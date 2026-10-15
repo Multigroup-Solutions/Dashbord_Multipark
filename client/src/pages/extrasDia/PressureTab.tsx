@@ -121,6 +121,7 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
   // 15 out 2026: os tempos novos da cidade (null fora das cidades ou sem tabela) e a Fila para a hora apertada
   const tg = ((q.data as { times?: { groups?: Record<string, PressureTimesGroup> } | null } | undefined)?.times?.groups?.[group] ?? null) as PressureTimesGroup | null;
   const targetMinutes = (q.data as { times?: { targetMinutes?: number } | null } | undefined)?.times?.targetMinutes ?? 15;
+  const timesTruncated = (q.data as { times?: { truncated?: boolean } | null } | undefined)?.times?.truncated === true;
   const tightOpts = useMemo(() => (tg?.queue ? { queue: tg.queue } : null), [tg]);
   const thresholds = useMemo(() => tightThresholds(slots, TIGHT_TOP_SHARE, tightOpts), [slots, tightOpts]);
   const summary = useMemo(() => pressureSummary(slots, where, 3, tightOpts), [slots, where, tightOpts]);
@@ -293,6 +294,7 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
               </Select>
               <CalibrationBadge note={tg.notes[timesPick] ?? null} />
               <span className="text-xs text-muted-foreground">
+                {timesTruncated && <span className="text-amber-700">Leitura cortada no limite: só os dias mais recentes da janela. </span>}
                 {TIMES_PCT.has(timesPick) ? "Mostra-se a %." : "Mostra-se o p75."} Medido em {fmtPct(timesPick === "meta" ? tg.coverage.nosso : timesPick === "t2" ? null : tg.coverage[timesPick as TimeMetric])} das {TIMES_OPTIONS.find((o) => o.key === timesPick)?.kind.toLowerCase()} ({tg.deliveries} entregas, {tg.pickups} recolhas no período).
               </span>
             </div>

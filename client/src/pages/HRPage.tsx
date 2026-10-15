@@ -26,6 +26,7 @@ import { DocStatusBadge, LicenceBadge } from "@/components/rh/RhBadges";
 import { LicencePanel } from "@/components/rh/LicencePanel";
 import { RejectDocumentDialog } from "@/components/rh/RejectDocumentDialog";
 import { EmployeeNotesPanel } from "@/components/rh/EmployeeNotesPanel";
+import { PontoModeCard } from "@/components/rh/PontoModeCard";
 import { DocsRequestBulkDialog, DocsRequestCard } from "@/components/rh/DocsRequestDialog";
 import { licenceRelevant, LICENCE_STATUS_LABELS, LICENCE_STATUSES, type LicenceStatus } from "@shared/drivingLicence";
 import { docsSummaryLabel, type DocsSummary as DocsSummaryView } from "@shared/employeeDocuments";
@@ -69,7 +70,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
-import CameraCapture from "@/components/CameraCapture";
+import CameraCapture, { type CaptureMeta } from "@/components/CameraCapture";
 import { Progress } from "@/components/ui/progress";
 import {
   Users, UserPlus, Search, FileText, Clock, Calendar,
@@ -903,8 +904,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
   // Troço de terminal aberto (última picagem = entrada no aeroporto)
   const openTerminal = terminalOn && records[0]?.type === "check_in" && records[0]?.terminalStatus === "start" ? records[0] : null;
 
-  const submitWithPhoto = (base64: string, mimeType: string) => {
-    const doSubmit = (lat: number, lng: number) => {
+  const submitWithPhoto = (base64: string, mimeType: string, meta?: CaptureMeta) => {
+    const doSubmit = (lat: number, lng: number, accuracy: number) => {
       const payload: any = {
         employeeId,
         photoBase64: base64,
@@ -915,6 +916,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
         // Se este browser é um PDA registado, o servidor liga a pessoa ao
         // PDA/Zello automaticamente no check-in
         pdaDeviceToken: localStorage.getItem("mp.pda.deviceToken") || undefined,
+        // Plano 63 (passo 1): rasto da picagem (o servidor só o guarda com o interruptor PONTO_MODOS)
+        trail: { photoSource: meta?.source ?? null, photoFileAgeS: meta?.fileAgeS ?? null, gpsAccuracyM: Number.isFinite(accuracy) ? Math.round(accuracy) : null },
       };
       if (cameraMode === "check_in") checkIn.mutate(payload);
       else checkOut.mutate(payload);
@@ -932,7 +935,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
           toast.error("A localização está aproximada (Wi-Fi/IP). Liga a localização EXATA do dispositivo e tenta outra vez.");
           return;
         }
-        doSubmit(pos.coords.latitude, pos.coords.longitude);
+        doSubmit(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
       },
       () => toast.error("Sem acesso à localização. Autoriza a localização exata nas permissões do browser para picar o ponto."),
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
@@ -2117,7 +2120,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
               : undefined} />
         </TabsContent>
         <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} canManage={!!access.canManage} isExtra={emp.position === "extra" || (emp as any).contractType === "extra"} /></TabsContent>
-        <TabsContent value="schedules" className="mt-4"><SchedulesTab employeeId={employeeId} /></TabsContent>
+        <TabsContent value="schedules" className="mt-4 space-y-4"><PontoModeCard employeeId={employeeId} /><SchedulesTab employeeId={employeeId} /></TabsContent>
         {access.canViewNotes && <TabsContent value="notes" className="mt-4"><EmployeeNotesPanel employeeId={employeeId} /></TabsContent>}
       </Tabs>
     </div>

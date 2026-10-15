@@ -10,7 +10,7 @@ import { cityGroupKey } from "../shared/extrasPressure";
 import { DEFAULT_TIGHT_USES_QUEUE, type TightUsesQueueMap } from "../shared/appSettings";
 import { SERVICE_TIMES_CALC_VERSION, DEFAULT_GARAGE_ROLES, garageRoleOf, type GarageRoleEntry, type GpsGate } from "../shared/serviceTimes";
 import { pressureCellKey, queueCellsOf, timesGrid, weekCellKey, type GateCtx, type ServiceRow, type TimesGrid } from "./serviceTimesAgg";
-import { loadServiceRows, loadServiceViewSettings } from "./serviceTimesRead";
+import { GRID_ROW_COLUMNS, loadServiceRowsInfo, loadServiceViewSettings } from "./serviceTimesRead";
 
 const CITY_OF_KEY: Record<string, "lisbon" | "porto" | "faro"> = { lisboa: "lisbon", porto: "porto", faro: "faro" };
 
@@ -28,6 +28,8 @@ export interface PressureTimes {
   from: string;
   to: string;
   rows: number;
+  /** A leitura chegou ao teto: ficam os dias mais recentes (o ecrã avisa). */
+  truncated: boolean;
   targetMinutes: number;
   groups: Record<string, PressureTimesGroup>;
 }
@@ -36,7 +38,7 @@ export interface PressureTimes {
  * Os tempos novos por (dia da semana × hora) de cada cidade, no período da
  * Pressão. PURA (as linhas já lidas).
  */
-export function pressureTimesFrom(rows: readonly ServiceRow[], o: { from: string; to: string; isSuperAdmin: boolean; gate: GpsGate | null | undefined; targetMinutes: number; tightUsesQueue: TightUsesQueueMap }): PressureTimes {
+export function pressureTimesFrom(rows: readonly ServiceRow[], o: { from: string; to: string; isSuperAdmin: boolean; gate: GpsGate | null | undefined; targetMinutes: number; tightUsesQueue: TightUsesQueueMap; truncated?: boolean }): PressureTimes {
   const byCity = new Map<string, ServiceRow[]>();
   for (const r of rows) {
     if (!r.cityKey || !CITY_OF_KEY[r.cityKey]) continue;
@@ -51,25 +53,29 @@ export function pressureTimesFrom(rows: readonly ServiceRow[], o: { from: string
     const on = o.tightUsesQueue[CITY_OF_KEY[city]] === true;
     groups[cityGroupKey(city)] = { ...grid, tightUsesQueue: on, queue: on && q.ok ? q.cells : null, queueCoveragePct: q.coveragePct };
   }
-  return { available: rows.length > 0, from: o.from, to: o.to, rows: rows.length, targetMinutes: o.targetMinutes, groups };
+  return { available: rows.length > 0, from: o.from, to: o.to, rows: rows.length, truncated: !!o.truncated, targetMinutes: o.targetMinutes, groups };
 }
 
 const PRESSURE_TIMES_CACHE_MS = 10 * 60_000;
 const pressureCache = new Map<string, { at: number; value: PressureTimes }>();
 
-/** O bloco `times` da Pressão (lê a tabela no período da janela; guardado 10 min). Nunca lança. */
+/**
+ * O bloco `times` da Pressão (lê a tabela no período da janela; guardado 10 min). Nunca lança.
+ * Auditoria do #389: a chave da cache leva o portão, a meta e a "hora apertada pela Fila" —
+ * fechar o portão (ou mudar a meta) vale logo, sem esperar 10 min.
+ */
 export async function getPressureTimes(o: { from: string; to: string; cityKeys: readonly string[] | null; isSuperAdmin: boolean }): Promise<PressureTimes> {
-  const empty: PressureTimes = { available: false, from: o.from, to: o.to, rows: 0, targetMinutes: 15, groups: {} };
-  const key = `${o.from}|${o.to}|${o.cityKeys ? [...o.cityKeys].sort().join(",") : "*"}|${o.isSuperAdmin ? 1 : 0}`;
-  const hit = pressureCache.get(key);
-  if (hit && Date.now() - hit.at < PRESSURE_TIMES_CACHE_MS) return hit.value;
+  const empty: PressureTimes = { available: false, from: o.from, to: o.to, rows: 0, truncated: false, targetMinutes: 15, groups: {} };
   try {
-    const [rows, st, tq] = await Promise.all([
-      loadServiceRows({ fromDay: o.from, toDay: o.to, cityKeys: o.cityKeys }),
+    const [st, tq] = await Promise.all([
       loadServiceViewSettings(),
       (async () => { const { getSetting } = await import("./appSettings"); return ((await getSetting("extras.tightUsesQueue").catch(() => null)) as TightUsesQueueMap | null) ?? DEFAULT_TIGHT_USES_QUEUE; })(),
     ]);
-    const value = pressureTimesFrom(rows, { from: o.from, to: o.to, isSuperAdmin: o.isSuperAdmin, gate: st.gate, targetMinutes: st.targetMinutes, tightUsesQueue: tq });
+    const key = [o.from, o.to, o.cityKeys ? [...o.cityKeys].sort().join(",") : "*", o.isSuperAdmin ? 1 : 0, JSON.stringify(st.gate), st.targetMinutes, JSON.stringify(tq)].join("|");
+    const hit = pressureCache.get(key);
+    if (hit && Date.now() - hit.at < PRESSURE_TIMES_CACHE_MS) return hit.value;
+    const read = await loadServiceRowsInfo({ fromDay: o.from, toDay: o.to, cityKeys: o.cityKeys, columns: GRID_ROW_COLUMNS });
+    const value = pressureTimesFrom(read.rows, { from: o.from, to: o.to, isSuperAdmin: o.isSuperAdmin, gate: st.gate, targetMinutes: st.targetMinutes, tightUsesQueue: tq, truncated: read.truncated });
     if (pressureCache.size > 40) pressureCache.clear();
     pressureCache.set(key, { at: Date.now(), value });
     return value;
@@ -79,10 +85,15 @@ export async function getPressureTimes(o: { from: string; to: string; cityKeys: 
   }
 }
 
+/** Só para os testes. */
+export function clearPressureTimesCache(): void { pressureCache.clear(); }
+
 // ─── Semana ─────────────────────────────────────────────────────────────────
 
 export interface WeekTimes {
   available: boolean;
+  /** A leitura chegou ao teto (o ecrã avisa). */
+  truncated: boolean;
   targetMinutes: number;
   /** Célula "dia|hora", total do dia "dia|*", total da hora "*|hora" e a semana "*". */
   cells: TimesGrid;
@@ -92,10 +103,10 @@ export interface WeekTimes {
 }
 
 /** Os tempos novos da semana de uma cidade (dia operacional × hora). PURA. */
-export function weekTimesFrom(rows: readonly ServiceRow[], o: { gate: GateCtx; targetMinutes: number }): WeekTimes {
+export function weekTimesFrom(rows: readonly ServiceRow[], o: { gate: GateCtx; targetMinutes: number; truncated?: boolean }): WeekTimes {
   const base = { gate: o.gate, targetMinutes: o.targetMinutes };
   return {
-    available: rows.length > 0, targetMinutes: o.targetMinutes,
+    available: rows.length > 0, truncated: !!o.truncated, targetMinutes: o.targetMinutes,
     cells: timesGrid(rows, weekCellKey, base),
     byDay: timesGrid(rows, (r) => r.opDay, base),
     byHour: timesGrid(rows, (r) => (r.refHour == null ? null : String(r.refHour)), base),
@@ -106,8 +117,8 @@ export function weekTimesFrom(rows: readonly ServiceRow[], o: { gate: GateCtx; t
 /** O bloco `times` da Semana. Nunca lança. */
 export async function getWeekTimes(o: { weekStart: string; cityKey: string; isSuperAdmin: boolean }): Promise<WeekTimes | null> {
   try {
-    const [rows, st] = await Promise.all([loadServiceRows({ fromDay: o.weekStart, toDay: addDays(o.weekStart, 6), cityKeys: [o.cityKey] }), loadServiceViewSettings()]);
-    return weekTimesFrom(rows, { gate: { gate: st.gate, isSuperAdmin: o.isSuperAdmin }, targetMinutes: st.targetMinutes });
+    const [read, st] = await Promise.all([loadServiceRowsInfo({ fromDay: o.weekStart, toDay: addDays(o.weekStart, 6), cityKeys: [o.cityKey], columns: GRID_ROW_COLUMNS }), loadServiceViewSettings()]);
+    return weekTimesFrom(read.rows, { gate: { gate: st.gate, isSuperAdmin: o.isSuperAdmin }, targetMinutes: st.targetMinutes, truncated: read.truncated });
   } catch (err: any) {
     console.warn("[tempos] semana:", String(err?.message ?? err).slice(0, 160));
     return null;
@@ -137,6 +148,8 @@ export interface CoverageCard {
   /** Linhas com outra versão do cálculo ou outros parâmetros do que as mais recentes (últimos 14 dias). */
   staleRows: number;
   rows: number;
+  /** A leitura chegou ao teto: ficam as semanas mais recentes (o cartão avisa). */
+  truncated: boolean;
   calcVersion: number;
 }
 
@@ -145,7 +158,7 @@ const NO_ZELLO = new Set(["sem_zello", "condutor_desconhecido", "condutor_fora_d
 const NO_ZONE = new Set(["sem_destino", "sem_zona", "sem_zona_t2", "destino_ambiguo", "zonas_sobrepostas"]);
 
 /** O cartão da cobertura: por cidade e semana (contagens; nada pessoal). PURA. */
-export function coverageCardFrom(rows: readonly ServiceRow[], o: { roles: readonly GarageRoleEntry[]; today: string }): CoverageCard {
+export function coverageCardFrom(rows: readonly ServiceRow[], o: { roles: readonly GarageRoleEntry[]; today: string; truncated?: boolean }): CoverageCard {
   const acc = new Map<string, CoverageWeekRow>();
   const unknown = new Set<string>();
   const recent = rows.filter((r) => r.opDay >= addDays(o.today, -14));
@@ -186,17 +199,17 @@ export function coverageCardFrom(rows: readonly ServiceRow[], o: { roles: readon
   return {
     weeks: [...acc.values()].sort((x, y) => y.week.localeCompare(x.week) || x.city.localeCompare(y.city)),
     garagesWithoutRole: [...unknown].sort((a, b) => a.localeCompare(b, "pt")).slice(0, 30),
-    staleRows: stale, rows: rows.length, calcVersion: SERVICE_TIMES_CALC_VERSION,
+    staleRows: stale, rows: rows.length, truncated: !!o.truncated, calcVersion: SERVICE_TIMES_CALC_VERSION,
   };
 }
 
 /** O cartão (últimas 8 semanas, cidades do âmbito). Nunca lança. */
 export async function getCoverageCard(o: { today: string; cityKeys: readonly string[] | null }): Promise<CoverageCard> {
-  const rows = await loadServiceRows({ fromDay: addDays(mondayOf(o.today), -7 * 7), toDay: o.today, cityKeys: o.cityKeys });
+  const read = await loadServiceRowsInfo({ fromDay: addDays(mondayOf(o.today), -7 * 7), toDay: o.today, cityKeys: o.cityKeys });
   let roles: GarageRoleEntry[] = DEFAULT_GARAGE_ROLES.map((g) => ({ ...g }));
   try {
     const { getSetting } = await import("./appSettings");
     roles = ((await getSetting("operations.garageRoles")) as GarageRoleEntry[] | null) ?? roles;
   } catch { /* omissão */ }
-  return coverageCardFrom(rows, { roles, today: o.today });
+  return coverageCardFrom(read.rows, { roles, today: o.today, truncated: read.truncated });
 }

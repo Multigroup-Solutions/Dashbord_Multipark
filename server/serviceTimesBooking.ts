@@ -11,7 +11,7 @@ import {
   DEFAULT_GPS_GATE, buildDeliveryCycles, buildPickupCycles, deliveryTimes, gpsTimesVisible, pickupTimes, resolveArrival,
   type GarageRoleEntry, type GpsGate, type ServiceEvent,
 } from "../shared/serviceTimes";
-import { DAY_TOTAL_MAX_MIN, TIME_METRICS, metricValue, visibleCities, type ServiceRow, type TimeMetric } from "./serviceTimesAgg";
+import { DAY_TOTAL_MAX_MIN, TIME_METRICS, metricValue, t2OpenCities, visibleCities, type ServiceRow, type TimeMetric } from "./serviceTimesAgg";
 import { ParamList } from "./multiparkDb/read";
 import { bookingScopeSql } from "./multiparkDb/bookingFile";
 import type { SqlParam } from "./multiparkDb/client";
@@ -77,16 +77,18 @@ function sourceOf(r: ServiceRow, m: TimeMetric): string | null {
  * As linhas da reserva → o que a ficha mostra, com o portão: com ele fechado,
  * quem não é super admin não vê os tempos com GPS (nem os instantes da
  * chegada / saída do terminal). `open` = as cidades em que o portão está
- * aberto para cada tempo (cobertura da cidade nesse dia). PURA.
+ * aberto para cada tempo (cobertura da cidade nesse dia); o "t2" com a regra
+ * das atrasadas no T2 (a cobertura da chegada ao T2, como no Resumo do dia),
+ * nunca a do terminal. PURA.
  */
-export function bookingTimesView(rows: readonly ServiceRow[], o: { gate: GpsGate | null | undefined; isSuperAdmin: boolean; open?: (r: ServiceRow, m: TimeMetric) => boolean }): { entries: BookingTimesEntry[]; gpsNote: string | null } {
+export function bookingTimesView(rows: readonly ServiceRow[], o: { gate: GpsGate | null | undefined; isSuperAdmin: boolean; open?: (r: ServiceRow, m: TimeMetric | "t2") => boolean }): { entries: BookingTimesEntry[]; gpsNote: string | null } {
   const gate = o.gate ?? DEFAULT_GPS_GATE;
   const closedLabel = gpsTimesVisible({ coveragePct: 0, n: 0, gate, isSuperAdmin: o.isSuperAdmin });
   const canSee = (r: ServiceRow, m: TimeMetric | "t2") => {
     if (m !== "t2" && !TIME_METRICS[m].gps) return { ok: true, hidden: null as string | null };
     if (o.isSuperAdmin) return { ok: true, hidden: null };
     if (!gate.visible) return { ok: false, hidden: closedLabel.label ?? "Em calibração" };
-    const ok = o.open ? o.open(r, m === "t2" ? "terminal" : m) : false;
+    const ok = o.open ? o.open(r, m) : false;
     return { ok, hidden: ok ? null : "Sem dados suficientes nesta cidade e dia" };
   };
   const entries = rows.filter((r) => !r.voidedAt).map((r): BookingTimesEntry => {
@@ -204,14 +206,19 @@ export async function getBookingTimes(o: { bookingId: string; cities: string[] |
     }
   }
   // portão aberto (e quem pede não é super admin): a cobertura da cidade nesse dia decide
-  let open: ((r: ServiceRow, m: TimeMetric) => boolean) | undefined;
+  let open: ((r: ServiceRow, m: TimeMetric | "t2") => boolean) | undefined;
   if (st.gate.visible && !o.isSuperAdmin && source === "tabela") {
     const cache = new Map<string, ServiceRow[]>();
     for (const k of [...new Set(rows.map((r) => `${r.opDay}|${r.cityKey ?? ""}|${r.kind}`))]) {
       const [day, city, kind] = k.split("|");
       cache.set(k, city ? await loadServiceRows({ fromDay: day, toDay: day, cityKeys: [city], kind: kind as "entrega" | "recolha" }) : []);
     }
-    open = (r, m) => visibleCities(cache.get(`${r.opDay}|${r.cityKey ?? ""}|${r.kind}`) ?? [], m, { gate: st.gate, isSuperAdmin: false }).cities.has(r.cityKey ?? "");
+    const g = { gate: st.gate, isSuperAdmin: false };
+    open = (r, m) => {
+      const day = cache.get(`${r.opDay}|${r.cityKey ?? ""}|${r.kind}`) ?? [];
+      // o T2 pela cobertura da chegada ao T2 (a regra das atrasadas no T2), não pela do terminal
+      return (m === "t2" ? t2OpenCities(day, g).open : visibleCities(day, m, g).cities).has(r.cityKey ?? "");
+    };
   }
   const v = bookingTimesView(rows, { gate: st.gate, isSuperAdmin: o.isSuperAdmin, open });
   return { available: true, source, entries: v.entries, gpsNote: v.gpsNote, targetMinutes: st.targetMinutes };

@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  LIVE_CACHE_OLDER_MS, LIVE_CACHE_TODAY_MS, LIVE_CACHE_YESTERDAY_MS, LIVE_FAILURE_CACHE_MS, LIVE_MIN_BUDGET_MS,
+  LIVE_CACHE_OLDER_MS, LIVE_CACHE_TODAY_MS, LIVE_CACHE_YESTERDAY_MS, LIVE_FAILURE_CACHE_MS, LIVE_MIN_BUDGET_MS, LIVE_POOL_WAIT_FAILURE_CACHE_MS,
   clearServiceLiveCache, dayServiceRows, liveCacheTtlMs, serviceLiveStarted, type LiveCompute,
 } from "./serviceTimesRead";
 import type { ServiceRow } from "./serviceTimesAgg";
@@ -100,6 +100,26 @@ describe("carga — nunca duas leituras ao mesmo tempo", () => {
 });
 
 describe("carga — falhas", () => {
+  it("sem ligação livre na pool (CONNECT_FAILED): a falha fica só 5 s, não 60 s", async () => {
+    expect(LIVE_POOL_WAIT_FAILURE_CACHE_MS).toBe(5_000);
+    const calls: string[] = [];
+    const compute: LiveCompute = async (date) => { calls.push(date); return { ok: false, error: "Sem ligação à BD da Multipark neste momento.", poolWait: true }; };
+    await dayServiceRows("2026-10-09", { cityKeys: null, compute });
+    await dayServiceRows("2026-10-09", { cityKeys: null, compute, nowMs: Date.now() + 2_000 });
+    expect(calls).toHaveLength(1);
+    await dayServiceRows("2026-10-09", { cityKeys: null, compute, nowMs: Date.now() + LIVE_POOL_WAIT_FAILURE_CACHE_MS + 500 });
+    expect(calls).toHaveLength(2);
+  });
+  it("o cálculo ao vivo marca o CONNECT_FAILED como espera na pool (e o resto não)", async () => {
+    const { computeServiceRowsLive } = await import("./serviceTimesJob");
+    const { MultiparkDbError } = await import("./multiparkDb/client");
+    const deps = (code: "CONNECT_FAILED" | "QUERY_FAILED") => ({
+      query: async () => { throw new MultiparkDbError("timeout exceeded when trying to connect", code); },
+      settings: async () => ({}) as any, now: () => NOW,
+    }) as any;
+    expect(await computeServiceRowsLive(deps("CONNECT_FAILED"), { from: "2026-10-09", to: "2026-10-09", deadlineAt: NOW + 30_000 })).toMatchObject({ ok: false, poolWait: true });
+    expect(await computeServiceRowsLive(deps("QUERY_FAILED"), { from: "2026-10-09", to: "2026-10-09", deadlineAt: NOW + 30_000 })).toMatchObject({ ok: false, poolWait: false });
+  });
   it("a Multipark em baixo: a falha fica 60 s (não se insiste a cada clique) e depois tenta outra vez", async () => {
     const f = fakeCompute({ ok: false });
     const a = await dayServiceRows("2026-10-09", { cityKeys: null, compute: f.compute });
@@ -114,8 +134,7 @@ describe("carga — falhas", () => {
 
 describe("carga — quem lê a Multipark", () => {
   it("só o Resumo do dia, o dia do condutor e a Ficha calculam ao vivo; com o prazo do pedido", () => {
-    const db = src("server/db.ts");
-    const dash = db.slice(db.indexOf("export async function getSupervisorDayDashboard"), db.indexOf("// ─── LIGAÇÃO AGENTE→PARCEIRO"));
+    const dash = src("server/supervisorDay.ts");
     expect(dash).toContain("deadlineMs: SUPERVISOR_DAY_BUDGET_MS - (Date.now() - t0)");
     // a leitura das reclamações dos carros que saíram: só os CHECK_OUT do dia
     expect(dash).toContain('readLiveHistory({ changeTypes: ["CHECK_OUT"], from: start, to: end');

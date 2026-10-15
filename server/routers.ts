@@ -115,6 +115,7 @@ import { rhRouter } from "./rhRouter";
 import { accountLinkRouter } from "./accountLinkRouter";
 import { operationalRouter } from "./operationalRouter";
 import { terminalRouter } from "./terminalRouter";
+import { pontoModesRouter } from "./pontoModesRouter";
 import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
 import { timesProbeProcedures } from "./sondaTemposRouter";
 import { availabilityPatternProcedures } from "./availabilityPatternRouter";
@@ -1781,6 +1782,8 @@ export const appRouter = router({
   operational: operationalRouter,
   // Plano 56 B1: terminal pelo perfil ("Estou no terminal", troca, TL) — server/terminalRouter.ts.
   terminal: terminalRouter,
+  // Plano 63 (passo 1): modo do ponto de cada pessoa (cartão em RH → ficha → Horário) — server/pontoModesRouter.ts.
+  pontoModes: pontoModesRouter,
 
   // ─── API KEYS MANAGEMENT ──────────────────────────────────────────────────
   // ─── INTEGRAÇÕES (Google Ads) ─────────────────────────────────────────────
@@ -4156,7 +4159,7 @@ export const appRouter = router({
       city: z.enum(HANDOVER_CITIES).optional(),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_resumo_dia", "view");
-      const { getSupervisorDayDashboard } = await import("./db");
+      const { getSupervisorDayDashboard } = await import("./supervisorDay");
       // 15 out 2026: o portão dos tempos com GPS aplica-se no servidor (só o super admin os vê com ele fechado)
       return getSupervisorDayDashboard(input.date, { isSuperAdmin: ctx.user.role === "super_admin" });
     }),
