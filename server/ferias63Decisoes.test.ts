@@ -264,6 +264,13 @@ describe("4. férias já aprovadas: só quem as aprova, o RH e o super admin", (
     await expect(assertCanLaunchApprovedVacation(U.rh, 3, 3)).rejects.toThrow(/ninguém aprova as suas/);
     await expect(assertCanLaunchApprovedVacation(U.jorge, 1, 1)).resolves.toBeUndefined();
   });
+  it("(auditoria final) a recusa das próprias diz onde pedir: no mapa, se estiver ligado; senão a quem gere a ficha", async () => {
+    await expect(assertCanLaunchApprovedVacation(U.rh, 3, 3)).rejects.toThrow("As tuas férias pedem-se no Mapa de férias: ninguém aprova as suas.");
+    delete process.env.FERIAS_MAPA;
+    // com o mapa desligado não há "Mapa de férias" onde pedir (ex.: dispensar a própria possível falta com "Férias")
+    await expect(assertCanLaunchApprovedVacation(U.rh, 3, 3)).rejects.toThrow("As tuas férias lança-as outra pessoa que gere a tua ficha: ninguém aprova as suas.");
+    expect(launchApprovedVacationError({ ...base, own: true, mapOn: false })).not.toMatch(/Mapa de férias/);
+  });
   it("com o mapa DESLIGADO nada muda: quem gere a ficha lança férias (só as próprias não)", async () => {
     delete process.env.FERIAS_MAPA;
     await launchLeave(U.supLx, { employeeId: 15, leaveType: "vacation", fromDate: "2026-11-16", toDate: "2026-11-20" });

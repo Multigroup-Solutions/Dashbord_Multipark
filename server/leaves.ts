@@ -257,8 +257,9 @@ export async function assertCanLaunchApprovedVacation(user: { id: number; role: 
   const [logins, me] = await Promise.all([employeeLogins(employeeId), getEmployeeByUserId(user.id)]);
   const own = logins.includes(user.id) || me?.employee?.id === employeeId || (principal != null && Number(principal) === user.id);
   // mapa desligado: como antes (só as próprias não) — não se leem regras nem contas
-  const mapOn = !own && (await feriasMapaOn());
-  const s = mapOn ? await loadLeaveSettings() : null;
+  // (o interruptor lê-se também para as próprias: a recusa diz onde pedir, e com o mapa desligado não há onde)
+  const mapOn = await feriasMapaOn();
+  const s = mapOn && !own ? await loadLeaveSettings() : null;
   // o RH não precisa de ler as regras; os outros têm de estar entre quem aprova (regras de agora)
   const approverUserIds = !s || s.hrPeople.includes(user.id) ? [] : (await approversForEmployee(employeeId, s)).userIds;
   const err = launchApprovedVacationError({ actorUserId: user.id, actorRole: user.role, own, mapOn, hrPeople: s?.hrPeople ?? [], approverUserIds });

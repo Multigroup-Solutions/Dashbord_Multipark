@@ -436,7 +436,10 @@ export function cancelLeaveError(actor: LeaveActor & { canManage: boolean }, lea
  */
 export function launchApprovedVacationError(i: { actorUserId: number; actorRole: string; own: boolean; mapOn: boolean; hrPeople: readonly number[]; approverUserIds: readonly number[] }): string | null {
   if (i.actorRole === "super_admin") return null;
-  if (i.own) return "As tuas férias pedem-se no Mapa de férias: ninguém aprova as suas.";
+  // com o mapa desligado não há "Mapa de férias" onde pedir: diz a quem pedir
+  if (i.own) return i.mapOn
+    ? "As tuas férias pedem-se no Mapa de férias: ninguém aprova as suas."
+    : "As tuas férias lança-as outra pessoa que gere a tua ficha: ninguém aprova as suas.";
   if (!i.mapOn) return null;
   if (i.hrPeople.includes(i.actorUserId) || i.approverUserIds.includes(i.actorUserId)) return null;
   return "Férias já aprovadas só as lança quem aprova as férias desta pessoa, o RH ou o super admin. A pessoa pede-as no Mapa de férias (ou pede a quem as aprova).";
