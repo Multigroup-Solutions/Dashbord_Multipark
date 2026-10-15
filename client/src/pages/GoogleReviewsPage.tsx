@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import BookingSearchField from "@/components/BookingSearchField";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 const RATING_COLORS: Record<number, string> = {
   1: "text-red-500",
@@ -78,6 +79,8 @@ export default function GoogleReviewsPage() {
   const beyondOwn = seesBeyondOwn(user as any, "criticas");
   const canEdit = can(user as any, "criticas", "edit");
   const [tab, setTab] = useState(() => (beyondOwn ? "dashboard" : "list"));
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab });
   // ?id=N abre logo a crítica (links a partir da ficha do cliente no CRM).
   const [selectedId, setSelectedId] = useState<number | null>(() => Number(new URLSearchParams(window.location.search).get("id")) || null);
 

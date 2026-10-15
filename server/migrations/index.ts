@@ -193,6 +193,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0685", () => import("./migration_0685").then((m) => step(m.MIGRATION_0685_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0685))],
   // Plano MPV (F0a): observabilidade da IA — ai_usage_log (finishReason, voltas, versão, final forçada) e ai_chat_messages (versão, nível).
   ["0690", () => import("./migration_0690").then((m) => step(m.MIGRATION_0690_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0690))],
+  // Plano MPV (F0b, auditoria A1): resposta do Multis com os marcadores dos colegas (o histórico não leva os nomes completos).
+  ["0695", () => import("./migration_0695").then((m) => step(m.MIGRATION_0695_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0695))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);

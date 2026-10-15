@@ -2,7 +2,7 @@
 modulo: multis
 titulo: Multis (o assistente de IA da equipa)
 rotas: /perfil, /multis/falhas
-palavras: multis, ia, inteligência artificial, assistente, chat, perguntar, perguntar à ia, perguntar ao multis, painel ao lado, conversa, conversas anteriores, nova conversa, apagar conversa, estrela, memória, memória do multis, memória da empresa, lembra-te, lembrar, memorizar, não te esqueças, notas do multis, guardar nota, arquivar nota, avaliar resposta, gosto, polegar, resposta errada, perguntas que falharam, falhas do multis
+palavras: multis, piloto do multis, modo económico, modelo smart, argon, separador aberto, ia, inteligência artificial, assistente, chat, perguntar, perguntar à ia, perguntar ao multis, painel ao lado, conversa, conversas anteriores, nova conversa, apagar conversa, estrela, memória, memória do multis, memória da empresa, lembra-te, lembrar, memorizar, não te esqueças, notas do multis, guardar nota, arquivar nota, avaliar resposta, gosto, polegar, resposta errada, perguntas que falharam, falhas do multis
 ---
 # Multis (o assistente de IA da equipa)
 
@@ -43,4 +43,13 @@ O **Multis** é o assistente de IA da Multipark dentro da aplicação. Apresenta
 2. Filtra por **período** (7, 30 ou 90 dias), **motivo** e **Por tratar / Tratadas**. Cada linha tem a pessoa, a página, a pergunta, a resposta, o motivo, as consultas feitas e a ajuda usada, e se foi **👎 da pessoa** ou **Automática**. Em cima, os totais de 👍 e 👎 do período.
 3. Depois de corrigir a ajuda ou a ferramenta, **Marcar como tratada** com uma nota (tem **Desfazer**). Nada se apaga; as perguntas ficam guardadas mesmo depois de a conversa desaparecer (30 dias).
 
-**Como o Multis encontra a ajuda**: pelas palavras da pergunta e, com a base de conhecimento ligada, também **pelo significado** — até 3 páginas da ajuda por pergunta, e de uma página longa só a parte que interessa.
+**Como o Multis encontra a ajuda**: pelas palavras da pergunta e, com a base de conhecimento ligada, também **pelo significado** — até 3 páginas da ajuda por pergunta, e de uma página longa só a parte que interessa. Quando há várias páginas do mesmo módulo (por exemplo Definições, Marketing, Integrações), abre a página certa pelo nome do ficheiro.
+
+**O Multis sabe o que tens aberto**
+- Nas páginas com separadores (Extras-Dia, Atividade diária, Avaliação, Despesas, Parcerias, Condutores e agentes, Críticas, Formação) o Multis sabe em que **separador** estás; na **Ficha da reserva** sabe que reserva estás a ver.
+- Não te dá acesso a nada que não tenhas: só o ajuda a perceber a que te referes ("o que é isto?" na Pressão).
+
+**Piloto do Multis (modelo smart)**
+- Algumas pessoas experimentam o Multis com um modelo mais forte. Quem está no piloto escolhe-se em **Definições → Parâmetros → IA → Multis: quem está no piloto** e liga-se com **Definições → Automações → Multis por página (MPV)** (só o super admin) e **IA: Multis do piloto (modelo smart)**. Para as outras pessoas nada muda.
+- O piloto tem um **teto de gasto próprio** (por dia, por mês e por pessoa por dia: **Multis do piloto: teto de gasto**). Quando chega lá (ou quando não consegue confirmar o gasto), o Multis continua a responder com o modelo de sempre e aparece **Modo económico** por baixo da resposta, com o motivo. Desligar o Multis desliga também o piloto. Não pára nada nem conta para o orçamento das outras funcionalidades.
+- Os nomes dos colegas que o Multis vai buscar (por exemplo, quem está escalado) não vão para a IA, nem nessa resposta nem nas seguintes da mesma conversa: ela vê um marcador e tu vês o nome completo na resposta.

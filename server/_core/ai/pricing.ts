@@ -32,6 +32,10 @@ const GEMINI_PRICES_USD: Record<string, ModelPrice> = {
   "gemini-3.6-flash": { input: 0.75, output: 3.75, cached: 0.075 },
   "gemini-3.5-flash": { input: 1.5, output: 9, cached: 0.15 },
   "gemini-3.1-pro-preview": { input: 2, output: 12, cached: 0.2 },
+  // Plano MPV §5.3 (F0b): Argon, preço INTRODUTÓRIO até 30 nov 2026 ($2/M entrada,
+  // $10/M saída, cache −95 %). REVER em dezembro (fonte secundária: $4/$20) — a
+  // sobreposição `ai.priceOverridesEur` ganha sempre a esta tabela.
+  "gemini-4-argon": { input: 2, output: 10, cached: 0.1 },
   "gemini-2.5-flash-lite": { input: 0.1, output: 0.4, cached: 0.01, audioInput: 0.3 },
   // Embeddings (base de conhecimento): só entrada.
   "gemini-embedding-001": { input: 0.15, output: 0 },
@@ -78,6 +82,38 @@ export function costEur(model: string, usage: TokenUsage, overrides?: AiPriceOve
   const audio = Math.max(0, Math.min(usage.audioInputTokens ?? 0, usage.inputTokens - cached));
   const plain = Math.max(0, usage.inputTokens - cached - audio);
   const c = (plain * p.input + audio * (p.audioInput ?? p.input) + cached * (p.cached ?? p.input) + Math.max(0, usage.outputTokens) * p.output) / 1_000_000;
+  return Math.round(c * 1_000_000) / 1_000_000;
+}
+
+/**
+ * Armazenamento da cache de contexto (USD por 1M tokens por HORA) — estimativa
+ * a partir da tabela da Gemini API (Flash/Flash-Lite ≈ $1/h, Pro ≈ $4,50/h).
+ * O Argon ainda não tem preço de armazenamento publicado: estimado como o Pro
+ * (REVER com o preço de dezembro). Modelo fora da tabela → null (regista-se só
+ * os tokens, custo 0).
+ */
+const CACHE_STORAGE_USD_PER_HOUR: Record<string, number> = {
+  "gemini-3.1-flash-lite": 1,
+  "gemini-3.5-flash-lite": 1,
+  "gemini-3.8-flash": 1,
+  "gemini-3.7-flash": 1,
+  "gemini-3.6-flash": 1,
+  "gemini-3.5-flash": 1,
+  "gemini-3.1-pro-preview": 4.5,
+  "gemini-4-argon": 4.5,
+};
+
+/** € por 1M tokens por hora de cache; null = sem preço conhecido. PURA. */
+export function cacheStoragePriceEurPerHour(model: string): number | null {
+  const usd = CACHE_STORAGE_USD_PER_HOUR[model] ?? Object.entries(CACHE_STORAGE_USD_PER_HOUR).find(([k]) => model.startsWith(`${k}-`))?.[1];
+  return usd == null ? null : usd * USD_TO_EUR;
+}
+
+/** Custo estimado (EUR) de guardar `tokens` em cache durante `ttlSeconds`; null = preço desconhecido. PURA. */
+export function cacheStorageCostEur(model: string, tokens: number, ttlSeconds: number): number | null {
+  const p = cacheStoragePriceEurPerHour(model);
+  if (p == null) return null;
+  const c = (Math.max(0, tokens) / 1_000_000) * p * (Math.max(0, ttlSeconds) / 3600);
   return Math.round(c * 1_000_000) / 1_000_000;
 }
 

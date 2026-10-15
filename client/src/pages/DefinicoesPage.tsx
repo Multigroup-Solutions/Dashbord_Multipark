@@ -347,6 +347,11 @@ function AiUsageCard() {
                 <span className="font-semibold text-lg">{eur(d.spentEur)}</span>
                 <span className="text-muted-foreground">{d.budgetEur > 0 ? `de ${eur(d.budgetEur)} (${String(pct ?? 0).replace(".", ",")}%)` : "sem limite mensal"}</span>
               </div>
+              {d.ownBudgetSpentEur > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  Inclui {eur(d.ownBudgetSpentEur)} com teto próprio (Multis do piloto), que não conta para o orçamento: a barra mostra {eur(d.gateSpentEur)}.
+                </p>
+              )}
               {d.budgetEur > 0 && (
                 <div className="h-2 w-full rounded bg-muted overflow-hidden" aria-hidden>
                   <div className={`h-full ${barCls}`} style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
@@ -379,6 +384,8 @@ function AiUsageCard() {
                       <tr key={f.feature} className="border-b last:border-0">
                         <td className="py-1 px-1">
                           {f.label}
+                          {f.ownBudget && <span className="text-muted-foreground"> (teto próprio)</span>}
+                          {f.storageEur > 0 && <span className="text-muted-foreground"> · armazenamento da cache {eur(f.storageEur)}</span>}
                           {(f.errors > 0 || f.blocked > 0) && (
                             <span className="text-muted-foreground"> · {f.errors ? `${f.errors} erro(s)` : ""}{f.errors && f.blocked ? ", " : ""}{f.blocked ? `${f.blocked} bloqueada(s)` : ""}</span>
                           )}

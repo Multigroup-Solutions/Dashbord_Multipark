@@ -9,11 +9,30 @@
  *  - `run(args, ctx)` volta a verificar o acesso (nunca confiar no modelo)
  *    e devolve agregados ou listas curtas (máx. MAX_TOOL_ROWS linhas);
  *  - erros de acesso devolvem `{ error }` com texto PT-PT para o modelo
- *    explicar à pessoa; outros erros viram uma mensagem genérica.
+ *    explicar à pessoa; outros erros viram uma mensagem genérica;
+ *  - dados pessoais nos RESULTADOS (plano MPV §3.7, F0b): cada ferramenta
+ *    declara os seus campos (`pii`) e o executor passa-os pelo contexto de
+ *    redação ÚNICO do turno (o mesmo da pergunta; numeração contínua; repõe-se
+ *    uma vez no fim): colaboradores → [NOME_n] (repostos), clientes → só o
+ *    1.º nome, texto livre → emails/telefones/IBAN/NIF/matrículas tapados.
  */
 import type { AiToolCall, AiToolDeclaration } from "../client";
+import { firstName, type RedactionContext } from "../pii";
 
 export const MAX_TOOL_ROWS = 20;
+
+/**
+ * Campos com dados pessoais no resultado de uma ferramenta (pelo NOME da
+ * chave, em qualquer nível do objeto/listas).
+ */
+export interface ToolPiiFields {
+  /** Nome completo de colaboradores → [NOME_n] (reposto na resposta). */
+  people?: readonly string[];
+  /** Nome de clientes/avaliadores → só o 1.º nome (não se repõe). */
+  clients?: readonly string[];
+  /** Texto livre (títulos, notas, críticas) → redação de emails, telefones, IBAN, NIF, matrículas. */
+  text?: readonly string[];
+}
 
 export interface ChatTool<Ctx> {
   name: string;
@@ -21,7 +40,10 @@ export interface ChatTool<Ctx> {
   /** JSON Schema de objeto (tipos simples: string, integer, boolean, enum). */
   parameters?: Record<string, unknown>;
   available(ctx: Ctx): boolean;
-  run(args: Record<string, unknown>, ctx: Ctx): Promise<Record<string, unknown>>;
+  /** `extra.redact`: o contexto de redação do turno (para quem precise de o usar à mão). */
+  run(args: Record<string, unknown>, ctx: Ctx, extra?: { redact?: RedactionContext }): Promise<Record<string, unknown>>;
+  /** Campos com dados pessoais no resultado (ver ToolPiiFields). */
+  pii?: ToolPiiFields;
 }
 
 /** Erro que o modelo pode ver (acesso negado, parâmetro inválido…). */
@@ -43,11 +65,47 @@ export function capRows<T>(rows: T[], max = MAX_TOOL_ROWS): { rows: T[]; total: 
 }
 
 /**
+ * Passa os campos declarados de um resultado pelo contexto de redação (em
+ * qualquer nível; listas incluídas). Sem campos ou sem contexto → igual. PURA
+ * (muda só o contexto).
+ */
+export function redactToolResult(
+  result: Record<string, unknown>, fields: ToolPiiFields | undefined, redact: RedactionContext | undefined,
+  opts: { maskPeople?: boolean } = {},
+): Record<string, unknown> {
+  if (!fields) return result;
+  // Sem contexto de redação (ou sem onde guardar a versão com marcadores), os colegas vão só pelo 1.º nome.
+  const maskPeople = !!redact && opts.maskPeople !== false;
+  const people = new Set(fields.people ?? []);
+  const clients = new Set(fields.clients ?? []);
+  const text = new Set(fields.text ?? []);
+  if (!people.size && !clients.size && !text.size) return result;
+  const walk = (v: unknown, key: string | null, depth: number): unknown => {
+    if (depth > 8) return v;
+    if (typeof v === "string" && key != null) {
+      if (people.has(key)) return maskPeople ? (redact!.person(v) ?? v) : firstName(v, "");
+      if (clients.has(key)) return firstName(v, "");
+      if (text.has(key)) return redact ? redact.text(v) : v;
+      return v;
+    }
+    if (Array.isArray(v)) return v.map((x) => walk(x, key, depth + 1));
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = walk(x, k, depth + 1);
+      return out;
+    }
+    return v;
+  };
+  return walk(result, null, 0) as Record<string, unknown>;
+}
+
+/**
  * Executor para o runAi: só corre ferramentas desta lista (o modelo não
  * inventa outras), verifica `available` outra vez e chama `onCall` ANTES de
  * correr (registo de auditoria: nome + parâmetros, nunca resultados).
  * `onError` recebe o texto de cada `{ error }` devolvido (Multis 2: a resposta
- * fica marcada em "Perguntas que falharam").
+ * fica marcada em "Perguntas que falharam"). `opts.redact`: o contexto de
+ * redação do turno — os campos `pii` de cada ferramenta passam por ele.
  */
 export function makeToolExecutor<Ctx>(
   tools: ChatTool<Ctx>[],
@@ -56,13 +114,14 @@ export function makeToolExecutor<Ctx>(
     onCall?: (name: string, args: Record<string, unknown>) => Promise<void> | void;
     onError?: (name: string, error: string) => void;
   } = {},
+  opts: { redact?: RedactionContext; maskPeople?: boolean } = {},
 ): (call: AiToolCall) => Promise<Record<string, unknown>> {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const run = async (call: AiToolCall, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const tool = byName.get(call.name);
     if (!tool || !tool.available(ctx)) return { error: "Ferramenta indisponível para esta pessoa." };
     try {
-      return await tool.run(args, ctx);
+      return redactToolResult(await tool.run(args, ctx, { redact: opts.redact }), tool.pii, opts.redact, { maskPeople: opts.maskPeople });
     } catch (err) {
       if (err instanceof ToolUserError) return { error: err.message };
       const code = (err as any)?.code;

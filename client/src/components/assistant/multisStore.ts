@@ -45,3 +45,35 @@ export function useMultisState(): MultisState {
     () => state,
   );
 }
+
+// ─── Contexto da página (plano MPV §3.1, F0b) ───────────────────────────────
+// As páginas com separadores/registo dizem o que está aberto (useMultisPage);
+// o widget manda-o com cada pergunta. Só em memória (não vai para o storage).
+
+export interface MultisPageEntity { type: string; id: number }
+export interface MultisPageState { path: string | null; tab: string | null; entity: MultisPageEntity | null }
+
+const EMPTY_PAGE: MultisPageState = { path: null, tab: null, entity: null };
+let pageState: MultisPageState = EMPTY_PAGE;
+const pageListeners = new Set<() => void>();
+
+/** Uma página diz o que tem aberto (null limpa). */
+export function setMultisPage(next: MultisPageState | null): void {
+  const v = next ?? EMPTY_PAGE;
+  if (v.path === pageState.path && v.tab === pageState.tab && v.entity?.type === pageState.entity?.type && v.entity?.id === pageState.entity?.id) return;
+  pageState = v;
+  for (const l of pageListeners) l();
+}
+
+/** Limpa só se ainda for desta página (a página seguinte pode já ter escrito). */
+export function clearMultisPage(path: string): void {
+  if (pageState.path === path) setMultisPage(null);
+}
+
+export function useMultisPageState(): MultisPageState {
+  return useSyncExternalStore(
+    (cb) => { pageListeners.add(cb); return () => { pageListeners.delete(cb); }; },
+    () => pageState,
+    () => pageState,
+  );
+}

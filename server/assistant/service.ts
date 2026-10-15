@@ -10,8 +10,20 @@
  *    vão no contexto do turno (<memoria>), nunca no prompt estável;
  *  - depois de cada resposta, as que não responderam (não sei / sem acesso /
  *    ferramenta com erro) ficam marcadas em "Perguntas que falharam".
+ *
+ * Plano MPV (F0b):
+ *  - piloto: com o interruptor MPV ligado e a pessoa em `ai.assistantPilot`,
+ *    o turno usa a funcionalidade `assistant_smart` (nível smart, limites e
+ *    teto € próprios); senão `assistant` (lite), como sempre. Teto próprio
+ *    atingido → `assistant` com a nota "modo económico" (não bloqueia nada);
+ *  - contexto da página: o separador aberto e o registo aberto (validados
+ *    contra as listas do código, shared/multisPage.ts) vão no <contexto>.
  */
-import { AI_ASSISTANT_DEFAULT_LIMITS, type AiAssistantLimits } from "../../shared/appSettings";
+import {
+  AI_ASSISTANT_DEFAULT_LIMITS, AI_ASSISTANT_SMART_DEFAULT_LIMITS, automationFlagDefault, type AiAssistantLimits,
+} from "../../shared/appSettings";
+import { MULTIS_ENTITY_LABELS, pagePathOf, sanitizeMultisPage, type MultisEntity } from "../../shared/multisPage";
+import type { OwnBudgetReason } from "../_core/ai/usage";
 import { ROLE_LABELS, type Role } from "../../shared/access";
 import { REMEMBER_MESSAGES, memoryBlock, parseRememberCommand, type RememberCommand } from "../../shared/assistantMemory";
 import { detectUnanswered } from "../../shared/assistantFeedback";
@@ -62,6 +74,11 @@ export async function assistantKnowledge(question: string, role: string, access:
 export const KB_UNAVAILABLE_BLOCK = "<conhecimento>\nNão foi possível consultar os manuais agora (erro temporário). Se a pergunta for sobre procedimentos internos, diz que não conseguiste consultar os manuais e que tente de novo daqui a pouco — não digas que os manuais não falam disso.\n</conhecimento>";
 
 export const ASSISTANT_FEATURE = "assistant" as const;
+/** Plano MPV §5.2: o Multis das pessoas do piloto (nível smart, teto próprio). */
+export const ASSISTANT_SMART_FEATURE = "assistant_smart" as const;
+export type AssistantFeature = typeof ASSISTANT_FEATURE | typeof ASSISTANT_SMART_FEATURE;
+/** Teto de saída BASE no smart (plano MPV §3.6: Argon low 2 048; medium sobe a 4 096 pelo maxTokensFor). */
+export const ASSISTANT_SMART_MAX_OUTPUT_TOKENS = 2048;
 export const ASSISTANT_CHANNEL = "staff" as const;
 
 let docsMemo: HelpDoc[] | null = null;
@@ -79,18 +96,80 @@ export function staffSystemPrompt(): string {
 
 export const ownerKeyFor = (userId: number) => userKey(userId);
 
-/** Limites em vigor (Definições → Parâmetros → ai.assistantLimits). Nunca lança. */
-export async function assistantLimits(): Promise<Required<AiAssistantLimits>> {
+/**
+ * Limites em vigor (Definições → Parâmetros → ai.assistantLimits; no piloto
+ * smart, ai.assistantSmartLimits). Nunca lança.
+ */
+export async function assistantLimits(feature: AssistantFeature = ASSISTANT_FEATURE): Promise<Required<AiAssistantLimits>> {
+  const smart = feature === ASSISTANT_SMART_FEATURE;
+  const defaults = smart ? AI_ASSISTANT_SMART_DEFAULT_LIMITS : AI_ASSISTANT_DEFAULT_LIMITS;
   let v: AiAssistantLimits | null = null;
   try {
     const { getSetting } = await import("../appSettings");
-    v = await getSetting("ai.assistantLimits");
+    v = smart ? await getSetting("ai.assistantSmartLimits") : await getSetting("ai.assistantLimits");
   } catch { v = null; }
   return {
-    perMinute: v?.perMinute ?? AI_ASSISTANT_DEFAULT_LIMITS.perMinute,
-    perDay: v?.perDay ?? AI_ASSISTANT_DEFAULT_LIMITS.perDay,
-    maxInputChars: v?.maxInputChars ?? AI_ASSISTANT_DEFAULT_LIMITS.maxInputChars,
+    perMinute: v?.perMinute ?? defaults.perMinute,
+    perDay: v?.perDay ?? defaults.perDay,
+    maxInputChars: v?.maxInputChars ?? defaults.maxInputChars,
   };
+}
+
+/** Esta pessoa está no piloto? (interruptor MPV ligado + id em ai.assistantPilot). Nunca lança. */
+export async function inAssistantPilot(userId: number): Promise<boolean> {
+  try {
+    const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("../_core/featureFlags");
+    await ensureFeatureFlagOverrides();
+    if (!isFeatureEnabled("MPV", { defaultEnabled: automationFlagDefault("MPV") })) return false;
+    const { getSetting } = await import("../appSettings");
+    const pilot = await getSetting("ai.assistantPilot");
+    return Array.isArray(pilot?.userIds) && pilot.userIds.includes(userId);
+  } catch {
+    return false;
+  }
+}
+
+export interface AssistantMode {
+  /** A funcionalidade que vai responder a esta pessoa. */
+  feature: AssistantFeature;
+  /** Está no piloto (MPV + ai.assistantPilot). */
+  pilot: boolean;
+  /** No piloto, mas o teto próprio foi atingido → responde o lite ("modo económico"). */
+  economy: boolean;
+  economyReason: OwnBudgetReason | null;
+}
+
+/**
+ * A funcionalidade EFETIVA desta pessoa (plano MPV §5.2/§5.3): fora do piloto,
+ * `assistant`; no piloto com o smart disponível e dentro do teto,
+ * `assistant_smart`; no piloto com o teto atingido, `assistant` em modo
+ * económico; no piloto com o smart desligado, `assistant` (sem nota). Nunca lança.
+ */
+export async function assistantModeFor(userId: number): Promise<AssistantMode> {
+  const base: AssistantMode = { feature: ASSISTANT_FEATURE, pilot: false, economy: false, economyReason: null };
+  if (!(await inAssistantPilot(userId))) return base;
+  try {
+    const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
+    // Desligar o assistente pára também o piloto (o status mostra "desligado").
+    if (!(await aiFeatureAvailableFresh(ASSISTANT_FEATURE))) return { ...base, pilot: true };
+    if (!(await aiFeatureAvailableFresh(ASSISTANT_SMART_FEATURE))) return { ...base, pilot: true };
+    const { ownBudgetCheck } = await import("../_core/ai/usage");
+    const own = await ownBudgetCheck(ASSISTANT_SMART_FEATURE, userId);
+    if (!own.ok) return { ...base, pilot: true, economy: true, economyReason: own.reason };
+    return { feature: ASSISTANT_SMART_FEATURE, pilot: true, economy: false, economyReason: null };
+  } catch {
+    return { ...base, pilot: true };
+  }
+}
+
+/** Nota curta do modo económico (widget e status), pelo motivo. PURA. */
+export function economyNote(reason: OwnBudgetReason | string | null | undefined): string {
+  switch (reason) {
+    case "user_day": return "Modo económico: hoje já chegaste ao teu teto diário do Multis do piloto, por isso respondo com o modelo de sempre (volta amanhã).";
+    case "day": return "Modo económico: hoje o Multis do piloto já chegou ao teto do dia, por isso respondo com o modelo de sempre (volta amanhã).";
+    case "month": return "Modo económico: este mês o Multis do piloto já chegou ao teto do mês, por isso respondo com o modelo de sempre.";
+    default: return "Modo económico: agora não consegui confirmar o gasto do Multis do piloto, por isso respondo com o modelo de sempre.";
+  }
 }
 
 /** Dia de hoje em Lisboa (AAAA-MM-DD). */
@@ -100,12 +179,21 @@ export function lisbonDay(now: Date = new Date()): string {
 
 const WEEKDAYS = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
 
-/** Contexto do turno (fora da cache): data, página, papel, cidades (e se a memória está desligada). PURA. */
-export function turnContext(p: { today: string; path?: string | null; role: string; cities: string[] | "todas"; memoryOff?: boolean }): string {
+/**
+ * Contexto do turno (fora da cache): data, página, separador e registo abertos
+ * (já validados — sanitizeMultisPage), papel, cidades (e se a memória está
+ * desligada). PURA.
+ */
+export function turnContext(p: {
+  today: string; path?: string | null; role: string; cities: string[] | "todas"; memoryOff?: boolean;
+  tab?: string | null; entity?: MultisEntity | null;
+}): string {
   const wd = WEEKDAYS[new Date(`${p.today}T12:00:00Z`).getUTCDay()];
   return [
     `Hoje: ${p.today} (${wd}, Lisboa).`,
-    p.path ? `Página aberta: ${p.path.split("?")[0]}` : null,
+    pagePathOf(p.path) ? `Página aberta: ${pagePathOf(p.path)}` : null,
+    p.tab ? `Separador aberto: ${p.tab}` : null,
+    p.entity ? `Registo aberto: ${p.entity.type} #${p.entity.id} (${MULTIS_ENTITY_LABELS[p.entity.type]})` : null,
     `Papel da pessoa: ${ROLE_LABELS[p.role as Role] ?? p.role}.`,
     `Cidades a que tem acesso: ${p.cities === "todas" ? "todas" : p.cities.join(", ") || "nenhuma"}.`,
     p.memoryOff ? "A memória do Multis está desligada: não consegues guardar notas (se pedirem, diz que um administrador a liga em Definições → Automações)." : null,
@@ -117,7 +205,21 @@ export interface AskInput {
   conversationId?: number | null;
   newConversation?: boolean;
   path?: string | null;
+  /** Separador aberto (validado contra a lista da página; fora dela, ignorado). */
+  tab?: string | null;
+  /** Registo aberto ({ type, id }; validado; fora da lista, ignorado). */
+  entity?: unknown;
 }
+
+/** Resposta do Multis + a versão que respondeu (piloto / modo económico). */
+export type AssistantTurnResult = ChatTurnResult & {
+  /** Funcionalidade que respondeu (assistant | assistant_smart). */
+  feature?: AssistantFeature;
+  /** Respondeu o lite porque o teto do piloto foi atingido (ou não se conseguiu medir). */
+  economy?: boolean;
+  /** Texto do modo económico, pelo motivo. */
+  economyNote?: string;
+};
 
 /**
  * "Lembra-te…" (sem IA): grava a nota pessoal e responde. A troca fica na
@@ -157,8 +259,10 @@ export async function askAssistant(
     knowledge?: ((question: string) => Promise<ChatKnowledge | null>) | null;
     /** Memória ligada? (omisso = o interruptor AI_ASSISTANT_MEMORY). */
     memoryEnabled?: boolean;
+    /** Versão desta pessoa (omisso = assistantModeFor). */
+    mode?: AssistantMode;
   } = {},
-): Promise<ChatTurnResult> {
+): Promise<AssistantTurnResult> {
   const user = toolCtx.user;
   const { assistantMemoryEnabled, activeNotesForTurn } = await import("./memory");
   const memoryOn = hooks.memoryEnabled ?? (await assistantMemoryEnabled());
@@ -169,33 +273,49 @@ export async function askAssistant(
     const notes = await activeNotesForTurn(user.id);
     memory = memoryBlock(notes.personal, notes.company, input.question);
   }
-  const limits = await assistantLimits();
+  const mode = hooks.mode ?? (await assistantModeFor(user.id));
   const cities = toolCtx.access?.all ? "todas" : (toolCtx.access?.cityNames ?? (toolCtx.access?.cityName ? [toolCtx.access.cityName] : []));
-  const r = await runChatTurn<StaffToolCtx>({
-    feature: ASSISTANT_FEATURE,
+  const page = sanitizeMultisPage({ path: input.path, tab: input.tab, entity: input.entity });
+  const context = turnContext({ today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn, tab: page.tab, entity: page.entity });
+  const turn = async (feature: AssistantFeature, conversationId: number | null, newConversation: boolean | undefined) => runChatTurn<StaffToolCtx>({
+    feature,
     channel: ASSISTANT_CHANNEL,
     ownerKey: ownerKeyFor(user.id),
     userId: user.id,
     question: input.question,
-    conversationId: input.conversationId ?? null,
-    newConversation: input.newConversation,
-    limits,
-    rateKey: `assistant:${userKey(user.id)}`,
+    conversationId,
+    newConversation,
+    limits: await assistantLimits(feature),
+    // O lite fica com a chave de sempre; o piloto tem a sua (limites próprios).
+    rateKey: `${feature}:${userKey(user.id)}`,
     system: staffSystemPrompt(),
     cacheSystem: true,
-    // Plano MPV: o Multis de hoje é o "v1" (registo de uso + resposta guardada).
+    // Plano MPV: o conteúdo de hoje é o "v1" (o do MPV chega no F1+); o nível fica no registo.
     variant: "v1",
-    context: turnContext({ today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn }),
+    ...(feature === ASSISTANT_SMART_FEATURE ? { maxOutputTokens: ASSISTANT_SMART_MAX_OUTPUT_TOKENS } : {}),
+    context,
     memory,
     helpDocs: toolCtx.helpDocs,
     path: input.path,
     tools: STAFF_TOOLS,
     toolCtx,
     knowledge: hooks.knowledge === null ? undefined : (hooks.knowledge ?? ((q) => assistantKnowledge(q, user.role, toolCtx.access))),
-    onToolCall: async (name, args, conversationId) => {
-      await hooks.logToolCall?.(name, args, conversationId);
+    onToolCall: async (name, args, cid) => {
+      await hooks.logToolCall?.(name, args, cid);
     },
   });
+  let feature: AssistantFeature = mode.feature;
+  let economy = mode.economy;
+  let economyWhy: string | null = mode.economyReason;
+  let r = await turn(feature, input.conversationId ?? null, input.newConversation);
+  // Teto próprio atingido entre a escolha e a chamada (ou orçamento): desce para o lite, na mesma conversa.
+  if (!r.ok && r.reason === "budget" && feature === ASSISTANT_SMART_FEATURE) {
+    feature = ASSISTANT_FEATURE;
+    economy = r.budgetScope === "own";
+    economyWhy = r.budgetReason ?? null;
+    const cid = r.conversationId ?? input.conversationId ?? null;
+    r = await turn(feature, cid, cid ? false : input.newConversation);
+  }
   // Respostas que não responderam → "Perguntas que falharam" (marca automática).
   if (r.ok && r.messageId) {
     const why = detectUnanswered(r.answer, r.toolErrors);
@@ -207,5 +327,5 @@ export async function askAssistant(
       });
     }
   }
-  return r;
+  return r.ok ? { ...r, feature, ...(economy ? { economy: true, economyNote: economyNote(economyWhy) } : {}) } : r;
 }
