@@ -191,6 +191,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0680", () => import("./migration_0680").then((m) => step(m.MIGRATION_0680_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0680))],
   // Plano 62 (P6): service_times — tempos de entrega e de recolha por ciclo.
   ["0685", () => import("./migration_0685").then((m) => step(m.MIGRATION_0685_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0685))],
+  // Plano 63 (passo 1): modo do ponto por pessoa, histórico, alertas, avisos lidos e rasto das picagens.
+  ["0690", () => import("./migration_0690").then((m) => step(m.MIGRATION_0690_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0690))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
