@@ -43,6 +43,8 @@ export interface StaffToolCtx {
    * significado (o `ajuda_procurar` usa-a; omissa = a lexical de sempre).
    */
   sectionSearch?: SectionSearchFn;
+  /** Prazo das leituras lentas das ferramentas do piloto (ms; omissão SLOW_CALL_MS em ./mpvDataTools.ts). Injetável (testes). */
+  slowCallMs?: number;
 }
 
 // ─── Cidades e datas (./toolArgs.ts, partilhadas com as do piloto) ──────────
