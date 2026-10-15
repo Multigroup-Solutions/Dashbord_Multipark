@@ -7,6 +7,12 @@
  *
  * Retenção: CHAT_RETENTION_DAYS (30). As leituras ignoram o que é mais
  * antigo; `purgeOldChats` (daily-ops) apaga em lotes.
+ *
+ * 0695 (plano MPV F0b, auditoria A1): cada resposta guarda também a versão
+ * com os nomes dos colegas como [NOME_n] (`contentMasked`) e o mapa
+ * (`maskedNames`), e o histórico usa essa versão — os nomes completos não
+ * voltam ao fornecedor. BD antes da 0695 → `maskedHistoryAvailable()` fica
+ * false e as ferramentas mandam só o 1.º nome dos colegas.
  */
 import { sql } from "drizzle-orm";
 
@@ -20,6 +26,35 @@ export interface StoredMessage {
   content: string;
   tools: string[];
   createdAt: string;
+  /** Resposta com os nomes dos colegas como [NOME_n] + o mapa (0695); null nas antigas. */
+  masked?: { content: string; names: Record<string, string> } | null;
+}
+
+/** null = ainda não se sabe; false = a BD não tem as colunas da 0695. */
+let maskedColumns: boolean | null = null;
+const badField = (err: any) => (err?.code ?? err?.cause?.code) === "ER_BAD_FIELD_ERROR";
+
+/** Há onde guardar a resposta com marcadores? (sem BD ou antes de saber: sim). */
+export function maskedHistoryAvailable(): boolean {
+  return maskedColumns !== false;
+}
+
+/** Só testes. */
+export function resetMaskedColumnsForTests(v: boolean | null = null): void {
+  maskedColumns = v;
+}
+
+function parseNames(raw: unknown): Record<string, string> | null {
+  if (raw == null || raw === "") return null;
+  try {
+    const o = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!o || typeof o !== "object" || Array.isArray(o)) return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(o as Record<string, unknown>)) if (/^\[NOME_\d+\]$/.test(k) && typeof v === "string") out[k] = v;
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 export interface ConversationSummary {
@@ -80,20 +115,36 @@ export async function resolveConversation(
 export async function loadMessages(channel: ChatChannel, ownerKey: string, conversationId: number, limit = 40, now = Date.now()): Promise<StoredMessage[]> {
   const d = await db();
   if (!d) return [];
-  const rows = rowsOf(await d.execute(sql`
-    SELECT m.id, m.role, m.content, m.tools, DATE_FORMAT(m.createdAt, '%Y-%m-%dT%H:%i:%sZ') AS createdAt
+  const n = Math.max(1, Math.min(200, Math.floor(limit)));
+  const query = (withMasked: boolean) => d.execute(sql`
+    SELECT m.id, m.role, m.content, m.tools, DATE_FORMAT(m.createdAt, '%Y-%m-%dT%H:%i:%sZ') AS createdAt${withMasked ? sql`, m.contentMasked, m.maskedNames` : sql``}
       FROM ai_chat_messages m
       JOIN ai_chat_conversations c ON c.id = m.conversationId
      WHERE m.conversationId = ${conversationId} AND c.channel = ${channel} AND c.ownerKey = ${ownerKey}
        AND m.createdAt >= ${cutoff(now)}
-     ORDER BY m.id DESC LIMIT ${Math.max(1, Math.min(200, Math.floor(limit)))}`));
-  return rows.reverse().map((r) => ({
-    id: Number(r.id),
-    role: r.role === "assistant" ? "assistant" : "user",
-    content: String(r.content ?? ""),
-    tools: r.tools ? String(r.tools).split(",").filter(Boolean) : [],
-    createdAt: String(r.createdAt ?? ""),
-  }));
+     ORDER BY m.id DESC LIMIT ${n}`);
+  let res: unknown;
+  if (maskedColumns !== false) {
+    try {
+      res = await query(true);
+      maskedColumns = true;
+    } catch (err: any) {
+      if (!badField(err)) throw err;
+      maskedColumns = false; // antes da 0695
+      res = await query(false);
+    }
+  } else res = await query(false);
+  return rowsOf(res).reverse().map((r) => {
+    const names = parseNames(r.maskedNames);
+    return {
+      id: Number(r.id),
+      role: r.role === "assistant" ? "assistant" : "user",
+      content: String(r.content ?? ""),
+      tools: r.tools ? String(r.tools).split(",").filter(Boolean) : [],
+      createdAt: String(r.createdAt ?? ""),
+      masked: r.contentMasked != null && names ? { content: String(r.contentMasked), names } : null,
+    };
+  });
 }
 
 /** Lista de nomes para uma coluna VARCHAR(255) ("a,b,c"; vazia → null). PURA. */
@@ -110,7 +161,11 @@ export async function appendExchange(
   conversationId: number,
   question: string,
   answer: string,
-  opts: { tools?: string[]; helpFiles?: string[]; path?: string | null; variant?: string | null; tier?: string | null; now?: number } = {},
+  opts: {
+    tools?: string[]; helpFiles?: string[]; path?: string | null; variant?: string | null; tier?: string | null; now?: number;
+    /** A resposta com os nomes dos colegas como [NOME_n] + o mapa (0695). Só se houver nomes. */
+    masked?: { content: string; names: Record<string, string> } | null;
+  } = {},
 ): Promise<{ answerId: number | null }> {
   const d = await db();
   if (!d) return { answerId: null };
@@ -125,9 +180,22 @@ export async function appendExchange(
     VALUES (${conversationId}, 'user', ${question}, NULL, ${t1})`);
   const variant = opts.variant ? String(opts.variant).slice(0, 16) : null;
   const tier = opts.tier ? String(opts.tier).slice(0, 16) : null;
-  const badField = (err: any) => (err?.code ?? err?.cause?.code) === "ER_BAD_FIELD_ERROR";
+  const masked = opts.masked && Object.keys(opts.masked.names).length ? opts.masked : null;
   let res: unknown;
-  try {
+  let saved = false;
+  if (masked && maskedColumns !== false) {
+    try {
+      res = await d.execute(sql`
+        INSERT INTO ai_chat_messages (conversationId, role, content, tools, helpFiles, path, variant, tier, contentMasked, maskedNames, createdAt)
+        VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${helpFiles}, ${path}, ${variant}, ${tier}, ${masked.content}, ${JSON.stringify(masked.names)}, ${t2})`);
+      maskedColumns = true;
+      saved = true;
+    } catch (err: any) {
+      if (!badField(err)) throw err;
+      maskedColumns = false; // antes da 0695: guarda sem a versão com marcadores
+    }
+  }
+  if (!saved) try {
     res = await d.execute(sql`
       INSERT INTO ai_chat_messages (conversationId, role, content, tools, helpFiles, path, variant, tier, createdAt)
       VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${helpFiles}, ${path}, ${variant}, ${tier}, ${t2})`);

@@ -3,6 +3,7 @@ modulo: criticas
 grupo: Suporte
 pagina: criticas
 titulo: Críticas Google
+separadores: dashboard=Dashboard, list=Reviews
 rotas: /criticas
 palavras: lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---

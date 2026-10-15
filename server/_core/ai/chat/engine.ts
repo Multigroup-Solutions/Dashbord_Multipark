@@ -11,17 +11,26 @@
  *
  * Nunca lança: devolve `{ ok: false, reason, message }` com texto PT-PT
  * para mostrar tal e qual (IA desligada, orçamento, muitos pedidos…).
+ *
+ * Dados pessoais (plano MPV §3.7, F0b): UM contexto de redação por turno —
+ * histórico, conhecimento, memória, pergunta E os resultados das ferramentas
+ * (campos `pii` de cada uma) partilham a numeração dos marcadores; a resposta
+ * é reposta UMA vez, no fim, com tudo. A resposta guarda-se também com os
+ * nomes dos colegas como [NOME_n] (+ o mapa, migração 0695) e é ESSA versão
+ * que volta no histórico, com os marcadores renumerados neste contexto — os
+ * nomes completos nunca voltam ao fornecedor. BD antes da 0695: as
+ * ferramentas mandam só o 1.º nome dos colegas.
  */
-import { isAiError, aiUserMessage } from "../errors";
+import { AiBudgetExceededError, isAiError, aiUserMessage } from "../errors";
 import { selectProvider } from "../client";
 import type { AiFeature } from "../features";
-import { redactPii } from "../pii";
+import { createRedactionContext } from "../pii";
 import { checkRateLimit, type RateLimitRule } from "../rateLimit";
 import { runAi } from "../run";
 import { aiFeatureAvailableFresh } from "../status";
 import { trimHistory, DEFAULT_MAX_TURNS } from "./history";
 import { combineHelpDocs, helpContext, helpHints, pickHelpDocs, type HelpDoc, type HelpHit } from "./retrieval";
-import { appendExchange, loadMessages, resolveConversation, type ChatChannel } from "./store";
+import { appendExchange, loadMessages, maskedHistoryAvailable, resolveConversation, type ChatChannel } from "./store";
 import { availableTools, makeToolExecutor, toolDeclarations, type ChatTool } from "./tools";
 import { appendCitations, type KbCitation } from "../../../../shared/knowledge";
 import type { ToolErrorNote } from "../../../../shared/assistantFeedback";
@@ -100,8 +109,16 @@ export type ChatTurnResult =
       citations?: KbCitation[];
       /** Turno do "Lembra-te" (sem IA): o que aconteceu à nota. */
       memory?: "saved" | "exists" | "rejected";
+      /** Nível do modelo que respondeu (lite/fast/smart); ausente sem IA. */
+      tier?: string;
     }
-  | { ok: false; reason: ChatFailure; message: string; retryAfterSec?: number; conversationId?: number | null };
+  | {
+      ok: false; reason: ChatFailure; message: string; retryAfterSec?: number; conversationId?: number | null;
+      /** reason "budget": o orçamento global ou o teto próprio da funcionalidade (plano MPV §5.3). */
+      budgetScope?: "global" | "own";
+      /** Teto próprio: qual (day | month | user_day | unknown). */
+      budgetReason?: string | null;
+    };
 
 export const CHAT_MESSAGES: Record<Exclude<ChatFailure, "too_long" | "rate_limited" | "error">, string> = {
   empty: "Escreve uma pergunta.",
@@ -138,7 +155,13 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
     });
   } catch { conversationId = null; }
   const stored = conversationId ? await loadMessages(input.channel, input.ownerKey, conversationId, 40).catch(() => []) : [];
-  const { turns, summary } = trimHistory(stored, { maxTurns: input.maxTurns ?? DEFAULT_MAX_TURNS });
+  // Um só contexto de redação no turno (histórico, pergunta e ferramentas continuam a numeração).
+  const red = createRedactionContext();
+  // Respostas anteriores: a versão com marcadores dos colegas, renumerados neste contexto.
+  const storedSafe = stored.map((m) => (m.role === "assistant" && m.masked ? { ...m, content: red.adoptNames(m.masked.content, m.masked.names) } : m));
+  const { turns, summary } = trimHistory(storedSafe, { maxTurns: input.maxTurns ?? DEFAULT_MAX_TURNS });
+  // Sem onde guardar a versão com marcadores (BD antes da 0695) → colegas só pelo 1.º nome.
+  const maskPeople = maskedHistoryAvailable();
 
   // Base de conhecimento (uma só consulta: manuais + ajuda pelo significado).
   let kb: ChatKnowledge | null = null;
@@ -158,18 +181,19 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   const parts = turns.map((t) => t.text);
   const kbAt = kb ? parts.push(kb.block) - 1 : -1;
   const memAt = memory ? parts.push(memory) - 1 : -1;
+  const sumAt = summary ? parts.push(summary) - 1 : -1;
   parts.push(question);
-  const red = redactPii(parts.join(SEP));
-  const redParts = red.text.split(SEP);
+  const redParts = red.text(parts.join(SEP)).split(SEP);
   const history = turns.map((t, i) => ({ role: t.role, text: redParts[i] ?? t.text }));
   const safeQuestion = redParts[redParts.length - 1] ?? question;
   const safeKnowledge = kbAt >= 0 ? redParts[kbAt] ?? "" : "";
   const safeMemory = memAt >= 0 ? redParts[memAt] ?? "" : "";
+  const safeSummary = sumAt >= 0 ? redParts[sumAt] ?? "" : "";
 
   const blocks: string[] = [];
   if (input.context?.trim()) blocks.push(`<contexto>\n${input.context.trim()}\n</contexto>`);
   if (safeMemory) blocks.push(safeMemory);
-  if (summary) blocks.push(`<resumo>\n${summary}\n</resumo>`);
+  if (safeSummary) blocks.push(`<resumo>\n${safeSummary}\n</resumo>`);
   if (help.length) blocks.push(helpContext(help, undefined, { question, hints: helpHints(helpHits) }));
   if (safeKnowledge) blocks.push(safeKnowledge);
   blocks.push(`<pergunta>\n${safeQuestion}\n</pergunta>`);
@@ -204,23 +228,31 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
                   await input.onToolCall?.(name, args, conversationId);
                 },
                 onError: (name, error) => { toolErrors.push({ tool: name, error: error.slice(0, 200) }); },
-              }),
+              }, { redact: red, maskPeople }),
             },
           }
         : {}),
     });
-    const cited = kb ? appendCitations(red.restore(r.output), kb.citations) : null;
-    const answer = (cited ? cited.text : red.restore(r.output)).trim();
+    // Restauro UMA vez, no fim (pergunta, conhecimento e ferramentas).
+    const restored = red.restore(r.output);
+    const cited = kb ? appendCitations(restored, kb.citations) : null;
+    const answer = (cited ? cited.text : restored).trim();
+    // Para o histórico: a mesma resposta com os colegas ainda como [NOME_n] (+ o mapa).
+    const forStorage = red.maskForStorage(r.output);
+    const maskedContent = (kb ? appendCitations(forStorage.content, kb.citations).text : forStorage.content).trim();
     const helpFiles = help.map((d) => d.file);
     let messageId: number | null = null;
     if (conversationId) {
-      const saved = await appendExchange(conversationId, question, answer, { tools: used, helpFiles, path: input.path, variant: input.variant ?? null, tier: r.tier }).catch(() => null);
+      const saved = await appendExchange(conversationId, question, answer, { tools: used, helpFiles, path: input.path, variant: input.variant ?? null, tier: r.tier, masked: { content: maskedContent, names: forStorage.names } }).catch(() => null);
       messageId = saved?.answerId ?? null;
     }
-    return { ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, ...(cited ? { citations: cited.used } : {}) };
+    return { ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, tier: r.tier, ...(cited ? { citations: cited.used } : {}) };
   } catch (err) {
     if (isAiError(err)) {
-      if (err.code === "disabled" || err.code === "not_configured" || err.code === "budget") {
+      if (err.code === "budget") {
+        return { ok: false, reason: "budget", message: CHAT_MESSAGES.budget, conversationId, budgetScope: err instanceof AiBudgetExceededError ? err.scope : "global", budgetReason: err instanceof AiBudgetExceededError ? err.ownReason : null };
+      }
+      if (err.code === "disabled" || err.code === "not_configured") {
         return { ok: false, reason: err.code, message: CHAT_MESSAGES[err.code], conversationId };
       }
       if (err.code === "rate_limited") return { ok: false, reason: "rate_limited", message: aiUserMessage(err), conversationId };

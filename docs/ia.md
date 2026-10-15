@@ -67,7 +67,7 @@ Há três níveis de modelo. Cada um é escolhido por uma variável de ambiente.
 |---|---|---|---|
 | lite | `AI_MODEL_LITE` | `gemini-3.1-flash-lite` | **Todas as funcionalidades, por omissão.** É o mais barato. |
 | fast | `AI_MODEL_FAST` | `gemini-3.8-flash` | Só onde o lite falha: faturas em PDF (várias páginas) e perguntas da formação. |
-| smart | `AI_MODEL_SMART` | `gemini-3.1-pro-preview` | Não é usado por omissão. Se o modelo deixar de existir (404), cai para o fast. |
+| smart | `AI_MODEL_SMART` | `gemini-3.1-pro-preview` | Só o **Multis do piloto** (`assistant_smart`, plano MPV F0b; pôr `AI_MODEL_SMART=gemini-4-argon`). Antes da 1.ª volta de ferramentas, um 404 ou um 429/quota (este depois de 2 novas tentativas, com 1 s e 3 s de espera) cai para o fast (`gemini-3.8-flash`). Depois da 1.ª volta não troca de modelo (o histórico já leva o conteúdo do smart): vai à chamada final. |
 
 Regra do dono: usar o modelo mais barato sempre que possível. Para mudar o nível
 de uma funcionalidade sem deploy:
@@ -90,21 +90,31 @@ Definições → o ponto de chamada (`runAi({ thinkingLevel })`) → env
 aceitam o nível (Gemini 3.x). O raciocínio paga-se como saída e gasta do mesmo
 teto (`maxTokens`): quem pede `scaleMaxTokensForThinking` (o Multis) sobe o teto
 ao mínimo do nível (`maxTokensFor`: low 900, medium 4 096, high 8 192); o Multis
-v1 passa assim de 700 para 900.
+v1 passa assim de 700 para 900. Com o nível `default` (ou `AI_THINKING_LEVEL=off`) o nível efetivo é o do
+modelo e o teto sobe ao maior (8 192), porque nos Gemini 3 o raciocínio do modelo costuma ser alto. Os
+modelos Pro/smart podem recusar `minimal`: no nível smart o `minimal` é ignorado (fica a env, `low`).
 
 **Function calling** (`runAi` com `tools`): todas as chamadas pedidas numa volta
 recebem resposta (acima de 4 recebem "limite de chamadas nesta ronda"). No
 máximo de voltas, ou quando o prazo deixa só a reserva (`finalReserveMs`,
 omissão 8 s), faz-se uma chamada final **sem cache e sem ferramentas** ("responde
 com o que tens"). Se a API recusar o histórico com ferramentas sem as declarar
-(400), os resultados vão resumidos em texto. Se nem assim houver texto, a pessoa
-recebe "Não consegui juntar tudo a tempo…" — nunca um erro depois de pagas as
-voltas. Teste manual contra a API real (não corre no CI):
+(400), os resultados vão resumidos em texto (o `<` dos resultados vai como `\u003c`, para não fechar o
+bloco); só quando o 400 fala de function/tool **e** o resumo resulta é que a instância passa a ir logo pelo
+resumo — **por modelo, durante 1 h** (registo `final_summary` sempre que o resumo é usado). Se nem assim
+houver texto, a pessoa recebe "Não consegui juntar tudo a tempo…" — nunca um erro depois de pagas as
+voltas; no registo essa resposta conta como **erro** `final_fallback`. Depois de pelo menos uma volta,
+**qualquer** erro (sem texto por `MAX_TOKENS`, 503 que já não cabe no prazo, 404/429 a meio) também leva
+à chamada final. Com `schema` (não se combina com ferramentas hoje) não há texto de recurso: o erro é
+`tool_rounds`. Teste manual contra a API real (não corre no CI):
 `pnpm tsx scripts/check-final-call.ts`.
 
 **Registo** (`ai_usage_log`, migração 0690): além do custo, `finishReason`,
 `rounds`, `variant` (`v1` no Multis de hoje) e `forcedFinal`; o portão "só
-Vertex AI na UE" do RH deixa uma linha `blocked` / `eu_only` (sem conteúdo).
+Vertex AI na UE" do RH deixa uma linha `blocked` / `eu_only` (sem conteúdo) — também quando é
+verificado antes do `runAi` (`aiFeatureAvailableLogged`: leitura dos documentos do RH e varrimento
+dos anexos, este no máximo 1 linha por hora por instância). O **uso por dia** conta ainda os
+recursos (`final_fallback`), as finais forçadas e as respostas cortadas por `MAX_TOKENS`.
 
 Os modelos da Google mudam depressa. Confirma os modelos em
 <https://ai.google.dev/gemini-api/docs/models> e na página de
@@ -139,6 +149,7 @@ faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
 | `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
 | `AI_CRM_IDENTITY` | `crm_identity`: "é a mesma pessoa?" nas sugestões duvidosas de Rever fichas (só o 1.º nome e factos; junta sozinha só com ≥ 85 %) | lite. **Desligado por omissão.** |
 | `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
+| `AI_ASSISTANT_SMART` | `assistant_smart`: o Multis das pessoas do piloto (com o interruptor `MPV` e `ai.assistantPilot`), com teto € próprio (`ai.assistantSmartBudget`); desligado por omissão | smart |
 | `AI_ASSISTANT_MEMORY` | Memória do Multis (não chama a IA): "Lembra-te…" grava a nota da pessoa sem IA (até 30, 300 car.); notas da empresa só admin/super_admin (até 100); as ativas vão no contexto do turno (`<memoria>`, fora da cache). `assistant_memories` (0605); arquivar não apaga | — (sem IA). **Ligado por omissão** (Jorge, 8 out 2026). Desligado: não grava, não usa as notas e esconde a Memória. |
 | `AI_OPS_BRIEFING` | `ops_briefing`: parágrafo do briefing diário por cidade | lite |
 | `AI_WEEKLY_REPORTS` | `weekly_report`: texto dos relatórios de segunda (direção, marketing, operações, RH) | lite |
@@ -277,7 +288,38 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   Parâmetros → **Preços dos modelos de IA**, em JSON e em €, por exemplo
   `{"gemini-3.1-flash-lite": {"input": 0.22, "output": 1.29}}`.
   Nota: o Flash 3.6/3.7/3.8 tem um preço promocional até 31 dez 2026 (depois
-  duplica). Atualiza os preços nessa altura.
+  duplica). Atualiza os preços nessa altura. O **Argon** (`gemini-4-argon`) está com o preço
+  introdutório até 30 nov 2026 ($2/M entrada, $10/M saída, $0,10/M em cache) — **rever em dezembro**
+  (fonte secundária: $4/$20).
+- **Gemini 4 Argon e cache**: segundo as docs da Google (out 2026), o Argon **não tem cache
+  explícita** — só a implícita, para prefixos iguais de ≥ 4 096 tokens (o guia do modelo, mais
+  recente, diz 6 144). O `getOrCreateContextCache` nem tenta criar cache para o Argon; o desconto
+  da implícita aparece sozinho nos `cachedTokens`. Para a aproveitar, o prefixo estável (regras +
+  índice + ferramentas) tem de passar os 6 144 tokens (a confirmar no F1 com
+  `scripts/measure-help-tree.ts`). Fontes: <https://ai.google.dev/gemini-api/docs/caching>,
+  <https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon>.
+- **Armazenamento da cache de contexto**: cada cache criada fica no registo com a funcionalidade
+  que a criou e `entity = "context_cache_storage"` (conta para o teto dessa funcionalidade, sem
+  pessoa). Custo estimado = tokens guardados × TTL × preço por hora (`pricing.ts`: Flash ≈ $1/M/h,
+  Pro e Argon ≈ $4,50/M/h — o do Argon ainda não está publicado). Tokens: os da API
+  (`usageMetadata.totalTokenCount`); sem eles, estimados (≈ 4 car./token, `errorCode`
+  `tokens_estimated`). Modelo sem preço de armazenamento → só os tokens (custo 0). No cartão do
+  custo estas linhas ficam à parte ("armazenamento da cache"): não contam nas chamadas, na latência
+  nem no custo por pergunta, mas contam no gasto do mês.
+- **Teto próprio** (plano MPV §5.3): o `assistant_smart` (Multis do piloto) tem
+  `ai.assistantSmartBudget` (`{"eurPerDay": 10, "eurPerMonth": 150, "eurPerUserPerDay": 3}`; os
+  três têm de ser > 0 — não há "sem teto"; o dia é o **dia de Lisboa**, como no resto da app; o mês
+  é o civil UTC, como o orçamento global), verificado **antes** do orçamento global. Cada turno
+  **reserva à cabeça** 0,20 € (o máximo estimado de uma pergunta) na instância, libertado quando o
+  custo real fica registado; a partir de 80 % de um teto o gasto lê-se sempre da BD (sem a cache de
+  60 s). **Limite do excesso**: cada instância só vê as suas reservas, por isso o teto pode passar,
+  no máximo, ≈ (turnos em curso noutras instâncias × 0,20 €) + o que um turno gastar acima da
+  estimativa. Se não se conseguir medir o gasto (erro da BD), o piloto também desce para o lite
+  (motivo "unknown"). Desligar o `AI_ASSISTANT` pára também o piloto. Ao chegar lá, o Multis
+  responde com o `assistant` (lite) e a nota "modo económico" — não bloqueia nada. O gasto por pessoa
+  lê-se pelo índice `(feature, userId, createdAt)` com cache de 60 s. As funcionalidades com teto
+  próprio (`ownBudget` no catálogo) **não entram** na soma do orçamento global (`monthSpendEur`,
+  cache do gasto e aviso do `assistant.status`); o cartão do custo continua a mostrá-las.
 - **Orçamento mensal**: Definições → Parâmetros → *Orçamento mensal da IA (€)*.
   Sem valor na página, usa-se `AI_MONTHLY_BUDGET_EUR`; sem nenhum dos dois,
   30 €. 0 significa sem limite. O mês é o mês civil em UTC.
@@ -300,6 +342,19 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   resposta no WhatsApp, assistente), os marcadores são repostos depois de a resposta
   chegar. Nas respostas públicas (críticas), os marcadores são retirados.
 - Dos nomes, só se envia o primeiro.
+- **Multis — um contexto de redação por turno** (plano MPV §3.7, F0b): o histórico, o conhecimento,
+  a memória, a pergunta **e os resultados das ferramentas** passam pela mesma redação
+  (`createRedactionContext`), com numeração contínua dos marcadores (o email da pergunta é o
+  `[EMAIL_1]`, o de uma ferramenta o `[EMAIL_2]`), e a resposta é reposta uma só vez, no fim. Cada
+  ferramenta declara os seus campos (`pii`): colaboradores → `[NOME_n]`, repostos com o nome
+  completo (dois "João" não se confundem); clientes → só o 1.º nome; texto livre → emails,
+  telefones, IBAN, NIF e matrículas tapados. Hoje: `extras_escala` (nomes), `casos_abertos` e
+  `minhas_tarefas` (títulos). Sem contexto de redação, os colegas vão só pelo 1.º nome. O
+  `<resumo>` das perguntas anteriores passa pela mesma redação.
+- **Histórico sem nomes completos** (migração 0695): cada resposta guarda também
+  `contentMasked` (os colegas ainda como `[NOME_n]`) e `maskedNames` (o mapa). No turno
+  seguinte o histórico usa essa versão, com os marcadores renumerados no contexto novo — os nomes
+  completos não voltam ao fornecedor. BD antes da 0695 → as ferramentas mandam só o 1.º nome.
 - As imagens e PDFs (faturas, documentos do RH) vão tal como estão. Por isso o
   `AI_HR_AUTOFILL` e o `AI_HR_EMAIL_ATTACHMENTS` estão desligados por omissão
   e **só correm com Vertex AI numa região da UE** (ver secção 1): fora disso
@@ -382,6 +437,32 @@ Custos e limites:
 - conta para o orçamento mensal. Quando a IA está desligada, sem configuração
   ou acima do orçamento, o painel mostra uma mensagem simples e não faz
   pedidos.
+
+**Piloto (plano MPV §5.2, F0b)**: com o interruptor `MPV` (desligado, só super admin) e a pessoa
+em `ai.assistantPilot` (`{"userIds": [1, 12]}`), o `askAssistant` usa a funcionalidade
+`assistant_smart` (nível smart, interruptor `AI_ASSISTANT_SMART`, desligado; limites
+`ai.assistantSmartLimits`, omissão 10/min, 80/dia; chave do limitador `assistant_smart:user:N`;
+teto de saída base 2 048); senão o `assistant` de sempre. Teto próprio atingido (antes ou durante o
+pedido) ou gasto que não se consegue medir → `assistant` com `economy: true` e a nota "Modo
+económico" no widget, com o motivo (teto da pessoa, do dia, do mês, ou "não consegui confirmar"). O
+`assistant.status` devolve a funcionalidade **efetiva** da pessoa (`feature`, `tier`, `pilot`,
+`economy`, `economyNote`) e os limites dela. As respostas guardam `variant` (`v1` — o conteúdo do
+MPV chega no F1+) e `tier`.
+
+**Contexto da página (plano MPV §3.1)**: as páginas com separadores ou registo chamam
+`useMultisPage({ tab, entity })` (Extras-Dia, Atividade diária, Avaliação, Despesas, Parcerias,
+Condutores e agentes, Críticas, Formação; a Ficha da reserva com `entity: booking`); o widget manda
+`{ path, tab, entity }` no `status` e no `ask`. O servidor só aceita o `tab` da lista da página
+(`shared/multisPage.ts`, com as mesmas constantes das páginas: `OPERATIONAL_TABS`, `CAIXA_TABS`,
+`CONDUTORES_TABS`…) e o `entity` de um tipo conhecido (booking, employee, review, complaint,
+expense, partner) com id inteiro > 0; o resto é ignorado (nunca dá erro). O caminho só entra no
+`<contexto>` se tiver letras, dígitos, "_", "-" e "/". Vai para o `<contexto>` como "Separador
+aberto: …" e "Registo aberto: tipo #id (nome)". Não dá acesso a nada.
+
+**`abrir_ajuda`**: procura primeiro pelo **ficheiro** (`google-tempo-real`, `web-analytics.md`),
+depois pelo módulo **só se for único**, depois pelo título; módulo com várias ajudas → devolve os
+candidatos (ficheiro, título, resumo). O índice da ajuda mostra o ficheiro quando o módulo se
+repete. Antes devolvia sempre a 1.ª ajuda do módulo (definicoes.md, marketing.md, integracoes.md…).
 
 ## 8. Preparação para o chat público (multipark.app)
 

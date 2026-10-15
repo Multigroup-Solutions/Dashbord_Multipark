@@ -161,7 +161,11 @@ export function looksLikeHowTo(question: string): boolean {
 
 /** Índice curto (para o prompt estável): uma linha por ficheiro. */
 export function helpIndex(docs: HelpDoc[]): string {
-  return docs.map((d) => `- ${d.title} (${d.module})${d.routes.length ? ` [${d.routes.join(", ")}]` : ""}: ${d.summary}`).join("\n");
+  // Módulo com várias ajudas → mostra também o ficheiro (é por ele que o abrir_ajuda as distingue).
+  const perModule = new Map<string, number>();
+  for (const d of docs) perModule.set(d.module, (perModule.get(d.module) ?? 0) + 1);
+  const id = (d: HelpDoc) => ((perModule.get(d.module) ?? 0) > 1 ? `${d.module}; ficheiro ${d.file.replace(/\.md$/, "")}` : d.module);
+  return docs.map((d) => `- ${d.title} (${id(d)})${d.routes.length ? ` [${d.routes.join(", ")}]` : ""}: ${d.summary}`).join("\n");
 }
 
 // ─── Ajuda pelo significado (base de conhecimento) ──────────────────────────
