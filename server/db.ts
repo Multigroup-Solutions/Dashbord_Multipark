@@ -1,7 +1,7 @@
 import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerScope, scopedProjectIds, requireGlobalCityAccess, gpsRowScope, pdaScope, cityNameScope } from './cityScope';
 import { TRPCError } from '@trpc/server';
 import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
-import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
+import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE } from '../shared/shiftHandover';
 import { handoverAiSummaryStale, mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, stampOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
@@ -92,7 +92,6 @@ import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle
 import { ENV } from "./_core/env";
 import { expenseStatsWindows, lisbonToday } from "../shared/expensePeriods";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
-import { dayTimings, teamLines } from "../shared/shiftDayReview";
 import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
@@ -4180,119 +4179,8 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
   }));
 }
 
-/**
- * Entregas pendente→entregue a partir do histórico (ao vivo): 1.º
- * PENDING_CHECKOUT no dia → 1.º CHECK_OUT (até 10 h depois). Instantes UTC
- * "YYYY-MM-DD HH:MM:SS". PURA. A hora marcada já não entra nas recolhas (15
- * out 2026): os tempos das recolhas vêm da tabela dos tempos (ou ao vivo).
- */
-export function supervisorTimings(
-  rows: Array<{ bookingExternalId: string; changeType: string | null; actionTime: string | null; agentName: string | null; checkIn: string | null }>,
-  w: { start: string; end: string; checkoutEnd: string },
-): { deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }> } {
-  const t = dayTimings(rows, w);
-  return { deliveryTimes: t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent })) };
-}
-
-/** Prazo do Resumo do dia para as leituras à Multipark (o resto — escala, reclamações — é a nossa BD). */
-const SUPERVISOR_DAY_BUDGET_MS = 48_000;
-
-/** Resumo do dia do supervisor: condutores por turno, carros
- *  recolhidos/entregues, reclamações do dia e, por chefe de turno, o que a
- *  equipa dele fez (12 out 2026).
- *  15 out 2026 — os tempos novos (Fila, Trânsito, Cliente, Nosso e a meta;
- *  nas recolhas o tempo no terminal, no P2, o cliente e as atrasadas no T2):
- *  da tabela dos tempos; sem linhas para o dia, calculados agora com as mesmas
- *  regras, sem GPS (server/serviceTimesRead.ts). O PORTÃO dos tempos com GPS
- *  aplica-se aqui (server/serviceTimesAgg.ts): quem não é super admin não
- *  recebe esses números enquanto ele estiver fechado. A hora marcada já não
- *  entra em nenhum tempo.
- *  O "dia" é o dia OPERACIONAL de Lisboa: 03:00 → 03:00 do dia seguinte
- *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
- *  dentro das cidades do utilizador (ou da cidade pedida). */
-export async function getSupervisorDayDashboard(date: string, opts: { isSuperAdmin?: boolean } = {}) {
-  const t0 = Date.now();
-  const db = await getDb();
-  if (!db) return null;
-  const { start, end } = operationalDayWindowUtc(date);
-
-  // Movimentos AO VIVO da BD da Multipark ("History"; a cópia local está congelada desde o #141):
-  // só para as reclamações dos carros que saíram — por isso só os CHECK_OUT do dia (15 out 2026: os
-  // pendentes e as recolhas já não entram aqui; os tempos vêm da tabela dos tempos ou do cálculo ao vivo).
-  const { readLiveHistory } = await import("./multiparkDb/historyLive");
-  const { scopedCityNamesLive } = await import("./cityScope");
-  const HIST_LIMIT = 5000;
-  const hist = await readLiveHistory({ changeTypes: ["CHECK_OUT"], from: start, to: end, cities: scopedCityNamesLive(), limit: HIST_LIMIT, order: "asc" });
-
-  // Tempos (15 out 2026): a tabela; sem linhas, ao vivo (uma leitura por dia, partilhada e com
-  // o prazo que sobra deste pedido: a função da Vercel morre aos 60 s). O portão no servidor.
-  const { dayServiceRows, loadServiceViewSettings, scopedServiceCityKeys, employeeNames } = await import("./serviceTimesRead");
-  const { dayTimesView, teamActs } = await import("./serviceTimesAgg");
-  const [svc, svcSettings] = await Promise.all([
-    dayServiceRows(date, { cityKeys: await scopedServiceCityKeys(), deadlineMs: SUPERVISOR_DAY_BUDGET_MS - (Date.now() - t0) }),
-    loadServiceViewSettings(),
-  ]);
-  const gate = { gate: svcSettings.gate, isSuperAdmin: !!opts.isSuperAdmin };
-  const timesView = dayTimesView(svc.rows, { targetMinutes: svcSettings.targetMinutes, gate });
-
-  // Reclamações criadas no mesmo dia operacional
-  const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
-    WHERE createdAt >= ${start} AND createdAt < ${end} AND ${projectScope(sql`complaints.projectId`)}`) as any;
-  // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM neste dia (entrega feita
-  // no dia operacional), seja qual for o dia em que chegaram — com o histórico já lido.
-  let complaintsDeparted: { available: true; complaints: number; bookings: number; truncated: boolean } | { available: false; reason: string };
-  try {
-    const { departedFromHistory, departedRefs } = await import("../shared/departedComplaints");
-    const { countComplaintsForRefs } = await import("./departedComplaints");
-    const left = departedFromHistory(hist, start, end);
-    complaintsDeparted = { available: true, complaints: await countComplaintsForRefs(departedRefs(left)), bookings: left.length, truncated: hist.length >= HIST_LIMIT };
-  } catch (err: any) {
-    console.warn("[resumo-dia] reclamações dos carros que saíram:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
-    complaintsDeparted = { available: false, reason: "Não foi possível contar as reclamações dos carros que saíram." };
-  }
-
-  // Condutores por turno (escala extras-dia do dia + ações)
-  const dayActivity = await getDayActivity(date);
-  const assignments = await db.select({
-    personName: extrasDiaAssignments.personName,
-    shift: extrasDiaAssignments.shift,
-    city: extrasDiaAssignments.city,
-    employeeId: extrasDiaAssignments.employeeId,
-    startHour: extrasDiaAssignments.startHour,
-    endHour: extrasDiaAssignments.endHour,
-    sentHomeHour: extrasDiaAssignments.sentHomeHour,
-    isTeamLeader: extrasDiaAssignments.isTeamLeader,
-  }).from(extrasDiaAssignments).where(and(eq(extrasDiaAssignments.assignmentDate, date), cityNameScope(extrasDiaAssignments.city)));
-
-  // Equipas por chefe de turno (regra 42c): a entrega é do condutor do Trânsito
-  // (quem pegou no carro), dentro ou fora da meta pelo nosso tempo; a recolha é
-  // de quem tirou o carro do terminal (só há atrasadas no T2). Com o portão
-  // fechado, sem medida (a contagem fica).
-  const acts = teamActs(svc.rows, { targetMinutes: svcSettings.targetMinutes, gate });
-  const teams = teamLines(date, assignments.map((a) => ({ ...a, shift: a.shift as "morning" | "night" })), {
-    deliveries: acts.deliveries.map((d) => ({ actor: { employeeId: d.employeeId, name: null }, at: d.at, ourMins: d.ourMins })),
-    pickups: acts.pickups.map((p) => ({ actor: { employeeId: p.employeeId, name: null }, at: p.at, t2: p.t2, t2LateMins: p.t2LateMins })),
-  }, { targetMinutes: svcSettings.targetMinutes });
-  const driverNames = await employeeNames([...timesView.deliveries.slowest.map((x) => x.driverEmployeeId), ...timesView.pickups.longest.map((x) => x.driverEmployeeId)]);
-
-  return {
-    date,
-    window: { start, end },
-    totals: dayActivity.totals,
-    people: dayActivity.people,
-    gpsMissingDays: dayActivity.gpsMissingDays,
-    shifts: assignments,
-    teams,
-    /** Portão fechado: as equipas vêm sem "dentro/fora da meta" (o texto a pôr no lugar). */
-    teamsHidden: acts.hidden,
-    times: { ...timesView, source: svc.source, computedAt: svc.computedAt, truncated: svc.truncated, reason: svc.reason },
-    driverNames,
-    complaintsToday: Number((compl as any)?.n ?? 0),
-    complaintsDeparted,
-    // Movimentos cortados no limite: as reclamações dos carros que saíram são de uma parte do dia (o ecrã avisa).
-    timingsTruncated: hist.length >= HIST_LIMIT,
-  };
-}
+// O Resumo do dia do supervisor (getSupervisorDayDashboard) mudou-se para
+// server/supervisorDay.ts (auditoria do #389).
 
 // ─── LIGAÇÃO AGENTE→PARCEIRO (agências que marcam pelo portal de agentes) ────
 // Alguns "agentes" Multipark são agências de viagens/parceiros, não

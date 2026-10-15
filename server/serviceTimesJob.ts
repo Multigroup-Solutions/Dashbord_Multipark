@@ -856,7 +856,7 @@ export type ServiceLiveDeps = Pick<ServiceTimesDeps, "query" | "now" | "settings
  * desligado ou dia ainda por calcular). Uma leitura da History, só leitura.
  * Nunca lança: a Multipark em baixo → `ok:false` com o motivo.
  */
-export async function computeServiceRowsLive(deps: ServiceLiveDeps, o: { from: string; to: string; deadlineAt: number }): Promise<{ ok: true; rows: ServiceTimesRow[]; truncated: boolean } | { ok: false; error: string }> {
+export async function computeServiceRowsLive(deps: ServiceLiveDeps, o: { from: string; to: string; deadlineAt: number }): Promise<{ ok: true; rows: ServiceTimesRow[]; truncated: boolean } | { ok: false; error: string; poolWait: boolean }> {
   try {
     const settings = await deps.settings();
     const nowMs = deps.now();
@@ -871,7 +871,9 @@ export async function computeServiceRowsLive(deps: ServiceLiveDeps, o: { from: s
     return { ok: true, rows, truncated: report.truncated };
   } catch (err) {
     const r = describeReadFailure(err);
-    return { ok: false, error: r.reason };
+    // sem ligação livre na pool (ou sem ligação): não é uma falha a guardar 60 s (ver serviceTimesRead.ts)
+    const poolWait = (err as { code?: unknown } | null)?.code === "CONNECT_FAILED";
+    return { ok: false, error: r.reason, poolWait };
   }
 }
 

@@ -44,8 +44,7 @@ describe("§8.1 — a regra", () => {
 
 describe("§8.1 — no servidor, em todos os ecrãs", () => {
   it("cada leitura da tabela dos tempos aplica o portão com o papel de quem pede", () => {
-    const db = src("server/db.ts");
-    const dash = db.slice(db.indexOf("export async function getSupervisorDayDashboard"), db.indexOf("// ─── LIGAÇÃO AGENTE→PARCEIRO"));
+    const dash = src("server/supervisorDay.ts");
     expect(dash).toContain("loadServiceViewSettings()");
     expect(dash).toContain("isSuperAdmin: !!opts.isSuperAdmin");
     expect(src("server/shiftDayDetail.ts")).toContain("gate: { gate: st.gate, isSuperAdmin: !!opts.isSuperAdmin }");
@@ -62,10 +61,19 @@ describe("§8.1 — no servidor, em todos os ecrãs", () => {
     // nenhum procedimento aceita o papel ou o portão vindos do pedido
     for (const f of ["server/routers.ts", "server/bookingFileRouter.ts", "server/sondaTemposRouter.ts"]) expect(src(f)).not.toMatch(/input\.(isSuperAdmin|gate|gpsGate)/);
   });
-  it("o MCP, o assistente e o briefing ainda não leem os tempos (fica para depois, com o portão)", () => {
+  it("o assistente, o briefing e os relatórios do MCP não leem os tempos por fora dos procedimentos", () => {
     for (const f of ["server/mcpReportsApi.ts", "server/assistant/tools.ts", "server/aiOps/briefing.ts"]) {
       expect(src(f), f).not.toMatch(/serviceTimesRead|serviceTimesAgg|service_times|driverTimes/);
     }
+  });
+  it("o MCP pessoal (owner:read) LÊ estes procedimentos, mas como quem criou a chave: o portão segue o papel dessa pessoa", () => {
+    // correção da auditoria do #389: o teste antigo dizia que o MCP não lia os tempos — lê, pelo
+    // /procedures/call; o que o protege é correr com o utilizador dono da chave (createCaller com
+    // esse user), e os procedimentos tiram o papel de ctx.user (nunca do pedido)
+    const mcp = src("server/mcpProceduresApi.ts");
+    expect(mcp).toContain("createCaller({ req, res, user, accessDenied: false })");
+    expect(mcp).toContain("const user = await getUserById(ownerId);");
+    expect(mcp).toMatch(/r\.post\("\/procedures\/call", requireCapability\("owner:read"\)/);
   });
   it("o ecrã nunca esconde por si: só mostra o texto do portão que vem do servidor", () => {
     for (const f of ["client/src/components/shiftDay/DayTimesSection.tsx", "client/src/components/people/DriverTimesCard.tsx", "client/src/pages/extrasDia/PressureTab.tsx", "client/src/components/operacoes/WeekActivityTab.tsx"]) {

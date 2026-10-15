@@ -4156,7 +4156,7 @@ export const appRouter = router({
       city: z.enum(HANDOVER_CITIES).optional(),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_resumo_dia", "view");
-      const { getSupervisorDayDashboard } = await import("./db");
+      const { getSupervisorDayDashboard } = await import("./supervisorDay");
       // 15 out 2026: o portão dos tempos com GPS aplica-se no servidor (só o super admin os vê com ele fechado)
       return getSupervisorDayDashboard(input.date, { isSuperAdmin: ctx.user.role === "super_admin" });
     }),

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildLiveHistoryByAgentSql, buildLiveHistorySql, mapLiveHistoryRow, readLiveHistory, HISTORY_MAX_LIMIT } from "./historyLive";
 import { assertReadOnlySql } from "./client";
-import { supervisorTimings } from "../db";
+import { dayTimings } from "../../shared/shiftDayReview";
 
 describe("histórico ao vivo (\"History\" da Multipark)", () => {
   it("por reserva: só leitura, LIMIT, ordem mais recente primeiro", () => {
@@ -63,14 +63,14 @@ describe("painel do supervisor: tempos a partir do histórico", () => {
   const w = { start: "2026-09-28 02:00:00", end: "2026-09-29 02:00:00", checkoutEnd: "2026-09-29 12:00:00" };
   const r = (b: string, ct: string, t: string, o: any = {}) => ({ bookingExternalId: b, changeType: ct, actionTime: t, agentName: "Rui", checkIn: null, ...o });
   it("pendente→entrega (mesma reserva, < 10 h); a hora marcada já não entra nas recolhas", () => {
-    const res = supervisorTimings([
+    const t = dayTimings([
       r("a", "PENDING_CHECKOUT", "2026-09-28 10:00:00"), r("a", "CHECK_OUT", "2026-09-28 10:25:00"),
       r("b", "PENDING_CHECKOUT", "2026-09-28 10:00:00"), r("b", "CHECK_OUT", "2026-09-28 22:00:00"),   // > 10 h: fora
       r("c", "CHECK_OUT", "2026-09-28 11:00:00"),                                                    // sem pendente: fora
       r("d", "CHECK_IN", "2026-09-28 08:20:00", { checkIn: "2026-09-28 08:00:00" }),
       r("d", "CHECK_IN", "2026-09-28 09:00:00", { checkIn: "2026-09-28 08:00:00" }),                 // conta o 1.º
-    ], w);
-    expect(res.deliveryTimes).toEqual([{ booking: "a", mins: 25, agent: "Rui" }]);
-    expect(res).not.toHaveProperty("pickupDelays");
+    ] as any, w);
+    expect(t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent }))).toEqual([{ booking: "a", mins: 25, agent: "Rui" }]);
+    for (const p of t.pickups) expect(p).not.toHaveProperty("delayMins");
   });
 });
