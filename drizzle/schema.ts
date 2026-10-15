@@ -1374,6 +1374,9 @@ export const extrasDiaAssignments = mysqlTable("extras_dia_assignments", {
 	// 0335 — 'auto' (criada pela proposta automática) | 'manual'; quem alterou por último.
 	source: varchar({ length: 8 }).default('manual').notNull(),
 	updatedById: int(),
+	// 0830 — quando ESTA pessoa foi posta NESTE dia (linha nova, troca de pessoa ou de dia);
+	// NULL nas linhas antigas (usa-se createdAt). "Avisou antes de ser escalado" conta daqui.
+	personAssignedAt: timestamp({ mode: 'string' }),
 },
 (table) => [
 	index("idx_extras_dia_date").on(table.assignmentDate),

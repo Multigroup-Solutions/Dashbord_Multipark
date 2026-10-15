@@ -15,6 +15,11 @@
 // `employees.contractType` passa a aceitar `partner_company` (parceiros-empresa:
 // fora do mapa e da folha, o salário fica só como referência para os custos).
 //
+// `extras_dia_assignments.personAssignedAt` TIMESTAMP NULL: quando ESTA pessoa
+// foi posta NESTE dia (linha nova, troca de pessoa ou de dia). "Avisou antes de
+// ser escalado" conta a partir daqui (Jorge, 15 out 2026). Fica NULL nas linhas
+// que já existem — essas usam a criação da linha, como antes.
+//
 // Nada se apaga: "apagar" uma ausência passa a CANCELAR (status 'cancelled').
 //
 // Idempotente e só acrescenta: ADD COLUMN → ER_DUP_FIELDNAME, ADD INDEX →
@@ -34,6 +39,7 @@ export const MIGRATION_0830_STATEMENTS: string[] = [
   "ALTER TABLE `employee_leaves` ADD COLUMN `cancelledAt` TIMESTAMP NULL DEFAULT NULL",
   "ALTER TABLE `employee_leaves` ADD INDEX `idx_employee_leaves_status` (`status`, `fromDate`)",
   "ALTER TABLE `employees` MODIFY COLUMN `contractType` ENUM('permanent','fixed_term','extra','partner_company') NULL DEFAULT 'permanent'",
+  "ALTER TABLE `extras_dia_assignments` ADD COLUMN `personAssignedAt` TIMESTAMP NULL DEFAULT NULL",
 ];
 
 export const IDEMPOTENT_ERROR_CODES_0830 = new Set<string>(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);

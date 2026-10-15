@@ -208,14 +208,17 @@ export type LeaveViewerMode = "full" | "supervisor" | "employee" | "extra" | "no
  * Como esta conta vê o mapa (decisão do Jorge):
  *  - "full": o super admin, as contas de `rh.leavesViewAll` e as do RH
  *    (`rh.hrPeople`) — tudo, de todas as cidades, com o tipo e as notas;
- *  - "supervisor": a sua área; baixas e ausências como "ausente";
+ *  - "supervisor": a sua área; baixas e ausências como "ausente". Também o
+ *    ADMINISTRADOR que não é super admin nem está naquelas listas (Jorge,
+ *    15 out 2026): a vista de supervisor, com todas as cidades (o âmbito
+ *    nacional que o papel já tem);
  *  - "employee": as suas e as FÉRIAS dos colegas da sua cidade;
  *  - "extra": só as suas indisponibilidades;
  *  - "none": conta sem ficha (nada além do que for seu, que não há). PURA.
  */
 export function leaveViewerMode(v: { role: string; userId: number; hasEmployee: boolean; isExtra: boolean; viewAll: readonly number[]; hrPeople: readonly number[] }): LeaveViewerMode {
   if (v.role === "super_admin" || v.viewAll.includes(v.userId) || v.hrPeople.includes(v.userId)) return "full";
-  if (v.role === "supervisor") return "supervisor";
+  if (v.role === "supervisor" || v.role === "admin") return "supervisor";
   if (!v.hasEmployee) return "none";
   return v.isExtra ? "extra" : "employee";
 }
@@ -421,6 +424,24 @@ export function cancelLeaveError(actor: LeaveActor & { canManage: boolean }, lea
   return "Sem permissão para cancelar esta ausência.";
 }
 
+/**
+ * Lançar FÉRIAS já aprovadas (RH → "Lançar ausência", a ficha, a dispensa de
+ * uma possível falta com "Férias") salta o pedido e a aprovação. Jorge (15 out
+ * 2026): só quem aprova as férias dessa pessoa (regra `rh.vacationApprovals`,
+ * agora), o RH (`rh.hrPeople`) e o super admin. As próprias continuam
+ * proibidas (ninguém aprova as suas), salvo o super admin. Com o mapa
+ * DESLIGADO (`mapOn` false) não há pedidos nem aprovações: fica como antes
+ * (quem gere a ficha lança; só as próprias não). As outras ausências (baixa,
+ * ausência, indisponível) não passam por aqui. Devolve a recusa, ou null. PURA.
+ */
+export function launchApprovedVacationError(i: { actorUserId: number; actorRole: string; own: boolean; mapOn: boolean; hrPeople: readonly number[]; approverUserIds: readonly number[] }): string | null {
+  if (i.actorRole === "super_admin") return null;
+  if (i.own) return "As tuas férias pedem-se no Mapa de férias: ninguém aprova as suas.";
+  if (!i.mapOn) return null;
+  if (i.hrPeople.includes(i.actorUserId) || i.approverUserIds.includes(i.actorUserId)) return null;
+  return "Férias já aprovadas só as lança quem aprova as férias desta pessoa, o RH ou o super admin. A pessoa pede-as no Mapa de férias (ou pede a quem as aprova).";
+}
+
 /** Lê a lista de quem podia aprovar (coluna JSON: array, texto JSON ou nada). PURA. */
 export function parseApproverIds(raw: unknown): number[] {
   let v: unknown = raw;
@@ -445,10 +466,36 @@ export interface NoticeLeave extends LeaveLikeRow {
 }
 
 /**
+ * A pessoa da linha mudou (outra ficha, outro nome sem ficha) ou a linha mudou
+ * de DIA? Então conta como uma escala NOVA dessa pessoa nesse dia (Jorge,
+ * 15 out 2026) e a hora de escalada (`personAssignedAt`) passa a ser agora.
+ * Mudar só as horas, o turno, a cidade ou o estado não. PURA.
+ */
+export function personAssignmentChanged(
+  prev: { employeeId: number | null; assignmentDate: string; personName?: string | null },
+  next: { employeeId: number | null; assignmentDate: string; personName?: string | null },
+): boolean {
+  if ((prev.employeeId ?? null) !== (next.employeeId ?? null)) return true;
+  if (String(prev.assignmentDate).slice(0, 10) !== String(next.assignmentDate).slice(0, 10)) return true;
+  return prev.employeeId == null && (prev.personName ?? "") !== (next.personName ?? "");
+}
+
+/**
+ * Desde quando ESTA pessoa está escalada NESTE dia: a hora em que foi posta
+ * (`personAssignedAt`, 0830); as linhas antigas, sem ela, usam a criação da
+ * linha (como antes). PURA.
+ */
+export function scheduledSince(r: { personAssignedAt?: string | Date | null; createdAt?: string | Date | null }): string | Date | null {
+  const at = r.personAssignedAt;
+  return at != null && String(at).trim() !== "" ? at : (r.createdAt ?? null);
+}
+
+/**
  * A falta ao Extras-Dia fica SEM pontos quando a pessoa tinha avisado ANTES de
  * ser escalada (ausência aprovada desse dia, de dia inteiro, registada antes
- * da linha da escala). Avisos depois de escalado não contam ("ninguém foge a
- * uma falta à última hora"). Devolve o aviso que justifica, ou null. PURA.
+ * de a pessoa ser posta nesse dia — `scheduledSince`). Avisos depois de
+ * escalado não contam ("ninguém foge a uma falta à última hora"). Devolve o
+ * aviso que justifica, ou null. PURA.
  */
 export function noticeBeforeAssignment<T extends NoticeLeave>(leaves: readonly T[], day: string, assignmentCreatedAt: string | Date | null | undefined): T | null {
   const at = tsMs(assignmentCreatedAt);
@@ -481,6 +528,33 @@ export function absenceForScheduler(l: NoticeLeave): SchedulerAbsence {
     noticeDay: Number.isFinite(ms) ? lisbonDayOf(ms) : null,
     partial: l.hours != null && l.hours !== "",
   };
+}
+
+/** A marca, na nota da possível falta, de quem tinha avisado antes de ser escalado. */
+export const NOTICE_NO_SHOW_MARK = "(antes de ser escalado): sem pontos";
+
+/** " — tinha avisado a 30/10 que não estava (antes de ser escalado): sem pontos". PURA. */
+export function noticeNoShowNote(noticeDay: string | null | undefined): string {
+  return ` — tinha avisado a ${shortDayPt(noticeDay)} que não estava ${NOTICE_NO_SHOW_MARK}`;
+}
+
+/**
+ * Esta falta ao Extras-Dia é de quem tinha avisado antes de ser escalado (0
+ * pontos e a marca na nota)? Essas não contam para a ordem da proposta
+ * automática (as faltas dos últimos 60 dias) — Jorge, 15 out 2026. PURA.
+ */
+export function isNoticeNoShow(p: { points?: number | string | null; notes?: string | null }): boolean {
+  return Number(p.points ?? 1) === 0 && String(p.notes ?? "").includes(NOTICE_NO_SHOW_MARK);
+}
+
+/**
+ * A ausência do dia tira a pessoa da proposta automática (e do "Preencher")?
+ * Sim quando é de DIA INTEIRO: o "não vou estar" dos extras e qualquer outra
+ * aprovada (uma baixa lançada pelo RH, por exemplo). Parte do dia não. À mão
+ * continua a poder escalar-se, com o aviso. PURA.
+ */
+export function blocksAutoProposal(a: SchedulerAbsence | null | undefined): boolean {
+  return !!a && !a.partial;
 }
 
 /** "Indisponível (avisou a 03/08)" / "De férias" / "Ausente". PURA. */

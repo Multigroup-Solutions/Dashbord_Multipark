@@ -29,6 +29,7 @@ import { PRESSURE_CITY_GROUP, describeMeasuredCrewRule, effectiveCrewRule, type 
 import { FALLBACK_CARS_PER_HOUR, MAX_SHIFT_HOURS as SHIFT_MAX, MIN_SHIFT_HOURS as SHIFT_MIN, PICKUP_PAIR_AFTER_MIN, PICKUP_PAIR_BEFORE_MIN, describeCrewRule, extrasNeededFor, pairPickupsWithDeliveries, pairTerminal, type CrewRule } from "../shared/extrasSchedule";
 import { lisbonDayOf, lisbonWallTimeUtcMs } from "../shared/lisbonDay";
 import { TL_PERMISSION, canBeTeamLeader, teamLeaderRefusal, teamLeaderRefusalMessage, type TlAccount } from "../shared/teamLeaderEligibility";
+import { personAssignmentChanged } from "../shared/leaves";
 import type { LiveExtrasBooking } from "./multiparkDb/extrasBookings";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -861,6 +862,9 @@ export function assignmentVersionChanged(
     || (prev.employeeId == null && prev.personName !== next.personName);
 }
 
+/** Agora, em UTC, no formato do MySQL (como os outros carimbos escritos pela app). */
+const utcNowSql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+
 /** Conflito de escala (a mesma pessoa a horas sobrepostas): o router devolve 409. */
 export class ScheduleConflictError extends Error {}
 
@@ -947,11 +951,15 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
     const [prev] = await db.select().from(extrasDiaAssignments).where(eq(extrasDiaAssignments.id, input.id)).limit(1);
     if (!prev) return null;
     const bump = assignmentVersionChanged(prev, { ...payload, shift: payload.shift });
+    // Plano 63 (11): trocar a pessoa ou o dia é uma escala NOVA dessa pessoa nesse dia
+    // ("avisou antes de ser escalado" conta a partir daqui); mexer nas horas não.
+    const newPerson = personAssignmentChanged(prev, payload);
     // Editar não apaga as notas (o formulário de horas não as manda); quem
     // edita fica registado e a linha passa a "à mão" (a proposta refeita já não a substitui).
     const { notes: _notes, ...rest } = payload;
     await db.update(extrasDiaAssignments).set({
       ...rest,
+      ...(newPerson ? { personAssignedAt: utcNowSql() } : {}),
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
       source: input.source ?? "manual",
       updatedById: input.updatedById ?? null,
@@ -982,7 +990,7 @@ export async function upsertAssignment(input: UpsertAssignmentInput): Promise<As
   }
   const [result] = await db
     .insert(extrasDiaAssignments)
-    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null, source: input.source ?? "manual" })
+    .values({ ...payload, status, proposalReason: input.proposalReason ?? null, createdById: input.createdById ?? null, source: input.source ?? "manual", personAssignedAt: utcNowSql() })
     .$returningId();
   const newId = (result as any).id;
   const [row] = await db

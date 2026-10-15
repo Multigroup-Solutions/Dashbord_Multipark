@@ -18,7 +18,7 @@ import { scopedProjectIds } from "./cityScope";
 import {
   DEFAULT_VACATION_APPROVALS, DEFAULT_VACATION_DAYS_PER_YEAR, FERIAS_AVISOS_FLAG, FERIAS_MAPA_FLAG, HR_PEOPLE_KEY, LEAVE_STATUS_LABELS, LEAVE_TYPE_LABELS,
   LEAVES_VIEW_ALL_KEY, PARTNER_COMPANY_CONTRACT, VACATION_APPROVALS_KEY, VACATION_DAYS_PER_YEAR_KEY,
-  cancelLeaveError, closedMonthMessage, closedMonthOfPeriod, decideLeaveError, isActiveLeave, leaveForViewer, leaveInputError,
+  blocksAutoProposal, cancelLeaveError, closedMonthMessage, closedMonthOfPeriod, decideLeaveError, isActiveLeave, launchApprovedVacationError, leaveForViewer, leaveInputError,
   leaveViewerMode, parseApproverIds, periodsOverlap, shortDayPt, vacationApproversFor, vacationDaysInYear, workingDaysIn,
   type ApproverCandidate, type ApproversResult, type LeaveType, type LeaveTypeShown, type LeaveViewerMode, type VacationApprovals,
 } from "../shared/leaves";
@@ -189,6 +189,20 @@ export async function assertPeriodOpen(p: { fromDate: string; toDate: string }):
 
 // ─── Quem aprova ─────────────────────────────────────────────────────────────
 
+/** A conta como candidata a aprovar (o supervisor com as cidades que cobre). */
+async function approverCandidate(r: { id: number; role: string; isActive: boolean }): Promise<ApproverCandidate> {
+  const u: ApproverCandidate = { id: r.id, role: r.role, isActive: r.isActive };
+  if (u.role === "supervisor") {
+    const { loadCityAccessParts } = await import("./cityAccess");
+    const { opsCityOf } = await import("./aiOps/cities");
+    try {
+      const { access } = await loadCityAccessParts(u.id, "supervisor");
+      u.cities = access.all ? "all" : (access.cityNames ?? (access.cityName ? [access.cityName] : [])).map((n) => opsCityOf(n)).filter((c): c is NonNullable<typeof c> => !!c);
+    } catch { u.cities = []; }
+  }
+  return u;
+}
+
 /** As contas que podem aprovar as férias desta ficha (regras de agora). */
 export async function approversForEmployee(employeeId: number, settings?: LeaveSettings): Promise<ApproversResult & { requesterUserIds: number[]; city: string | null }> {
   const s = settings ?? (await loadLeaveSettings());
@@ -202,22 +216,60 @@ export async function approversForEmployee(employeeId: number, settings?: LeaveS
   ].filter((n) => Number.isInteger(n) && n > 0)));
   const rows = rowsOf(await (await db()).execute(sql`SELECT id, role, isActive FROM users
      WHERE isActive = 1 AND (role IN ('supervisor', 'super_admin')${explicit.length ? sql` OR id IN (${sql.join(explicit.map((id) => sql`${id}`), sql`, `)})` : sql``})`));
-  const { loadCityAccessParts } = await import("./cityAccess");
-  const { opsCityOf } = await import("./aiOps/cities");
   const users: ApproverCandidate[] = [];
-  for (const r of rows) {
-    const u: ApproverCandidate = { id: Number(r.id), role: String(r.role), isActive: Number(r.isActive) === 1 };
-    if (u.role === "supervisor") {
-      try {
-        const { access } = await loadCityAccessParts(u.id, "supervisor");
-        u.cities = access.all ? "all" : (access.cityNames ?? (access.cityName ? [access.cityName] : [])).map((n) => opsCityOf(n)).filter((c): c is NonNullable<typeof c> => !!c);
-      } catch { u.cities = []; }
-    }
-    users.push(u);
-  }
+  for (const r of rows) users.push(await approverCandidate({ id: Number(r.id), role: String(r.role), isActive: Number(r.isActive) === 1 }));
   const requesterUserIds = Array.from(new Set([...(emp.employee.userId ? [Number(emp.employee.userId)] : []), ...logins]));
   const res = vacationApproversFor({ employeeId, position: emp.employee.position ?? null, city, userIds: requesterUserIds }, s.rules, users, s.hrPeople);
   return { ...res, requesterUserIds, city };
+}
+
+/**
+ * Pode lançar FÉRIAS já aprovadas a esta ficha? (shared/leaves.ts →
+ * launchApprovedVacationError: quem as aprova, o RH ou o super admin; as
+ * próprias não.) Lança FORBIDDEN com o motivo.
+ */
+export async function assertCanLaunchApprovedVacation(user: { id: number; role: string }, employeeId: number, principalUserId?: number | null): Promise<void> {
+  if (user.role === "super_admin") return;
+  // a conta principal da ficha: quem chama já a tem (senão lê-se a ficha)
+  const principal = principalUserId !== undefined ? principalUserId : ((await getEmployeeById(employeeId))?.employee?.userId ?? null);
+  const [logins, me] = await Promise.all([employeeLogins(employeeId), getEmployeeByUserId(user.id)]);
+  const own = logins.includes(user.id) || me?.employee?.id === employeeId || (principal != null && Number(principal) === user.id);
+  // mapa desligado: como antes (só as próprias não) — não se leem regras nem contas
+  const mapOn = !own && (await feriasMapaOn());
+  const s = mapOn ? await loadLeaveSettings() : null;
+  // o RH não precisa de ler as regras; os outros têm de estar entre quem aprova (regras de agora)
+  const approverUserIds = !s || s.hrPeople.includes(user.id) ? [] : (await approversForEmployee(employeeId, s)).userIds;
+  const err = launchApprovedVacationError({ actorUserId: user.id, actorRole: user.role, own, mapOn, hrPeople: s?.hrPeople ?? [], approverUserIds });
+  if (err) throw new TRPCError({ code: "FORBIDDEN", message: err });
+}
+
+/**
+ * Para o ecrã de lançar: a que fichas ESTA conta pode lançar férias já
+ * aprovadas (o servidor volta a confirmar ao gravar). Uma só leitura das
+ * regras e das contas: basta saber se a conta que lança está entre quem
+ * aprova cada ficha, por isso a lista de candidatas é só ela.
+ */
+export async function vacationLaunchableIds(user: { id: number; role: string }, people: ReadonlyArray<{ id: number; position: string | null; projectId: number | null; userId: number | null }>): Promise<Set<number>> {
+  const out = new Set<number>();
+  if (!people.length) return out;
+  const mapOn = await feriasMapaOn();
+  const s = await loadLeaveSettings();
+  const [me, cityOf, actor] = await Promise.all([getEmployeeByUserId(user.id), cityResolver(), approverCandidate({ id: user.id, role: user.role, isActive: true })]);
+  // contas extra das fichas que importam aqui: as do RH (a regra do RH ganha ao posto) e a de quem lança (as próprias não)
+  const relevant = Array.from(new Set([...s.hrPeople, user.id]));
+  const extra = new Map<number, number[]>();
+  try {
+    const rows = rowsOf(await (await db()).execute(sql`SELECT employeeId, userId FROM employee_accounts WHERE userId IN (${sql.join(relevant.map((id) => sql`${id}`), sql`, `)})`));
+    for (const r of rows) extra.set(Number(r.employeeId), [...(extra.get(Number(r.employeeId)) ?? []), Number(r.userId)]);
+  } catch { /* sem contas extra: só a principal */ }
+  for (const p of people) {
+    const userIds = Array.from(new Set([...(p.userId != null ? [Number(p.userId)] : []), ...(extra.get(p.id) ?? [])]));
+    const own = me?.employee?.id === p.id || userIds.includes(user.id);
+    const approverUserIds = own || !mapOn || user.role === "super_admin" || s.hrPeople.includes(user.id) ? []
+      : vacationApproversFor({ employeeId: p.id, position: p.position, city: cityOf(p.projectId), userIds }, s.rules, [actor], s.hrPeople).userIds;
+    if (!launchApprovedVacationError({ actorUserId: user.id, actorRole: user.role, own, mapOn, hrPeople: s.hrPeople, approverUserIds })) out.add(p.id);
+  }
+  return out;
 }
 
 // ─── Avisos (FERIAS_AVISOS) ──────────────────────────────────────────────────
@@ -462,8 +514,10 @@ export async function cancelLeave(actor: { userId: number; role: string; employe
 
 /**
  * O RH (quem gere a ficha — o router já confirmou) lança uma ausência:
- * entra APROVADA, como sempre. As próprias férias não (ninguém aprova as
- * suas), salvo o super admin. Parceiros-empresa: fora.
+ * entra APROVADA, como sempre. FÉRIAS só as lança quem as aprova (regra
+ * `rh.vacationApprovals`, agora), o RH (`rh.hrPeople`) ou o super admin — o
+ * supervisor da cidade já não as lança a quem não aprova; as próprias não
+ * (ninguém aprova as suas), salvo o super admin. Parceiros-empresa: fora.
  */
 export async function launchLeave(user: { id: number; role: string }, input: { employeeId: number; leaveType: LeaveType; fromDate: string; toDate: string; hours?: number | null; notes?: string | null }) {
   const err = leaveInputError(input);
@@ -473,13 +527,8 @@ export async function launchLeave(user: { id: number; role: string }, input: { e
   if (emp.employee.contractType === PARTNER_COMPANY_CONTRACT) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Os parceiros-empresa ficam fora do mapa de férias e da folha." });
   const isExtra = emp.employee.position === "extra" || emp.employee.contractType === "extra";
   if (input.leaveType === "unavailable" && !isExtra) throw new TRPCError({ code: "BAD_REQUEST", message: "\"Indisponível\" é só para extras; para um funcionário usa férias ou uma ausência." });
-  if (input.leaveType === "vacation" && user.role !== "super_admin") {
-    const logins = await employeeLogins(input.employeeId);
-    const me = await getEmployeeByUserId(user.id);
-    if (logins.includes(user.id) || me?.employee?.id === input.employeeId) {
-      throw new TRPCError({ code: "FORBIDDEN", message: "As tuas férias pedem-se no Mapa de férias: ninguém aprova as suas." });
-    }
-  }
+  // Férias já aprovadas: só quem as aprova (regra de agora), o RH ou o super admin; as próprias não (Jorge, 15 out 2026).
+  if (input.leaveType === "vacation") await assertCanLaunchApprovedVacation(user, input.employeeId, emp.employee.userId ?? null);
   await assertPeriodOpen(input);
   // Sobreposições: o mesmo dia não fica com duas ausências ativas (duas férias contavam a dobrar no total do
   // ano e no PDF; uma baixa por cima de férias aprovadas deixava o mapa a mostrar "férias"). Cancela-se a
@@ -531,6 +580,19 @@ export async function absencesOnDay(day: string, employeeIds: readonly number[])
   } catch (err: any) {
     console.warn("[férias] ausências do dia não lidas:", String(err?.message ?? err).slice(0, 160));
   }
+  return out;
+}
+
+/**
+ * Quem a proposta automática do Extras-Dia (e o "Preencher") deixa de fora
+ * nesse dia: avisou que não está — "não vou estar" ou outra ausência aprovada
+ * de dia inteiro (shared/leaves.ts → blocksAutoProposal). Só com FERIAS_MAPA
+ * ligado (desligado → ninguém sai, como antes); erro → ninguém sai. À mão
+ * continua a poder pôr-se, com o aviso.
+ */
+export async function awayForAutoProposal(day: string, employeeIds: readonly number[]): Promise<Set<number>> {
+  const out = new Set<number>();
+  for (const [id, a] of await absencesOnDay(day, employeeIds)) if (blocksAutoProposal(a)) out.add(id);
   return out;
 }
 

@@ -812,7 +812,9 @@ export async function autofillShift(input: { date: string; city: CityId; shift: 
   const { employeesMissingTraining } = await import("./trainingPaths");
   const allCands = await listDriverCandidates(input.date);
   const untrained = await employeesMissingTraining(allCands.map((c) => c.id));
-  const cands = allCands.filter((c) => !untrained.has(c.id));
+  // Plano 63 (11, só com FERIAS_MAPA): quem avisou que não está nesse dia também não (à mão pode, com o aviso).
+  const away = await (await import("./leaves")).awayForAutoProposal(input.date, allCands.filter((c) => !untrained.has(c.id)).map((c) => c.id));
+  const cands = allCands.filter((c) => !untrained.has(c.id) && !away.has(c.id));
   const { employees } = await import("../drizzle/schema");
   const { inArray } = await import("drizzle-orm");
   const ids = cands.map((c) => c.id);

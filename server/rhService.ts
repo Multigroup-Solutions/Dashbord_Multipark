@@ -16,7 +16,7 @@ import { getDb, getDocumentChecklistForEmployee, getPayrollData, toMysqlDateTime
 import { employeeLeaves, employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
 import { manualBlockReason } from "../shared/suspendSuggest";
 import { approvedLeaveSql, fullDayLeaveSql } from "./leavesSql";
-import { FERIAS_MAPA_FLAG, absenceForScheduler, noticeBeforeAssignment, shortDayPt } from "../shared/leaves";
+import { FERIAS_MAPA_FLAG, absenceForScheduler, noticeBeforeAssignment, noticeNoShowNote, scheduledSince } from "../shared/leaves";
 import { isTerminalExtra } from "../shared/terminalSession";
 
 const nowMysql = () => toMysqlDateTime(new Date());
@@ -216,7 +216,7 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
   const skipped: Record<NoShowSkip, number> = { proposed: 0, sent_home: 0, check_in: 0, multipark: 0 };
   const db = await getDb();
   if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false };
-  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city, status: extrasDiaAssignments.status, sentHomeHour: extrasDiaAssignments.sentHomeHour, createdAt: extrasDiaAssignments.createdAt })
+  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city, status: extrasDiaAssignments.status, sentHomeHour: extrasDiaAssignments.sentHomeHour, createdAt: extrasDiaAssignments.createdAt, personAssignedAt: extrasDiaAssignments.personAssignedAt })
     .from(extrasDiaAssignments)
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), eq(extrasDiaAssignments.isTeamLeader, 0), isNotNull(extrasDiaAssignments.employeeId)));
   const candidates: typeof rows = [];
@@ -268,8 +268,9 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
   for (const r of candidates) {
     if (r.employeeId == null) continue;
     if (noShowSkipReason({ status: r.status, sentHomeHour: r.sentHomeHour, hasCheckIn: false, multiparkMoves: movesByEmployee.get(r.employeeId) ?? 0 })) { skipped.multipark++; continue; }
-    const notice = noticeBeforeAssignment(notices.get(r.employeeId) ?? [], dateStr, r.createdAt);
-    const noticeNote = notice ? ` — tinha avisado a ${shortDayPt(absenceForScheduler(notice).noticeDay)} que não estava (antes de ser escalado): sem pontos` : "";
+    // "Antes de ser escalado" = antes de ESTA pessoa ser posta NESTE dia (personAssignedAt; as linhas antigas: a criação)
+    const notice = noticeBeforeAssignment(notices.get(r.employeeId) ?? [], dateStr, scheduledSince(r));
+    const noticeNote = notice ? noticeNoShowNote(absenceForScheduler(notice).noticeDay) : "";
     // Plano 63 (2b + 11): avisou antes de ser escalado → 0 (com a nota); senão funcionário 0, extra 1.
     const points = notice ? 0 : extraDiaNoShowPoints(kindOf.get(r.employeeId));
     try {
@@ -532,22 +533,18 @@ export async function dismissFixedNoShow(id: number, reason: import("../shared/s
 
 /**
  * Plano 63 (11): as guardas de `launchLeave` (server/leaves.ts) para a
- * ausência que a dispensa com motivo lança: parceiros-empresa fora; as
- * próprias férias não (ninguém aprova as suas, salvo o super admin); mês
- * fechado → recusa (falha fechado: sem confirmar, também recusa).
+ * ausência que a dispensa com motivo lança: parceiros-empresa fora; FÉRIAS só
+ * quem as aprova, o RH ou o super admin, e as próprias não (ninguém aprova as
+ * suas, salvo o super admin); mês fechado → recusa (falha fechado: sem
+ * confirmar, também recusa).
  */
 async function assertDismissLeaveAllowed(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, employeeId: number, leave: { leaveType: string; fromDate: string; toDate: string }, reviewer: { id: number; role: string }): Promise<void> {
   const [emp] = await db.select({ userId: employees.userId, contractType: employees.contractType }).from(employees).where(eq(employees.id, employeeId)).limit(1);
   const { PARTNER_COMPANY_CONTRACT } = await import("../shared/leaves");
   if (emp?.contractType === PARTNER_COMPANY_CONTRACT) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Os parceiros-empresa ficam fora do mapa de férias e da folha: dispensa sem motivo." });
   const leaves = await import("./leaves");
-  if (leave.leaveType === "vacation" && reviewer.role !== "super_admin") {
-    const { getEmployeeByUserId } = await import("./db");
-    const own = (emp?.userId != null && Number(emp.userId) === reviewer.id)
-      || (await leaves.employeeLogins(employeeId)).includes(reviewer.id)
-      || (await getEmployeeByUserId(reviewer.id))?.employee?.id === employeeId;
-    if (own) throw new TRPCError({ code: "FORBIDDEN", message: "As tuas férias pedem-se no Mapa de férias: ninguém aprova as suas." });
-  }
+  // Férias já aprovadas: só quem as aprova (regra de agora), o RH ou o super admin; as próprias não (Jorge, 15 out 2026)
+  if (leave.leaveType === "vacation") await leaves.assertCanLaunchApprovedVacation(reviewer, employeeId, emp?.userId ?? null);
   await leaves.assertPeriodOpen(leave);
 }
 

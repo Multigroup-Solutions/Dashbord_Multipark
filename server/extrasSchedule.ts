@@ -73,6 +73,7 @@ import {
   type ManualEditAtConfirm,
 } from "../shared/extrasSchedule";
 import { DEFAULT_CREW_RULES, SETTINGS, hhmmToMinutes, type CrewRulesMap } from "../shared/appSettings";
+import { NOTICE_NO_SHOW_MARK } from "../shared/leaves";
 
 export type ScheduleCity = "lisbon" | "porto" | "faro";
 export const SCHEDULE_CITIES: ScheduleCity[] = ["lisbon", "porto", "faro"];
@@ -239,8 +240,14 @@ export async function setScheduleHold(date: string, city: ScheduleCity, hold: bo
 // ─── Candidatos ─────────────────────────────────────────────────────────────
 
 const inList = (ids: number[]) => sql.join(ids.map((id) => sql`${id}`), sql`, `);
+/** Agora, em UTC, no formato do MySQL (como os outros carimbos escritos pela app). */
+const utcNowSql = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
-/** Avaliação (pts médios/dia, 4 semanas), dias escalados (14 d), faltas e recusas (60 d). */
+/**
+ * Avaliação (pts médios/dia, 4 semanas), dias escalados (14 d), faltas e recusas (60 d).
+ * Plano 63 (11): a falta de quem tinha avisado antes de ser escalado (0 pontos,
+ * shared/leaves.ts → isNoticeNoShow) não conta para a ordem (Jorge, 15 out 2026).
+ */
 async function loadHistory(ids: number[], date: string): Promise<{
   evalScore: Map<number, number>; recentDays: Map<number, number>; noShows: Map<number, number>; declines: Map<number, number>;
 }> {
@@ -281,6 +288,7 @@ async function loadHistory(ids: number[], date: string): Promise<{
         FROM employee_penalties
        WHERE employeeId IN (${inList(ids)}) AND reason = 'no_show_extra_dia' AND status = 'confirmed'
          AND clearedAt IS NULL AND createdAt >= ${from60}
+         AND NOT (points = 0 AND COALESCE(notes, '') LIKE ${`%${NOTICE_NO_SHOW_MARK}%`})
        GROUP BY employeeId`);
     for (const r of rowsOf(res)) out.noShows.set(Number(r.employeeId), Number(r.n));
   });
@@ -303,8 +311,9 @@ export const candidateWindows = (c: { availability?: { windows?: readonly { from
 /**
  * Extras que PODEM entrar na escala do dia/cidade: disponíveis no dia
  * operacional, extras (funcionários só à mão), da cidade da escala (sem cidade
- * não) e com a formação obrigatória concluída. A mesma lista serve a proposta
- * automática e o "disponíveis por escalar" do indicador de pessoal.
+ * não), com a formação obrigatória concluída e (com FERIAS_MAPA) sem aviso de
+ * que não estão nesse dia. A mesma lista serve a proposta automática e o
+ * "disponíveis por escalar" do indicador de pessoal.
  */
 export async function loadEligibleExtras(date: string, city: ScheduleCity): Promise<DriverCandidateRow[]> {
   const db = await getDb();
@@ -321,11 +330,15 @@ export async function loadEligibleExtras(date: string, city: ScheduleCity): Prom
   const cityKey = city === "lisbon" ? "lisboa" : city;
   // Proposta automática: só EXTRAS e só da cidade da escala (Jorge, 2 out 2026:
   // funcionários só à mão; quem não tem cidade não se escala).
-  return available.filter((c) => {
+  const eligible = available.filter((c) => {
     if (untrained.has(c.id)) return false;
     if ((c.position ?? "").toLowerCase() !== "extra") return false;
     return (cities.get(c.id)?.city ?? null) === cityKey;
   });
+  // Plano 63 (11, só com FERIAS_MAPA): quem avisou "não vou estar" nesse dia (ou tem outra ausência
+  // aprovada de dia inteiro) não é proposto. À mão continua a poder pôr-se, com o aviso.
+  const away = eligible.length ? await (await import("./leaves")).awayForAutoProposal(date, eligible.map((c) => c.id)) : new Set<number>();
+  return away.size ? eligible.filter((c) => !away.has(c.id)) : eligible;
 }
 
 /**
@@ -448,7 +461,7 @@ export async function archiveAssignments(exec: Exec, where: ReturnType<typeof sq
         'level', level, 'isTeamLeader', isTeamLeader, 'shift', shift, 'startHour', startHour, 'endHour', endHour,
         'sentHomeHour', sentHomeHour, 'notes', notes, 'status', status, 'version', version, 'source', source,
         'proposalReason', proposalReason, 'createdById', createdById, 'updatedById', updatedById,
-        'createdAt', createdAt, 'updatedAt', updatedAt),
+        'createdAt', createdAt, 'updatedAt', updatedAt, 'personAssignedAt', personAssignedAt),
       ${reason}, ${userId}
       FROM extras_dia_assignments WHERE ${where}`);
   return extractAffectedRows(await exec.execute(sql`DELETE FROM extras_dia_assignments WHERE ${where}`));
@@ -551,9 +564,9 @@ export async function proposeSchedule(input: { date: string; city: ScheduleCity;
       for (const p of plan.picks) {
         await tx.execute(sql`
           INSERT INTO extras_dia_assignments
-            (assignmentDate, city, employeeId, personName, level, isTeamLeader, shift, startHour, endHour, notes, status, version, proposalReason, createdById, source)
+            (assignmentDate, city, employeeId, personName, level, isTeamLeader, shift, startHour, endHour, notes, status, version, proposalReason, createdById, source, personAssignedAt)
           VALUES (${date}, ${city}, ${p.employeeId}, ${p.personName.slice(0, 128)}, ${p.level}, 0, ${p.shift}, ${p.startHour}, ${p.endHour},
-                  'proposta automática', 'proposed', 1, ${p.reason.slice(0, 500)}, ${input.userId}, 'auto')`);
+                  'proposta automática', 'proposed', 1, ${p.reason.slice(0, 500)}, ${input.userId}, 'auto', ${utcNowSql()})`);
       }
       // Refazer à mão é mexer no dia: a partir daqui o cron já não propõe nele.
       const manualMark = by === "manual" ? sql`, manualAt = NOW(), manualById = ${input.userId}, manualWhat = ${"refez a proposta" satisfies ManualWhat}` : sql``;
@@ -1304,9 +1317,9 @@ export async function completeSchedule(input: { date: string; city: ScheduleCity
     for (const p of plan.picks) {
       await tx.execute(sql`
         INSERT INTO extras_dia_assignments
-          (assignmentDate, city, employeeId, personName, level, isTeamLeader, shift, startHour, endHour, notes, status, version, proposalReason, createdById, source)
+          (assignmentDate, city, employeeId, personName, level, isTeamLeader, shift, startHour, endHour, notes, status, version, proposalReason, createdById, source, personAssignedAt)
         VALUES (${date}, ${city}, ${p.employeeId}, ${p.personName.slice(0, 128)}, ${p.level}, 0, ${p.shift}, ${p.startHour}, ${p.endHour},
-                ${COMPLETED_NOTE}, 'proposed', 1, ${p.reason.slice(0, 500)}, NULL, 'auto')`);
+                ${COMPLETED_NOTE}, 'proposed', 1, ${p.reason.slice(0, 500)}, NULL, 'auto', ${utcNowSql()})`);
     }
     const note = `Completado antes da confirmação: ${plan.picks.length} acrescentado(s).${plan.gaps.length ? ` Ainda: ${plan.gaps.map(describeGap).join("; ")}.` : ""}`;
     await tx.execute(sql`

@@ -102,7 +102,7 @@ export default function FeriasPage() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><Palmtree className="h-6 w-6 text-primary" />Férias e ausências</h1>
           <p className="text-sm text-muted-foreground">
             {s.mode === "full" ? "Vês todas as cidades, com baixas e ausências." :
-              s.mode === "supervisor" ? "Vês a tua área. As baixas e ausências aparecem só como \"ausente\"." :
+              s.mode === "supervisor" ? `Vês ${s.allCities ? "todas as cidades" : "a tua área"}. As baixas e ausências aparecem só como "ausente".` :
               s.mode === "extra" ? "Avisa quando não vais estar: quem escala vê e não te chama." :
               "Marca as tuas férias e vê as dos colegas da tua cidade."}
           </p>
@@ -361,7 +361,11 @@ function LaunchDialog({ onClose }: { onClose: () => void }) {
   const [notes, setNotes] = useState("");
   const person = (peopleQ.data ?? []).find((p) => p.id === employeeId);
   const h = partial ? Number(hours.replace(",", ".")) : null;
-  const err = employeeId == null ? "Escolhe a pessoa." : leaveInputError({ leaveType, fromDate, toDate, hours: partial ? (Number.isFinite(h) ? h : NaN) : null });
+  // Férias já aprovadas: só quem as aprova, o RH ou o super admin (o servidor volta a confirmar)
+  const vacationBlocked = leaveType === "vacation" && person?.canVacation === false;
+  const err = employeeId == null ? "Escolhe a pessoa."
+    : vacationBlocked ? "Férias já aprovadas desta pessoa só as lança quem as aprova, o RH ou o super admin. A pessoa pede-as no Mapa de férias."
+    : leaveInputError({ leaveType, fromDate, toDate, hours: partial ? (Number.isFinite(h) ? h : NaN) : null });
   const create = trpc.rh.leaves.create.useMutation({
     onSuccess: () => { toast.success("Ausência lançada (aprovada)."); utils.rh.leaves.invalidate(); onClose(); },
     onError: (e) => toast.error(e.message),
@@ -371,7 +375,7 @@ function LaunchDialog({ onClose }: { onClose: () => void }) {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Lançar ausência</DialogTitle>
-          <DialogDescription>Entra logo aprovada. As baixas e ausências só as veem a pessoa, o RH e quem vê o mapa inteiro.</DialogDescription>
+          <DialogDescription>Entra logo aprovada. As baixas e ausências só as veem a pessoa, o RH e quem vê o mapa inteiro. Férias: só a quem tu aprovas (o RH e o super admin a todos).</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1">

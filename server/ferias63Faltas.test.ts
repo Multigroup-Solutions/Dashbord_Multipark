@@ -35,6 +35,7 @@ vi.mock("./db", async (original) => {
 vi.mock("./personIdentity", () => ({ agentIdsOfEmployee: async () => ({ agentUserIds: [] }) }));
 
 import { detectExtraDiaNoShows } from "./rhService";
+import { isNoticeNoShow } from "../shared/leaves";
 
 const row = (o: Record<string, unknown> = {}) => ({ id: 10, employeeId: 5, personName: "Zé Extra", startHour: 9, endHour: 17, city: "lisbon", status: "confirmed", sentHomeHour: null, createdAt: "2026-11-01 10:00:00", ...o });
 const aviso = (o: Record<string, unknown> = {}) => ({ employeeId: 5, leaveType: "unavailable", status: "approved", fromDate: "2026-11-02", toDate: "2026-11-02", hours: null, requestedAt: "2026-10-30 08:00:00", createdAt: "2026-10-30 08:00:00", ...o });
@@ -49,6 +50,8 @@ describe("falta ao Extras-Dia de quem avisou que não estava", () => {
     expect(r.created).toBe(1);
     expect(state.inserted[0]).toMatchObject({ employeeId: 5, reason: "no_show_extra_dia", points: 0, status: "pending" });
     expect(state.inserted[0].notes).toContain("tinha avisado a 30/10 que não estava (antes de ser escalado): sem pontos");
+    // (decisão 3) esta falta fica marcada como "de quem avisou": não conta para a ordem da proposta
+    expect(isNoticeNoShow(state.inserted[0])).toBe(true);
   });
   it("avisou DEPOIS de ser escalado → falta normal (1 ponto)", async () => {
     state.leaves = [aviso({ requestedAt: "2026-11-01 12:00:00", createdAt: "2026-11-01 12:00:00" })];
@@ -62,6 +65,34 @@ describe("falta ao Extras-Dia de quem avisou que não estava", () => {
   });
   it("com o mapa de férias desligado nada muda (1 ponto)", async () => {
     delete process.env.FERIAS_MAPA;
+    state.leaves = [aviso()];
+    await detectExtraDiaNoShows("2026-11-02");
+    expect(state.inserted[0]).toMatchObject({ points: 1 });
+  });
+  it("(decisão 2) conta desde que ESTA pessoa foi posta NESTE dia: linha antiga, pessoa trocada depois do aviso → sem pontos", async () => {
+    // a linha existia desde 1/10 (com outra pessoa); o Zé avisou a 30/10 e foi posto nela a 1/11
+    state.rows = [row({ createdAt: "2026-10-01 10:00:00", personAssignedAt: "2026-11-01 10:00:00" })];
+    state.leaves = [aviso()];
+    await detectExtraDiaNoShows("2026-11-02");
+    expect(state.inserted[0]).toMatchObject({ points: 0 });
+    expect(state.inserted[0].notes).toContain("tinha avisado a 30/10");
+  });
+  it("(decisão 2) posto a 20/10, avisou a 30/10 → depois de escalado → falta normal (mesmo com a linha mais antiga)", async () => {
+    state.rows = [row({ createdAt: "2026-10-01 10:00:00", personAssignedAt: "2026-10-20 10:00:00" })];
+    state.leaves = [aviso()];
+    await detectExtraDiaNoShows("2026-11-02");
+    expect(state.inserted[0]).toMatchObject({ points: 1 });
+    expect(isNoticeNoShow(state.inserted[0])).toBe(false);
+  });
+  it("(decisão 2) linhas antigas sem a hora da pessoa usam a criação da linha (como antes)", async () => {
+    state.rows = [row({ createdAt: "2026-11-01 10:00:00", personAssignedAt: null })];
+    state.leaves = [aviso()];
+    await detectExtraDiaNoShows("2026-11-02");
+    expect(state.inserted[0]).toMatchObject({ points: 0 });
+  });
+  it("(decisão 2) com o mapa desligado a hora da pessoa não muda nada (1 ponto)", async () => {
+    delete process.env.FERIAS_MAPA;
+    state.rows = [row({ createdAt: "2026-10-01 10:00:00", personAssignedAt: "2026-11-01 10:00:00" })];
     state.leaves = [aviso()];
     await detectExtraDiaNoShows("2026-11-02");
     expect(state.inserted[0]).toMatchObject({ points: 1 });

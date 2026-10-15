@@ -21,7 +21,7 @@ import { assertCanManageEmployee, assertOwnOrScopedEmployee, employeeIdOfRecord 
 import { LEAVE_TYPES } from "../shared/leaves";
 import {
   approversForEmployee, assertMapOn, cancelLeave, decideLeave, feriasMapaOn, launchLeave, leaveMap, leaveMapForPdf, leavesForEmployee,
-  myLeaves, pendingForApprover, requestLeave, resolveLeaveViewer,
+  myLeaves, pendingForApprover, requestLeave, resolveLeaveViewer, vacationLaunchableIds,
 } from "./leaves";
 
 const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida (AAAA-MM-DD).");
@@ -81,7 +81,7 @@ export const leavesRouter = router({
   /** O que o ecrã precisa de saber (também com o interruptor desligado). */
   status: protectedProcedure.query(async ({ ctx }) => {
     const enabled = await feriasMapaOn();
-    if (!enabled) return { enabled, mode: "none" as const, employeeId: null, isExtra: false, isPartner: false, canLaunch: false, canPrint: false, pendingCount: 0, daysPerYear: 0, city: null as string | null, fullName: null as string | null };
+    if (!enabled) return { enabled, mode: "none" as const, employeeId: null, isExtra: false, isPartner: false, canLaunch: false, canPrint: false, pendingCount: 0, daysPerYear: 0, city: null as string | null, fullName: null as string | null, allCities: false };
     const v = await resolveLeaveViewer(ctx.user);
     let pendingCount = 0;
     try { pendingCount = (await pendingForApprover(v)).length; } catch { /* sem contagem */ }
@@ -89,6 +89,8 @@ export const leavesRouter = router({
       enabled, mode: v.mode, employeeId: v.employeeId, isExtra: v.isExtra, isPartner: v.isPartner,
       canLaunch: canAccess(ctx.user, "rh", "manage"), canPrint: v.mode === "full" || v.mode === "supervisor",
       pendingCount, daysPerYear: v.settings.daysPerYear, city: v.city, fullName: v.fullName,
+      // a vista de supervisor sem âmbito de cidade (o administrador): todas as cidades
+      allCities: v.mode === "full" || (v.mode === "supervisor" && v.scopeProjectIds == null),
     };
   }),
   map: protectedProcedure
@@ -141,10 +143,14 @@ export const leavesRouter = router({
     const { projectScope } = await import("./cityScope");
     const db = await getDb();
     if (!db) return [];
-    const res: any = await db.execute(sql`SELECT e.id, e.fullName, e.position, e.contractType FROM employees e
+    const res: any = await db.execute(sql`SELECT e.id, e.fullName, e.position, e.contractType, e.projectId, e.userId FROM employees e
        WHERE e.isActive = 1 AND COALESCE(e.contractType, '') <> 'partner_company' AND ${projectScope(sql`e.projectId`)} ORDER BY e.fullName LIMIT 2000`);
     const rows = (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
-    return rows.map((r) => ({ id: Number(r.id), fullName: String(r.fullName ?? ""), isExtra: r.position === "extra" || r.contractType === "extra" }));
+    // Férias já aprovadas: só a quem esta conta aprova (ou o RH / o super admin) — o ecrã avisa antes de gravar
+    const people = rows.map((r) => ({ id: Number(r.id), position: r.position ?? null, projectId: r.projectId == null ? null : Number(r.projectId), userId: r.userId == null ? null : Number(r.userId) }));
+    let vacationOk: Set<number> | null = null;
+    try { vacationOk = await vacationLaunchableIds(ctx.user, people); } catch { /* sem a dica: o servidor confirma ao gravar */ }
+    return rows.map((r) => ({ id: Number(r.id), fullName: String(r.fullName ?? ""), isExtra: r.position === "extra" || r.contractType === "extra", canVacation: vacationOk ? vacationOk.has(Number(r.id)) : true }));
   }),
   /** O mapa em PDF: só férias aprovadas (nunca baixas). Quem vê tudo e o supervisor (a sua área). */
   pdf: protectedProcedure

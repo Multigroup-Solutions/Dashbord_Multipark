@@ -268,8 +268,8 @@ Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Defini
 
 **Extras: "Não vou estar"** (separador **Quando não vou estar**)
 - Marcas de que dia a que dia não podes vir. Entra logo: não precisa de aprovação e não é pago.
-- Quem escala no **Extras-Dia** vê "indisponível (avisou a DD/MM)" ao escolher-te e na tua linha da escala.
-- **Avisa antes de seres escalado.** Se te escalarem na mesma e faltares, a falta desse dia fica **sem pontos**. Se avisares **depois** de estares escalado, é uma falta normal.
+- Quem escala no **Extras-Dia** vê "indisponível (avisou a DD/MM)" ao escolher-te e na tua linha da escala. A **proposta automática** (e o "Preencher com disponíveis") deixa de te pôr nesses dias; à mão ainda te podem pôr, com o aviso.
+- **Avisa antes de seres escalado.** Se te escalarem na mesma e faltares, a falta desse dia fica **sem pontos** (e não conta para a ordem da proposta automática). Se avisares **depois** de estares escalado, é uma falta normal. "Escalado" conta desde que **te puseram nesse dia**: se te puserem numa linha que era de outra pessoa, ou mudarem a tua linha para outro dia, conta a partir daí.
 - Podes cancelar o teu aviso.
 
 **Por aprovar** (quem aprova)
@@ -293,6 +293,7 @@ Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Defini
 **Quem vê o quê** (o filtro é feito no servidor, não só no ecrã)
 - O super admin, o RH e as contas de **"Férias: quem vê o mapa inteiro"**: tudo, de todas as cidades, com o tipo (férias, baixa, ausência, indisponível) e as notas.
 - O supervisor: a sua área (férias, pedidos e os avisos dos extras). As baixas e ausências aparecem só como **"ausente"**, sem o motivo.
+- Os administradores (que não são super admin nem estão nas listas acima): como o supervisor, mas de **todas as cidades** — as baixas e ausências só como **"ausente"**.
 - Os colegas: as suas (tudo) e só as **férias** dos colegas da sua cidade. **Nunca veem as baixas.**
 - Os extras: só os seus avisos.
 
@@ -301,8 +302,9 @@ Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Defini
 - Carrega num quadrado para ver o detalhe e, se puderes, aprovar, recusar ou cancelar. Por baixo do mapa há a lista do mês (mais fácil no telemóvel).
 - **Mapa (PDF)** (RH e supervisores): o mapa do ano para afixar, só com as **férias aprovadas** (nunca baixas). A lei pede-o feito até 15 de abril e afixado de 15 de abril a 31 de outubro.
 
-**Lançar ausência** (quem gere a ficha: RH, supervisor da cidade, administradores)
-- Pessoa, tipo (férias, baixa, não remunerada, ausência justificada; nos extras também "indisponível"), datas e nota. Entra **aprovada**, como sempre.
+**Lançar ausência**
+- Quem gere a ficha (RH, supervisor da cidade, administradores) escolhe a pessoa, o tipo (férias, baixa, não remunerada, ausência justificada; nos extras também "indisponível"), as datas e uma nota. Entra **aprovada**, como sempre.
+- **Férias já aprovadas** só as lança **quem aprova as férias dessa pessoa** (ver "Quem aprova quem"), o **RH** e o **super admin**. O supervisor da cidade lança baixas e ausências a toda a sua área, mas férias só a quem ele aprova (ex.: um back office, que só o RH aprova, não). Para os outros, a pessoa pede as férias no mapa. O mesmo vale para **Dispensar → Férias** numa possível falta do horário fixo.
 - **Só parte do dia**: na ausência justificada (consulta, funeral…), um dia, de 0,25 h a 12 h. Nesse dia o atraso não conta; se a pessoa não vier de todo, continua a dar possível falta.
 - As tuas próprias férias não se lançam aqui: pedem-se (ninguém aprova as suas).
 - Não se lança por cima de outra ausência da mesma pessoa (pedida ou aprovada): cancela essa primeiro (fica no histórico) e lança a nova. Ex.: baixa a meio das férias → cancela as férias, lança a baixa e a pessoa volta a pedir os dias que faltam.
@@ -325,7 +327,7 @@ Em **RH → Dashboard** (super admin).
 - **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **"RH: possíveis faltas de quem tem horário fixo"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Corre de madrugada, **só para ontem**. Com **"RH: fins de semana e exceções por data"** ligado, contam também as **exceções por data**: quem está **de serviço num fim de semana** (ou num feriado de serviço) e não picou também fica aqui (a nota diz "exceção por data"); quem tem **folga** marcada nesse dia não. Fora: quem estava na escala do Extras-Dia nesse dia (mesmo só proposta), férias e baixas **aprovadas** de dia inteiro (um pedido de férias por aprovar não tira a falta; uma ausência de parte do dia também não), dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro), quem mexeu em carros na Multipark e quem está na lista **Fora das faltas automáticas** (ver "Horários por rever"). Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).
 - Nas **Falta (horário fixo)**, em vez de **Libertar** há **Dispensar ▾**, com o motivo:
   - **Não foi falta: picou noutro sistema / picagem perdida** — fica dispensada e marcada; aparece em "Horários por rever" como prova para a verificação do ponto. Se o turno tem de contar, acrescenta-o no ponto da ficha.
-  - **Férias**, **Baixa** ou **Falta justificada** (consulta, funeral…) — lança na ficha a **ausência desse dia** (férias, baixa ou "outra"), **aprovada** em teu nome, para não voltar a aparecer e para sair das horas esperadas. Só quem gere a ficha (como lançar uma ausência). Se já houver uma ausência **aprovada de dia inteiro** nesse dia, não cria outra. Tem as regras de quem lança no mapa de férias: não dá num **mês fechado** (ordenado aprovado ou pago), nem por cima de **outra ausência ativa** desse dia (um pedido de férias por aprovar, uma ausência de parte do dia — decide ou cancela essa primeiro), nem para as **tuas próprias férias** (pedem-se no mapa). Nesses casos aparece o motivo e a possível falta continua por validar.
+  - **Férias**, **Baixa** ou **Falta justificada** (consulta, funeral…) — lança na ficha a **ausência desse dia** (férias, baixa ou "outra"), **aprovada** em teu nome, para não voltar a aparecer e para sair das horas esperadas. Só quem gere a ficha (como lançar uma ausência). Se já houver uma ausência **aprovada de dia inteiro** nesse dia, não cria outra. Tem as regras de quem lança no mapa de férias: não dá num **mês fechado** (ordenado aprovado ou pago), nem por cima de **outra ausência ativa** desse dia (um pedido de férias por aprovar, uma ausência de parte do dia — decide ou cancela essa primeiro), nem para as **tuas próprias férias** (pedem-se no mapa); com o mapa ligado, **Férias** só a quem tu aprovas (ou se fores do RH ou super admin). Nesses casos aparece o motivo e a possível falta continua por validar.
   - **Libertar sem motivo** — como antes.
   - Nada se apaga: a possível falta fica dispensada, com o motivo e quem dispensou. Se outra pessoa já a reviu entretanto, aparece "já foi revista" e não se cria nada.
 - O número entre parênteses é o **total real** das tuas cidades; a lista mostra as 200 mais recentes.
