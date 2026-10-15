@@ -35,6 +35,10 @@ export const REVIEW_AUTO_PUBLISH_EXPIRE_HOURS = 24;
 export const REVIEW_AUTO_PUBLISH_MAX_AGE_DAYS = REVIEW_AUTO_DRAFT_MAX_AGE_DAYS;
 /** Verificação depois de publicar: as publicadas nos últimos N dias, uma vez por dia. */
 export const REVIEW_AUTO_PUBLISH_VERIFY_DAYS = 30;
+/** Verificação diária: sem conseguir ler a crítica estes dias seguidos → aviso. */
+export const REVIEW_AUTO_PUBLISH_VERIFY_FAIL_DAYS = 2;
+/** Uma resposta presa em "a publicar" há mais do que isto (a corrida morreu a meio) volta a ser vista. */
+export const REVIEW_AUTO_PUBLISH_STUCK_MIN = 15;
 export const REPLY_MIN_CHARS = 40;
 export const REPLY_MAX_CHARS = 400;
 
@@ -236,6 +240,16 @@ export function nextAutoPublishState(prev: AutoPublishState, outcome: { ok: bool
     return { consecutiveFailures: n, pausedAt: nowIso, pausedReason: String(outcome.error ?? "falhas seguidas").slice(0, 300) };
   }
   return { ...prev, consecutiveFailures: n };
+}
+
+/** JSON estável do estado (a mesma ordem das chaves — o compare-and-set compara o texto). PURA. */
+export function autoPublishStateJson(s: AutoPublishState): string {
+  return JSON.stringify({ consecutiveFailures: s.consecutiveFailures, pausedAt: s.pausedAt, pausedReason: s.pausedReason });
+}
+
+/** O texto da crítica mudou desde a preparação (comparado só pelas letras e números)? PURA. */
+export function reviewTextChanged(prepared: string | null | undefined, now: string | null | undefined): boolean {
+  return matchKey(prepared) !== matchKey(now);
 }
 
 /** Lê o estado guardado (JSON); lixo → vazio. PURA. */

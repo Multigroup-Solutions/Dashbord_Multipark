@@ -2668,9 +2668,9 @@ export const appRouter = router({
     autoPublishResume: protectedProcedure.mutation(async ({ ctx }) => {
       requireRole(ctx.user.role, "admin");
       const { resumeAutoPublish } = await import("./reviewAutoPublish");
-      const s = await resumeAutoPublish();
-      await logActivity({ userId: ctx.user.id, action: "review_auto_publish_resume", entity: "google_review", details: "Publicação automática das 5★ retomada" });
-      return s;
+      const r = await resumeAutoPublish();
+      if (r.resumed) await logActivity({ userId: ctx.user.id, action: "review_auto_publish_resume", entity: "google_review", details: "Publicação automática das 5★ retomada" });
+      return r;
     }),
     // Aprovar = o texto está bom. Não é "respondida": isso só quando publicada.
     approveResponse: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {

@@ -227,14 +227,22 @@ export async function currentReplyChannel(): Promise<'google' | 'windsor' | 'non
  * Grava primeiro no Google e só depois na BD: se a Google recusar (quota 0,
  * conta sem permissão no perfil), nada muda cá dentro.
  */
-export async function publishReply(reviewId: number, comment: string, userId: number) {
+/** Plano MPV F7: a crítica já tem resposta (cá dentro) — o caminho automático não substitui uma resposta humana. */
+export class ReplyAlreadyThereError extends Error {
+  constructor() { super('A crítica já tem resposta — a automática não a substitui.'); this.name = 'ReplyAlreadyThereError'; }
+}
+
+export async function publishReply(reviewId: number, comment: string, userId: number, opts: { onlyIfNoReply?: boolean } = {}) {
   const text = comment.trim();
   if (!text) throw new Error('Escreve a resposta antes de publicar.');
   if (text.length > REPLY_MAX_LENGTH) throw new Error(`A resposta tem de ter no máximo ${REPLY_MAX_LENGTH} caracteres.`);
   const db = await database();
-  const [review] = await db.select({ id: googleReviews.id, name: googleReviews.googleReviewName, complaintId: googleReviews.complaintId })
+  const [review] = await db.select({ id: googleReviews.id, name: googleReviews.googleReviewName, complaintId: googleReviews.complaintId,
+    googleReply: googleReviews.googleReply, respondedAt: googleReviews.respondedAt })
     .from(googleReviews).where(eq(googleReviews.id, reviewId)).limit(1);
   if (!review) throw new Error('Crítica não encontrada.');
+  // Caminho automático (5★): nunca por cima de uma resposta que já lá esteja.
+  if (opts.onlyIfNoReply && (review.googleReply || review.respondedAt)) throw new ReplyAlreadyThereError();
   if (!review.name || !reviewPattern.test(review.name)) {
     throw new Error('Esta crítica veio por email e não está ligada ao Google. Responde diretamente no perfil Google, ou espera que a importação pela API a associe.');
   }
@@ -259,7 +267,8 @@ export async function publishReply(reviewId: number, comment: string, userId: nu
   await db.update(googleReviews).set({
     googleReply: published.comment || text, aiResponse: text, aiResponseApproved: 1, respondedAt: at, respondedBy: userId,
     status: review.complaintId ? 'converted_complaint' : 'manually_responded',
-  }).where(eq(googleReviews.id, reviewId));
+    // Automático: compare-and-set — só grava se ninguém respondeu entretanto cá dentro.
+  }).where(opts.onlyIfNoReply ? and(eq(googleReviews.id, reviewId), isNull(googleReviews.googleReply)) : eq(googleReviews.id, reviewId));
   return { publishedAt: at, channel };
 }
 

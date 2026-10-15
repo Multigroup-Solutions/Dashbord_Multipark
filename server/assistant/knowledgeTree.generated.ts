@@ -2600,7 +2600,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "A mão humana manda.",
        "children": [],
        "container": false,
-       "chars": 2286
+       "chars": 2264
       },
       {
        "id": "extras-dia.md#horas-da-escala-automatica-lembretes-e-novas-tentativas",
@@ -2614,7 +2614,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "extras-dia.md#notas"
        ],
        "container": false,
-       "chars": 2622
+       "chars": 3490
       },
       {
        "id": "extras-dia.md#quem-ve-o-que",
@@ -4006,7 +4006,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Interruptor Críticas 5★: publicar a resposta sozinho (6 h depois) em Definições → Automações: desligado por omissão, e só o super admin o liga.",
        "children": [],
        "container": false,
-       "chars": 2374
+       "chars": 3166
       },
       {
        "id": "criticas.md#limpeza",
@@ -5362,7 +5362,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Extras-dia (cartão no fim dos Parâmetros; mudam a previsão, a Pressão e a proposta automática da escala do Extras-dia):",
        "children": [],
        "container": false,
-       "chars": 2429
+       "chars": 2407
       },
       {
        "id": "definicoes.md#notificacoes",
@@ -5442,7 +5442,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Reservas: as páginas (Reservas do dia, ficha da reserva, Ocorrências, Avaliação, Extras-Dia, Parcerias) leem a BD da Multipark ao vivo — nada é copiado por…",
        "children": [],
        "container": false,
-       "chars": 14084
+       "chars": 14153
       },
       {
        "id": "agendador.md#ler-o-cartao-agendador-definicoes-estado-so-super-admin",

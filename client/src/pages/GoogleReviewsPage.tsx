@@ -522,12 +522,19 @@ function AutoPublishPausedNote() {
   const q = trpc.reviews.autoPublishStatus.useQuery(undefined, { retry: false, staleTime: 60_000 });
   const utils = trpc.useUtils();
   const resume = trpc.reviews.autoPublishResume.useMutation({
-    onSuccess: () => { utils.reviews.autoPublishStatus.invalidate(); toast.success("Publicação automática retomada."); },
+    onSuccess: (r) => { utils.reviews.autoPublishStatus.invalidate(); if (r.resumed) toast.success("Publicação automática retomada."); else toast.info("Já não estava parada (ou mudou entretanto) — vê o estado outra vez."); },
     onError: (e) => toast.error(e.message || "Não foi possível retomar"),
   });
   const s = q.data;
   // Desligado (a omissão): não se mostra nada — a página fica como sempre foi.
   if (!s || !s.flagOn) return null;
+  if (!s.state.pausedAt && s.missing.length) {
+    return (
+      <p className="text-xs text-amber-800 dark:text-amber-300">
+        Respostas automáticas às 5★: o interruptor está ligado, mas não sai nada — falta {s.missing.join(" e ")}.{s.waiting ? ` ${s.waiting} à espera.` : ""}
+      </p>
+    );
+  }
   if (!s.state.pausedAt) {
     return (
       <p className="text-xs text-muted-foreground">

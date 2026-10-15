@@ -607,7 +607,12 @@ export function canAutoConfirm(state: { status: string; holdAuto: boolean } | nu
 
 export type ManualEditAtConfirm = "confirm" | "skip_notify" | "if_older_30m";
 export const MANUAL_EDIT_AT_CONFIRM_MODES: readonly ManualEditAtConfirm[] = ["confirm", "skip_notify", "if_older_30m"];
-export const MANUAL_EDIT_AT_CONFIRM_DEFAULT: ManualEditAtConfirm = "skip_notify";
+// Omissão = o comportamento de hoje (confirma na mesma) até o Jorge decidir o D4b (auditoria da F7).
+export const MANUAL_EDIT_AT_CONFIRM_DEFAULT: ManualEditAtConfirm = "confirm";
+/** "skip_notify": se o dia continuar por confirmar, o aviso repete-se a esta hora (Lisboa, min). */
+export const MANUAL_HOLD_REPEAT_AT_MIN = 18 * 60;
+/** Última corrida do agendador da escala no dia (Lisboa, min): a janela é 08h–23h, de 15 em 15 min. */
+export const SCHEDULE_LAST_RUN_MIN = 23 * 60 + 45;
 export const MANUAL_EDIT_AT_CONFIRM_LABELS: Record<ManualEditAtConfirm, string> = {
   confirm: "Confirma na mesma (como até aqui)",
   skip_notify: "Não confirma e avisa o TL, o supervisor e o back office",
@@ -620,8 +625,8 @@ export type AutoConfirmDecision =
   | { action: "confirm" }
   /** Nada a confirmar (sem proposta, já confirmada ou suspensa). */
   | { action: "skip"; reason: string }
-  /** Mexido à mão há pouco: volta a ver na corrida seguinte. */
-  | { action: "wait"; reason: string }
+  /** Mexido à mão há pouco: volta a ver na corrida seguinte (`settleAtMs` = quando passa a poder confirmar). */
+  | { action: "wait"; reason: string; settleAtMs: number }
   /** Mexido à mão: não confirma sozinho e avisa (uma vez). */
   | { action: "hold_notify"; reason: string };
 
@@ -640,7 +645,21 @@ export function autoConfirmDecision(
   if (mode === "skip_notify") return { action: "hold_notify", reason: "mexido à mão — não se confirma sozinho (confirma à mão em Extras-dia)" };
   const ageMin = Math.floor((nowMs - manual.atUnix * 1000) / 60_000);
   if (ageMin > MANUAL_EDIT_SETTLE_MIN) return { action: "confirm" };
-  return { action: "wait", reason: `mexido à mão há ${Math.max(0, ageMin)} min — confirma quando passarem ${MANUAL_EDIT_SETTLE_MIN} min sem mexer` };
+  return {
+    action: "wait",
+    reason: `mexido à mão há ${Math.max(0, ageMin)} min — confirma quando passarem ${MANUAL_EDIT_SETTLE_MIN} min sem mexer`,
+    settleAtMs: manual.atUnix * 1000 + (MANUAL_EDIT_SETTLE_MIN + 1) * 60_000,
+  };
+}
+
+/**
+ * "if_older_30m": a espera acaba depois da última corrida do dia (23:45)? Uma
+ * mudança depois das ~23:15 nunca chegaria a ser confirmada (às 08:00 o dia
+ * de amanhã já é hoje) — então avisa em vez de ficar pendurada. PURA.
+ */
+export function settlesAfterLastRun(settleAtMs: number, today: string): boolean {
+  const s = lisbonNow(new Date(settleAtMs));
+  return s.date !== today || s.minutes > SCHEDULE_LAST_RUN_MIN;
 }
 
 // ─── Cobertura depois da confirmação (plano MPV F7, §6.1 "Falhas") ──────────
@@ -766,40 +785,66 @@ export function notifyRetryWaitMinutes(attempts: number): number {
  * MAX_NOTIFY_ATTEMPTS tentativas e passada a espera da última
  * (`ageMs` = agora − última mudança da linha). PURA.
  */
-export function notifyRetryDue(row: { status: string; attempts: number; ageMs: number }): boolean {
-  if (row.status !== "failed" || row.attempts >= MAX_NOTIFY_ATTEMPTS) return false;
+export function notifyRetryDue(row: { status: string; attempts: number; ageMs: number; maxAttempts?: number | null }): boolean {
+  if (row.status !== "failed" || row.attempts >= maxAttemptsOf(row)) return false;
   return row.ageMs >= (notifyRetryWaitMinutes(row.attempts) - NOTIFY_RETRY_TOLERANCE_MIN) * 60_000;
 }
 
+/**
+ * Teto de tentativas de uma linha de aviso. As linhas criadas antes do F7
+ * têm `maxAttempts = 3` (omissão da coluna na 0705): uma falha antiga já
+ * esgotada com 3 tentativas NÃO ganha uma 4.ª no deploy. Sem a coluna (linha
+ * sem o campo) vale o teto novo. PURA.
+ */
+export function maxAttemptsOf(row: { maxAttempts?: number | null }): number {
+  const m = Number(row.maxAttempts);
+  return Number.isInteger(m) && m >= 1 ? m : MAX_NOTIFY_ATTEMPTS;
+}
+
 /** Falhou todas as tentativas (não se volta a tentar sozinho)? PURA. */
-export function notifyExhausted(row: { status: string; attempts: number }): boolean {
-  return row.status === "failed" && row.attempts >= MAX_NOTIFY_ATTEMPTS;
+export function notifyExhausted(row: { status: string; attempts: number; maxAttempts?: number | null }): boolean {
+  return row.status === "failed" && row.attempts >= maxAttemptsOf(row);
 }
 
 /** Uma reserva 'sending' esquecida (o processo morreu a meio) liberta-se ao fim disto. */
 export const NOTIFY_SENDING_STALE_MIN = 15;
 
+/** Motivo curto de um canal que não chegou (para o aviso "ficou por avisar"). PURA. */
+export const UNDELIVERED_LABELS: Record<string, string> = {
+  failed: "falhou em todas as tentativas", invalid: "número inválido", no_contact: "sem contacto", opted_out: "pediu STOP / não quer avisos", skipped: "não enviado",
+};
+
+export interface UnnotifiedPerson { assignmentId: number; version: number; personName: string; channels: string[]; reasons: string[] }
+
 /**
- * Quem ficou por avisar depois das tentativas todas: nenhum canal 'sent', pelo
- * menos um canal esgotado e nenhum ainda por tentar. Uma linha por pessoa e
- * versão da linha da escala. PURA.
+ * Quem ficou por avisar: NENHUM canal chegou ('sent') e nenhum está ainda em
+ * curso ou por tentar — falhado esgotado, número inválido, sem contacto, STOP
+ * ou não enviado. Os funcionários postos à mão (não são extras e nunca recebem
+ * avisos de propósito) ficam de fora. Uma linha por pessoa e versão. PURA.
  */
-export function unnotifiedAfterRetries<T extends { assignmentId: number; version: number; channel: string; status: string; attempts: number; personName?: string | null }>(
+export function unnotifiedAfterRetries<T extends { assignmentId: number; version: number; channel: string; status: string; attempts: number; maxAttempts?: number | null; personName?: string | null; detail?: string | null }>(
   rows: readonly T[],
-): Array<{ assignmentId: number; version: number; personName: string; channels: string[] }> {
+  notExtraDetail: string | null = null,
+): UnnotifiedPerson[] {
   const by = new Map<string, T[]>();
   for (const r of rows) {
     const k = `${r.assignmentId}:${r.version}`;
     by.set(k, [...(by.get(k) ?? []), r]);
   }
-  const out: Array<{ assignmentId: number; version: number; personName: string; channels: string[] }> = [];
+  const out: UnnotifiedPerson[] = [];
   for (const list of Array.from(by.values())) {
     if (list.some((r) => r.status === "sent")) continue;
-    const exhausted = list.filter((r) => notifyExhausted(r));
-    if (!exhausted.length) continue;
     // Outro canal ainda em curso ou por tentar → ainda não "ficou por avisar".
     if (list.some((r) => r.status === "sending" || (r.status === "failed" && !notifyExhausted(r)))) continue;
-    out.push({ assignmentId: list[0].assignmentId, version: list[0].version, personName: String(list[0].personName ?? "").trim() || `linha #${list[0].assignmentId}`, channels: exhausted.map((r) => r.channel) });
+    if (!list.every((r) => notifyExhausted(r) || FINAL_NOTIFY_STATUSES.has(r.status))) continue;
+    // Funcionário (não é extra): sem aviso de propósito.
+    if (notExtraDetail && list.every((r) => r.status === "no_contact" && r.detail === notExtraDetail)) continue;
+    out.push({
+      assignmentId: list[0].assignmentId, version: list[0].version,
+      personName: String(list[0].personName ?? "").trim() || `linha #${list[0].assignmentId}`,
+      channels: list.map((r) => r.channel),
+      reasons: list.map((r) => `${r.channel === "whatsapp" ? "WhatsApp" : "email"}: ${UNDELIVERED_LABELS[r.status] ?? r.status}`),
+    });
   }
   return out.sort((a, b) => a.personName.localeCompare(b.personName, "pt") || a.assignmentId - b.assignmentId);
 }
@@ -811,6 +856,8 @@ export interface NotifyLogRow {
   channel: NotifyChannel;
   status: string;
   attempts: number;
+  /** Teto de tentativas DESTA linha (0705: as criadas antes do F7 ficam com 3). */
+  maxAttempts?: number | null;
 }
 
 /** Já tratado para esta versão/canal? (falhado conta até MAX_NOTIFY_ATTEMPTS tentativas) */
@@ -826,7 +873,7 @@ export function notificationDone(
   if (!row) return false;
   if (FINAL_NOTIFY_STATUSES.has(row.status)) return true;
   // 'sending' fica para a reserva no servidor decidir (em curso vs. esquecida).
-  return row.status === "failed" && row.attempts >= MAX_NOTIFY_ATTEMPTS;
+  return notifyExhausted(row);
 }
 
 /** Linhas da escala que precisam de aviso "escalado" neste canal. */

@@ -13,18 +13,19 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_NOTIFY_ATTEMPTS, autoConfirmDecision, lisbonNow, notifyExhausted, notifyRetryDue, scheduleCoverage, scheduleDue, unnotifiedAfterRetries,
-  type Gap,
+  MAX_NOTIFY_ATTEMPTS, autoConfirmDecision, lisbonNow, notifyExhausted, notifyRetryDue, notificationDone, scheduleCoverage, scheduleDue, settlesAfterLastRun,
+  unnotifiedAfterRetries, type Gap,
 } from "../shared/extrasSchedule";
 import {
-  DEFAULT_REMINDER_RECIPIENTS, describeReminderRule, isoWeekday, reminderAppliesOn, reminderMessage, reminderRecipientFilter, reminderRecipientsSchema, remindersDue,
+  DEFAULT_REMINDER_RECIPIENTS, REMINDER_ROLES, describeReminderRule, isoWeekday, reminderAppliesOn, reminderMessage, reminderRecipientFilter, reminderRecipientsSchema, remindersDue,
 } from "../shared/extrasReminders";
 import { AUTOMATION_FLAGS, CRON_JOBS, SETTINGS, automationFlagDefault, hhmmToMinutes, validateSetting } from "../shared/appSettings";
 import { TICK_JOBS, describeCadence, isDue } from "./cronSchedule";
-import { kindDef } from "../shared/notificationRouting";
+import { kindDef, resolveRecipients, type RoutingCandidate } from "../shared/notificationRouting";
+import { NOT_EXTRA_NOTICE_REASON } from "../shared/shiftNotice";
 
 // ─── BD falsa (só para a reserva dos avisos) ────────────────────────────────
-const fake = vi.hoisted(() => ({ inserted: 0, row: null as null | { status: string; attempts: number; ageS: number }, updated: 1, queries: [] as string[] }));
+const fake = vi.hoisted(() => ({ inserted: 0, row: null as null | { status: string; attempts: number; ageS: number; maxAttempts?: number }, updated: 1, queries: [] as string[] }));
 vi.mock("./db", () => ({
   getDb: async () => ({
     execute: async (q: any) => {
@@ -52,30 +53,38 @@ describe("definições (D4, D4b, D4c)", () => {
     expect(SETTINGS["extras.autoConfirmAt"].defaultValue).toBe("15:00");
     expect(SETTINGS["extras.autoConfirm"].defaultValue).toBe(true);
   });
-  it("D4b: três opções, omissão 'não confirma e avisa'", () => {
-    expect(SETTINGS["extras.manualEditAtConfirm"].defaultValue).toBe("skip_notify");
+  it("D4b: três opções; omissão 'confirm' (o comportamento de hoje) até o Jorge decidir", () => {
+    expect(SETTINGS["extras.manualEditAtConfirm"].defaultValue).toBe("confirm");
     for (const v of ["confirm", "skip_notify", "if_older_30m"]) expect(validateSetting("extras.manualEditAtConfirm", v)).toEqual({ ok: true, value: v });
     expect(validateSetting("extras.manualEditAtConfirm", "talvez").ok).toBe(false);
   });
-  it("D4c: por cidade, papéis + dias + contas; omissão TL e supervisor todos os dias", () => {
+  it("D4c: por cidade, papéis + dias + contas; omissão TL e supervisor todos os dias; admin só como conta juntada", () => {
     expect(SETTINGS["extras.reminderRecipients"].defaultValue).toEqual(DEFAULT_REMINDER_RECIPIENTS);
     for (const c of ["lisbon", "porto", "faro"] as const) {
       expect(DEFAULT_REMINDER_RECIPIENTS[c]).toEqual({ roles: ["team_leader", "supervisor"], days: [1, 2, 3, 4, 5, 6, 7], userIds: [] });
     }
+    expect(REMINDER_ROLES as readonly string[]).not.toContain("admin");
+    // Os papéis que se escolhem são os do tipo de notificação (senão nunca recebiam).
+    for (const r of REMINDER_ROLES) expect(kindDef("extras_reminder")!.roles).toContain(r);
     const v = validateSetting("extras.reminderRecipients", { ...DEFAULT_REMINDER_RECIPIENTS, lisbon: { roles: ["backoffice"], days: [5, 1, 1], userIds: [9, 9] } });
     expect(v.ok && (v.value as any).lisbon).toEqual({ roles: ["backoffice"], days: [1, 5], userIds: [9] });
-    expect(reminderRecipientsSchema.safeParse({ ...DEFAULT_REMINDER_RECIPIENTS, porto: { roles: ["extra"], days: [], userIds: [] } }).success).toBe(false);
+    expect(reminderRecipientsSchema.safeParse({ ...DEFAULT_REMINDER_RECIPIENTS, porto: { roles: ["admin"], days: [], userIds: [] } }).success).toBe(false);
     expect(validateSetting("extras.reminderRecipients", { ...DEFAULT_REMINDER_RECIPIENTS, faro: { roles: [], days: [8], userIds: [] } }).ok).toBe(false);
     expect(describeReminderRule(DEFAULT_REMINDER_RECIPIENTS.lisbon)).toBe("Team leader, Supervisor (todos os dias)");
   });
-  it("interruptores novos: lembretes e 'completar' desligados por omissão", () => {
+  it("interruptores novos (regra da casa): lembretes, avisos da escala e 'completar' desligados por omissão", () => {
     expect(automationFlagDefault("EXTRAS_REMINDERS")).toBe(false);
+    expect(automationFlagDefault("EXTRAS_SCHEDULE_ALERTS")).toBe(false);
     expect(automationFlagDefault("EXTRAS_COMPLETE_BEFORE_CONFIRM")).toBe(false);
-    expect(AUTOMATION_FLAGS.map((f) => f.name)).toEqual(expect.arrayContaining(["EXTRAS_REMINDERS", "EXTRAS_COMPLETE_BEFORE_CONFIRM"]));
+    expect(AUTOMATION_FLAGS.map((f) => f.name)).toEqual(expect.arrayContaining(["EXTRAS_REMINDERS", "EXTRAS_SCHEDULE_ALERTS", "EXTRAS_COMPLETE_BEFORE_CONFIRM"]));
   });
-  it("tipos de notificação: lembretes (TL/supervisor por omissão) e falhas (TL + supervisor + back office, com email)", () => {
+  it("tipos de notificação: falhas a TL + supervisor + back office (e admins, por omissão), com email", () => {
     expect(kindDef("extras_reminder")).toMatchObject({ module: "extras_dia", cityScoped: true, personal: false });
     expect(kindDef("extras_schedule_alert")).toMatchObject({ module: "extras_dia", roles: ["team_leader", "supervisor", "backoffice"], emailDefault: true });
+    let id = 1;
+    const p = (role: string, cities: RoutingCandidate["cities"]): RoutingCandidate => ({ id: id++, role, isActive: true, email: `p${id}@x.pt`, cities, accessOverrides: {}, prefs: { muted: [], email: {} } });
+    const people = [p("admin", "all"), p("supervisor", ["lisbon"]), p("team_leader", ["porto"]), p("backoffice", ["lisbon"])];
+    expect(resolveRecipients({ kind: "extras_schedule_alert", city: "lisbon" }, people).map((r) => r.userId).sort()).toEqual([1, 2, 4]);
   });
 });
 
@@ -123,25 +132,38 @@ describe("novas tentativas com espera crescente (30 × tentativas min)", () => {
     expect(notifyExhausted({ status: "failed", attempts: 4 })).toBe(true);
     expect(notifyRetryDue({ status: "sent", attempts: 1, ageMs: 999 * min })).toBe(false);
   });
-  it("quem ficou por avisar: nenhum canal enviado e todos os tentados esgotados", () => {
-    const r = (o: any) => ({ assignmentId: 1, version: 1, channel: "whatsapp", status: "failed", attempts: 4, personName: "Ana Silva", ...o });
-    expect(unnotifiedAfterRetries([r({})])).toEqual([{ assignmentId: 1, version: 1, personName: "Ana Silva", channels: ["whatsapp"] }]);
+  it("deploy: as falhas de antes do F7 (teto 3 na 0705) que já estavam esgotadas NÃO ganham uma 4.ª", () => {
+    expect(notifyRetryDue({ status: "failed", attempts: 3, ageMs: 999 * min, maxAttempts: 3 })).toBe(false);
+    expect(notifyExhausted({ status: "failed", attempts: 3, maxAttempts: 3 })).toBe(true);
+    expect(notificationDone({ id: 1, version: 1 }, [{ assignmentId: 1, version: 1, kind: "scheduled", channel: "whatsapp", status: "failed", attempts: 3, maxAttempts: 3 }], "scheduled", "whatsapp")).toBe(true);
+    expect(notificationDone({ id: 1, version: 1 }, [{ assignmentId: 1, version: 1, kind: "scheduled", channel: "whatsapp", status: "failed", attempts: 3, maxAttempts: 4 }], "scheduled", "whatsapp")).toBe(false);
+    const sql = readFileSync(resolve(__dirname, "migrations/migration_0705.ts"), "utf8");
+    expect(sql).toContain("ALTER TABLE `extras_dia_notifications` ADD COLUMN `maxAttempts` INT NOT NULL DEFAULT 3");
+  });
+  it("quem ficou por avisar: NENHUM canal chegou — esgotado, inválido, sem contacto ou STOP; funcionários de fora", () => {
+    const r = (o: any) => ({ assignmentId: 1, version: 1, channel: "whatsapp", status: "failed", attempts: 4, personName: "Ana Silva", detail: null, ...o });
+    expect(unnotifiedAfterRetries([r({})])).toEqual([{ assignmentId: 1, version: 1, personName: "Ana Silva", channels: ["whatsapp"], reasons: ["WhatsApp: falhou em todas as tentativas"] }]);
     expect(unnotifiedAfterRetries([r({}), r({ channel: "email", status: "sent", attempts: 1 })])).toEqual([]); // o email chegou
     expect(unnotifiedAfterRetries([r({}), r({ channel: "email", status: "failed", attempts: 2 })])).toEqual([]); // o email ainda vai tentar
     expect(unnotifiedAfterRetries([r({ attempts: 3 })])).toEqual([]);
+    for (const status of ["invalid", "no_contact", "opted_out"]) {
+      expect(unnotifiedAfterRetries([r({ status, attempts: 1 }), r({ channel: "email", status: "no_contact", attempts: 1 })]).length, status).toBe(1);
+    }
+    expect(unnotifiedAfterRetries([r({ status: "no_contact", attempts: 1, detail: NOT_EXTRA_NOTICE_REASON })], NOT_EXTRA_NOTICE_REASON)).toEqual([]);
   });
 });
 
 describe("reserva do aviso (claimNotification) contra a BD falsa", () => {
   const a = { id: 7, version: 2, employeeId: 11, assignmentDate: "2026-10-22", city: "lisbon" };
-  it("nova → envia; falhada há 10 min (1 tentativa) → não; há 30 min → sim, com reserva compare-and-set", async () => {
+  it("nova → envia (com o teto novo); falhada há 10 min (1 tentativa) → não; há 30 min → sim, com reserva compare-and-set", async () => {
     const { claimNotification } = await import("./extrasSchedule");
     fake.inserted = 1;
     expect(await claimNotification(a, "scheduled", "whatsapp")).toBe(true);
-    fake.inserted = 0; fake.row = { status: "failed", attempts: 1, ageS: 600 };
+    expect(fake.queries[0]).toMatch(/maxAttempts/);
+    fake.inserted = 0; fake.row = { status: "failed", attempts: 1, ageS: 600, maxAttempts: 4 };
     expect(await claimNotification(a, "scheduled", "whatsapp")).toBe(false);
     expect(fake.queries.some((q) => /^\s*UPDATE/i.test(q))).toBe(false);
-    fake.row = { status: "failed", attempts: 1, ageS: 30 * 60 };
+    fake.row = { status: "failed", attempts: 1, ageS: 30 * 60, maxAttempts: 4 };
     fake.queries = [];
     expect(await claimNotification(a, "scheduled", "whatsapp")).toBe(true);
     const upd = fake.queries.find((q) => /^\s*UPDATE/i.test(q))!;
@@ -150,13 +172,15 @@ describe("reserva do aviso (claimNotification) contra a BD falsa", () => {
     fake.updated = 0; // outra corrida ganhou
     expect(await claimNotification(a, "scheduled", "whatsapp")).toBe(false);
   });
-  it("esgotada (4 tentativas) nunca mais; 'sending' esquecida há mais de 15 min volta", async () => {
+  it("esgotada (4, ou 3 numa linha de antes do F7) nunca mais; 'sending' esquecida há mais de 15 min volta", async () => {
     const { claimNotification } = await import("./extrasSchedule");
-    fake.row = { status: "failed", attempts: 4, ageS: 10 * 3600 };
+    fake.row = { status: "failed", attempts: 4, ageS: 10 * 3600, maxAttempts: 4 };
     expect(await claimNotification(a, "scheduled", "email")).toBe(false);
-    fake.row = { status: "sending", attempts: 1, ageS: 16 * 60 };
+    fake.row = { status: "failed", attempts: 3, ageS: 10 * 3600, maxAttempts: 3 };
+    expect(await claimNotification(a, "scheduled", "email")).toBe(false);
+    fake.row = { status: "sending", attempts: 1, ageS: 16 * 60, maxAttempts: 4 };
     expect(await claimNotification(a, "scheduled", "email")).toBe(true);
-    fake.row = { status: "sending", attempts: 1, ageS: 5 * 60 };
+    fake.row = { status: "sending", attempts: 1, ageS: 5 * 60, maxAttempts: 4 };
     expect(await claimNotification(a, "scheduled", "email")).toBe(false);
   });
 });
@@ -181,6 +205,11 @@ describe("dia mexido à mão na confirmação (D4b)", () => {
     expect(autoConfirmDecision(state(null, { holdAuto: true }), "confirm", nowMs).action).toBe("skip");
     expect(autoConfirmDecision(state(null, { status: "confirmed" }), "confirm", nowMs).action).toBe("skip");
     expect(autoConfirmDecision(null, "confirm", nowMs).action).toBe("skip");
+  });
+  it("if_older_30m: a espera que acaba depois da última volta (23:45) não fica pendurada", () => {
+    expect(settlesAfterLastRun(Date.parse("2026-10-21T22:36:00Z"), "2026-10-21")).toBe(false); // 23:36 Lisboa
+    expect(settlesAfterLastRun(Date.parse("2026-10-21T22:51:00Z"), "2026-10-21")).toBe(true); // 23:51 Lisboa
+    expect(settlesAfterLastRun(Date.parse("2026-10-21T23:10:00Z"), "2026-10-21")).toBe(true); // 00:10 do dia seguinte
   });
 });
 
@@ -214,9 +243,9 @@ describe("lembretes: quando e a quem (D4c)", () => {
     const f = reminderRecipientFilter(rule);
     expect(f({ id: 1, role: "supervisor" })).toBe(true);
     expect(f({ id: 2, role: "team_leader" })).toBe(false);
-    expect(f({ id: 42, role: "backoffice" })).toBe(true);
+    expect(f({ id: 42, role: "admin" })).toBe(true);
   });
-  it("textos: proposta e confirmação (mexido à mão, suspenso, acrescentados, faltas)", () => {
+  it("textos: proposta e confirmação (mexido à mão, suspenso, acrescentados, faltas) e o aviso do D4b às 14:30", () => {
     const base = { cityLabel: "Lisboa", dayLabel: "quinta 22/10", status: "proposed" as const, holdAuto: false, manual: false, manualMode: "skip_notify" as const, proposed: 5, confirmed: 0, gaps: [], noAnswer: null, added: [] };
     const p = reminderMessage({ ...base, slot: "propose", at: "11:00", status: "none", proposed: 0, noAnswer: 3 });
     expect(p.title).toBe("Extras-dia Lisboa: proposta de quinta 22/10 às 11:00");
@@ -226,6 +255,9 @@ describe("lembretes: quando e a quem (D4c)", () => {
     expect(c.body).toContain("Às 15:00 a escala de quinta 22/10 é confirmada");
     expect(c.body).toContain("não é confirmado sozinho");
     expect(c.body).toContain("Acrescentados com quem respondeu entretanto: Rui.");
+    expect(c.body).toContain("se mexeres agora nos condutores deste dia, às 15:00 já não é confirmado sozinho");
+    expect(reminderMessage({ ...base, slot: "confirm", at: "15:00", manualMode: "if_older_30m" }).body).toContain("só é confirmado sozinho 30 min depois da última mudança");
+    expect(reminderMessage({ ...base, slot: "confirm", at: "15:00", manualMode: "confirm" }).body).toContain("é confirmado e avisado como estiver às 15:00");
     expect(reminderMessage({ ...base, slot: "confirm", at: "15:00", holdAuto: true }).body).toContain("está suspenso");
   });
 });
@@ -238,25 +270,28 @@ type Notif = { assignmentId: number; version: number; channel: string; status: s
  * Mundo falso: o estado da escala de amanhã por cidade, as linhas da escala e
  * os avisos. As funções do trabalho são as de produção; só as pontas são falsas.
  */
-function world(opts: { mode: "confirm" | "skip_notify" | "if_older_30m"; manualAt?: number | null; whatsappUpAt?: number | null; remindersOn?: boolean; dateOf: (ms: number) => string }) {
+function world(opts: {
+  mode: "confirm" | "skip_notify" | "if_older_30m"; manualAt?: number | null; whatsappUpAt?: number | null; remindersOn?: boolean;
+  alertsOn?: boolean; confirmAt?: string; recipients?: (input: any) => number[]; admins?: number[];
+}) {
   const W = {
     now: 0,
     states: new Map<string, any>(),
     notifs: [] as Notif[],
     proposals: [] as Array<{ at: number; city: string }>,
     confirms: [] as Array<{ at: number; city: string }>,
-    alerts: [] as Array<{ at: number; kind: string; title: string; body: string; city: string }>,
+    alerts: [] as Array<{ at: number; kind: string; title: string; body: string; city: string | null; recipients: number }>,
     reminders: [] as Array<{ at: number; title: string; body: string; city: string; alsoUserIds?: readonly unknown[] }>,
-    claimed: new Set<string>(),
-    calls: { proposeAuto: 0 },
+    claims: new Map<string, { released: boolean; attempts: number }>(),
   };
   const key = (date: string, city: string) => `${date}:${city}`;
+  const confirmAt = opts.confirmAt ?? "15:00";
   const settings = {
-    autoProposeAt: "11:00", autoConfirmAt: "15:00", autoProposeAtMin: 660, autoConfirmAtMin: 900, daysAhead: 1, autoConfirm: true,
+    autoProposeAt: "11:00", autoConfirmAt: confirmAt, autoProposeAtMin: 660, autoConfirmAtMin: hhmmToMinutes(confirmAt), daysAhead: 1, autoConfirm: true,
     crewRules: {} as any, meetingPoints: { lisbon: "", porto: "", faro: "" }, manualEditAtConfirm: opts.mode,
   };
   const sendFor = (date: string, city: string) => {
-    for (const n of W.notifs.filter((x) => x.assignmentId > 0 && W.states.get(key(date, city))?.rows?.includes(x.assignmentId))) {
+    for (const n of W.notifs.filter((x) => W.states.get(key(date, city))?.rows?.includes(x.assignmentId))) {
       // A mesma regra da reserva real (claimNotification → notifyRetryDue).
       if (n.status !== "failed" || !notifyRetryDue({ status: n.status, attempts: n.attempts, ageMs: W.now - n.updatedAt })) continue;
       n.attempts++;
@@ -266,18 +301,31 @@ function world(opts: { mode: "confirm" | "skip_notify" | "if_older_30m"; manualA
     }
     return { whatsapp: null, email: null, warnings: [], errors: [] };
   };
+  const getState = async (date: string, city: string) => {
+    const st = W.states.get(key(date, city)) ?? null;
+    // A mudança à mão aparece à hora em que é feita (só Lisboa).
+    if (st && city === "lisbon" && opts.manualAt != null && W.now >= opts.manualAt && !st.manual) {
+      st.manual = { atUnix: Math.floor(opts.manualAt / 1000), byId: 5, byName: "Márcia", what: "tirou" };
+    }
+    return st;
+  };
+  const claimAlert = async (a: { date: string; city: string; kind: string; key?: string }) => {
+    const k = `${a.date}|${a.city}|${a.kind}|${a.key ?? ""}`;
+    const c = W.claims.get(k);
+    if (!c) { W.claims.set(k, { released: false, attempts: 1 }); return true; }
+    if (c.released && c.attempts < 3) { c.released = false; c.attempts++; return true; }
+    return false;
+  };
   const scheduleDeps = {
-    flagOn: async (name: string) => (name === "EXTRAS_AUTOMATION" ? true : name === "EXTRAS_REMINDERS" ? !!opts.remindersOn : false),
+    flagOn: async (name: string) => (name === "EXTRAS_AUTOMATION" ? true : name === "EXTRAS_REMINDERS" ? !!opts.remindersOn : name === "EXTRAS_SCHEDULE_ALERTS" ? opts.alertsOn ?? true : false),
     loadSettings: async () => settings,
-    getState: async (date: string, city: string) => W.states.get(key(date, city)) ?? null,
+    getState,
     propose: async ({ date, city }: { date: string; city: string }) => {
-      W.calls.proposeAuto++;
       if (W.states.has(key(date, city))) return { status: "skipped", reason: "já tem proposta ou escala", proposed: 0, kept: 0, gaps: [], summary: null, removedOut: 0 } as any;
       const base = city === "lisbon" ? 100 : city === "porto" ? 200 : 300;
       W.states.set(key(date, city), {
         status: "proposed", holdAuto: false, proposedAt: null, proposedBy: "auto", confirmedAt: null, confirmedBy: null, gaps: [] as Gap[], summary: null,
-        manual: city === "lisbon" && opts.manualAt != null ? { atUnix: Math.floor(opts.manualAt / 1000), byId: 5, byName: "Márcia", what: "tirou" } : null,
-        rows: [base + 1, base + 2],
+        manual: null, rows: [base + 1, base + 2],
       });
       W.proposals.push({ at: W.now, city });
       return { status: "proposed", proposed: 2, kept: 0, gaps: [], summary: "x", removedOut: 0 } as any;
@@ -288,7 +336,6 @@ function world(opts: { mode: "confirm" | "skip_notify" | "if_older_30m"; manualA
       if (!st || st.status !== "proposed" || st.holdAuto) return { status: "skipped", reason: "sem proposta", confirmed: 0, notifications: null } as any;
       st.status = "confirmed";
       W.confirms.push({ at: W.now, city });
-      // Envio na confirmação: 1.ª tentativa de cada linha.
       for (const id of st.rows) {
         const ok = opts.whatsappUpAt != null && W.now >= opts.whatsappUpAt;
         W.notifs.push({ assignmentId: id, version: 1, channel: "whatsapp", status: ok ? "sent" : "failed", attempts: 1, updatedAt: W.now, personName: `Extra ${id}`, tries: [W.now] });
@@ -298,24 +345,28 @@ function world(opts: { mode: "confirm" | "skip_notify" | "if_older_30m"; manualA
     sendNotifications: async (date: string, city: any) => sendFor(date, city),
     unnotified: async (date: string, city: string) => unnotifiedAfterRetries(W.notifs.filter((n) => W.states.get(key(date, city))?.rows?.includes(n.assignmentId))),
     coverage: async () => ({ coverage: 1, gaps: [] }),
-    claimAlert: async (a: { date: string; city: string; kind: string; key?: string }) => {
-      const k = `${a.date}|${a.city}|${a.kind}|${a.key ?? ""}`;
-      if (W.claimed.has(k)) return false;
-      W.claimed.add(k);
-      return true;
+    claimAlert,
+    releaseAlert: async (a: { date: string; city: string; kind: string; key?: string }) => {
+      const c = W.claims.get(`${a.date}|${a.city}|${a.kind}|${a.key ?? ""}`);
+      if (c) c.released = true;
     },
-    alert: async (input: any) => { W.alerts.push({ at: W.now, kind: input.entity.id.split(":")[2], title: input.title, body: input.body, city: input.city }); return { recipients: [1, 2] }; },
+    alert: async (input: any) => {
+      const recipients = opts.recipients ? opts.recipients(input) : [1, 2];
+      W.alerts.push({ at: W.now, kind: input.entity.id.split(":")[2], title: input.title, body: input.body, city: input.city, recipients: recipients.length });
+      return { recipients, duplicates: 0 };
+    },
+    adminIds: async () => opts.admins ?? [],
     noteRecipients: async () => {},
   };
   const reminderDeps = {
     flagOn: scheduleDeps.flagOn,
     loadSettings: async () => settings,
     loadRules: async () => DEFAULT_REMINDER_RECIPIENTS,
-    getState: scheduleDeps.getState,
+    getState,
     counts: async (date: string, city: string) => ({ proposed: W.states.get(key(date, city))?.status === "proposed" ? 2 : 0, confirmed: W.states.get(key(date, city))?.status === "confirmed" ? 2 : 0 }),
     noAnswer: async () => 3,
     completedNames: async () => [],
-    claim: async (a: any) => scheduleDeps.claimAlert(a),
+    claim: async (a: any) => claimAlert(a),
     notify: async (input: any) => { W.reminders.push({ at: W.now, title: input.title, body: input.body, city: input.city, alsoUserIds: input.alsoUserIds }); return { recipients: [1] }; },
     noteRecipients: async () => {},
   };
@@ -342,7 +393,7 @@ describe("relógio simulado das 10:00 às 18:30 (Lisboa)", () => {
   // Quarta 21 out (hora de verão, UTC+1) e domingo 25 out (muda a hora: UTC+0).
   for (const [label, from, to] of [["qua 21 out (verão)", "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z"], ["dom 25 out (muda a hora)", "2026-10-25T10:00:00Z", "2026-10-25T18:30:00Z"]] as const) {
     it(`${label}: lembrete 10:30 → proposta 11:00 → lembrete 14:30 → confirmação e envio 15:00`, async () => {
-      const w = world({ mode: "skip_notify", whatsappUpAt: 0, remindersOn: true, dateOf: (ms) => lisbonNow(new Date(ms)).date });
+      const w = world({ mode: "confirm", whatsappUpAt: 0, remindersOn: true });
       await runClock(w, from, to);
       const cities = (xs: Array<{ city: string }>) => xs.map((x) => x.city).sort();
       // Lembretes: um por cidade e hora, nunca repetidos às :45.
@@ -359,7 +410,7 @@ describe("relógio simulado das 10:00 às 18:30 (Lisboa)", () => {
   }
 
   it("lembretes desligados (omissão) → nenhum lembrete; a escala corre na mesma", async () => {
-    const w = world({ mode: "skip_notify", whatsappUpAt: 0, remindersOn: false, dateOf: () => "" });
+    const w = world({ mode: "confirm", whatsappUpAt: 0, remindersOn: false });
     const reports = await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T14:30:00Z");
     expect(w.W.reminders).toEqual([]);
     expect(reports[0].rem).toMatchObject({ skipped: "off" });
@@ -367,7 +418,7 @@ describe("relógio simulado das 10:00 às 18:30 (Lisboa)", () => {
   });
 
   it("falha do envio às 15:00 → nova tentativa 15:30 → 16:30 → 18:00 → aviso de falha (uma vez)", async () => {
-    const w = world({ mode: "skip_notify", whatsappUpAt: null, remindersOn: false, dateOf: () => "" });
+    const w = world({ mode: "confirm", whatsappUpAt: null });
     await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
     const lisbon = w.W.notifs.filter((n) => n.assignmentId === 101)[0];
     expect(lisbon.tries.map(lx)).toEqual(["15:00", "15:30", "16:30", "18:00"]);
@@ -376,12 +427,19 @@ describe("relógio simulado das 10:00 às 18:30 (Lisboa)", () => {
     expect(unnotified.map((a) => `${lx(a.at)} ${a.city}`).sort()).toEqual(["18:00 faro", "18:00 lisbon", "18:00 porto"]);
     const lxAlert = unnotified.find((a) => a.city === "lisbon")!;
     expect(lxAlert.title).toBe("Escala de quinta 22/10 (Lisboa): 2 extras ficaram por avisar");
-    expect(lxAlert.body).toContain("Extra 101, Extra 102");
-    expect(lxAlert.body).toContain("4 tentativas");
+    expect(lxAlert.body).toContain("Extra 101 (WhatsApp: falhou em todas as tentativas)");
+    expect(lxAlert.body).toContain("não chegou por nenhum canal");
+  });
+
+  it("avisos da escala desligados (EXTRAS_SCHEDULE_ALERTS, omissão): a mesma falha não avisa ninguém (nem email)", async () => {
+    const w = world({ mode: "skip_notify", manualAt: Date.parse("2026-10-21T13:50:00Z"), whatsappUpAt: null, alertsOn: false });
+    const reports = await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
+    expect(w.W.alerts).toEqual([]);
+    expect(reports.some((r) => r.sched.skipped.some((s: string) => s.includes("EXTRAS_SCHEDULE_ALERTS desligado")))).toBe(true);
   });
 
   it("a Meta volta às 16:00: a tentativa das 16:30 já passa e não há aviso", async () => {
-    const w = world({ mode: "skip_notify", whatsappUpAt: Date.parse("2026-10-21T15:00:00Z"), remindersOn: false, dateOf: () => "" });
+    const w = world({ mode: "confirm", whatsappUpAt: Date.parse("2026-10-21T15:00:00Z") });
     await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
     const n = w.W.notifs.find((x) => x.assignmentId === 101)!;
     expect(n.tries.map(lx)).toEqual(["15:00", "15:30", "16:30"]);
@@ -389,31 +447,65 @@ describe("relógio simulado das 10:00 às 18:30 (Lisboa)", () => {
     expect(w.W.alerts.filter((a) => a.kind === "unnotified")).toEqual([]);
   });
 
+  it("aviso sem destinatários na cidade → vai aos admins; sem ninguém → liberta e tenta outra vez (no máximo 3)", async () => {
+    // Ninguém na cidade, admins existem: a 2.ª chamada (sem cidade) chega aos admins.
+    const w = world({ mode: "confirm", whatsappUpAt: null, admins: [99], recipients: (input) => (input.city ? [] : [99]) });
+    const reports = await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
+    const lxAlerts = w.W.alerts.filter((a) => a.kind === "unnotified" && a.title.includes("Lisboa"));
+    expect(lxAlerts.map((a) => a.city)).toEqual(["lisbon", null]); // 1.º a cidade, depois os admins
+    expect(lxAlerts[1].recipients).toBe(1);
+    expect(reports.some((r) => r.sched.warnings.some((s: string) => s.includes("foi aos admins")))).toBe(true);
+    // Ninguém de todo: liberta e volta a tentar nas corridas seguintes, até 3 vezes.
+    const w0 = world({ mode: "confirm", whatsappUpAt: null, admins: [], recipients: () => [] });
+    const r0 = await runClock(w0, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
+    const tries = w0.W.alerts.filter((a) => a.kind === "unnotified" && a.title.includes("Lisboa")).map((a) => lx(a.at));
+    expect(tries).toEqual(["18:00", "18:15", "18:30"]);
+    expect(r0.some((r) => r.sched.warnings.some((s: string) => s.includes("sem destinatários")))).toBe(true);
+  });
+
   describe("dia mexido à mão às 14:50 (Lisboa), nas 3 opções", () => {
     const manualAt = Date.parse("2026-10-21T13:50:00Z"); // 14:50 Lisboa
-    it("confirm: confirma às 15:00 como está", async () => {
-      const w = world({ mode: "confirm", manualAt, whatsappUpAt: 0, dateOf: () => "" });
+    it("confirm (omissão): confirma às 15:00 como está", async () => {
+      const w = world({ mode: "confirm", manualAt, whatsappUpAt: 0 });
       await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
       expect(w.W.confirms.find((c) => c.city === "lisbon")).toMatchObject({ at: Date.parse("2026-10-21T14:00:00Z") });
       expect(w.W.alerts.filter((a) => a.kind === "manual_hold")).toEqual([]);
     });
-    it("skip_notify (omissão): não confirma e avisa uma vez; as outras cidades confirmam", async () => {
-      const w = world({ mode: "skip_notify", manualAt, whatsappUpAt: 0, dateOf: () => "" });
+    it("skip_notify: não confirma e avisa às 15:00; continua por confirmar → repete às 18:00 (uma vez)", async () => {
+      const w = world({ mode: "skip_notify", manualAt, whatsappUpAt: 0 });
       await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
       expect(w.W.confirms.map((c) => c.city).sort()).toEqual(["faro", "porto"]);
       const hold = w.W.alerts.filter((a) => a.kind === "manual_hold");
-      expect(hold.map((a) => `${lx(a.at)} ${a.city}`)).toEqual(["15:00 lisbon"]);
+      expect(hold.map((a) => `${lx(a.at)} ${a.city}`)).toEqual(["15:00 lisbon", "18:00 lisbon"]);
       expect(hold[0].body).toContain("mexido à mão por Márcia (tirou)");
       expect(hold[0].body).toContain("Confirmar escala");
+      expect(hold[1].title).toContain("AINDA por confirmar");
       expect(w.W.notifs.some((n) => n.assignmentId === 101)).toBe(false); // ninguém de Lisboa avisado
     });
     it("if_older_30m: espera; confirma às 15:30 (40 min depois da última mudança)", async () => {
-      const w = world({ mode: "if_older_30m", manualAt, whatsappUpAt: 0, dateOf: () => "" });
+      const w = world({ mode: "if_older_30m", manualAt, whatsappUpAt: 0 });
       const reports = await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
       expect(lx(w.W.confirms.find((c) => c.city === "lisbon")!.at)).toBe("15:30");
       const at1515 = reports.find((r) => lx(r.at) === "15:15")!;
       expect(at1515.sched.skipped.join(" ")).toMatch(/mexido à mão há 25 min/);
       expect(w.W.alerts).toEqual([]);
+    });
+  });
+
+  describe("if_older_30m perto do fim do dia (confirmação às 23:30)", () => {
+    it("mexido às 23:05 → confirma às 23:45 sem aviso", async () => {
+      const w = world({ mode: "if_older_30m", confirmAt: "23:30", manualAt: Date.parse("2026-10-21T22:05:00Z"), whatsappUpAt: 0 });
+      await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T22:45:00Z");
+      expect(lx(w.W.confirms.find((c) => c.city === "lisbon")!.at)).toBe("23:45");
+      expect(w.W.alerts).toEqual([]);
+    });
+    it("mexido às 23:20 → a espera passava das 23:45: avisa (uma vez) e não fica pendurado", async () => {
+      const w = world({ mode: "if_older_30m", confirmAt: "23:30", manualAt: Date.parse("2026-10-21T22:20:00Z"), whatsappUpAt: 0 });
+      await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T22:45:00Z");
+      expect(w.W.confirms.find((c) => c.city === "lisbon")).toBeUndefined();
+      const late = w.W.alerts.filter((a) => a.kind === "manual_hold");
+      expect(late.map((a) => lx(a.at))).toEqual(["23:30"]);
+      expect(late[0].body).toContain("não vai ser confirmado sozinho");
     });
   });
 });

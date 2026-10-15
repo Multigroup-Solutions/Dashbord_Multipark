@@ -679,7 +679,7 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
                   ? `Mexido à mão: às ${d.settings.autoConfirmAt} é confirmado na mesma, como está.`
                   : d.settings.manualEditAtConfirm === "if_older_30m"
                     ? `Mexido à mão: só é confirmado sozinho 30 min depois da última mudança.`
-                    : `Mexido à mão: às ${d.settings.autoConfirmAt} não é confirmado sozinho (o TL e o supervisor são avisados) — confirma tu.`}
+                    : `Mexido à mão: às ${d.settings.autoConfirmAt} não é confirmado sozinho${d.settings.alertsOn ? " (o TL, o supervisor e o back office são avisados)" : ""} — confirma tu.`}
               </p>
             )}
           </div>

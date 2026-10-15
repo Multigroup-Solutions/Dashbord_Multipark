@@ -60,6 +60,9 @@ import {
   MANUAL_EDIT_AT_CONFIRM_MODES,
   MAX_NOTIFY_ATTEMPTS,
   NOTIFY_SENDING_STALE_MIN,
+  MANUAL_EDIT_SETTLE_MIN,
+  MANUAL_HOLD_REPEAT_AT_MIN,
+  settlesAfterLastRun,
   autoConfirmDecision,
   fmtDayPt,
   notifyRetryDue,
@@ -667,13 +670,29 @@ function describeNotify(n: NotifySummary): string {
 export async function loadNotifyLog(assignmentIds: number[]): Promise<NotifyLogRow[]> {
   const db = await getDb();
   if (!db || !assignmentIds.length) return [];
-  const res = await db.execute(sql`
-    SELECT assignmentId, version, kind, channel, status, attempts
-      FROM extras_dia_notifications WHERE assignmentId IN (${inList(assignmentIds)})`);
+  const res = await withoutMaxAttempts(
+    () => db.execute(sql`SELECT assignmentId, version, kind, channel, status, attempts, maxAttempts
+      FROM extras_dia_notifications WHERE assignmentId IN (${inList(assignmentIds)})`),
+    () => db.execute(sql`SELECT assignmentId, version, kind, channel, status, attempts, 3 AS maxAttempts
+      FROM extras_dia_notifications WHERE assignmentId IN (${inList(assignmentIds)})`),
+  );
   return rowsOf(res).map((r) => ({
     assignmentId: Number(r.assignmentId), version: Number(r.version), kind: String(r.kind) as NotifyKind,
     channel: String(r.channel) as NotifyChannel, status: String(r.status), attempts: Number(r.attempts),
+    maxAttempts: r.maxAttempts == null ? null : Number(r.maxAttempts),
   }));
+}
+
+/**
+ * Sem a coluna maxAttempts (0705 por aplicar): corre a versão de antes, com
+ * o teto antigo (3) — nunca uma 4.ª tentativa para quem já tinha esgotado.
+ */
+async function withoutMaxAttempts<T>(withCol: () => Promise<T>, without: () => Promise<T>): Promise<T> {
+  try { return await withCol(); } catch (err: any) {
+    const code = err?.code ?? err?.cause?.code;
+    if (code === "ER_BAD_FIELD_ERROR") return without();
+    throw err;
+  }
 }
 
 /**
@@ -693,19 +712,31 @@ export async function claimNotification(
 ): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
-  const ins = await db.execute(sql`
-    INSERT IGNORE INTO extras_dia_notifications (assignmentId, version, kind, channel, employeeId, assignmentDate, city, status, attempts)
-    VALUES (${a.id}, ${a.version}, ${kind}, ${channel}, ${a.employeeId}, ${a.assignmentDate}, ${a.city}, 'sending', 1)`);
+  // As linhas novas nascem com o teto novo (4); as de antes do F7 ficaram com 3 (0705).
+  const ins = await withoutMaxAttempts(
+    () => db.execute(sql`
+      INSERT IGNORE INTO extras_dia_notifications (assignmentId, version, kind, channel, employeeId, assignmentDate, city, status, attempts, maxAttempts)
+      VALUES (${a.id}, ${a.version}, ${kind}, ${channel}, ${a.employeeId}, ${a.assignmentDate}, ${a.city}, 'sending', 1, ${MAX_NOTIFY_ATTEMPTS})`),
+    () => db.execute(sql`
+      INSERT IGNORE INTO extras_dia_notifications (assignmentId, version, kind, channel, employeeId, assignmentDate, city, status, attempts)
+      VALUES (${a.id}, ${a.version}, ${kind}, ${channel}, ${a.employeeId}, ${a.assignmentDate}, ${a.city}, 'sending', 1)`),
+  );
   if (extractAffectedRows(ins) > 0) return true;
-  const seen = rowsOf(await db.execute(sql`
-    SELECT status, attempts, TIMESTAMPDIFF(SECOND, updatedAt, NOW()) AS ageS
-      FROM extras_dia_notifications
-     WHERE assignmentId = ${a.id} AND version = ${a.version} AND kind = ${kind} AND channel = ${channel} LIMIT 1`))[0];
+  const seen = rowsOf(await withoutMaxAttempts(
+    () => db.execute(sql`
+      SELECT status, attempts, maxAttempts, TIMESTAMPDIFF(SECOND, updatedAt, NOW()) AS ageS
+        FROM extras_dia_notifications
+       WHERE assignmentId = ${a.id} AND version = ${a.version} AND kind = ${kind} AND channel = ${channel} LIMIT 1`),
+    () => db.execute(sql`
+      SELECT status, attempts, 3 AS maxAttempts, TIMESTAMPDIFF(SECOND, updatedAt, NOW()) AS ageS
+        FROM extras_dia_notifications
+       WHERE assignmentId = ${a.id} AND version = ${a.version} AND kind = ${kind} AND channel = ${channel} LIMIT 1`),
+  ))[0];
   if (!seen) return false;
   const status = String(seen.status ?? "");
   const attempts = Number(seen.attempts ?? 0) || 0;
   const ageMs = Math.max(0, Number(seen.ageS ?? 0) || 0) * 1000;
-  const retry = notifyRetryDue({ status, attempts, ageMs })
+  const retry = notifyRetryDue({ status, attempts, ageMs, maxAttempts: seen.maxAttempts == null ? null : Number(seen.maxAttempts) })
     || (status === "sending" && ageMs > NOTIFY_SENDING_STALE_MIN * 60_000);
   if (!retry) return false;
   const upd = await db.execute(sql`
@@ -1037,7 +1068,7 @@ export interface ScheduleOverview {
   noAnswerCount: number;
   availableCount: number;
   notifications: { assignmentId: number; version: number; kind: string; channel: string; status: string; detail: string | null }[];
-  settings: { autoProposeAt: string; autoConfirm: boolean; autoConfirmAt: string; daysAhead: number; manualEditAtConfirm: ManualEditAtConfirm };
+  settings: { autoProposeAt: string; autoConfirm: boolean; autoConfirmAt: string; daysAhead: number; manualEditAtConfirm: ManualEditAtConfirm; alertsOn: boolean };
 }
 
 export async function getScheduleOverview(date: string, city: ScheduleCity): Promise<ScheduleOverview> {
@@ -1077,7 +1108,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
     availableCount: cands.filter((c) => candidateWindows(c).length > 0).length,
     notifications,
-    settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead, manualEditAtConfirm: settings.manualEditAtConfirm },
+    settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead, manualEditAtConfirm: settings.manualEditAtConfirm, alertsOn: await scheduleFlagOn(SCHEDULE_ALERTS_FLAG).catch(() => false) },
   };
 }
 
@@ -1098,33 +1129,63 @@ export interface ScheduleCronReport {
 export type ScheduleAlertKind =
   | "reminder_propose" | "reminder_confirm" | "manual_hold" | "unnotified" | "low_coverage" | "confirm_failed" | "complete";
 
+/** Um aviso libertado (não chegou a ninguém, ou o trabalho falhou) volta a ser tentado no máximo isto. */
+export const ALERT_MAX_ATTEMPTS = 3;
+
+type AlertRef = { date: string; city: string; kind: ScheduleAlertKind; key?: string };
+const alertWhere = (a: AlertRef) =>
+  sql`assignmentDate = ${a.date.slice(0, 10)} AND city = ${a.city} AND kind = ${a.kind} AND alertKey = ${(a.key ?? "").slice(0, 64)}`;
+
 /**
- * Reserva um aviso de (dia, cidade, tipo, chave): true = é a primeira vez e
- * este processo avisa. Sem a tabela (0705 por aplicar) → false: na dúvida não
- * se avisa (nunca há avisos repetidos a cada 15 min).
+ * Reserva um aviso de (dia, cidade, tipo, chave): true = este processo avisa.
+ * 1.ª vez → insere; libertado antes (sem destinatários / erro) e com menos de
+ * ALERT_MAX_ATTEMPTS tentativas → volta a ser seu (compare-and-set). Sem a
+ * tabela (0705 por aplicar) → false: na dúvida não se avisa (nunca há avisos
+ * repetidos a cada 15 min).
  */
-export async function claimScheduleAlert(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string; detail?: string | null; recipients?: number }): Promise<boolean> {
+export async function claimScheduleAlert(a: AlertRef & { detail?: string | null }): Promise<boolean> {
   try {
     const db = await getDb();
     if (!db) return false;
     const res = await db.execute(sql`
-      INSERT IGNORE INTO extras_dia_alerts (assignmentDate, city, kind, alertKey, detail, recipients)
-      VALUES (${a.date.slice(0, 10)}, ${a.city}, ${a.kind}, ${(a.key ?? "").slice(0, 64)}, ${a.detail ? a.detail.slice(0, 1000) : null}, ${a.recipients ?? 0})`);
-    return extractAffectedRows(res) > 0;
+      INSERT IGNORE INTO extras_dia_alerts (assignmentDate, city, kind, alertKey, detail)
+      VALUES (${a.date.slice(0, 10)}, ${a.city}, ${a.kind}, ${(a.key ?? "").slice(0, 64)}, ${a.detail ? a.detail.slice(0, 1000) : null})`);
+    if (extractAffectedRows(res) > 0) return true;
+    const again = await db.execute(sql`UPDATE extras_dia_alerts SET released = 0, attempts = attempts + 1, recipients = NULL
+      WHERE ${alertWhere(a)} AND released = 1 AND attempts < ${ALERT_MAX_ATTEMPTS}`);
+    return extractAffectedRows(again) > 0;
   } catch (err: any) {
     console.warn("[extras-schedule] reserva do aviso falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
     return false;
   }
 }
 
-/** Quem foi avisado depois de reservado (para o registo). Nunca lança. */
-async function noteAlertRecipients(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }, recipients: number): Promise<void> {
+/** Liberta a reserva (o aviso não chegou a ninguém ou o trabalho falhou): a corrida seguinte volta a tentar. Nunca lança. */
+export async function releaseScheduleAlert(a: AlertRef): Promise<void> {
   try {
     const db = await getDb();
     if (!db) return;
-    await db.execute(sql`UPDATE extras_dia_alerts SET recipients = ${recipients}
-      WHERE assignmentDate = ${a.date.slice(0, 10)} AND city = ${a.city} AND kind = ${a.kind} AND alertKey = ${(a.key ?? "").slice(0, 64)}`);
+    await db.execute(sql`UPDATE extras_dia_alerts SET released = 1 WHERE ${alertWhere(a)}`);
+  } catch { /* na pior, não se repete */ }
+}
+
+/** Quem foi avisado depois de reservado (para o registo). Nunca lança. */
+async function noteAlertRecipients(a: AlertRef, recipients: number): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.execute(sql`UPDATE extras_dia_alerts SET recipients = ${recipients} WHERE ${alertWhere(a)}`);
   } catch { /* registo */ }
+}
+
+/** Administradores e super admins ativos (recurso quando um aviso não chega a ninguém da cidade). */
+async function loadAdminUserIds(): Promise<number[]> {
+  try {
+    const db = await getDb();
+    if (!db) return [];
+    const res = await db.execute(sql`SELECT id FROM users WHERE isActive = 1 AND role IN ('admin', 'super_admin') ORDER BY id LIMIT 20`);
+    return rowsOf(res).map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);
+  } catch { return []; }
 }
 
 /** Chave curta e estável de uma lista (para "ficaram por avisar" de um conjunto de linhas). */
@@ -1136,21 +1197,24 @@ export function alertKeyOf(parts: readonly (string | number)[]): string {
 }
 
 /**
- * Linhas da escala (dia, cidade) com os avisos esgotados e sem nenhum canal
- * enviado — "ficaram por avisar" (regra pura `unnotifiedAfterRetries`).
+ * Linhas da escala (dia, cidade) em que NENHUM canal chegou e nada está por
+ * tentar — "ficaram por avisar" (regra pura `unnotifiedAfterRetries`).
  */
 export async function loadUnnotifiedAfterRetries(date: string, city: string): Promise<ReturnType<typeof unnotifiedAfterRetries>> {
   const db = await getDb();
   if (!db) return [];
-  const res = await db.execute(sql`
-    SELECT n.assignmentId, n.version, n.channel, n.status, n.attempts, a.personName
+  const q = (maxCol: ReturnType<typeof sql>) => db.execute(sql`
+    SELECT n.assignmentId, n.version, n.channel, n.status, n.attempts, ${maxCol} AS maxAttempts, n.detail, a.personName
       FROM extras_dia_notifications n
       JOIN extras_dia_assignments a ON a.id = n.assignmentId AND a.version = n.version AND a.status = 'confirmed'
      WHERE n.assignmentDate = ${date} AND n.city = ${city} AND n.kind = 'scheduled'`);
+  const res = await withoutMaxAttempts(() => q(sql`n.maxAttempts`), () => q(sql`3`));
+  const { NOT_EXTRA_NOTICE_REASON } = await import("../shared/shiftNotice");
   return unnotifiedAfterRetries(rowsOf(res).map((r) => ({
     assignmentId: Number(r.assignmentId), version: Number(r.version), channel: String(r.channel),
-    status: String(r.status), attempts: Number(r.attempts ?? 0), personName: r.personName ? String(r.personName) : null,
-  })));
+    status: String(r.status), attempts: Number(r.attempts ?? 0), maxAttempts: r.maxAttempts == null ? null : Number(r.maxAttempts),
+    detail: r.detail ? String(r.detail) : null, personName: r.personName ? String(r.personName) : null,
+  })), NOT_EXTRA_NOTICE_REASON);
 }
 
 /**
@@ -1284,7 +1348,9 @@ export interface ScheduleAutomationDeps {
   unnotified(date: string, city: ScheduleCity): Promise<ReturnType<typeof unnotifiedAfterRetries>>;
   coverage(date: string, city: ScheduleCity): Promise<{ coverage: number; gaps: Gap[] } | null>;
   claimAlert(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string; detail?: string | null }): Promise<boolean>;
-  alert(input: import("./notify").NotifyInput): Promise<{ recipients: number[] }>;
+  releaseAlert(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }): Promise<void>;
+  alert(input: import("./notify").NotifyInput): Promise<{ recipients: number[]; duplicates?: number }>;
+  adminIds(): Promise<number[]>;
   noteRecipients(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }, recipients: number): Promise<void>;
 }
 
@@ -1299,9 +1365,14 @@ export const realScheduleDeps: ScheduleAutomationDeps = {
   unnotified: loadUnnotifiedAfterRetries,
   coverage: loadScheduleCoverage,
   claimAlert: claimScheduleAlert,
+  releaseAlert: releaseScheduleAlert,
   alert: async (input) => (await import("./notify")).notify(input),
+  adminIds: loadAdminUserIds,
   noteRecipients: noteAlertRecipients,
 };
+
+/** Interruptor dos avisos da escala (manual_hold, low_coverage, unnotified, confirm_failed): sino e email. */
+export const SCHEDULE_ALERTS_FLAG = "EXTRAS_SCHEDULE_ALERTS";
 
 /** "faltam 2 condutores entre 14h–17h" → "Faltam 2 …" */
 const capital = (s: string) => (s ? `${s[0].toUpperCase()}${s.slice(1)}` : s);
@@ -1315,10 +1386,12 @@ const capital = (s: string) => (s ? `${s[0].toUpperCase()}${s.slice(1)}` : s);
  *    as horas em falta de amanhã com quem respondeu (só dias intocados);
  *  - a partir de `extras.autoConfirmAt` (15:00, se `extras.autoConfirm`):
  *    confirma a proposta de amanhã não suspensa e avisa; um dia mexido à mão
- *    segue `extras.manualEditAtConfirm` (D4b); cobertura < 80 % → aviso;
+ *    segue `extras.manualEditAtConfirm` (D4b);
  *  - escalas já confirmadas e não suspensas de hoje em diante: envia avisos
  *    em falta (linhas editadas → nova versão; falhas → até 4 tentativas, com
- *    30/60/90 min de espera) e avisa quem ficou por avisar depois de todas.
+ *    30/60/90 min de espera).
+ * Os avisos às pessoas (dia mexido por confirmar, cobertura < 80 %, quem
+ * ficou por avisar, confirmação falhada) só com EXTRAS_SCHEDULE_ALERTS ligado.
  */
 export async function runScheduleAutomation(now: Date = new Date(), deps: ScheduleAutomationDeps = realScheduleDeps): Promise<ScheduleCronReport> {
   const ln = lisbonNow(now);
@@ -1329,6 +1402,7 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
   }
   const settings = await deps.loadSettings();
   const due = scheduleDue(ln, settings);
+  const alertsOn = await deps.flagOn(SCHEDULE_ALERTS_FLAG).catch(() => false);
   const step = async (key: string, fn: () => Promise<unknown>): Promise<{ ok: boolean; out: any; error?: string }> => {
     try {
       const out: any = await fn();
@@ -1344,18 +1418,48 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
       return { ok: false, out: null, error };
     }
   };
-  /** Aviso a TL + supervisor + back office da cidade, uma só vez por (dia, cidade, tipo, chave). */
-  const alertOnce = async (a: { date: string; city: ScheduleCity; kind: ScheduleAlertKind; key?: string; title: string; body: string }) => {
+  /**
+   * Aviso a TL + supervisor + back office da cidade (e admins), uma só vez por
+   * (dia, cidade, tipo, chave). Só com EXTRAS_SCHEDULE_ALERTS ligado (sino e
+   * email). Sem destinatários na cidade → vai aos admins/super admins; sem
+   * ninguém mesmo assim → liberta a reserva e tenta na corrida seguinte (no
+   * máximo ALERT_MAX_ATTEMPTS vezes).
+   */
+  const alertOnce = async (a: { date: string; city: ScheduleCity; kind: ScheduleAlertKind; key?: string; title: string; body: string }): Promise<boolean> => {
+    const ref = { date: a.date, city: a.city, kind: a.kind, key: a.key };
+    if (!alertsOn) { report.skipped.push(`aviso ${a.kind}:${a.date}:${a.city} (${SCHEDULE_ALERTS_FLAG} desligado)`); return false; }
+    let claimed = false;
     try {
-      if (!(await deps.claimAlert({ date: a.date, city: a.city, kind: a.kind, key: a.key, detail: a.body }))) return;
-      const r = await deps.alert({
-        kind: "extras_schedule_alert", city: a.city, title: a.title, body: a.body, link: "/extras-dia",
+      if (!(await deps.claimAlert({ ...ref, detail: a.body }))) return false;
+      claimed = true;
+      const base = {
+        kind: "extras_schedule_alert" as const, title: a.title, body: a.body, link: "/extras-dia",
         entity: { type: "extras_schedule_alert", id: `${a.date}:${a.city}:${a.kind}:${a.key ?? ""}` },
-      });
-      await deps.noteRecipients({ date: a.date, city: a.city, kind: a.kind, key: a.key }, r?.recipients?.length ?? 0);
+      };
+      let r = await deps.alert({ ...base, city: a.city });
+      let n = r?.recipients?.length ?? 0;
+      if (n === 0 && !(r?.duplicates ?? 0)) {
+        // Ninguém na cidade (ou todos o silenciaram): os administradores.
+        const admins = await deps.adminIds().catch(() => [] as number[]);
+        if (admins.length) {
+          const ids = new Set(admins);
+          r = await deps.alert({ ...base, city: null, noCityToAll: true, alsoUserIds: admins, recipientFilter: (c) => ids.has(c.id) });
+          n = r?.recipients?.length ?? 0;
+          if (n) report.warnings.push(`aviso ${a.kind} (${a.date}, ${CITY_LABELS_PT[a.city]}): ninguém da cidade o recebe — foi aos admins`);
+        }
+      }
+      if (n === 0 && !(r?.duplicates ?? 0)) {
+        await deps.releaseAlert(ref);
+        report.warnings.push(`aviso ${a.kind} (${a.date}, ${CITY_LABELS_PT[a.city]}) sem destinatários — volta a tentar na corrida seguinte (até ${ALERT_MAX_ATTEMPTS} vezes)`);
+        return false;
+      }
+      await deps.noteRecipients(ref, n);
       report.ran.push(`alert:${a.kind}:${a.date}:${a.city}`);
+      return true;
     } catch (err: any) {
+      if (claimed) await deps.releaseAlert(ref).catch(() => undefined);
       report.warnings.push(`aviso ${a.kind} (${a.date}, ${CITY_LABELS_PT[a.city]}) falhou: ${String(err?.message ?? err).slice(0, 120)}`);
+      return false;
     }
   };
 
@@ -1370,9 +1474,11 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
   if (settings.autoConfirm && ln.minutes >= completeFrom && ln.minutes < settings.autoConfirmAtMin && (await deps.flagOn("EXTRAS_COMPLETE_BEFORE_CONFIRM"))) {
     const date = addDaysIso(ln.date, 1);
     for (const city of SCHEDULE_CITIES) {
-      // Uma vez por dia e cidade (a leitura da previsão é ao vivo — não se repete de 15 em 15 min).
+      // Uma vez por dia e cidade (a leitura da previsão é ao vivo — não se repete de 15 em 15 min);
+      // se lançar erro, liberta a reserva para a corrida seguinte (até 3 vezes).
       if (!(await deps.claimAlert({ date, city, kind: "complete" }))) continue;
-      await step(`complete:${date}:${city}`, () => deps.complete({ date, city }));
+      const r = await step(`complete:${date}:${city}`, () => deps.complete({ date, city }));
+      if (!r.ok) await deps.releaseAlert({ date, city, kind: "complete" }).catch(() => undefined);
     }
   }
 
@@ -1381,15 +1487,28 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
       const state = await deps.getState(date, city);
       const decision = autoConfirmDecision(state, settings.manualEditAtConfirm, now.getTime());
       if (decision.action === "skip") continue;
-      if (decision.action === "wait") { report.skipped.push(`confirm:${date}:${city} (${decision.reason})`); continue; }
+      const who = state?.manual?.byName ? ` por ${state.manual.byName}` : "";
+      const what = state?.manual?.what ? ` (${state.manual.what})` : "";
+      if (decision.action === "wait") {
+        report.skipped.push(`confirm:${date}:${city} (${decision.reason})`);
+        // Mudança tarde demais (depois das ~23:15): a espera acabava depois da última corrida → avisa, não fica pendurada.
+        if (settlesAfterLastRun(decision.settleAtMs, ln.date)) {
+          await alertOnce({
+            date, city, kind: "manual_hold", key: "late",
+            title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}) por confirmar: mexida à mão tarde`,
+            body: `O dia foi mexido à mão${who}${what} perto do fim do dia: os ${MANUAL_EDIT_SETTLE_MIN} min de espera passam depois da última volta do agendador (23:45), por isso não vai ser confirmado sozinho. Confirma tu em Extras-dia → Dia → "Confirmar escala".`,
+          });
+        }
+        continue;
+      }
       if (decision.action === "hold_notify") {
         report.skipped.push(`confirm:${date}:${city} (${decision.reason})`);
-        const who = state?.manual?.byName ? ` por ${state.manual.byName}` : "";
-        await alertOnce({
-          date, city, kind: "manual_hold",
-          title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}) por confirmar: mexida à mão`,
-          body: `O dia foi mexido à mão${who}${state?.manual?.what ? ` (${state.manual.what})` : ""}, por isso às ${settings.autoConfirmAt} não foi confirmado nem os extras foram avisados. Confirma tu em Extras-dia → Dia → "Confirmar escala" (avisa cada extra por WhatsApp e email).`,
-        });
+        const body = `O dia foi mexido à mão${who}${what}, por isso às ${settings.autoConfirmAt} não foi confirmado nem os extras foram avisados. Confirma tu em Extras-dia → Dia → "Confirmar escala" (avisa cada extra por WhatsApp e email).`;
+        const first = await alertOnce({ date, city, kind: "manual_hold", title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}) por confirmar: mexida à mão`, body });
+        // Continua por confirmar às 18:00 → o aviso repete-se (uma vez; não no mesmo instante do 1.º).
+        if (!first && ln.minutes >= MANUAL_HOLD_REPEAT_AT_MIN) {
+          await alertOnce({ date, city, kind: "manual_hold", key: "repeat", title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}) AINDA por confirmar`, body: `Continua por confirmar: ninguém foi avisado para amanhã. ${body}` });
+        }
         continue;
       }
       const r = await step(`confirm:${date}:${city}`, () => deps.confirm({ date, city, by: "auto", userId: null }));
@@ -1403,6 +1522,7 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
       }
       if (r.out?.status !== "confirmed") continue;
       // Cobertura abaixo de 80 % depois de confirmar → aviso (a previsão é a de agora).
+      if (!alertsOn) continue;
       try {
         const cov = await deps.coverage(date, city);
         if (cov && cov.coverage < COVERAGE_ALERT_MIN) {
@@ -1426,14 +1546,14 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
       if (!report.ran.includes(`confirm:${date}:${city}`)) {
         await step(`notify:${date}:${city}`, () => deps.sendNotifications(date, city, { userId: null, respectHold: true }));
       }
+      if (!alertsOn) continue;
       try {
         const left = await deps.unnotified(date, city);
         if (left.length) {
-          const channels = Array.from(new Set(left.flatMap((l) => l.channels))).map((c) => (c === "whatsapp" ? "WhatsApp" : "email")).join(" e ");
           await alertOnce({
             date, city, kind: "unnotified", key: alertKeyOf(left.map((l) => `${l.assignmentId}:${l.version}`)),
             title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}): ${left.length === 1 ? "1 extra ficou" : `${left.length} extras ficaram`} por avisar`,
-            body: `O aviso de trabalho (${channels}) falhou nas ${MAX_NOTIFY_ATTEMPTS} tentativas (a última 3 h depois da primeira): ${left.map((l) => l.personName).join(", ")}. Avisa-os tu (telefone) — em Extras-dia → Dia vês o estado de cada aviso.`,
+            body: `O aviso de trabalho não chegou por nenhum canal (as falhas são tentadas ${MAX_NOTIFY_ATTEMPTS} vezes, a última 3 h depois da primeira): ${left.map((l) => `${l.personName} (${l.reasons.join("; ")})`).join(", ")}. Avisa-os tu (telefone) — em Extras-dia → Dia vês o estado de cada aviso.`,
           });
         }
       } catch (err: any) {

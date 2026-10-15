@@ -6,10 +6,12 @@
  * rebenta se alguém lhe tocar). Com o interruptor desligado o trabalho não lê
  * nem escreve nada.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   REVIEW_AUTO_PUBLISH_MAX_PER_PROFILE_DAY, autoPublishEntryRefusal, autoReplyRefusal, detectLanguage, nextAutoPublishState, parseAutoPublishState,
-  publishTiming, scheduledForOf, sourceCheckRefusal, textRefusal, EMPTY_AUTO_PUBLISH_STATE, type AutoPublishState, type SourceRead,
+  publishTiming, scheduledForOf, sourceCheckRefusal, textRefusal, autoPublishStateJson, EMPTY_AUTO_PUBLISH_STATE, type AutoPublishState, type SourceRead,
 } from "../shared/reviewAutoPublish";
 import { AUTOMATION_FLAGS, CRON_JOBS, automationFlagDefault } from "../shared/appSettings";
 import { AI_FEATURES } from "../shared/aiFeatures";
@@ -119,14 +121,17 @@ describe("leitura na fonte (readReviewAtSource) — transportes falsos", () => {
     const windsorList = vi.fn(async () => []);
     const r = await readReviewAtSource(review(), { oauthConnected: async () => true, windsorConfigured: () => true, googleGet, windsorList });
     expect(r).toEqual({ ok: true, rating: 5, text: review().reviewText, hasReply: false });
-    expect(googleGet).toHaveBeenCalledWith("accounts/1/locations/2/reviews/abc");
+    expect(googleGet).toHaveBeenCalledWith("accounts/1/locations/2/reviews/abc", expect.any(Number));
     expect(windsorList).not.toHaveBeenCalled();
   });
-  it("sem Google: Windsor ± 1 dia, filtrada pelo id da crítica", async () => {
+  it("sem Google: Windsor do dia antes da crítica até hoje (apanha as editadas), filtrada pelo id", async () => {
     const { readReviewAtSource } = await import("./integrations/googleBusiness/sourceRead");
     const windsorList = vi.fn(async () => [g({ reviewId: "outra", starRating: "ONE" }), g({ starRating: "FOUR", reviewReply: { comment: "Obrigado" } })]);
     const r = await readReviewAtSource(review(), { oauthConnected: async () => false, windsorConfigured: () => true, googleGet: vi.fn(), windsorList }, NOW);
-    expect(windsorList).toHaveBeenCalledWith("locations/2", "2026-10-20", "2026-10-22");
+    expect(windsorList).toHaveBeenCalledWith("locations/2", "2026-10-20", "2026-10-22", expect.any(Number));
+    // Uma crítica de há 10 dias, lida hoje: a janela vai até hoje (a data de atualização pode ser recente).
+    const { windsorWindowAround } = await import("./integrations/googleBusiness/sourceRead");
+    expect(windsorWindowAround("2026-10-12 09:00:00", NOW)).toEqual({ dateFrom: "2026-10-11", dateTo: "2026-10-22" });
     expect(r).toEqual({ ok: true, rating: 4, text: review().reviewText, hasReply: true });
   });
   it("não consegue ler → ok:false (nunca lança)", async () => {
@@ -150,37 +155,45 @@ describe("leitura na fonte (readReviewAtSource) — transportes falsos", () => {
 
 type Q = QueueRow & { reason?: string | null; publishedAtMs?: number; verifiedAt?: string | null; alertedAt?: string | null; channel?: string | null };
 
-function harness(o: { flag?: boolean | (() => boolean); source?: (r: ReviewRow) => SourceRead; publishFails?: boolean; reviews?: ReviewRow[]; publishedLast24h?: number; channel?: "google" | "windsor" | "none" } = {}) {
+function harness(o: { flag?: boolean | (() => boolean); source?: (r: ReviewRow) => SourceRead; publishFails?: boolean | "answered"; reviews?: ReviewRow[]; publishedLast24h?: number; channel?: "google" | "windsor" | "none"; ai?: boolean } = {}) {
   const H = {
     now: NOW,
     state: { ...EMPTY_AUTO_PUBLISH_STATE } as AutoPublishState,
+    stateRaw: null as string | null,
     reviews: new Map((o.reviews ?? [review()]).map((r) => [r.id, r])),
     queue: [] as Q[],
     published: [] as Array<{ reviewId: number; text: string }>,
     notified: [] as any[],
     logs: [] as any[],
+    reads: 0,
     drafts: 0,
   };
   const deps: AutoPublishDeps = {
     flagOn: async () => (typeof o.flag === "function" ? o.flag() : o.flag ?? true),
     nowMs: () => H.now,
-    loadState: async () => H.state,
-    saveState: async (s) => { H.state = s; },
+    loadState: async () => ({ state: H.state, raw: H.stateRaw }),
+    saveState: async (s, prevRaw) => {
+      if (prevRaw !== H.stateRaw) return false; // compare-and-set
+      H.state = s; H.stateRaw = autoPublishStateJson(s);
+      return true;
+    },
     candidates: async () => Array.from(H.reviews.values()).filter((r) => !H.queue.some((q) => q.reviewId === r.id)),
     preparedLast24h: async () => 0,
     publishedLast24h: async () => o.publishedLast24h ?? 0,
-    aiAvailable: async () => true,
+    aiAvailable: async () => o.ai ?? true,
     draft: async () => { H.drafts++; return { text: GOOD_REPLY, raw: GOOD_REPLY }; },
     insertQueue: async (row) => {
       if (H.queue.some((q) => q.reviewId === row.reviewId)) return false;
-      H.queue.push({ id: H.queue.length + 1, reviewId: row.reviewId, googleLocationId: row.googleLocationId, projectId: row.projectId, status: row.status, replyText: row.replyText, scheduledFor: row.scheduledFor, attempts: 0, reason: row.reason });
+      H.queue.push({ id: H.queue.length + 1, reviewId: row.reviewId, googleLocationId: row.googleLocationId, projectId: row.projectId, status: row.status, replyText: row.replyText, reviewTextAtPrepare: row.reviewTextAtPrepare, scheduledFor: row.scheduledFor, attempts: 0, reason: row.reason, verifyFailures: 0 });
       return true;
     },
     dueRows: async () => H.queue.filter((q) => q.status === "scheduled" && Date.parse(`${String(q.scheduledFor).replace(" ", "T")}Z`) <= H.now),
+    stuckRows: async () => H.queue.filter((q) => q.status === "publishing" && (q as any).stuck),
     loadReview: async (id) => H.reviews.get(id) ?? null,
-    readAtSource: async (r) => (o.source ? o.source(r) : { ok: true, rating: 5, text: r.reviewText ?? null, hasReply: false }),
+    readAtSource: async (r) => { H.reads++; return o.source ? o.source(r) : { ok: true, rating: 5, text: r.reviewText ?? null, hasReply: false }; },
     replyChannel: async () => o.channel ?? "google",
     publish: async (reviewId, text) => {
+      if (o.publishFails === "answered") { const e = new Error("A crítica já tem resposta — a automática não a substitui."); e.name = "ReplyAlreadyThereError"; throw e; }
       if (o.publishFails) throw new Error("A Google recusou (500)");
       H.published.push({ reviewId, text });
       const r = H.reviews.get(reviewId)!;
@@ -193,7 +206,7 @@ function harness(o: { flag?: boolean | (() => boolean); source?: (r: ReviewRow) 
       Object.assign(q, patch);
       return true;
     },
-    verifyRows: async () => H.queue.filter((q) => q.status === "published" && !q.alertedAt && !q.verifiedAt),
+    verifyRows: async () => H.queue.filter((q) => q.status === "published" && !q.alertedAt && !(q as any).verifiedAt),
     notify: async (input) => { H.notified.push(input); return { recipients: [1] }; },
     log: async (e) => { H.logs.push(e); },
   };
@@ -315,9 +328,10 @@ describe("trabalho reviews-5star (dependências falsas)", () => {
     expect(r.notPublished.join(" ")).toMatch(/20 publicadas nas últimas 24 h/);
   });
 
-  it("sem canal (Google não ligada e GBP_WINDSOR_REPLY desligado): fica à espera, não tenta", async () => {
-    const { H, run } = harness({ channel: "none" });
+  it("sem canal (Google desligada depois de preparada e GBP_WINDSOR_REPLY desligado): fica à espera, não tenta", async () => {
+    const { H, deps, run } = harness();
     await run();
+    deps.replyChannel = async () => "none";
     H.now = NOW + 6 * 3_600_000;
     const r = await run();
     expect(H.published).toEqual([]);
@@ -372,6 +386,100 @@ describe("trabalho reviews-5star (dependências falsas)", () => {
     const alert = H.notified.find((n) => n.title.includes("desceu"));
     expect(alert).toMatchObject({ kind: "review_auto_publish", projectId: 3 });
     expect(alert.title).toBe("Crítica respondida sozinha desceu para 2★");
+  });
+});
+
+describe("auditoria da F7: pontos baixos das 5★", () => {
+  it("o texto da crítica muda (cá) depois de preparada: não publica", async () => {
+    const { H, run } = harness();
+    await run();
+    expect(H.queue[0].reviewTextAtPrepare).toBe(review().reviewText);
+    H.reviews.set(1, { ...H.reviews.get(1)!, reviewText: "Afinal foi péssimo, esperei uma hora." });
+    H.now = NOW + 6 * 3_600_000;
+    await run();
+    expect(H.published).toEqual([]);
+    expect(H.queue[0]).toMatchObject({ status: "skipped", reason: "o texto da crítica mudou desde que a resposta foi preparada" });
+  });
+  it("alguém respondeu cá entre a leitura e o publicar (compare-and-set): não sai e não conta como falha", async () => {
+    const { H, run } = harness({ publishFails: "answered" });
+    await run();
+    H.now = NOW + 6 * 3_600_000;
+    const r = await run();
+    expect(r.failed).toBe(0);
+    expect(H.state.consecutiveFailures).toBe(0);
+    expect(H.queue[0]).toMatchObject({ status: "skipped" });
+  });
+  it("sem canal para publicar, ou sem a IA dos rascunhos automáticos: não prepara nada (nem chama a IA)", async () => {
+    for (const o of [{ channel: "none" as const }, { ai: false }]) {
+      const { H, run } = harness(o);
+      const r = await run();
+      expect(H.drafts).toBe(0);
+      expect(H.queue).toEqual([]);
+      expect(r.notPrepared.join(" ")).toMatch(o.ai === false ? /AI_REVIEW_AUTO_DRAFTS/ : /sem canal/);
+    }
+  });
+  it("candidatas: os perfis no teto das 24 h ficam de fora no SQL (não tapam os outros)", () => {
+    const src = readFileSync(resolve(__dirname, "reviewAutoPublish.ts"), "utf8");
+    expect(src).toMatch(/googleLocationId NOT IN \(/);
+    expect(src).toMatch(/HAVING COUNT\(\*\) >= \$\{REVIEW_AUTO_PUBLISH_MAX_PER_PROFILE_DAY\}/);
+  });
+  it("presa em «a publicar» (a corrida morreu): relida na fonte — sem resposta volta à espera; com a nossa fica publicada", async () => {
+    const { H, run } = harness();
+    await run();
+    Object.assign(H.queue[0], { status: "publishing", stuck: true });
+    H.now = NOW + 7 * 3_600_000;
+    await run();
+    expect(H.reads).toBeGreaterThanOrEqual(1);
+    // Voltou à espera e, na mesma corrida, saiu (a hora já tinha passado).
+    expect(H.published.length).toBe(1);
+    const h2 = harness({ source: () => ({ ok: true, rating: 5, text: review().reviewText ?? null, hasReply: true }) });
+    await h2.run();
+    h2.H.reviews.set(1, { ...h2.H.reviews.get(1)!, googleReply: GOOD_REPLY });
+    Object.assign(h2.H.queue[0], { status: "publishing", stuck: true });
+    await h2.run();
+    expect(h2.H.queue[0].status).toBe("published");
+    expect(h2.H.published).toEqual([]);
+  });
+  it("pausa e 'Retomar' em compare-and-set: um 'Retomar' a meio da corrida não se perde", async () => {
+    const reviews = [1, 2, 3].map((id) => review({ id, googleReviewName: `accounts/1/locations/2/reviews/r${id}` }));
+    const { H, deps, run } = harness({ publishFails: true, reviews });
+    await run();
+    H.now = NOW + 6 * 3_600_000;
+    // Alguém mexe no estado durante a corrida (ex.: "Retomar" noutra janela).
+    const realLoad = deps.loadState;
+    deps.loadState = async () => { const s = await realLoad(); H.stateRaw = autoPublishStateJson({ ...EMPTY_AUTO_PUBLISH_STATE, pausedReason: "outro" }); return s; };
+    const r = await run();
+    expect(r.failed).toBe(3);
+    expect(H.state.pausedAt).toBeNull(); // o estado da corrida não se sobrepôs
+    expect(r.notPublished.join(" ")).toMatch(/o estado mudou durante a corrida/);
+    expect(H.notified.filter((n) => n.title.includes("parou"))).toEqual([]);
+  });
+  it("verificação: a classificação de cá (sincronização) desce → avisa sem ler a fonte", async () => {
+    const { H, run } = harness();
+    await run();
+    H.now = NOW + 6 * 3_600_000;
+    await run();
+    const readsBefore = H.reads;
+    H.reviews.set(1, { ...H.reviews.get(1)!, rating: 3 });
+    (H.queue[0] as any).verifiedAt = null; // no dia seguinte
+    await run();
+    expect(H.reads).toBe(readsBefore);
+    expect(H.notified.find((n) => n.title === "Crítica respondida sozinha desceu para 3★")).toBeTruthy();
+  });
+  it("verificação: sem conseguir ler 2 dias seguidos → avisa (uma vez)", async () => {
+    let readable = true;
+    const { H, run } = harness({ source: (rv) => (readable ? { ok: true, rating: 5, text: rv.reviewText ?? null, hasReply: false } : { ok: false, reason: "quota 0" }) });
+    await run();
+    H.now = NOW + 6 * 3_600_000;
+    await run();
+    readable = false;
+    for (let day = 1; day <= 3; day++) {
+      (H.queue[0] as any).verifiedAt = null;
+      await run();
+    }
+    const alerts = H.notified.filter((n) => n.title.includes("não deu para a confirmar"));
+    expect(alerts.length).toBe(1);
+    expect(alerts[0].body).toContain("Há 2 dias seguidos");
   });
 });
 

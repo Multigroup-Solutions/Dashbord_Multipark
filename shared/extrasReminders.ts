@@ -29,11 +29,14 @@ export const REMINDER_SLOT_LABELS: Record<ReminderSlot, string> = {
 export const REMINDER_CITIES = ["lisbon", "porto", "faro"] as const;
 export type ReminderCity = (typeof REMINDER_CITIES)[number];
 
-/** Papéis que podem receber (os que veem o Extras-dia na matriz de acessos). */
-export const REMINDER_ROLES = ["team_leader", "supervisor", "frontoffice", "backoffice", "admin"] as const satisfies readonly Role[];
+/**
+ * Papéis que se podem escolher (os mesmos do tipo de notificação
+ * `extras_reminder`). Os admins não estão na lista: junta-se a conta (`userIds`).
+ */
+export const REMINDER_ROLES = ["team_leader", "supervisor", "frontoffice", "backoffice"] as const satisfies readonly Role[];
 export type ReminderRole = (typeof REMINDER_ROLES)[number];
 export const REMINDER_ROLE_LABELS: Record<ReminderRole, string> = {
-  team_leader: "Team leader", supervisor: "Supervisor", frontoffice: "Front office", backoffice: "Back office", admin: "Admin",
+  team_leader: "Team leader", supervisor: "Supervisor", frontoffice: "Front office", backoffice: "Back office",
 };
 /** 1 = segunda … 7 = domingo (ISO). */
 export const ISO_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
@@ -189,6 +192,14 @@ export function reminderMessage(c: ReminderContext): { title: string; body: stri
           ? "O dia foi mexido à mão: só é confirmado sozinho 30 min depois da última mudança."
           : "O dia foi mexido à mão: é confirmado na mesma, como está.");
     }
+  }
+  if (c.status === "proposed" && !c.holdAuto) {
+    // D4b: o que mexer agora faz à confirmação.
+    lines.push(c.manualMode === "skip_notify"
+      ? `Atenção: se mexeres agora nos condutores deste dia, às ${c.at} já não é confirmado sozinho — terás de carregar em "Confirmar escala".`
+      : c.manualMode === "if_older_30m"
+        ? `Atenção: se mexeres agora nos condutores, só é confirmado sozinho 30 min depois da última mudança (mexer depois das 23:15 já não dá).`
+        : `O que mudares até lá é confirmado e avisado como estiver às ${c.at}.`);
   }
   if (c.added.length) lines.push(`Acrescentados com quem respondeu entretanto: ${c.added.join(", ")}.`);
   if (c.gaps.length) lines.push(`Ainda: ${c.gaps.join("; ")}.`);
