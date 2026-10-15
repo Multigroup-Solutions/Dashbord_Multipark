@@ -60,7 +60,7 @@ import { conversationAlerts } from "../shared/whatsappConversation";
 import { triageComplaint, decideComplaintSuggestion } from "./complaintTriage";
 import { noteInboundForTriage, triageConversation, triageTranscript } from "./whatsappTriage";
 import { computeMatchesFor } from "./lostFoundMatch";
-import { draftPendingReviewReplies } from "./reviewAutoDraft";
+import { autoDraftEmailReview, draftPendingReviewReplies } from "./reviewAutoDraft";
 
 const dialect = new MySqlDialect();
 
@@ -474,6 +474,39 @@ describe("rascunho automático das críticas", () => {
     expect(reviewAutoDraftEligible({ reviewDate: new Date(NOW_MS - 3_600_000) }, NOW_MS)).toBe(true);
     expect(reviewAutoDraftEligible({}, NOW_MS)).toBe(false);
     expect(reviewAutoDraftEligible({ reviewDate: "lixo" }, NOW_MS)).toBe(false);
+  });
+
+  it("MPV R1 (seguimento): crítica por email com data antiga → sem rascunho e marcada (o cron também não a apanha)", async () => {
+    h.selectRows = (t) => (t === "google_reviews" ? [review] : []);
+    const r = await autoDraftEmailReview(5, "2026-08-01 10:00:00", { nowMs: NOW_MS });
+    expect(r).toEqual({ drafted: false, skipped: "old" });
+    expect(h.runAi).not.toHaveBeenCalled();
+    const marks = h.db.log.updates.filter((u: any) => u.table === "google_reviews");
+    expect(marks).toHaveLength(1);
+    expect(marks[0].data.aiDraftAttemptedAt).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+  });
+
+  it("MPV R1 (seguimento): crítica por email recente (ou sem data → agora) → rascunho", async () => {
+    h.selectRows = (t) => (t === "google_reviews" ? [review] : t === "complaints" ? [{ t: "delay", s: "analyzing", ref: "MP1" }] : []);
+    h.runAi.mockResolvedValue(aiResult("Olá Joana, lamentamos a espera."));
+    expect(await autoDraftEmailReview(5, "2026-09-25 09:00:00", { nowMs: NOW_MS })).toEqual({ drafted: true });
+    expect(await autoDraftEmailReview(5, null, { nowMs: NOW_MS })).toEqual({ drafted: true });
+    expect(h.runAi).toHaveBeenCalledTimes(2);
+  });
+
+  it("MPV R1 (seguimento): o leitor de email usa a regra dos 14 dias com a data do email", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "jobs/emailInboundSync.ts"), "utf8");
+    const block = src.split('if (alias === "criticas")')[1].split('return { targetModule: "review"')[0];
+    expect(block).toContain("autoDraftEmailReview(id, sourceEmailDate");
+    expect(block).toContain("sourceEmailDate = sqlUtcOrNull(ctx.receivedAt)");
+    expect(block).not.toContain("autoDraftReview(id");
+    const { sqlUtcOrNull } = await import("../shared/reviewRules");
+    expect(sqlUtcOrNull("2026-09-25T10:00:00+01:00")).toBe("2026-09-25 09:00:00");
+    expect(sqlUtcOrNull("2026-09-25 10:00:00")).toBe("2026-09-25 10:00:00");
+    expect(sqlUtcOrNull("lixo")).toBeNull();
+    expect(sqlUtcOrNull(null)).toBeNull();
   });
 
   it("fica por aprovar (aiResponseApproved = 0), com sentimento e contexto; nunca publica", async () => {

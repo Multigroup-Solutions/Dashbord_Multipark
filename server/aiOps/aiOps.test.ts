@@ -35,6 +35,8 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import {
   ANOMALY_EXPLAIN_MAX_ATTEMPTS,
   ANOMALY_EXPLAIN_RETRY_MS,
+  anomalyExplainBatches,
+  anomalyExplainBatchSize,
   anomalyExplainDue,
   anomalyExplainMaxTokens,
   anomalyPrompt,
@@ -282,18 +284,25 @@ describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
   let pending: any[];
   let state: string | null;
   let updates: number[];
+  let stateReadFails: boolean;
+  let stateWrites: number;
 
   beforeEach(() => {
     pending = [1, 2, 3].map((id) => ({ id, domain: "bookings", detail: `Anomalia ${id}` }));
     state = null;
     updates = [];
+    stateReadFails = false;
+    stateWrites = 0;
     h.db = {
       execute: async (q: any) => {
         const c = dialect.sqlToQuery(q);
         const s = c.sql.replace(/\s+/g, " ").trim();
         if (s.startsWith("SELECT id, domain, detail FROM ops_anomalies")) return [pending.filter((r) => !updates.includes(r.id))];
-        if (s.startsWith("SELECT `value` FROM app_settings")) return [state == null ? [] : [{ value: state }]];
-        if (s.startsWith("INSERT INTO app_settings")) { state = String(c.params[1]); return [{ affectedRows: 1 }]; }
+        if (s.startsWith("SELECT `value` FROM app_settings")) {
+          if (stateReadFails) throw new Error("ligação perdida");
+          return [state == null ? [] : [{ value: state }]];
+        }
+        if (s.startsWith("INSERT INTO app_settings")) { stateWrites++; state = String(c.params[1]); return [{ affectedRows: 1 }]; }
         if (s.startsWith("UPDATE ops_anomalies SET explanation")) { updates.push(Number(c.params[1])); return [{ affectedRows: 1 }]; }
         return [[]];
       },
@@ -319,13 +328,14 @@ describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
     await explainPendingAnomalies("2026-10-14", cap(), 20, { nowMs: NOW + 3_600_000 });
     expect(h.runAi).toHaveBeenCalledTimes(1);
     // 2.ª e 3.ª tentativas, um dia de intervalo cada.
+    // (a 3.ª — a última — vai uma a uma: 3 anomalias → 3 chamadas)
     await explainPendingAnomalies("2026-10-15", cap(), 20, { nowMs: NOW + 86_400_000 });
     await explainPendingAnomalies("2026-10-16", cap(), 20, { nowMs: NOW + 2 * 86_400_000 });
-    expect(h.runAi).toHaveBeenCalledTimes(3);
+    expect(h.runAi).toHaveBeenCalledTimes(1 + 1 + 3);
     expect(JSON.parse(state!)["2"].n).toBe(3);
     // Esgotada: não volta a ser enviada.
     expect(await explainPendingAnomalies("2026-10-17", cap(), 20, { nowMs: NOW + 3 * 86_400_000 })).toEqual({ explained: 0 });
-    expect(h.runAi).toHaveBeenCalledTimes(3);
+    expect(h.runAi).toHaveBeenCalledTimes(5);
   });
 
   it("a que o modelo omite conta como tentativa; as explicadas saem do estado; nova anomalia segue logo", async () => {
@@ -345,6 +355,51 @@ describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
     expect(await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW })).toEqual({ explained: 0, skipped: "disabled" });
     expect(state).toBeNull();
     expect(h.runAi).not.toHaveBeenCalled();
+  });
+
+  it("seguimento: um lote que falha sempre não gasta as outras — nas repetições, lotes mais pequenos e por fim uma a uma", async () => {
+    // A 1 é "venenosa": qualquer lote com ela falha. A 2 só falha por ir no lote da 1.
+    pending = [1, 2].map((id) => ({ id, domain: "bookings", detail: `Anomalia ${id}` }));
+    h.runAi.mockImplementation(async (o: any) => {
+      if (String(o.input).includes("Anomalia 1")) throw new Error("truncado");
+      return { output: { lines: [{ n: 1, text: "Explicada sozinha" }] } };
+    });
+    const cap = () => new AiCallCap(5);
+    // max = 2: 1.ª em lote de 2, 2.ª em lote de ceil(2/2) = 1 → já sai sozinha.
+    expect(await explainPendingAnomalies("2026-10-14", cap(), 2, { nowMs: NOW })).toEqual({ explained: 0, skipped: "error" });
+    expect(h.runAi.mock.calls[0][0].input).toBe("1. [bookings] Anomalia 1\n2. [bookings] Anomalia 2");
+    const r = await explainPendingAnomalies("2026-10-15", cap(), 2, { nowMs: NOW + 86_400_000 });
+    expect(r).toEqual({ explained: 1, skipped: "error" });
+    expect(updates).toEqual([2]);
+    expect(h.runAi.mock.calls.slice(1).map((c: any) => c[0].input)).toEqual(["1. [bookings] Anomalia 1", "1. [bookings] Anomalia 2"]);
+    // A venenosa segue com a sua contagem; a explicada sai do estado.
+    expect(JSON.parse(state!)).toEqual({ 1: { n: 2, at: NOW + 86_400_000 } });
+  });
+
+  it("seguimento: com max = 20, a 2.ª tentativa vai em lotes de 10 e a 3.ª uma a uma (no máximo 3 chamadas por corrida)", () => {
+    expect(anomalyExplainBatchSize(0, 20)).toBe(20);
+    expect(anomalyExplainBatchSize(1, 20)).toBe(10);
+    expect(anomalyExplainBatchSize(2, 20)).toBe(1);
+    expect(anomalyExplainBatchSize(1, 3)).toBe(2);
+    const due = Array.from({ length: 25 }, (_, i) => ({ id: i + 1 }));
+    const att: Record<string, { n: number; at: number }> = {};
+    for (let id = 1; id <= 25; id++) att[id] = { n: 1, at: 0 };
+    expect(anomalyExplainBatches(due, att, 20).map((b) => b.length)).toEqual([10, 10, 5]);
+    for (let id = 1; id <= 25; id++) att[id] = { n: 2, at: 0 };
+    expect(anomalyExplainBatches(due, att, 20).map((b) => b.map((x) => x.id))).toEqual([[1], [2], [3]]);
+    // Novas primeiro, num só lote; depois as repetições.
+    const mixed = { 3: { n: 1, at: 0 }, 4: { n: 2, at: 0 } };
+    expect(anomalyExplainBatches([{ id: 4 }, { id: 3 }, { id: 1 }, { id: 2 }], mixed, 20).map((b) => b.map((x) => x.id))).toEqual([[1, 2], [3], [4]]);
+  });
+
+  it("seguimento: se a leitura do estado falhar, não grava (os contadores não se apagam)", async () => {
+    state = JSON.stringify({ 1: { n: 2, at: NOW - 86_400_000 } });
+    stateReadFails = true;
+    h.runAi.mockRejectedValue(new Error("truncado"));
+    await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW });
+    expect(h.runAi).toHaveBeenCalled();
+    expect(stateWrites).toBe(0);
+    expect(JSON.parse(state!)).toEqual({ 1: { n: 2, at: NOW - 86_400_000 } });
   });
 
   it("regras puras do estado", () => {

@@ -111,3 +111,9 @@ export function reviewAutoDraftEligible(r: { reviewDate?: unknown; createdAt?: u
   if (!Number.isFinite(t)) return false;
   return nowMs - t <= REVIEW_AUTO_DRAFT_MAX_AGE_DAYS * 86_400_000;
 }
+
+/** Data (ex.: a do email) → "YYYY-MM-DD HH:MM:SS" em UTC; ilegível → null. PURA. */
+export function sqlUtcOrNull(v: unknown): string | null {
+  const t = utcMs(v);
+  return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 19).replace("T", " ") : null;
+}

@@ -299,6 +299,43 @@ export const ANOMALY_EXPLAIN_RETRY_MS = 12 * 3_600_000;
 export const ANOMALY_EXPLAIN_STATE_KEY = "aiOps.anomalyExplain._state";
 export type AnomalyExplainAttempts = Record<string, { n: number; at: number }>;
 
+/**
+ * Tamanho do lote conforme as tentativas já falhadas (MPV A1, seguimento):
+ * 1.ª tentativa em lote inteiro (`max`), 2.ª em lotes de metade, 3.ª (a
+ * última) uma a uma. Assim um lote que falha sempre (uma anomalia "venenosa",
+ * resposta grande demais) não gasta as tentativas de todas as outras. PURA.
+ */
+export const ANOMALY_EXPLAIN_MAX_CALLS = 3;
+export function anomalyExplainBatchSize(n: number, max: number): number {
+  const m = Math.max(1, Math.floor(max));
+  if (n >= ANOMALY_EXPLAIN_MAX_ATTEMPTS - 1) return 1;
+  return Math.max(1, Math.ceil(m / 2 ** Math.max(0, n)));
+}
+
+/**
+ * Lotes desta corrida: as anomalias em dia agrupadas pelo nº de tentativas
+ * (novas primeiro), cada grupo partido no tamanho de `anomalyExplainBatchSize`;
+ * no máximo `maxCalls` lotes (o resto fica para a corrida seguinte, ainda em
+ * dia). PURA.
+ */
+export function anomalyExplainBatches<T extends { id: number }>(due: T[], attempts: AnomalyExplainAttempts, max: number, maxCalls = ANOMALY_EXPLAIN_MAX_CALLS): T[][] {
+  const byN = new Map<number, T[]>();
+  for (const r of due) {
+    const n = attempts[String(r.id)]?.n ?? 0;
+    if (!byN.has(n)) byN.set(n, []);
+    byN.get(n)!.push(r);
+  }
+  const out: T[][] = [];
+  for (const n of [...byN.keys()].sort((a, b) => a - b)) {
+    const list = byN.get(n)!;
+    // As novas vão num só lote (como antes): o que não couber fica para a próxima.
+    const size = anomalyExplainBatchSize(n, max);
+    const take = n === 0 ? list.slice(0, size) : list;
+    for (let i = 0; i < take.length; i += size) out.push(take.slice(i, i + size));
+  }
+  return out.slice(0, Math.max(1, maxCalls));
+}
+
 /** Esta anomalia (ainda sem explicação) pode ir no pedido agora? PURA. */
 export function anomalyExplainDue(a: { n: number; at: number } | undefined, nowMs: number): boolean {
   if (!a) return true;
@@ -323,7 +360,8 @@ export function nextAnomalyExplainAttempts(prev: AnomalyExplainAttempts, o: { pe
   return out;
 }
 
-async function loadExplainAttempts(db: any): Promise<AnomalyExplainAttempts> {
+/** `null` = a leitura falhou (aí não se grava, para não apagar os contadores). */
+async function loadExplainAttempts(db: any): Promise<AnomalyExplainAttempts | null> {
   try {
     const { parseJsonValue } = await import("../appSettings");
     const r = rowsOf(await db.execute(sql`SELECT \`value\` FROM app_settings WHERE settingKey = ${ANOMALY_EXPLAIN_STATE_KEY} LIMIT 1`))[0];
@@ -334,7 +372,7 @@ async function loadExplainAttempts(db: any): Promise<AnomalyExplainAttempts> {
       if (a && Number.isFinite(Number(a.n)) && Number.isFinite(Number(a.at))) out[id] = { n: Number(a.n), at: Number(a.at) };
     }
     return out;
-  } catch { return {}; }
+  } catch { return null; }
 }
 
 async function saveExplainAttempts(db: any, s: AnomalyExplainAttempts): Promise<void> {
@@ -344,7 +382,11 @@ async function saveExplainAttempts(db: any, s: AnomalyExplainAttempts): Promise<
   } catch { /* best-effort: na pior das hipóteses tenta outra vez */ }
 }
 
-/** Explica (UMA chamada lite) as anomalias ainda sem explicação dos últimos dias. */
+/**
+ * Explica as anomalias ainda sem explicação dos últimos dias: novas num lote
+ * (1 chamada lite), repetições em lotes mais pequenos (ver
+ * `anomalyExplainBatches`), no máximo `ANOMALY_EXPLAIN_MAX_CALLS` chamadas.
+ */
 export async function explainPendingAnomalies(day: string, cap: AiCallCap, max = 20, opts: { nowMs?: number } = {}): Promise<{ explained: number; skipped?: string }> {
   const db = await getDb();
   if (!db) return { explained: 0 };
@@ -356,20 +398,26 @@ export async function explainPendingAnomalies(day: string, cap: AiCallCap, max =
      ORDER BY FIELD(severity, 'critical', 'warning'), id DESC
      LIMIT ${max * 5}`));
   if (!rows.length) return { explained: 0 };
-  const attempts = await loadExplainAttempts(db);
-  const due = rows.filter((r) => anomalyExplainDue(attempts[String(Number(r.id))], nowMs)).slice(0, max);
+  const loaded = await loadExplainAttempts(db);
+  const attempts = loaded ?? {};
+  const due = rows
+    .filter((r) => anomalyExplainDue(attempts[String(Number(r.id))], nowMs))
+    .map((r) => ({ id: Number(r.id), domain: String(r.domain), detail: String(r.detail) }));
   // Só esgotadas / à espera do intervalo: não é um aviso, é o comportamento normal.
   if (!due.length) return { explained: 0 };
-  const numbered = due.map((r, i) => ({ n: i + 1, id: Number(r.id), domain: String(r.domain), detail: String(r.detail) }));
-  const res = await tryAi({
-    feature: "anomaly_explain", system: ANOMALY_SYSTEM, input: anomalyPrompt(numbered), schema: anomalyExplainSchema,
-    maxTokens: anomalyExplainMaxTokens(numbered.length), cap, entity: "ops_anomalies",
-  });
-  const pendingIds = rows.map((r) => Number(r.id));
-  // Desligada / orçamento / teto da corrida: nada foi enviado → não conta como tentativa.
-  if (!res.ok && res.skipped !== "error") return { explained: 0, skipped: res.skipped };
+  const sentIds: number[] = [];
   const explainedIds: number[] = [];
-  if (res.ok) {
+  let skipped: string | undefined;
+  for (const batch of anomalyExplainBatches(due, attempts, max)) {
+    const numbered = batch.map((r, i) => ({ n: i + 1, ...r }));
+    const res = await tryAi({
+      feature: "anomaly_explain", system: ANOMALY_SYSTEM, input: anomalyPrompt(numbered), schema: anomalyExplainSchema,
+      maxTokens: anomalyExplainMaxTokens(numbered.length), cap, entity: "ops_anomalies",
+    });
+    // Desligada / orçamento / teto da corrida: este lote não foi enviado → não conta; pára.
+    if (!res.ok && res.skipped !== "error") { skipped = res.skipped; break; }
+    sentIds.push(...numbered.map((x) => x.id));
+    if (!res.ok) { skipped = res.skipped; continue; }
     for (const line of res.output.lines) {
       const target = numbered.find((x) => x.n === line.n);
       const text = oneLine(line.text, 400);
@@ -378,8 +426,13 @@ export async function explainPendingAnomalies(day: string, cap: AiCallCap, max =
       explainedIds.push(target.id);
     }
   }
-  await saveExplainAttempts(db, nextAnomalyExplainAttempts(attempts, { pendingIds, sentIds: numbered.map((x) => x.id), explainedIds, nowMs }));
-  return res.ok ? { explained: explainedIds.length } : { explained: 0, skipped: res.skipped };
+  // Nada enviado (IA desligada, orçamento, teto) → o estado fica como estava.
+  // Estado ilegível (falha na leitura) → não se grava, para não apagar os contadores.
+  if (sentIds.length && loaded) {
+    const pendingIds = rows.map((r) => Number(r.id));
+    await saveExplainAttempts(db, nextAnomalyExplainAttempts(loaded, { pendingIds, sentIds, explainedIds, nowMs }));
+  }
+  return { explained: explainedIds.length, ...(skipped ? { skipped } : {}) };
 }
 
 export async function runAnomalyDetection(day: string, cap: AiCallCap): Promise<{ found: number; inserted: number; explained: number; aiSkipped?: string }> {
