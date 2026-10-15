@@ -351,7 +351,7 @@ describe("uso da IA por dia e leituras repetidas (só leitura)", () => {
     const q = h.db.queries.find((x: FakeQuery) => x.sql.includes("FROM ai_usage_log"))!;
     expect(q.sql).toMatch(/^SELECT /);
     expect(q.sql).not.toMatch(/INSERT|UPDATE|DELETE/i);
-    expect(q.params).toEqual([usageWindowStart(62, NOW), "hr_autofill"]);
+    expect(q.params).toEqual(["context_cache_storage", "context_cache_storage", usageWindowStart(62, NOW), "hr_autofill"]);
     expect(q.sql).not.toContain("hr_autofill");
   });
 
@@ -384,7 +384,7 @@ describe("uso da IA por dia e leituras repetidas (só leitura)", () => {
 
 describe("migração 0690 (observabilidade da IA)", () => {
   it("registada no fim, só acrescenta, idempotente, espelhada no drizzle", () => {
-    expect(SCHEMA_MIGRATION_IDS.at(-1)).toBe("0690");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0690");
     const all = MIGRATION_0690_STATEMENTS.join("\n");
     expect(all).not.toMatch(/DROP|DELETE|UPDATE|MODIFY|CHANGE/i);
     for (const st of MIGRATION_0690_STATEMENTS) expect(st).toMatch(/^ALTER TABLE `ai_(usage_log|chat_messages)` ADD (COLUMN|INDEX) /);

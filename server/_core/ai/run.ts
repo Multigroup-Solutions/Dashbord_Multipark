@@ -56,7 +56,7 @@ import {
 import { toProviderJsonSchema } from "./jsonSchema";
 import { fallbackTier, maxTokensFor, resolveModel, supportsThinkingLevel, type AiTier } from "./models";
 import { costEur, type TokenUsage } from "./pricing";
-import { enforceBudget, getPriceOverrides, logAiUsage, ownBudgetCheck } from "./usage";
+import { enforceBudget, getPriceOverrides, logAiUsage, ownBudgetCheck, reserveOwnBudget } from "./usage";
 import { euVertexOk, requiresEuVertex } from "../../../shared/aiLimits";
 
 /** Prazo por omissão (a função do Vercel morre aos 60 s). */
@@ -282,13 +282,16 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
     const own = await ownBudgetCheck(opts.feature, opts.userId ?? null);
     if (!own.ok) {
       await logAiUsage({ ...meta, tier, provider: providerId, model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, costEur: 0, latencyMs: 0, status: "blocked", errorCode: `own_budget_${own.reason}` });
-      throw new AiBudgetExceededError("own");
+      throw new AiBudgetExceededError("own", own.reason);
     }
   }
+  // Reserva à cabeça o máximo estimado do turno (pedidos ao mesmo tempo contam com ela); liberta-se ao registar o custo real.
+  const releaseOwn = reserveOwnBudget(opts.feature, opts.userId ?? null);
 
   try {
     await enforceBudget(def.essential);
   } catch (err) {
+    releaseOwn();
     await logAiUsage({ ...meta, tier, provider: providerId, model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, costEur: 0, latencyMs: 0, status: "blocked", errorCode: "budget" });
     throw err;
   }
@@ -328,6 +331,7 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
     opts.scaleMaxTokensForThinking ? maxTokensFor(maxTokens, thinkingLevelFor(m, env, thinkingFor()), { noThinking: !supportsThinkingLevel(m) }) : maxTokens;
 
   const finish = async (status: "ok" | "error", errorCode: string | null) => {
+    releaseOwn();
     await logAiUsage({
       ...meta, tier, provider: providerId, model,
       inputTokens: usageTotal.inputTokens, outputTokens: usageTotal.outputTokens, cachedTokens: usageTotal.cachedTokens,

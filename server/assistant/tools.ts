@@ -315,6 +315,8 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     description: "As tarefas atribuídas à PRÓPRIA pessoa: contagens por estado, em atraso, e a lista (máx. 20).",
     parameters: { type: "object", properties: {} },
     available: (ctx) => can(ctx.user, "tarefas", "view"),
+    // Títulos escritos à mão (podem ter emails, telefones, matrículas).
+    pii: { text: ["titulo"] },
     async run(_args, ctx) {
       const [rows, stats] = await Promise.all([
         ctx.call("tasks.list", { mine: true }) as Promise<any[]>,

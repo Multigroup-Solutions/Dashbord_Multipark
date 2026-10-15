@@ -291,15 +291,31 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   duplica). Atualiza os preços nessa altura. O **Argon** (`gemini-4-argon`) está com o preço
   introdutório até 30 nov 2026 ($2/M entrada, $10/M saída, $0,10/M em cache) — **rever em dezembro**
   (fonte secundária: $4/$20).
+- **Gemini 4 Argon e cache**: segundo as docs da Google (out 2026), o Argon **não tem cache
+  explícita** — só a implícita, para prefixos iguais de ≥ 4 096 tokens (o guia do modelo, mais
+  recente, diz 6 144). O `getOrCreateContextCache` nem tenta criar cache para o Argon; o desconto
+  da implícita aparece sozinho nos `cachedTokens`. Para a aproveitar, o prefixo estável (regras +
+  índice + ferramentas) tem de passar os 6 144 tokens (a confirmar no F1 com
+  `scripts/measure-help-tree.ts`). Fontes: <https://ai.google.dev/gemini-api/docs/caching>,
+  <https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon>.
 - **Armazenamento da cache de contexto**: cada cache criada fica no registo com a funcionalidade
   que a criou e `entity = "context_cache_storage"` (conta para o teto dessa funcionalidade, sem
   pessoa). Custo estimado = tokens guardados × TTL × preço por hora (`pricing.ts`: Flash ≈ $1/M/h,
   Pro e Argon ≈ $4,50/M/h — o do Argon ainda não está publicado). Tokens: os da API
   (`usageMetadata.totalTokenCount`); sem eles, estimados (≈ 4 car./token, `errorCode`
-  `tokens_estimated`). Modelo sem preço de armazenamento → só os tokens (custo 0).
+  `tokens_estimated`). Modelo sem preço de armazenamento → só os tokens (custo 0). No cartão do
+  custo estas linhas ficam à parte ("armazenamento da cache"): não contam nas chamadas, na latência
+  nem no custo por pergunta, mas contam no gasto do mês.
 - **Teto próprio** (plano MPV §5.3): o `assistant_smart` (Multis do piloto) tem
-  `ai.assistantSmartBudget` (`{"eurPerDay": 10, "eurPerMonth": 150, "eurPerUserPerDay": 3}`; dia e
-  mês civis UTC; 0 = sem esse teto), verificado **antes** do orçamento global. Ao chegar lá, o Multis
+  `ai.assistantSmartBudget` (`{"eurPerDay": 10, "eurPerMonth": 150, "eurPerUserPerDay": 3}`; os
+  três têm de ser > 0 — não há "sem teto"; o dia é o **dia de Lisboa**, como no resto da app; o mês
+  é o civil UTC, como o orçamento global), verificado **antes** do orçamento global. Cada turno
+  **reserva à cabeça** 0,20 € (o máximo estimado de uma pergunta) na instância, libertado quando o
+  custo real fica registado; a partir de 80 % de um teto o gasto lê-se sempre da BD (sem a cache de
+  60 s). **Limite do excesso**: cada instância só vê as suas reservas, por isso o teto pode passar,
+  no máximo, ≈ (turnos em curso noutras instâncias × 0,20 €) + o que um turno gastar acima da
+  estimativa. Se não se conseguir medir o gasto (erro da BD), o piloto também desce para o lite
+  (motivo "unknown"). Desligar o `AI_ASSISTANT` pára também o piloto. Ao chegar lá, o Multis
   responde com o `assistant` (lite) e a nota "modo económico" — não bloqueia nada. O gasto por pessoa
   lê-se pelo índice `(feature, userId, createdAt)` com cache de 60 s. As funcionalidades com teto
   próprio (`ownBudget` no catálogo) **não entram** na soma do orçamento global (`monthSpendEur`,
@@ -332,9 +348,13 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   `[EMAIL_1]`, o de uma ferramenta o `[EMAIL_2]`), e a resposta é reposta uma só vez, no fim. Cada
   ferramenta declara os seus campos (`pii`): colaboradores → `[NOME_n]`, repostos com o nome
   completo (dois "João" não se confundem); clientes → só o 1.º nome; texto livre → emails,
-  telefones, IBAN, NIF e matrículas tapados. Hoje: `extras_escala` (nomes) e `casos_abertos`
-  (títulos). Limite conhecido: as respostas anteriores da mesma conversa voltam no histórico só com
-  a redação dos padrões, não dos nomes.
+  telefones, IBAN, NIF e matrículas tapados. Hoje: `extras_escala` (nomes), `casos_abertos` e
+  `minhas_tarefas` (títulos). Sem contexto de redação, os colegas vão só pelo 1.º nome. O
+  `<resumo>` das perguntas anteriores passa pela mesma redação.
+- **Histórico sem nomes completos** (migração 0695): cada resposta guarda também
+  `contentMasked` (os colegas ainda como `[NOME_n]`) e `maskedNames` (o mapa). No turno
+  seguinte o histórico usa essa versão, com os marcadores renumerados no contexto novo — os nomes
+  completos não voltam ao fornecedor. BD antes da 0695 → as ferramentas mandam só o 1.º nome.
 - As imagens e PDFs (faturas, documentos do RH) vão tal como estão. Por isso o
   `AI_HR_AUTOFILL` e o `AI_HR_EMAIL_ATTACHMENTS` estão desligados por omissão
   e **só correm com Vertex AI numa região da UE** (ver secção 1): fora disso
@@ -423,7 +443,8 @@ em `ai.assistantPilot` (`{"userIds": [1, 12]}`), o `askAssistant` usa a funciona
 `assistant_smart` (nível smart, interruptor `AI_ASSISTANT_SMART`, desligado; limites
 `ai.assistantSmartLimits`, omissão 10/min, 80/dia; chave do limitador `assistant_smart:user:N`;
 teto de saída base 2 048); senão o `assistant` de sempre. Teto próprio atingido (antes ou durante o
-pedido) → `assistant` com `economy: true` e a nota "Modo económico" no widget. O
+pedido) ou gasto que não se consegue medir → `assistant` com `economy: true` e a nota "Modo
+económico" no widget, com o motivo (teto da pessoa, do dia, do mês, ou "não consegui confirmar"). O
 `assistant.status` devolve a funcionalidade **efetiva** da pessoa (`feature`, `tier`, `pilot`,
 `economy`, `economyNote`) e os limites dela. As respostas guardam `variant` (`v1` — o conteúdo do
 MPV chega no F1+) e `tier`.
@@ -434,7 +455,8 @@ Condutores e agentes, Críticas, Formação; a Ficha da reserva com `entity: boo
 `{ path, tab, entity }` no `status` e no `ask`. O servidor só aceita o `tab` da lista da página
 (`shared/multisPage.ts`, com as mesmas constantes das páginas: `OPERATIONAL_TABS`, `CAIXA_TABS`,
 `CONDUTORES_TABS`…) e o `entity` de um tipo conhecido (booking, employee, review, complaint,
-expense, partner) com id inteiro > 0; o resto é ignorado. Vai para o `<contexto>` como "Separador
+expense, partner) com id inteiro > 0; o resto é ignorado (nunca dá erro). O caminho só entra no
+`<contexto>` se tiver letras, dígitos, "_", "-" e "/". Vai para o `<contexto>` como "Separador
 aberto: …" e "Registo aberto: tipo #id (nome)". Não dá acesso a nada.
 
 **`abrir_ajuda`**: procura primeiro pelo **ficheiro** (`google-tempo-real`, `web-analytics.md`),

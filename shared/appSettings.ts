@@ -401,11 +401,12 @@ export const aiAssistantPilotSchema = z.object({
 }).strict();
 export type AiAssistantPilot = z.infer<typeof aiAssistantPilotSchema>;
 
-/** Plano MPV §5.3 (F0b): teto € próprio do Multis do piloto (assistant_smart). 0 = sem esse teto. */
+/** Plano MPV §5.3 (F0b): teto € próprio do Multis do piloto (assistant_smart). Os três > 0 (sem "sem teto"). */
 export const aiAssistantSmartBudgetSchema = z.object({
-  eurPerDay: z.number({ error: "eurPerDay tem de ser um número." }).min(0, "eurPerDay: não pode ser negativo.").max(10_000, "eurPerDay: máximo 10 000 €."),
-  eurPerMonth: z.number({ error: "eurPerMonth tem de ser um número." }).min(0, "eurPerMonth: não pode ser negativo.").max(100_000, "eurPerMonth: máximo 100 000 €."),
-  eurPerUserPerDay: z.number({ error: "eurPerUserPerDay tem de ser um número." }).min(0, "eurPerUserPerDay: não pode ser negativo.").max(10_000, "eurPerUserPerDay: máximo 10 000 €."),
+  // Sem "sem teto": o piloto tem sempre os três tetos (auditoria M2).
+  eurPerDay: z.number({ error: "eurPerDay tem de ser um número." }).positive("eurPerDay: tem de ser maior que 0 (o piloto tem sempre teto).").max(10_000, "eurPerDay: máximo 10 000 €."),
+  eurPerMonth: z.number({ error: "eurPerMonth tem de ser um número." }).positive("eurPerMonth: tem de ser maior que 0 (o piloto tem sempre teto).").max(100_000, "eurPerMonth: máximo 100 000 €."),
+  eurPerUserPerDay: z.number({ error: "eurPerUserPerDay tem de ser um número." }).positive("eurPerUserPerDay: tem de ser maior que 0 (o piloto tem sempre teto).").max(10_000, "eurPerUserPerDay: máximo 10 000 €."),
 }).strict();
 export type AiAssistantSmartBudget = z.infer<typeof aiAssistantSmartBudgetSchema>;
 export const AI_ASSISTANT_SMART_DEFAULT_BUDGET: AiAssistantSmartBudget = { eurPerDay: 10, eurPerMonth: 150, eurPerUserPerDay: 3 };
@@ -725,7 +726,7 @@ export const SETTINGS = {
     key: "ai.assistantSmartBudget",
     group: "ia",
     label: "Multis do piloto: teto de gasto (€)",
-    description: "Teto próprio do Multis do piloto (assistant_smart), em € estimados: por dia (UTC), por mês civil (UTC) e por pessoa por dia. Ao chegar a um deles, a pessoa continua a ter o Multis no modelo de sempre (lite), com a nota \"modo económico\" — não bloqueia nada. Este gasto não conta para o orçamento mensal da IA que pára as outras funcionalidades (o cartão do custo mostra-o na mesma). 0 = sem esse teto. JSON: {\"eurPerDay\": 10, \"eurPerMonth\": 150, \"eurPerUserPerDay\": 3}.",
+    description: "Teto próprio do Multis do piloto (assistant_smart), em € estimados: por dia (dia de Lisboa), por mês civil (UTC) e por pessoa por dia (Lisboa). Ao chegar a um deles, a pessoa continua a ter o Multis no modelo de sempre (lite), com a nota \"modo económico\" — não bloqueia nada. Este gasto não conta para o orçamento mensal da IA que pára as outras funcionalidades (o cartão do custo mostra-o na mesma). Os três têm de ser maiores que 0. Se não for possível medir o gasto, também responde o modelo de sempre. JSON: {\"eurPerDay\": 10, \"eurPerMonth\": 150, \"eurPerUserPerDay\": 3}.",
     schema: aiAssistantSmartBudgetSchema,
     defaultValue: { ...AI_ASSISTANT_SMART_DEFAULT_BUDGET },
     wiring: "live",

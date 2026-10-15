@@ -51,5 +51,5 @@ O **Multis** é o assistente de IA da Multipark dentro da aplicação. Apresenta
 
 **Piloto do Multis (modelo smart)**
 - Algumas pessoas experimentam o Multis com um modelo mais forte. Quem está no piloto escolhe-se em **Definições → Parâmetros → IA → Multis: quem está no piloto** e liga-se com **Definições → Automações → Multis por página (MPV)** (só o super admin) e **IA: Multis do piloto (modelo smart)**. Para as outras pessoas nada muda.
-- O piloto tem um **teto de gasto próprio** (por dia, por mês e por pessoa por dia: **Multis do piloto: teto de gasto**). Quando chega lá, o Multis continua a responder com o modelo de sempre e aparece **Modo económico** por baixo da resposta. Não pára nada nem conta para o orçamento das outras funcionalidades.
-- Os nomes dos colegas que o Multis vai buscar (por exemplo, quem está escalado) não vão para a IA: ela vê um marcador e tu vês o nome completo na resposta.
+- O piloto tem um **teto de gasto próprio** (por dia, por mês e por pessoa por dia: **Multis do piloto: teto de gasto**). Quando chega lá (ou quando não consegue confirmar o gasto), o Multis continua a responder com o modelo de sempre e aparece **Modo económico** por baixo da resposta, com o motivo. Desligar o Multis desliga também o piloto. Não pára nada nem conta para o orçamento das outras funcionalidades.
+- Os nomes dos colegas que o Multis vai buscar (por exemplo, quem está escalado) não vão para a IA, nem nessa resposta nem nas seguintes da mesma conversa: ela vê um marcador e tu vês o nome completo na resposta.

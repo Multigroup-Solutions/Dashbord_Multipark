@@ -62,9 +62,14 @@ export const MULTIS_ENTITY_LABELS: Record<MultisEntityType, string> = {
   partner: "parceiro",
 };
 
-/** "/despesas?x=1#a" → "/despesas"; "/formacao/" → "/formacao". PURA. */
+/**
+ * "/despesas?x=1#a" → "/despesas"; "/formacao/" → "/formacao". Só caminhos
+ * com letras, dígitos, "_", "-" e "/" (até 200 car.); o resto → "" (não vai
+ * para o <contexto>). PURA.
+ */
 export function pagePathOf(path: unknown): string {
   const p = String(path ?? "").split(/[?#]/)[0].trim();
+  if (!p || p.length > 200 || !/^\/[\w/-]*$/.test(p)) return "";
   return p.length > 1 ? p.replace(/\/+$/, "") : p;
 }
 

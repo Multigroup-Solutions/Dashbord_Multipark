@@ -463,7 +463,8 @@ describe("IA: registo de uso e custo", () => {
     expect(s.features[0]).toMatchObject({ feature: "review_reply", label: "Resposta a críticas", calls: 3, costEur: 0.0123 });
     const q = h.db.queries.find((x: any) => x.sql.includes("GROUP BY feature"));
     expect(q.sql).not.toMatch(/2026-09/);
-    expect(q.params).toEqual(["2026-09-01 00:00:00", "2026-10-01 00:00:00"]);
+    // as linhas do armazenamento da cache ficam à parte (parâmetro, não texto no SQL)
+    expect(q.params).toEqual(["context_cache_storage", "context_cache_storage", "context_cache_storage", "2026-09-01 00:00:00", "2026-10-01 00:00:00"]);
     const selectList = q.sql.slice(q.sql.indexOf("SELECT") + 6, q.sql.indexOf("FROM ai_usage_log"));
     // Divide por vírgulas de topo (fora de parênteses): só `feature` pode não ser agregado.
     const cols: string[] = [];

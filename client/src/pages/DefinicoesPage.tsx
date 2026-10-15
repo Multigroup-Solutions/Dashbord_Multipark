@@ -385,6 +385,7 @@ function AiUsageCard() {
                         <td className="py-1 px-1">
                           {f.label}
                           {f.ownBudget && <span className="text-muted-foreground"> (teto próprio)</span>}
+                          {f.storageEur > 0 && <span className="text-muted-foreground"> · armazenamento da cache {eur(f.storageEur)}</span>}
                           {(f.errors > 0 || f.blocked > 0) && (
                             <span className="text-muted-foreground"> · {f.errors ? `${f.errors} erro(s)` : ""}{f.errors && f.blocked ? ", " : ""}{f.blocked ? `${f.blocked} bloqueada(s)` : ""}</span>
                           )}

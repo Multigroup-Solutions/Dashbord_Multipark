@@ -64,10 +64,13 @@ export class AiEuOnlyError extends AiError {
 export class AiBudgetExceededError extends AiError {
   /** "global" = orçamento mensal da IA; "own" = teto próprio da funcionalidade (plano MPV §5.3). */
   readonly scope: "global" | "own";
-  constructor(scope: "global" | "own" = "global") {
+  /** Teto próprio: qual (day | month | user_day | unknown). */
+  readonly ownReason: string | null;
+  constructor(scope: "global" | "own" = "global", ownReason: string | null = null) {
     super("budget", scope === "own" ? { detail: "own" } : {});
     this.name = "AiBudgetExceededError";
     this.scope = scope;
+    this.ownReason = scope === "own" ? ownReason : null;
   }
 }
 export class AiTimeoutError extends AiError {

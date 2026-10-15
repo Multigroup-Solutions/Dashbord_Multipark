@@ -22,7 +22,7 @@
 import {
   AI_ASSISTANT_DEFAULT_LIMITS, AI_ASSISTANT_SMART_DEFAULT_LIMITS, automationFlagDefault, type AiAssistantLimits,
 } from "../../shared/appSettings";
-import { MULTIS_ENTITY_LABELS, sanitizeMultisPage, type MultisEntity } from "../../shared/multisPage";
+import { MULTIS_ENTITY_LABELS, pagePathOf, sanitizeMultisPage, type MultisEntity } from "../../shared/multisPage";
 import type { OwnBudgetReason } from "../_core/ai/usage";
 import { ROLE_LABELS, type Role } from "../../shared/access";
 import { REMEMBER_MESSAGES, memoryBlock, parseRememberCommand, type RememberCommand } from "../../shared/assistantMemory";
@@ -150,6 +150,8 @@ export async function assistantModeFor(userId: number): Promise<AssistantMode> {
   if (!(await inAssistantPilot(userId))) return base;
   try {
     const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
+    // Desligar o assistente pára também o piloto (o status mostra "desligado").
+    if (!(await aiFeatureAvailableFresh(ASSISTANT_FEATURE))) return { ...base, pilot: true };
     if (!(await aiFeatureAvailableFresh(ASSISTANT_SMART_FEATURE))) return { ...base, pilot: true };
     const { ownBudgetCheck } = await import("../_core/ai/usage");
     const own = await ownBudgetCheck(ASSISTANT_SMART_FEATURE, userId);
@@ -160,8 +162,15 @@ export async function assistantModeFor(userId: number): Promise<AssistantMode> {
   }
 }
 
-/** Nota curta do modo económico (widget e status). */
-export const ECONOMY_NOTE = "Modo económico: hoje o Multis do piloto já chegou ao teto de gasto, por isso respondo com o modelo de sempre.";
+/** Nota curta do modo económico (widget e status), pelo motivo. PURA. */
+export function economyNote(reason: OwnBudgetReason | string | null | undefined): string {
+  switch (reason) {
+    case "user_day": return "Modo económico: hoje já chegaste ao teu teto diário do Multis do piloto, por isso respondo com o modelo de sempre (volta amanhã).";
+    case "day": return "Modo económico: hoje o Multis do piloto já chegou ao teto do dia, por isso respondo com o modelo de sempre (volta amanhã).";
+    case "month": return "Modo económico: este mês o Multis do piloto já chegou ao teto do mês, por isso respondo com o modelo de sempre.";
+    default: return "Modo económico: agora não consegui confirmar o gasto do Multis do piloto, por isso respondo com o modelo de sempre.";
+  }
+}
 
 /** Dia de hoje em Lisboa (AAAA-MM-DD). */
 export function lisbonDay(now: Date = new Date()): string {
@@ -182,7 +191,7 @@ export function turnContext(p: {
   const wd = WEEKDAYS[new Date(`${p.today}T12:00:00Z`).getUTCDay()];
   return [
     `Hoje: ${p.today} (${wd}, Lisboa).`,
-    p.path ? `Página aberta: ${p.path.split("?")[0]}` : null,
+    pagePathOf(p.path) ? `Página aberta: ${pagePathOf(p.path)}` : null,
     p.tab ? `Separador aberto: ${p.tab}` : null,
     p.entity ? `Registo aberto: ${p.entity.type} #${p.entity.id} (${MULTIS_ENTITY_LABELS[p.entity.type]})` : null,
     `Papel da pessoa: ${ROLE_LABELS[p.role as Role] ?? p.role}.`,
@@ -206,8 +215,10 @@ export interface AskInput {
 export type AssistantTurnResult = ChatTurnResult & {
   /** Funcionalidade que respondeu (assistant | assistant_smart). */
   feature?: AssistantFeature;
-  /** Respondeu o lite porque o teto do piloto foi atingido. */
+  /** Respondeu o lite porque o teto do piloto foi atingido (ou não se conseguiu medir). */
   economy?: boolean;
+  /** Texto do modo económico, pelo motivo. */
+  economyNote?: string;
 };
 
 /**
@@ -295,11 +306,13 @@ export async function askAssistant(
   });
   let feature: AssistantFeature = mode.feature;
   let economy = mode.economy;
+  let economyWhy: string | null = mode.economyReason;
   let r = await turn(feature, input.conversationId ?? null, input.newConversation);
   // Teto próprio atingido entre a escolha e a chamada (ou orçamento): desce para o lite, na mesma conversa.
   if (!r.ok && r.reason === "budget" && feature === ASSISTANT_SMART_FEATURE) {
     feature = ASSISTANT_FEATURE;
     economy = r.budgetScope === "own";
+    economyWhy = r.budgetReason ?? null;
     const cid = r.conversationId ?? input.conversationId ?? null;
     r = await turn(feature, cid, cid ? false : input.newConversation);
   }
@@ -314,5 +327,5 @@ export async function askAssistant(
       });
     }
   }
-  return r.ok ? { ...r, feature, ...(economy ? { economy: true } : {}) } : r;
+  return r.ok ? { ...r, feature, ...(economy ? { economy: true, economyNote: economyNote(economyWhy) } : {}) } : r;
 }

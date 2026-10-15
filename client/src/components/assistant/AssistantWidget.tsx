@@ -40,8 +40,8 @@ type Msg = {
   /** Id da resposta guardada (para o 👍/👎). */
   id?: number | null;
   rating?: 1 | -1 | null;
-  /** Respondida no modo económico (piloto com o teto atingido). */
-  economy?: boolean;
+  /** Respondida no modo económico (piloto com o teto atingido): o texto do motivo. */
+  economy?: string | null;
 };
 
 const TOOL_LABELS: Record<string, string> = {
@@ -118,7 +118,7 @@ export function AssistantWidget() {
       if (r.ok) {
         setConversationId(r.conversationId);
         setFresh(false);
-        setMessages((prev) => [...prev, { key: `a-${Date.now()}`, role: "assistant", content: r.answer, tools: r.toolsUsed, id: r.messageId, rating: null, economy: "economy" in r && !!r.economy }]);
+        setMessages((prev) => [...prev, { key: `a-${Date.now()}`, role: "assistant", content: r.answer, tools: r.toolsUsed, id: r.messageId, rating: null, economy: "economy" in r && r.economy ? (r.economyNote ?? "Modo económico") : null }]);
         void utils.assistant.conversations.invalidate();
         if (r.memory === "saved") void utils.assistant.memory.list.invalidate();
       } else {
@@ -298,7 +298,7 @@ export function AssistantWidget() {
                         </div>
                       )}
                       {m.economy && (
-                        <div className="mt-1 text-[11px] text-muted-foreground" title={status.data?.economyNote ?? undefined}>Modo económico</div>
+                        <div className="mt-1 text-[11px] text-muted-foreground" title={m.economy}>Modo económico</div>
                       )}
                       {m.id != null && <MultisFeedback messageId={m.id} rating={m.rating} onRated={(r) => setRating(m.key, r)} />}
                     </>

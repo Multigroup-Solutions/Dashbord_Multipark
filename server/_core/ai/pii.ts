@@ -127,12 +127,24 @@ export interface RedactionContext {
   readonly counts: Readonly<Record<PiiKind, number>>;
   /** Quantos nomes de colaboradores foram tapados. */
   readonly names: number;
+  /**
+   * Para GUARDAR a resposta (auditoria A1): repõe tudo MENOS os nomes dos
+   * colegas, e devolve o mapa dos [NOME_n] que lá ficaram — assim o histórico
+   * do turno seguinte não leva os nomes completos ao fornecedor.
+   */
+  maskForStorage(output: string): { content: string; names: Record<string, string> };
+  /**
+   * Histórico: um texto guardado com marcadores de OUTRO turno → os nomes
+   * passam a marcadores DESTE contexto (repostos no fim, como os outros).
+   * Marcador sem nome no mapa → tirado.
+   */
+  adoptNames(text: string, names: Record<string, string> | null | undefined): string;
 }
 
 export function createRedactionContext(opts: { kinds?: readonly PiiKind[] } = {}): RedactionContext {
   const st = newState();
   const kinds = new Set<PiiKind>(opts.kinds ?? ALL_KINDS);
-  return {
+  const self: RedactionContext = {
     text: (input) => redactInto(st, input, kinds),
     person: (fullName) => {
       const name = String(fullName ?? "").replace(/\s+/g, " ").trim();
@@ -150,7 +162,26 @@ export function createRedactionContext(opts: { kinds?: readonly PiiKind[] } = {}
     strip: stripMarks,
     get counts() { return st.counts; },
     get names() { return st.names; },
+    maskForStorage(output) {
+      const names: Record<string, string> = {};
+      const content = String(output ?? "").replace(MARK, (t) => {
+        if (t.startsWith("[NOME_")) {
+          const v = st.byToken.get(t);
+          if (v) names[t] = v;
+          return t;
+        }
+        return st.byToken.get(t) ?? t;
+      });
+      return { content, names };
+    },
+    adoptNames(text, names) {
+      return String(text ?? "").replace(/\[NOME_\d+\]/g, (t) => {
+        const full = names?.[t];
+        return full ? (self.person(full) ?? "") : "";
+      });
+    },
   };
+  return self;
 }
 
 /** Só o primeiro nome ("Maria João Silva" → "Maria"); vazio → fallback. PURA. */

@@ -65,6 +65,6 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - Só leitura: nada muda ao abrir. O raciocínio de cada funcionalidade muda-se em **Definições → Parâmetros → Raciocínio da IA por funcionalidade** (o "minimal" não vale no modelo smart).
 
 **Multis do piloto e o orçamento**
-- O **Multis do piloto** (modelo smart) tem **teto próprio** em **Definições → Parâmetros → IA → Multis do piloto: teto de gasto** (omissão: 10 € por dia, 150 € por mês, 3 € por pessoa por dia; dia e mês em UTC). Ao chegar lá, a pessoa fica com o Multis de sempre, com a nota **Modo económico**.
+- O **Multis do piloto** (modelo smart) tem **teto próprio** em **Definições → Parâmetros → IA → Multis do piloto: teto de gasto** (omissão: 10 € por dia, 150 € por mês, 3 € por pessoa por dia; o dia é o de Lisboa; os três têm de ser maiores que 0). Ao chegar lá, a pessoa fica com o Multis de sempre, com a nota **Modo económico**.
 - Esse gasto **não conta** para o **Orçamento mensal da IA** que pára as outras funcionalidades: o cartão **IA — custo do mês** mostra-o na lista (com "teto próprio"), mas a barra e o "Orçamento atingido" só contam o resto.
-- A cache de contexto também custa (por hora guardada): aparece no registo da funcionalidade que a criou.
+- A cache de contexto também custa (por hora guardada): aparece no registo da funcionalidade que a criou e, no cartão, à parte ("armazenamento da cache").

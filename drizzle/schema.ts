@@ -3726,6 +3726,9 @@ export const aiChatMessages = mysqlTable("ai_chat_messages", {
 	// 0690: versão ("v1" | "mpv") e nível (lite/fast/smart) da resposta — para o 👍/👎.
 	variant: varchar({ length: 16 }),
 	tier: varchar({ length: 16 }),
+	// 0695: a resposta com os nomes dos colegas como [NOME_n] + o mapa (o histórico do turno seguinte não leva os nomes).
+	contentMasked: mediumtext(),
+	maskedNames: text(),
 },
 (table) => [
 	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),

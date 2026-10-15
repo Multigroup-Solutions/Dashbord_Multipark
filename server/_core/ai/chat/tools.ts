@@ -69,8 +69,13 @@ export function capRows<T>(rows: T[], max = MAX_TOOL_ROWS): { rows: T[]; total: 
  * qualquer nível; listas incluídas). Sem campos ou sem contexto → igual. PURA
  * (muda só o contexto).
  */
-export function redactToolResult(result: Record<string, unknown>, fields: ToolPiiFields | undefined, redact: RedactionContext | undefined): Record<string, unknown> {
-  if (!redact || !fields) return result;
+export function redactToolResult(
+  result: Record<string, unknown>, fields: ToolPiiFields | undefined, redact: RedactionContext | undefined,
+  opts: { maskPeople?: boolean } = {},
+): Record<string, unknown> {
+  if (!fields) return result;
+  // Sem contexto de redação (ou sem onde guardar a versão com marcadores), os colegas vão só pelo 1.º nome.
+  const maskPeople = !!redact && opts.maskPeople !== false;
   const people = new Set(fields.people ?? []);
   const clients = new Set(fields.clients ?? []);
   const text = new Set(fields.text ?? []);
@@ -78,9 +83,9 @@ export function redactToolResult(result: Record<string, unknown>, fields: ToolPi
   const walk = (v: unknown, key: string | null, depth: number): unknown => {
     if (depth > 8) return v;
     if (typeof v === "string" && key != null) {
-      if (people.has(key)) return redact.person(v) ?? v;
+      if (people.has(key)) return maskPeople ? (redact!.person(v) ?? v) : firstName(v, "");
       if (clients.has(key)) return firstName(v, "");
-      if (text.has(key)) return redact.text(v);
+      if (text.has(key)) return redact ? redact.text(v) : v;
       return v;
     }
     if (Array.isArray(v)) return v.map((x) => walk(x, key, depth + 1));
@@ -109,14 +114,14 @@ export function makeToolExecutor<Ctx>(
     onCall?: (name: string, args: Record<string, unknown>) => Promise<void> | void;
     onError?: (name: string, error: string) => void;
   } = {},
-  opts: { redact?: RedactionContext } = {},
+  opts: { redact?: RedactionContext; maskPeople?: boolean } = {},
 ): (call: AiToolCall) => Promise<Record<string, unknown>> {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const run = async (call: AiToolCall, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const tool = byName.get(call.name);
     if (!tool || !tool.available(ctx)) return { error: "Ferramenta indisponível para esta pessoa." };
     try {
-      return redactToolResult(await tool.run(args, ctx, { redact: opts.redact }), tool.pii, opts.redact);
+      return redactToolResult(await tool.run(args, ctx, { redact: opts.redact }), tool.pii, opts.redact, { maskPeople: opts.maskPeople });
     } catch (err) {
       if (err instanceof ToolUserError) return { error: err.message };
       const code = (err as any)?.code;

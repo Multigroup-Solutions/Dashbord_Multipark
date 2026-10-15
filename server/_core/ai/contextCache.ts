@@ -32,6 +32,16 @@ export interface ContextCacheOwner {
 /** Entidade das linhas do armazenamento da cache no registo de uso. */
 export const CONTEXT_CACHE_STORAGE_ENTITY = "context_cache_storage";
 
+/**
+ * Modelos SEM cache explícita (docs da Google, out 2026: o Gemini 4 Argon só
+ * tem cache implícita, para prefixos iguais de ≥ 4 096 tokens — o guia do
+ * modelo fala em 6 144). Nesses não se tenta criar a cache: o desconto da
+ * implícita vem sozinho no usageMetadata (cachedTokens). PURA.
+ */
+export function supportsExplicitCache(model: string): boolean {
+  return !/^gemini-4-argon/.test(model);
+}
+
 /** Tokens de um prefixo quando a API não os dá (≈ 4 car./token). PURA. */
 export function estimateCacheTokens(system: string, tools?: AiToolDeclaration[]): number {
   const t = tools?.length ? JSON.stringify(tools).length : 0;
@@ -64,7 +74,7 @@ export async function getOrCreateContextCache(
   system: string,
   opts: { ttlSeconds?: number; signal: AbortSignal; now?: number; tools?: AiToolDeclaration[]; owner?: ContextCacheOwner },
 ): Promise<string | null> {
-  if (!provider.createCache || !system.trim()) return null;
+  if (!provider.createCache || !system.trim() || !supportsExplicitCache(model)) return null;
   const now = opts.now ?? Date.now();
   // As ferramentas vão DENTRO da cache (a API recusa-as ao lado dela): cada
   // conjunto de ferramentas tem a sua cache.

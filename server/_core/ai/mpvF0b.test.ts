@@ -27,7 +27,8 @@ import {
 import { aiFeatureAvailableLogged, resetEuOnlyLogForTests } from "./status";
 import { createFakeDb, createFakeProvider, httpError, okResponse, type FakeQuery } from "./testUtils";
 import {
-  aiUsageDaily, aiUsageSummary, logAiUsage, monthSpendEur, ownBudgetCheck, ownBudgetDecision, resetAiUsageCachesForTests,
+  OWN_BUDGET_TURN_RESERVE_EUR, aiUsageDaily, aiUsageSummary, dayBounds, logAiUsage, monthSpendEur, ownBudgetCheck, ownBudgetDecision, ownBudgetReservedForTests,
+  reserveOwnBudget, resetAiUsageCachesForTests,
 } from "./usage";
 import { AI_OWN_BUDGET_FEATURES, hasOwnBudget } from "../../../shared/aiFeatures";
 import { AI_ASSISTANT_SMART_DEFAULT_BUDGET, AUTOMATION_FLAGS, validateSetting } from "../../../shared/appSettings";
@@ -105,19 +106,76 @@ describe("teto próprio do assistant_smart", () => {
     let userQueries = 0;
     h.db = createFakeDb((q) => {
       if (q.sql.includes("AS dayEur")) return [[{ dayEur: "1", monthEur: "2" }]];
-      if (q.sql.includes("userId = ?")) { userQueries++; return [[{ spent: "2.5" }]]; }
+      if (q.sql.includes("userId = ?")) { userQueries++; return [[{ spent: "1" }]]; }
       return [[]];
     });
     const a = await ownBudgetCheck("assistant_smart", 7);
-    expect(a).toMatchObject({ ok: true, spend: { dayEur: 1, monthEur: 2, userDayEur: 2.5 } });
+    expect(a).toMatchObject({ ok: true, spend: { dayEur: 1, monthEur: 2, userDayEur: 1 } });
     const uq = h.db.queries.find((q: FakeQuery) => q.sql.includes("userId = ?"))!;
     expect(uq.sql).toMatch(/WHERE feature = \? AND userId = \? AND createdAt >= \? AND createdAt < \?/);
     expect(uq.params.slice(0, 2)).toEqual(["assistant_smart", 7]);
-    // registo de 0,6 € desta pessoa → passa o teto por pessoa sem voltar à BD
+    // registo de 0,6 € desta pessoa → soma à cache, sem voltar à BD (1,6 € < 80 % de 3 €)
     await logAiUsage({ feature: "assistant_smart", tier: "smart", provider: "gemini", model: "gemini-4-argon", userId: 7, inputTokens: 1, outputTokens: 1, cachedTokens: 0, costEur: 0.6, latencyMs: 1, status: "ok" });
     const b = await ownBudgetCheck("assistant_smart", 7);
     expect(userQueries).toBe(1);
-    expect(b).toMatchObject({ ok: false, reason: "user_day" });
+    expect(b.spend.userDayEur).toBeCloseTo(1.6, 6);
+  });
+
+  it("acima de 80 % de um teto lê sempre da BD (sem a cache)", async () => {
+    let userQueries = 0;
+    h.db = createFakeDb((q) => {
+      if (q.sql.includes("AS dayEur")) return [[{ dayEur: "1", monthEur: "1" }]];
+      if (q.sql.includes("userId = ?")) { userQueries++; return [[{ spent: "2.5" }]]; }
+      return [[]];
+    });
+    expect(await ownBudgetCheck("assistant_smart", 7)).toMatchObject({ ok: true });
+    expect(userQueries).toBe(2); // a da cache e a fresca (2,5 ≥ 2,4)
+    await ownBudgetCheck("assistant_smart", 7);
+    expect(userQueries).toBe(3); // a da cache não vai à BD; a fresca vai sempre
+  });
+
+  it("reserva à cabeça 0,20 € por turno em curso; liberta-se ao registar", async () => {
+    h.db = createFakeDb((q) => (q.sql.includes("AS dayEur") ? [[{ dayEur: "0", monthEur: "0" }]] : q.sql.includes("userId = ?") ? [[{ spent: "2.85" }]] : [[]]));
+    expect((await ownBudgetCheck("assistant_smart", 7)).ok).toBe(true);
+    const release = reserveOwnBudget("assistant_smart", 7);
+    expect(ownBudgetReservedForTests("assistant_smart", 7)).toEqual({ feature: OWN_BUDGET_TURN_RESERVE_EUR, user: OWN_BUDGET_TURN_RESERVE_EUR });
+    expect(await ownBudgetCheck("assistant_smart", 7)).toMatchObject({ ok: false, reason: "user_day" });
+    release();
+    release(); // uma vez só
+    expect(ownBudgetReservedForTests("assistant_smart", 7)).toEqual({ feature: 0, user: 0 });
+    expect((await ownBudgetCheck("assistant_smart", 7)).ok).toBe(true);
+    // o runAi reserva e liberta (antes de registar o custo real)
+    setAiProvidersForTests({ gemini: createFakeProvider("gemini", [async () => {
+      expect(ownBudgetReservedForTests("assistant_smart", 7).user).toBeCloseTo(OWN_BUDGET_TURN_RESERVE_EUR, 6);
+      return okResponse("ok");
+    }]) });
+    await runAi({ feature: "assistant_smart", input: "?", userId: 7 });
+    expect(ownBudgetReservedForTests("assistant_smart", 7)).toEqual({ feature: 0, user: 0 });
+    expect(reserveOwnBudget("assistant", 7)).toBeTypeOf("function");
+    expect(ownBudgetReservedForTests("assistant", 7)).toEqual({ feature: 0, user: 0 });
+  });
+
+  it("erro a medir o gasto → NÃO corre (reason unknown → modo económico)", async () => {
+    h.db = createFakeDb((q) => { if (q.sql.includes("AS dayEur")) throw new Error("ligação caiu"); return [[]]; });
+    expect(await ownBudgetCheck("assistant_smart", 7)).toMatchObject({ ok: false, reason: "unknown" });
+    const err = await runAi({ feature: "assistant_smart", input: "?", userId: 7 }).catch((e) => e);
+    expect(err).toBeInstanceOf(AiBudgetExceededError);
+    expect(err.ownReason).toBe("unknown");
+    expect(usageInserts().at(-1)!.params).toEqual(expect.arrayContaining(["blocked", "own_budget_unknown"]));
+  });
+
+  it("o teto diário segue o dia de Lisboa (verão: começa às 23:00 UTC da véspera)", () => {
+    expect(dayBounds(Date.UTC(2026, 6, 10, 22, 30))).toEqual({ day: "2026-07-10", start: "2026-07-09 23:00:00", end: "2026-07-10 23:00:00" });
+    expect(dayBounds(Date.UTC(2026, 6, 10, 23, 30))).toMatchObject({ day: "2026-07-11", start: "2026-07-10 23:00:00" });
+    expect(dayBounds(Date.UTC(2026, 11, 10, 12))).toEqual({ day: "2026-12-10", start: "2026-12-10 00:00:00", end: "2026-12-11 00:00:00" });
+    // dia da mudança da hora (25 out 2026: 25 h)
+    expect(dayBounds(Date.UTC(2026, 9, 25, 12))).toEqual({ day: "2026-10-25", start: "2026-10-24 23:00:00", end: "2026-10-26 00:00:00" });
+  });
+
+  it("sem 'sem teto': os três valores têm de ser > 0", () => {
+    expect(validateSetting("ai.assistantSmartBudget", { eurPerDay: 0, eurPerMonth: 150, eurPerUserPerDay: 3 }).ok).toBe(false);
+    expect(validateSetting("ai.assistantSmartBudget", { eurPerDay: 10, eurPerMonth: 0, eurPerUserPerDay: 3 }).ok).toBe(false);
+    expect(validateSetting("ai.assistantSmartBudget", { eurPerDay: 10, eurPerMonth: 150, eurPerUserPerDay: 0 }).ok).toBe(false);
   });
 
   it("runAi: teto atingido → bloqueado ANTES do orçamento global (linha own_budget_day), erro com scope 'own'", async () => {
@@ -157,14 +215,17 @@ describe("teto próprio do assistant_smart", () => {
     expect(await monthSpendEur()).toBe(3);
   });
 
-  it("o cartão mostra tudo, mas a barra e o bloqueio contam só as sem teto próprio", async () => {
+  it("o cartão mostra tudo, mas a barra e o bloqueio contam só as sem teto próprio; o armazenamento à parte", async () => {
     process.env.AI_MONTHLY_BUDGET_EUR = "30";
     h.db = createFakeDb((q) => (q.sql.includes("GROUP BY feature")
-      ? [[{ feature: "assistant_smart", calls: 10, errors: 0, blocked: 0, inTok: 1, outTok: 1, totalCost: "40", avgLatency: 1 }, { feature: "mail_routing", calls: 5, errors: 0, blocked: 0, inTok: 1, outTok: 1, totalCost: "6", avgLatency: 1 }]]
+      ? [[{ feature: "assistant_smart", calls: 10, errors: 0, blocked: 0, inTok: 1, outTok: 1, totalCost: "40", storageCost: "2", avgLatency: 1 }, { feature: "mail_routing", calls: 5, errors: 0, blocked: 0, inTok: 1, outTok: 1, totalCost: "6", storageCost: "0", avgLatency: 1 }]]
       : [[]]));
     const s = await aiUsageSummary();
-    expect(s).toMatchObject({ spentEur: 46, ownBudgetSpentEur: 40, gateSpentEur: 6, pct: 20, blocked: false });
-    expect(s.features.find((f) => f.feature === "assistant_smart")?.ownBudget).toBe(true);
+    expect(s).toMatchObject({ spentEur: 46, ownBudgetSpentEur: 40, gateSpentEur: 6, storageEur: 2, pct: 20, blocked: false });
+    expect(s.features.find((f) => f.feature === "assistant_smart")).toMatchObject({ ownBudget: true, costEur: 38, storageEur: 2 });
+    const q = h.db.queries.find((x: FakeQuery) => x.sql.includes("GROUP BY feature"))!;
+    expect(q.sql).toContain("SUM(CASE WHEN entity = ? THEN 0 ELSE 1 END) AS calls");
+    expect(q.sql).toContain("AVG(CASE WHEN entity = ? THEN NULL ELSE latencyMs END)");
   });
 });
 
@@ -186,16 +247,26 @@ describe("Argon: preço e armazenamento da cache de contexto", () => {
     expect(cacheStorageCostEur("modelo-desconhecido", 1000, 3600)).toBeNull();
   });
 
+  it("Argon: sem cache explícita (só a implícita) — nem se tenta criar", async () => {
+    const createCache = vi.fn(async () => ({ name: "cachedContents/x", expiresAt: Date.now() + 3_600_000 }));
+    const p = Object.assign(createFakeProvider("gemini", [okResponse("ok", "gemini-4-argon")]), { createCache });
+    setAiProvidersForTests({ gemini: p });
+    await runAi({ feature: "assistant_smart", system: "REGRAS", cacheSystem: true, input: "?" });
+    expect(createCache).not.toHaveBeenCalled();
+    expect(p.calls[0].cachedContent).toBeUndefined();
+  });
+
   it("cache criada → linha no registo com a funcionalidade dona e entity context_cache_storage", async () => {
+    process.env.AI_MODEL_SMART = "gemini-3.1-pro-preview";
     h.db = createFakeDb();
-    const p = Object.assign(createFakeProvider("gemini", [okResponse("ok", "gemini-4-argon")]), {
+    const p = Object.assign(createFakeProvider("gemini", [okResponse("ok", "gemini-3.1-pro-preview")]), {
       createCache: async () => ({ name: "cachedContents/x", expiresAt: Date.now() + 3_600_000, tokens: 5000 }),
     });
     setAiProvidersForTests({ gemini: p });
     await runAi({ feature: "assistant_smart", system: "REGRAS", cacheSystem: { ttlSeconds: 3600 }, input: "?", userId: 7, variant: "v1" });
     const row = usageInserts().find((q: FakeQuery) => q.params.includes(CONTEXT_CACHE_STORAGE_ENTITY))!;
     expect(row).toBeTruthy();
-    expect(row.params).toEqual(expect.arrayContaining(["assistant_smart", "smart", "gemini-4-argon", CONTEXT_CACHE_STORAGE_ENTITY, 5000, "ok"]));
+    expect(row.params).toEqual(expect.arrayContaining(["assistant_smart", "smart", "gemini-3.1-pro-preview", CONTEXT_CACHE_STORAGE_ENTITY, 5000, "ok"]));
     expect(row.params).toContain((Math.round(5000 / 1e6 * 4.5 * USD_TO_EUR * 1e6) / 1e6).toFixed(6));
     // a linha da cache não conta para a pessoa (é de quem a criou, partilhada)
     expect(row.params[5]).toBeNull();
@@ -385,5 +456,20 @@ describe("portão só UE verificado antes do runAi também fica registado", () =
     const read = (p: string) => readFileSync(resolve(__dirname, "../..", p), "utf8");
     expect(read("documentAutofill.ts")).toContain('aiFeatureAvailableLogged("hr_autofill"');
     expect(read("rhAttachmentReader.ts")).toContain('aiFeatureAvailableLogged("hr_email_attachments"');
+  });
+});
+
+describe("migração 0695 (resposta do Multis com marcadores)", () => {
+  it("registada, só acrescenta colunas NULL, idempotente, espelhada no drizzle", async () => {
+    const { SCHEMA_MIGRATION_IDS } = await import("../../migrations/index");
+    const { MIGRATION_0695_STATEMENTS, IDEMPOTENT_ERROR_CODES_0695 } = await import("../../migrations/migration_0695");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0695");
+    for (const st of MIGRATION_0695_STATEMENTS) expect(st).toMatch(/^ALTER TABLE `ai_chat_messages` ADD COLUMN `(contentMasked|maskedNames)` (MEDIUMTEXT|TEXT) NULL$/);
+    expect(IDEMPOTENT_ERROR_CODES_0695.has("ER_DUP_FIELDNAME")).toBe(true);
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const schema = readFileSync(resolve(__dirname, "../../../drizzle/schema.ts"), "utf8");
+    expect(schema).toContain("contentMasked: mediumtext(),");
+    expect(schema).toContain("maskedNames: text(),");
   });
 });
