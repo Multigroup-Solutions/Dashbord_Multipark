@@ -264,12 +264,14 @@ export async function publishReply(reviewId: number, comment: string, userId: nu
   }
   const at = published.updateTime && Number.isFinite(Date.parse(published.updateTime))
     ? new Date(published.updateTime).toISOString().slice(0, 19).replace('T', ' ') : now();
-  await db.update(googleReviews).set({
+  const upd = await db.update(googleReviews).set({
     googleReply: published.comment || text, aiResponse: text, aiResponseApproved: 1, respondedAt: at, respondedBy: userId,
     status: review.complaintId ? 'converted_complaint' : 'manually_responded',
     // Automático: compare-and-set — só grava se ninguém respondeu entretanto cá dentro.
   }).where(opts.onlyIfNoReply ? and(eq(googleReviews.id, reviewId), isNull(googleReviews.googleReply)) : eq(googleReviews.id, reviewId));
-  return { publishedAt: at, channel };
+  // stored = false: no caminho automático, uma pessoa respondeu cá entre a verificação e o envio (perdeu a corrida).
+  const stored = Number((upd as any)?.[0]?.affectedRows ?? (upd as any)?.affectedRows ?? 1) > 0;
+  return { publishedAt: at, channel, stored };
 }
 
 export async function pendingReviews() {
