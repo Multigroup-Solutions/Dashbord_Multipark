@@ -1,6 +1,6 @@
 /**
  * Exceções por data ao horário fixo (plano 63, passo 10b; tabela
- * `schedule_overrides`, migração 0725): "trabalha das HH:MM às HH:MM" ou
+ * `schedule_overrides`, migração 0825): "trabalha das HH:MM às HH:MM" ou
  * "folga" numa data. É assim que se marca a rotação do fim de semana.
  *
  *  - Interruptor `FINS_DE_SEMANA` (desligado): o ecrã, as exceções na ficha e

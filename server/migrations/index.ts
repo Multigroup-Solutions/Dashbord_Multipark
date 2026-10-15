@@ -199,10 +199,10 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0700", () => import("./migration_0700").then((m) => step(m.MIGRATION_0700_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0700))],
   // Plano MPV (F7): avisos da escala que só saem uma vez (extras_dia_alerts) e a fila das respostas automáticas às 5★ (review_auto_publish).
   ["0705", () => import("./migration_0705").then((m) => step(m.MIGRATION_0705_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0705))],
-  // Plano 63 (passo 10b): schedule_overrides — exceções por data ao horário fixo (fins de semana, folgas).
-  ["0725", () => import("./migration_0725").then((m) => step(m.MIGRATION_0725_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0725))],
   // Plano 63 (passo 1): modo do ponto por pessoa, histórico, alertas, avisos lidos e rasto das picagens.
   ["0820", () => import("./migration_0820").then((m) => step(m.MIGRATION_0820_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0820))],
+  // Plano 63 (passo 10b): schedule_overrides — exceções por data ao horário fixo (fins de semana, folgas).
+  ["0825", () => import("./migration_0825").then((m) => step(m.MIGRATION_0825_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0825))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);

@@ -2537,7 +2537,7 @@ export const schedules = mysqlTable("schedules", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
-// 0725 (plano 63, passo 10b): exceções por data ao horário fixo — "trabalha das HH:MM às HH:MM" ou "folga".
+// 0825 (plano 63, passo 10b): exceções por data ao horário fixo — "trabalha das HH:MM às HH:MM" ou "folga".
 // Uma ativa por pessoa e dia (activeFlag 1; NULL quando cancelada). Cancelar não apaga.
 export const scheduleOverrides = mysqlTable("schedule_overrides", {
 	id: int().autoincrement().primaryKey(),
