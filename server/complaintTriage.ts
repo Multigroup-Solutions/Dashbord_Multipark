@@ -138,6 +138,39 @@ export interface TriageResult {
 }
 
 /**
+ * A leitura da IA de UMA reclamação (tipo, prioridade, reserva, rascunho): o
+ * MESMO pedido para a produção (`triageComplaint`) e para a avaliação
+ * (server/complaintTriageEval.ts). `restore` repõe os marcadores dos dados
+ * pessoais do corpo. `thinkingLevel` + `thinkingFromCaller` só na avaliação
+ * (compara os níveis). Lança se a IA falhar.
+ */
+export async function classifyComplaintText(
+  c: { clientName: string | null | undefined; subject: string; body: string; knownBooking: boolean },
+  opts: { timeoutMs?: number; userId?: number | null; complaintId?: number | null; thinkingLevel?: import("../shared/aiFeatures").AiThinkingLevel; thinkingFromCaller?: boolean } = {},
+): Promise<{ output: import("./_core/ai/prompts/comms").ComplaintTriageOutput; restore: (s: string) => string; model: string }> {
+  const { runAi } = await import("./_core/ai/run");
+  const { redactPii, firstName } = await import("./_core/ai/pii");
+  const { COMPLAINT_TRIAGE_SYSTEM, complaintTriageInput, complaintTriageSchema, COMPLAINT_INPUT_MAX } = await import("./_core/ai/prompts/comms");
+  const body = String(c.body ?? "").replace(/\s+\n/g, "\n").slice(0, COMPLAINT_INPUT_MAX);
+  const red = redactPii(body);
+  const subj = redactPii(String(c.subject ?? ""));
+  const r = await runAi({
+    feature: "complaint_triage",
+    system: COMPLAINT_TRIAGE_SYSTEM,
+    input: complaintTriageInput({ firstName: firstName(c.clientName), subject: subj.text, body: red.text, knownBooking: c.knownBooking }),
+    schema: complaintTriageSchema,
+    maxTokens: 700,
+    timeoutMs: opts.timeoutMs ?? 20_000,
+    userId: opts.userId ?? null,
+    entity: "complaint",
+    entityId: opts.complaintId ?? null,
+    ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+    ...(opts.thinkingFromCaller ? { thinkingFromCaller: true } : {}),
+  });
+  return { output: r.output, restore: red.restore, model: r.model };
+}
+
+/**
  * Triagem de UMA reclamação. Nunca lança (o email já foi gravado); erros de
  * IA → `{ ok:false, error }` com código curto. `force` repete mesmo que já
  * tenha sido feita (botão "Voltar a analisar").
@@ -152,32 +185,19 @@ export async function triageComplaint(complaintId: number, opts: { userId?: numb
   if (!c) return { ...out, skipped: "not_found" };
   if (c.aiTriagedAt && !opts.force) return { ...out, skipped: "already" };
 
-  const { runAi } = await import("./_core/ai/run");
-  const { redactPii, firstName } = await import("./_core/ai/pii");
   const { aiErrorCode } = await import("./_core/ai/errors");
-  const { COMPLAINT_TRIAGE_SYSTEM, complaintTriageInput, complaintTriageSchema, COMPLAINT_INPUT_MAX } = await import("./_core/ai/prompts/comms");
-
-  const body = String(c.description ?? "").replace(/\s+\n/g, "\n").slice(0, COMPLAINT_INPUT_MAX);
-  const red = redactPii(body);
-  const subj = redactPii(String(c.title ?? ""));
-  let ai;
+  let ai: Awaited<ReturnType<typeof classifyComplaintText>>;
   try {
-    ai = await runAi({
-      feature: "complaint_triage",
-      system: COMPLAINT_TRIAGE_SYSTEM,
-      input: complaintTriageInput({ firstName: firstName(c.clientName), subject: subj.text, body: red.text, knownBooking: !!c.reservationRef }),
-      schema: complaintTriageSchema,
-      maxTokens: 700,
-      timeoutMs: opts.timeoutMs ?? 20_000,
-      userId: opts.userId ?? null,
-      entity: "complaint",
-      entityId: complaintId,
-    });
+    ai = await classifyComplaintText(
+      { clientName: c.clientName, subject: String(c.title ?? ""), body: String(c.description ?? ""), knownBooking: !!c.reservationRef },
+      { timeoutMs: opts.timeoutMs, userId: opts.userId ?? null, complaintId },
+    );
   } catch (err) {
     // Desligada/orçamento/sem fornecedor: não marca (tenta noutra altura).
     if (!isStopAiError(err)) await db.update(complaints).set({ aiTriagedAt: nowStr() } as any).where(eq(complaints.id, complaintId));
     return { ...out, error: aiErrorCode(err) };
   }
+  const red = { restore: ai.restore };
   const o = ai.output;
   const type: ComplaintType = mapComplaintType(o.type);
   const priority: ComplaintPriority = mapComplaintPriority(o.priority);

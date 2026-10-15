@@ -1,8 +1,10 @@
 ---
 modulo: whatsapp
+grupo: Comunicação
+pagina: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
-palavras: whatsapp, movido pela ia, geral, sem cidade, cidade de cima, conversa nova, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
+palavras: triagem dos colaboradores, palavras de urgência, acidente, avaria, roubo, urgência por palavras, whatsapp, movido pela ia, geral, sem cidade, cidade de cima, conversa nova, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
 ---
 # WhatsApp
 
@@ -29,7 +31,7 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 4. **Janela de 24 h**: só podes escrever texto livre até 24 h depois da última mensagem do contacto. Com a janela fechada, usa **Enviar template**; o texto livre só volta quando o contacto responder.
 5. **Sugerir resposta com IA** põe uma sugestão na caixa de texto — revê sempre antes de enviar. A IA nunca envia.
 
-**Estado de cada mensagem enviada** (o ícone ao lado da hora; passa o rato para ver o nome)
+## Estado de cada mensagem enviada (o ícone ao lado da hora; passa o rato para ver o nome)
 - 🕓 **A enviar** → ✓ esbatido **Aceite** (a Meta aceitou o pedido, mas ainda não avisou que saiu) → ✓ **Enviado** → ✓✓ **Entregue** → ✓✓ azul **Lido**. Ou ✗ **Falhou**.
 - "Aceite" não é "Enviado": se ficar muito tempo em Aceite, a Meta ainda não confirmou que a mensagem saiu.
 
@@ -68,6 +70,12 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Liga a conversa a uma reserva ou cliente no painel lateral. Com a Multipark em baixo, o painel diz "indisponível" (não "nenhuma reserva").
 - Contactos que pediram STOP ficam marcados "Não quer mensagens". O aviso diz de onde veio: **pediu STOP**, **carregou em «Parar promoções»** (o botão das promoções da Multipark, ou escrito) ou **parou as promoções no WhatsApp** (na própria app). Os três valem o mesmo: nada de templates nem envios em massa. Volta com **INICIAR** (ou "Retomar promoções" na app).
 - **Partilhado com o site da Multipark** (be-multipark): quem carrega em «Parar promoções» numa mensagem da Multipark também fica bloqueado aqui. O STOP escrito aqui e o "Parar promoções" da app chegam também ao site da Multipark (o dashboard reencaminha-lhe os eventos), que trata do lado dele.
+
+**Conversas de colaboradores e a IA**
+- Interruptor **"IA: não ler com IA as conversas de colaboradores no WhatsApp"**, desligado por omissão.
+- Ligado, só nas conversas de colaboradores e candidatos (caixa RH por regra): uma conversa já lida só volta à IA da intenção e urgência se ainda não tiver intenção (ou for "Outro"), se a última leitura tiver mais de **24 h**, ou se a mensagem tiver uma **palavra de urgência** (acidente, avaria, roubo, furto, batida, incêndio, ferido, polícia, reboque, preso, portão, "não abre", ajuda, urgente…; "sem urgência" não conta).
+- As conversas de **clientes** continuam como sempre (no máximo uma leitura a cada poucos minutos).
+- A resposta a um pedido de disponibilidade que a IA da disponibilidade já leu não vai a uma segunda IA: com uma palavra de urgência, a conversa fica **Urgente** na mesma (por regra).
 
 **A triagem propõe o caso**
 - Quando a triagem por IA acha que a conversa de um cliente é uma **reclamação** ou um **perdido/achado**, aparece por cima das mensagens: "A triagem acha que isto é uma reclamação" com **Criar reclamação** (ou **Criar perdido**) e **Não é**.

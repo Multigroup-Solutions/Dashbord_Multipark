@@ -93,7 +93,7 @@ describe("ligado com cuidado", () => {
     expect(src("server/commsAiSweep.ts")).toContain('runRhAttachmentSweep({ limit: 2, deadlineAt })');
     expect(src("server/jobs/emailInboundSync.ts")).not.toContain("rhAttachmentReader");
     const rd = src("server/rhAttachmentReader.ts");
-    expect(rd).toContain('aiFeatureAvailableFresh("hr_email_attachments")');
+    expect(rd).toContain('aiFeatureAvailableLogged("hr_email_attachments"');
     expect(rd).toContain("e.targetModule = 'rh'");
     expect(rd).toContain("inArray(extraLeadSources.sourceRef, recent.map((e) => `email:${e.id}`))");
     expect(rd).toContain("sources.filter((r) => r.leadId != null)");

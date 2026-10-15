@@ -560,6 +560,8 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
 
   // Resposta de um colaborador a um pedido de disponibilidade / aviso de
   // escala ("sim" / "não"). Nunca lança.
+  // Plano MPV F6b (W1): se a IA da disponibilidade já leu a mensagem, a triagem não a volta a ler.
+  let availabilityAiRead = false;
   if (steps.has("employee_automations") && w.employeeId != null) {
     try {
       const { handleWhatsappReply, handleShiftNoticeButton } = await import("./extrasAutomation");
@@ -575,7 +577,7 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
               payload: m.buttonPayload,
             })
           : false;
-      if (!viaButton) await handleWhatsappReply({ employeeId: w.employeeId, conversationId: w.conversationId, body: m.body });
+      if (!viaButton) availabilityAiRead = !!(await handleWhatsappReply({ employeeId: w.employeeId, conversationId: w.conversationId, body: m.body })).aiRead;
     } catch (err: any) {
       console.warn("[WhatsAppWebhook] automação falhou:", String(err?.message ?? err).slice(0, 160));
     }
@@ -600,7 +602,7 @@ async function handleInbound(db: Db, m: ParsedInboundMessage, triage?: number[])
   // reserva aqui; a chamada à IA corre depois de responder à Meta.
   if (w.plan.bumpUnread && !w.optedOut && triage) {
     const { noteInboundForTriage } = await import("./whatsappTriage");
-    if (await noteInboundForTriage(w.conversationId)) triage.push(w.conversationId);
+    if (await noteInboundForTriage(w.conversationId, Date.now(), { body: m.body, availabilityAiRead })) triage.push(w.conversationId);
   }
   // Lentos no fim (o ficheiro volta a ser tentado pelo cron se ficar a meio).
   if (steps.has("download_media") && m.media) {

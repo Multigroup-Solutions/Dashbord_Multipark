@@ -2366,7 +2366,8 @@ export async function createGoogleReview(data: InsertGoogleReview) {
 
 export async function getGoogleReviews(filters?: { rating?: number; status?: string; projectId?: number }) {
   const db = await getDb(); if (!db) return [];
-  const conditions: any[] = [projectScope(googleReviews.projectId)];
+  // Plano MPV F6b: as que não são críticas e as repetidas saem da lista (nada se apaga — Críticas → Limpeza desfaz).
+  const conditions: any[] = [projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf)];
   if (filters?.rating) conditions.push(eq(googleReviews.rating, filters.rating));
   if (filters?.status) conditions.push(eq(googleReviews.status, filters.status as any));
   if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
@@ -2404,7 +2405,8 @@ export async function updateGoogleReview(id: number, data: Partial<InsertGoogleR
 
 export async function getGoogleReviewStats(filters?: { projectId?: number }) {
   const db = await getDb(); if (!db) return { total: 0, avg: 0, star1: 0, star2: 0, star3: 0, star4: 0, star5: 0, unrated: 0, pending: 0, responded: 0, complaints: 0 };
-  const conditions = [projectScope(googleReviews.projectId)];
+  // Plano MPV F6b: as que não são críticas e as repetidas não contam nos números.
+  const conditions = [projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf)];
   if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
   // 44c: o lixo (sem parque nem marca) não conta nos números.
   const { isTrashReview } = await import("../shared/reviewParks");
@@ -6547,7 +6549,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
       ? db.select({
           id: googleReviews.id, rating: googleReviews.rating, reviewText: googleReviews.reviewText,
           status: googleReviews.status, vehiclePlate: googleReviews.vehiclePlate, createdAt: googleReviews.createdAt,
-        }).from(googleReviews).where(and(or(...reviewConds), projectScope(googleReviews.projectId))).orderBy(desc(googleReviews.createdAt)).limit(30)
+        }).from(googleReviews).where(and(or(...reviewConds), projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf))).orderBy(desc(googleReviews.createdAt)).limit(30)
       : Promise.resolve([]),
   ]);
 

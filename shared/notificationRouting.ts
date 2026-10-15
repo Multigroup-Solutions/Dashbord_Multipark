@@ -112,6 +112,9 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "reclamacoes", action: "view", roles: [], cityScoped: false, personal: true, channels: IN_APP }),
   K({ kind: "google_reviews_alert", group: "suporte", label: "Críticas Google: alertas", description: "Média de estrelas dos últimos 7 dias a cair e críticas Google sem resposta há demasiado tempo (por perfil da tua cidade).",
     module: "criticas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 1440 }),
+  // Plano MPV F7 (§6.2): respostas automáticas às 5★ (interruptor REVIEW_AUTO_PUBLISH_5STAR).
+  K({ kind: "review_auto_publish", group: "suporte", label: "Críticas 5★ automáticas: avisos", description: "A publicação automática das respostas às críticas de 5★ parou (3 falhas seguidas) ou uma crítica respondida sozinha deixou de ter 5★.",
+    module: "criticas", action: "view", roles: ["supervisor", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, dedupeMinutes: 1440 }),
   K({ kind: "incident_critical", group: "suporte", label: "Ocorrência crítica", description: "Ocorrências registadas com gravidade crítica.",
     module: "ocorrencias", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, mandatoryFlag: CRITICAL_ALERTS_MANDATORY_FLAG }),
   K({ kind: "incident_sla", group: "suporte", label: "Ocorrências fora do prazo", description: "Já não é enviado (as ocorrências vêm da app Multipark).",
@@ -139,6 +142,12 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "extras_schedule_reply", group: "operacoes", label: "Respostas ao aviso de escala", description: "Extra que não pode ir ao turno, pede para alterar o turno ou resposta por rever.",
     module: "extras_dia", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
+  // Plano MPV F7 (D4c): quem recebe é a definição "Lembretes da escala: a quem e em que dias" (os papéis aqui são o teto).
+  K({ kind: "extras_reminder", group: "operacoes", label: "Lembretes da escala", description: "30 min antes da proposta automática e da confirmação automática da escala de amanhã, com o estado do dia (só com o interruptor dos lembretes ligado; a quem e em que dias está em Definições → Parâmetros).",
+    module: "extras_dia", action: "view", roles: ["team_leader", "supervisor", "frontoffice", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 12 * 60 }),
+  // Plano MPV F7 (§6.1 "Falhas"): sino + email a TL, supervisor e back office da cidade.
+  K({ kind: "extras_schedule_alert", group: "operacoes", label: "Escala: confirmação e avisos que falharam", description: "Dia mexido à mão que não se confirmou sozinho, extras que ficaram por avisar depois das tentativas todas, cobertura abaixo de 80 % na confirmação automática ou confirmação que falhou.",
+    module: "extras_dia", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, dedupeMinutes: 12 * 60 }),
   K({ kind: "handover", group: "operacoes", label: "A tua passagem de turno", description: "Passagem entregue para ti (pede \"Recebi\") e lembretes do teu turno.",
     module: "passagem_turno", action: "view", roles: [], cityScoped: true, personal: true, mandatory: true, channels: IN_APP }),
   K({ kind: "handover_missing", group: "operacoes", label: "Passagem de turno em falta", description: "Turnos da tua cidade sem passagem preenchida.",

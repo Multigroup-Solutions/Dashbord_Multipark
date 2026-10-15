@@ -129,8 +129,9 @@ async function applyToLead(db: Db, leadId: number, x: AttachmentExtract): Promis
  */
 export async function runRhAttachmentSweep(opts: { limit?: number; deadlineAt?: number } = {}): Promise<{ read: number; skipped: number; failed: number; off?: true }> {
   const out = { read: 0, skipped: 0, failed: 0 };
-  const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
-  if (!(await aiFeatureAvailableFresh("hr_email_attachments"))) return { ...out, off: true };
+  // Ligada mas travada pelo portão "só UE" → a linha "blocked / eu_only" (no máx. 1 por hora por instância).
+  const { aiFeatureAvailableLogged } = await import("./_core/ai/status");
+  if (!(await aiFeatureAvailableLogged("hr_email_attachments", { throttleMs: 60 * 60_000 }))) return { ...out, off: true };
   const db = await getDb();
   if (!db) return out;
   const deadlineAt = opts.deadlineAt ?? Date.now() + 40_000;

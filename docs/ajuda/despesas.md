@@ -1,6 +1,9 @@
 ---
 modulo: despesas
+grupo: Financeiro
+pagina: despesas
 titulo: Despesas
+separadores: lista=Lista, resumo=Resumo
 rotas: /despesas, /despesas/dashboard
 palavras: sinistros, categoria, quem comprou, método de pagamento, lançar paga, já paga, principais, data futura, nota de crédito, notas de crédito, nc, devolução, reembolso, abatida, por receber, despesa, despesas, eliminar, eliminadas, repor, fatura, factura, comprovativo, recibo, fornecedor, nif, extrair com ia, marcar como paga, pagamento, vencimento, centro de custos, exportar excel, resumo, comparar períodos, recorrentes, despesas fixas, renda, anúncios, fatura do google, fatura da meta, período de consumo, falta a fatura, sem fatura, anexar fatura, contabilista, zip, export mensal, faturas do mês, mandar à contabilista, despesas do turno, passagem de turno, talão, foto do talão, link direto, abrir nas despesas
 ---
@@ -36,6 +39,9 @@ Registo de faturas e despesas da empresa.
 - Filtra por estado, categoria e (admin) quem inseriu. O **centro de custos** é o filtro do topo da aplicação.
 - Os cartões **Total / Pendente / Pago / Em atraso** somam o que a lista mostra; as canceladas ficam fora do total.
 - Clica numa despesa para ver o comprovativo, os dados e o histórico de alterações.
+
+**Resumo**
+- Separador **Resumo**: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos próximos 7 dias. Despesas com data futura não entram nos totais do mês nem do ano.
 
 **Gerir (admin)**
 - Na linha: **Marcar como paga** (fica paga hoje), **Editar** (valores, datas, estado, data de pagamento) e, só o super admin, **Eliminar**.
@@ -73,7 +79,6 @@ Registo de faturas e despesas da empresa.
 3. Nada é enviado sozinho: descarregas e mandas tu à contabilista. Respeita o filtro de centro de custos que tiveres escolhido.
 4. Uma fatura com mais de 3 MB, ou que não se consiga ler, fica de fora e aparece em **FALTAM-NO-ZIP.txt** (abre-se pela despesa na app).
 5. Precisa de Despesas → exportar e de ver os totais. Fica registado em Logs quem exportou que mês.
-- Separador **Resumo**: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos próximos 7 dias. Despesas com data futura não entram nos totais do mês nem do ano.
 
 **Exportar e comparar**: supervisores, frontoffice, backoffice e admin — com os mesmos filtros e o mesmo alcance da lista.
 

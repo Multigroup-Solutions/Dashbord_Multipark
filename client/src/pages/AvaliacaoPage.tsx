@@ -31,6 +31,7 @@ import DayEvaluationTab from "@/components/evaluation/DayEvaluationTab";
 // 12 out 2026: o "Mês" é um componente próprio (também na Atividade diária → "Avaliação do mês").
 import MonthEvaluationTab, { PeriodNav, thisMonth } from "@/components/evaluation/MonthEvaluationTab";
 import { canSeeEvaluationRanking } from "@shared/operationalTabs";
+import type { AvaliacaoTab } from "@shared/multisPage";
 import {
   DisputeList,
   EmployeeEvaluationDetail,
@@ -38,8 +39,9 @@ import {
   ptsClass,
   fmtPts,
 } from "@/components/evaluation/EvaluationBreakdown";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
-type TabKey = "dia" | "mes" | "minha" | "contestacoes";
+type TabKey = AvaliacaoTab;
 
 export default function AvaliacaoPage() {
   const { user } = useAuth();
@@ -59,6 +61,8 @@ export default function AvaliacaoPage() {
   const askedRaw = params.get("tab");
   const asked = (askedRaw === "semanas" ? "mes" : askedRaw) as TabKey | null;
   const [tab, setTabState] = useState<TabKey>(asked && allowed.includes(asked) ? asked : allowed[0]);
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab });
   const setTab = (t: string) => {
     setTabState(t as TabKey);
     try {

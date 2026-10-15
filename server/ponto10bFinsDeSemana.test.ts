@@ -98,7 +98,7 @@ import { AUTOMATION_FLAGS, automationFlagDefault, automationFlagSuperAdminOnly }
 import { kindDef } from "../shared/notificationRouting";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { expectedHoursFromSchedule } from "./payroll/compute";
-import { MIGRATION_0725_STATEMENTS, IDEMPOTENT_ERROR_CODES_0725 } from "./migrations/migration_0725";
+import { MIGRATION_0825_STATEMENTS, IDEMPOTENT_ERROR_CODES_0825 } from "./migrations/migration_0825";
 import { WEEKENDS_FLAG, WEEKENDS_NOTIFY_FLAG, canMarkScheduleOverride, loadActiveOverridesForReaders, loadSchedulesAndLeaves, overrideNoticeText, todayLisbon } from "./scheduleOverrides";
 import { appRouter } from "./routers";
 
@@ -596,17 +596,18 @@ describe("interruptores, migração, aviso e ajuda", () => {
     expect(WEEKENDS_FLAG).toBe("FINS_DE_SEMANA");
     expect(WEEKENDS_NOTIFY_FLAG).toBe("FINS_DE_SEMANA_AVISO");
   });
-  it("0725: só cria a tabela, idempotente, uma ativa por pessoa e dia (por colunas), e registada por ordem crescente", () => {
-    expect(MIGRATION_0725_STATEMENTS).toHaveLength(1);
-    const ddl = MIGRATION_0725_STATEMENTS[0];
+  it("0825: só cria a tabela, idempotente, uma ativa por pessoa e dia (por colunas), e registada por ordem crescente", () => {
+    expect(MIGRATION_0825_STATEMENTS).toHaveLength(1);
+    const ddl = MIGRATION_0825_STATEMENTS[0];
     expect(ddl).toMatch(/^CREATE TABLE IF NOT EXISTS `schedule_overrides`/);
     expect(ddl).toContain("UNIQUE KEY `uq_schedule_overrides_active` (`employeeId`, `day`, `activeFlag`)");
     expect(ddl).toContain("`activeFlag` TINYINT NULL DEFAULT 1");
     expect(ddl).toContain("`cancelledAt` TIMESTAMP NULL");
     expect(ddl).not.toMatch(/DROP|DELETE|TRUNCATE/i);
-    expect([...IDEMPOTENT_ERROR_CODES_0725]).toEqual(["ER_TABLE_EXISTS_ERROR"]);
-    expect(SCHEMA_MIGRATION_IDS).toContain("0725");
-    expect(SCHEMA_MIGRATION_IDS.indexOf("0725")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0685"));
+    expect([...IDEMPOTENT_ERROR_CODES_0825]).toEqual(["ER_TABLE_EXISTS_ERROR"]);
+    expect(SCHEMA_MIGRATION_IDS).toContain("0825");
+    expect(SCHEMA_MIGRATION_IDS.indexOf("0825")).toBeGreaterThan(SCHEMA_MIGRATION_IDS.indexOf("0820"));
+    expect([...SCHEMA_MIGRATION_IDS].sort()).toEqual([...SCHEMA_MIGRATION_IDS]);
     expect(OVERRIDE_REASONS).toEqual(["weekend", "holiday", "compensation", "swap", "other"]);
   });
   it("cancelar nunca apaga (só UPDATE com cancelledAt), e fica no registo de atividade", () => {

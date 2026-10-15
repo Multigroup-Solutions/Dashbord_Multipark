@@ -1,4 +1,4 @@
-// Migration 0720 — Ponto em três modos por pessoa (plano 63, passo 1).
+// Migration 0820 — Ponto em três modos por pessoa (plano 63, passo 1).
 //
 //  - `employees.pontoMode`: cópia do modo de HOJE (NULL = sem modo, as regras
 //    de hoje; `fixed`, `exempt`, `always_on`). Só para mostrar: o ordenado e a
@@ -21,7 +21,7 @@
 // COLUMN/INDEX e CREATE TABLE IF NOT EXISTS calam o que já existe. Sem dados.
 const col = (table: string, name: string, type: string) => `ALTER TABLE \`${table}\` ADD COLUMN \`${name}\` ${type}`;
 
-export const MIGRATION_0720_STATEMENTS: string[] = [
+export const MIGRATION_0820_STATEMENTS: string[] = [
   col("employees", "pontoMode", "VARCHAR(12) NULL"),
   "CREATE TABLE IF NOT EXISTS `employee_ponto_modes` (" +
     "`id` INT NOT NULL AUTO_INCREMENT, " +
@@ -81,4 +81,4 @@ export const MIGRATION_0720_STATEMENTS: string[] = [
   col("time_records", "createdByUserId", "INT NULL"),
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0720 = new Set<string>(["ER_DUP_FIELDNAME", "ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME"]);
+export const IDEMPOTENT_ERROR_CODES_0820 = new Set<string>(["ER_DUP_FIELDNAME", "ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME"]);

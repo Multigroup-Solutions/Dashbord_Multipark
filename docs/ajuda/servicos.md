@@ -1,5 +1,7 @@
 ---
 modulo: servicos
+grupo: Operações
+pagina: servicos
 titulo: Serviços
 rotas: /servicos
 palavras: serviços, servicos, serviços extra, lavagem, lavagens, carregamento elétrico, carregamento, valet, flexível, dar baixa, feito, pendente, reabrir, feito por, feito na app multipark, tarefa do serviço

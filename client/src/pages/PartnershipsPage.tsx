@@ -30,7 +30,9 @@ import { lisbonToday } from "@shared/expensePeriods";
 import { toast } from "sonner";
 import { MultiparkSyncCard } from "@/components/partnerships/MultiparkSyncCard";
 import { PartnerCloseTab } from "@/components/partnerships/PartnerCloseTab";
+import { PARTNERSHIPS_TABS, type PartnershipsTab } from "@shared/multisPage";
 import { MergePartnersDialog } from "@/components/partnerships/MergePartnersDialog";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 const fmt = (v: number | null) => v == null ? "Indisponível" : new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(v);
 
@@ -437,12 +439,20 @@ export default function PartnershipsPage() {
       .sort((a, b) => b.revenue - a.revenue);
   }, [partners, partnerByCampaign]);
   const psSort = useTableSort(partnerSummary);
+  const [tab, setTab] = useState<PartnershipsTab>(() => {
+    try {
+      const t = new URLSearchParams(window.location.search).get("tab");
+      return t && (PARTNERSHIPS_TABS as readonly string[]).includes(t) ? (t as PartnershipsTab) : "partners";
+    } catch { return "partners"; }
+  });
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab });
 
   return (
     <div className="space-y-6">
       <p className="text-muted-foreground">Agências, agregadores e parques (ao vivo da BD da Multipark), Pró e avenças, e os nossos registos (contratos, notas e contactos)</p>
 
-      <Tabs defaultValue={(() => { try { const t = new URLSearchParams(window.location.search).get("tab"); return t && ["partners", "parks", "pro", "summary", "fecho", "analytics", "management"].includes(t) ? t : "partners"; } catch { return "partners"; } })()}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as PartnershipsTab)}>
         <TabsList className={TABS_SCROLL}>
           <TabsTrigger value="partners"><Handshake className="w-3 h-3 mr-1" /> Parceiros</TabsTrigger>
           <TabsTrigger value="parks"><Building2 className="w-3 h-3 mr-1" /> Parques</TabsTrigger>

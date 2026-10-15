@@ -1,4 +1,4 @@
-// Migration 0725 — Exceções por data ao horário fixo (plano 63, passo 10b).
+// Migration 0825 — Exceções por data ao horário fixo (plano 63, passo 10b).
 //
 // Cada funcionário tem o seu horário fixo (`schedules`, por dia da semana) e
 // o fim de semana RODA. `schedule_overrides` guarda, por pessoa e DIA DE
@@ -17,7 +17,7 @@
 // continua certa. Cancelar não apaga (`cancelledAt`, `cancelledById`).
 //
 // Só cria; idempotente (CREATE TABLE IF NOT EXISTS → ER_TABLE_EXISTS_ERROR calado).
-export const MIGRATION_0725_STATEMENTS: string[] = [
+export const MIGRATION_0825_STATEMENTS: string[] = [
   "CREATE TABLE IF NOT EXISTS `schedule_overrides` (" +
     "`id` INT NOT NULL AUTO_INCREMENT, " +
     "`employeeId` INT NOT NULL, " +
@@ -41,4 +41,4 @@ export const MIGRATION_0725_STATEMENTS: string[] = [
   ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0725 = new Set<string>(["ER_TABLE_EXISTS_ERROR"]);
+export const IDEMPOTENT_ERROR_CODES_0825 = new Set<string>(["ER_TABLE_EXISTS_ERROR"]);

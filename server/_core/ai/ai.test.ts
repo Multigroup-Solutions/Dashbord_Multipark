@@ -102,8 +102,10 @@ describe("IA: níveis e modelos", () => {
     expect(fallbackTier("lite")).toBeNull();
   });
 
-  it("regra do dono: tudo lite por omissão; fast só onde o lite falha; smart em lado nenhum", () => {
-    for (const id of AI_FEATURE_IDS) expect(AI_FEATURES[id].tier).not.toBe("smart");
+  it("regra do dono: tudo lite por omissão; fast só onde o lite falha; smart só no piloto do Multis (teto próprio)", () => {
+    // Plano MPV §5.2: o assistant_smart (piloto, interruptor desligado por omissão, teto € próprio) é o único smart.
+    expect(AI_FEATURE_IDS.filter((id) => AI_FEATURES[id].tier === "smart")).toEqual(["assistant_smart"]);
+    expect((AI_FEATURES.assistant_smart as { ownBudget?: boolean }).ownBudget).toBe(true);
     const fast = AI_FEATURE_IDS.filter((id) => AI_FEATURES[id].tier === "fast");
     // As perguntas de escolha múltipla (rascunhos e o quiz novo em cada jogo, 14 out 2026): com o lite a resposta certa falha.
     expect(fast).toEqual(["quiz_generation", "quiz_live"]);
@@ -461,7 +463,8 @@ describe("IA: registo de uso e custo", () => {
     expect(s.features[0]).toMatchObject({ feature: "review_reply", label: "Resposta a críticas", calls: 3, costEur: 0.0123 });
     const q = h.db.queries.find((x: any) => x.sql.includes("GROUP BY feature"));
     expect(q.sql).not.toMatch(/2026-09/);
-    expect(q.params).toEqual(["2026-09-01 00:00:00", "2026-10-01 00:00:00"]);
+    // as linhas do armazenamento da cache ficam à parte (parâmetro, não texto no SQL)
+    expect(q.params).toEqual(["context_cache_storage", "context_cache_storage", "context_cache_storage", "2026-09-01 00:00:00", "2026-10-01 00:00:00"]);
     const selectList = q.sql.slice(q.sql.indexOf("SELECT") + 6, q.sql.indexOf("FROM ai_usage_log"));
     // Divide por vírgulas de topo (fora de parênteses): só `feature` pode não ser agregado.
     const cols: string[] = [];

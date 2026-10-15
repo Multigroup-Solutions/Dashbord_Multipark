@@ -4,7 +4,8 @@
 //  - commission_on_revenue: comissão = receita das reservas × commissionRate%
 //  - small_commission: comissão de afiliado (rate normalmente baixa < 5%)
 //  - monthly_fee: avença fixa mensal (campo `monthlyFee` na partnership)
-//  - yearly_fee: avença fixa anual (campo `monthlyFee` ÷ 12 ou novo campo)
+//  - yearly_fee: avença anual — o MESMO `monthlyFee` em €/mês; só a fatura cobre um período maior
+//    (monthlyFee × meses cobertos do período escolhido — partnerFeeForPeriod em shared/partnerRules.ts)
 //  - prepaid_with_discount: cliente paga logo (vem na reserva com desconto já aplicado)
 //  - monthly_invoice_discount: factura-se no fim do mês com desconto
 //  - own_campaign: campanha própria — descontos / cashback / prémios para o centro de custos
@@ -61,7 +62,7 @@ export const PARTNER_TYPES: PartnerTypeDef[] = [
   {
     id: "avenca_anual",
     label: "Avença anual",
-    description: "Valor fixo cobrado uma vez por ano.",
+    description: "Valor fixo em €/mês, como a mensal; muda só a fatura, que cobre os meses do período escolhido (valor × meses).",
     chargeModel: "yearly_fee",
     appliesTo: "sale",
   },

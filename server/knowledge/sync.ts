@@ -31,7 +31,8 @@ export interface KbSyncReport {
   ok: boolean;
   done: boolean;
   drive: { configured: boolean; scanned: number; queued: number; removed: number; pass: "complete" | "partial" | "skipped" };
-  help: { updated: number };
+  /** `sections`: secções da ajuda que mudaram (MPV; ausente com o interruptor desligado). */
+  help: { updated: number; sections?: number };
   processed: number;
   failed: number;
   embedded: number;
@@ -70,6 +71,83 @@ export async function syncHelpDocs(d: store.Db, files: ReadonlyArray<{ file: str
     updated++;
   }
   return updated;
+}
+
+/**
+ * Plano MPV (F3, §3.2): as SECÇÕES da ajuda → um documento "help_sec" por
+ * secção com a referência NOVA `help:<ficheiro>.md#<secção>` (o id da árvore).
+ * As `help:<ficheiro>.md` de sempre ficam (o v1 depende de
+ * `^help:(.+\.md)$`). Só as que mudaram (checksum) voltam a partir; uma
+ * secção que deixou de existir fica marcada (`deletedAt`), nunca apagada, e
+ * volta se reaparecer. Para quando o prazo aperta (continua na próxima).
+ * Devolve quantas mudaram e quantas saíram.
+ */
+export async function syncHelpSections(
+  d: store.Db, files: ReadonlyArray<{ file: string; raw: string }>, opts: { deadlineAt?: number; maxPerRun?: number } = {},
+): Promise<{ updated: number; retired: number; done: boolean }> {
+  const { sql } = await import("drizzle-orm");
+  const { buildHelpTree, treePages } = await import("../../shared/helpTree");
+  const pages = treePages(buildHelpTree(files));
+  const max = Math.max(1, opts.maxPerRun ?? HELP_SECTIONS_PER_RUN);
+  const existing = new Map<string, { id: number; checksum: string; deleted: boolean; title: string; link: string | null }>();
+  for (const r of store.rowsOf(await d.execute(sql`SELECT id, driveFileId, checksum, deletedAt, title, webViewLink FROM kb_documents WHERE source = 'help_sec'`))) {
+    existing.set(String(r.driveFileId), {
+      id: Number(r.id), checksum: String(r.checksum ?? ""), deleted: r.deletedAt != null,
+      title: String(r.title ?? ""), link: r.webViewLink != null ? String(r.webViewLink) : null,
+    });
+  }
+  const live = new Set<string>();
+  let updated = 0;
+  let done = true;
+  for (const page of pages) {
+    for (const s of page.sections) {
+      if (!s.text.trim()) continue; // só arrumação (a lista dos filhos sai da árvore)
+      const key = `help:${s.id}`;
+      if (key.length > 128) continue;
+      live.add(key);
+      const title = (s.level === 1 ? `Ajuda: ${page.title}` : `Ajuda: ${page.title} → ${s.title}`).slice(0, 300);
+      const link = page.routes[0] ?? null;
+      const text = `${title.replace(/^Ajuda: /, "")}\n\n${s.text}`;
+      const checksum = textChecksum(text);
+      const had = existing.get(key);
+      // Título ou ligação mudaram (a página mudou de rota, por exemplo) → atualiza, mesmo com o texto igual.
+      if (had && (had.title !== title || had.link !== link)) {
+        await d.execute(sql`UPDATE kb_documents SET title = ${title}, webViewLink = ${link} WHERE id = ${had.id}`);
+      }
+      if (had && !had.deleted && had.checksum === checksum) continue;
+      // Por corrida, no máx. `max` secções (a 1.ª sincronização são centenas: não come o prazo do Drive).
+      if (updated >= max || (opts.deadlineAt != null && Date.now() > opts.deadlineAt - 15_000)) { done = false; continue; }
+      const id = had ? had.id : await store.insertDoc(d, {
+        source: "help_sec", title, driveFileId: key, mimeType: "text/markdown", webViewLink: link, visibility: KB_VISIBILITY_ALL,
+      });
+      if (had?.deleted) await d.execute(sql`UPDATE kb_documents SET deletedAt = NULL WHERE id = ${had.id}`);
+      await store.saveExtraction(d, id, { text, checksum, chunks: chunkText(text) });
+      await store.markStatus(d, id, "synced");
+      updated++;
+    }
+  }
+  let retired = 0;
+  for (const [key, row] of existing) {
+    if (live.has(key) || row.deleted) continue;
+    await d.execute(sql`UPDATE kb_documents SET deletedAt = ${store.nowMysql()}, chunkCount = 0 WHERE id = ${row.id} AND deletedAt IS NULL`);
+    retired++;
+  }
+  return { updated, retired, done };
+}
+
+/** Secções da ajuda sincronizadas por corrida, no máximo (o resto fica para as seguintes). */
+export const HELP_SECTIONS_PER_RUN = 80;
+
+/** As secções da ajuda vão para a base? (interruptor MPV — só o piloto as usa). Nunca lança. */
+export async function helpSectionsWanted(): Promise<boolean> {
+  try {
+    const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("../_core/featureFlags");
+    const { automationFlagDefault } = await import("../../shared/appSettings");
+    await ensureFeatureFlagOverrides();
+    return isFeatureEnabled("MPV", { defaultEnabled: automationFlagDefault("MPV") });
+  } catch {
+    return false;
+  }
 }
 
 // ─── Descoberta no Drive (retomável) ─────────────────────────────────────────
@@ -374,7 +452,11 @@ export async function embeddingsWanted(cfg: KnowledgeConfig): Promise<boolean> {
 
 // ─── Corrida do cron ─────────────────────────────────────────────────────────
 
-export async function runKnowledgeSync(opts: { deadlineAt: number; d?: store.Db; drive?: KbDriveApi | null; embed?: EmbedFn | null; helpFiles?: ReadonlyArray<{ file: string; raw: string }>; now?: Date }): Promise<KbSyncReport> {
+export async function runKnowledgeSync(opts: {
+  deadlineAt: number; d?: store.Db; drive?: KbDriveApi | null; embed?: EmbedFn | null; helpFiles?: ReadonlyArray<{ file: string; raw: string }>; now?: Date;
+  /** As secções da ajuda (MPV, "help_sec"). Omisso = o interruptor MPV. */
+  helpSections?: boolean;
+}): Promise<KbSyncReport> {
   const report: KbSyncReport = {
     ok: true, done: true, drive: { configured: false, scanned: 0, queued: 0, removed: 0, pass: "skipped" }, help: { updated: 0 },
     processed: 0, failed: 0, embedded: 0, errors: [],
@@ -384,6 +466,13 @@ export async function runKnowledgeSync(opts: { deadlineAt: number; d?: store.Db;
     const cfg = await loadKnowledgeConfig();
     const helpFiles = opts.helpFiles ?? (await import("../assistant/helpDocs.generated")).HELP_FILES;
     report.help.updated = await syncHelpDocs(d, helpFiles).catch((err) => { report.errors.push(`Ajuda: ${errText(err)}`); return 0; });
+    if (opts.helpSections ?? (await helpSectionsWanted())) {
+      const r = await syncHelpSections(d, helpFiles, { deadlineAt: opts.deadlineAt }).catch((err) => { report.errors.push(`Ajuda (secções): ${errText(err)}`); return null; });
+      if (r) {
+        report.help.sections = r.updated;
+        if (!r.done) report.done = false;
+      }
+    }
 
     let drive: KbDriveApi | null = opts.drive !== undefined ? opts.drive : null;
     if (opts.drive === undefined && cfg.driveEnabled) {
