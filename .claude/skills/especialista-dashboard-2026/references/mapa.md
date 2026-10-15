@@ -258,7 +258,7 @@ Há ainda routers locais de autenticação dos streams em `server/centralRing.ts
   - a primeira é 0050;
   - todos os ficheiros estão registados.
 - **Última: `0830`** (as anteriores são 0820, 0825; antes saltou de 0715 para 0820).
-- **Regra de 5 em 5:** não está no código. Está escrita em `.claude/agents/multipark-dashboard-specialist.md` (linha 17) e em `.claude/skills/especialista-dashboard-2026/references/processo.md:109`: ver o último número no origin/main e nos ramos abertos antes de escolher. O histórico tem exceções (0058–0101 seguidos, 0123, 0138, 0376).
+- **Regra de 5 em 5:** não está no código. Está escrita em `.claude/agents/multipark-dashboard-specialist.md` (linha 17) e em `.claude/skills/especialista-dashboard-2026/references/processo.md` §8: ver o último número no origin/main e nos ramos abertos antes de escolher. O histórico tem exceções (0058–0101 seguidos, 0123, 0138, 0376).
 
 ---
 

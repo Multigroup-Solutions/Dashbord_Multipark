@@ -26,7 +26,7 @@
 - A porta de cada módulo é `requireAccess(ctx.user, "<modulo>", "<acao>")` (`server/_core/access.ts`) — `can()` no cliente para mostrar/esconder, mas **o servidor decide**. Matriz em `shared/access.ts` (`MATRIX_SPEC`); `docs/permissoes.md` é gerado (`pnpm tsx scripts/gen-permissoes-doc.ts`) e testado.
 - Cidades: `projectScope(coluna)` / `cityScope` (preenchidos pelo `requireUser`); quem não tem centro de custos (`missingCostCenter`) só vê o próprio — o centro de custos é obrigatório mesmo para admin. Valida a cidade pedida contra as da pessoa antes de ler.
 - Prefixo tRPC novo → entrada em `PATH_MODULE` (`server/_core/accessContext.ts`), que decide o alcance de cidade do pedido; operações por id (editar/apagar um registo) → `assertScopedOperation` (`server/cityScopeGuards.ts`). Sem estas duas peças um router novo é uma fuga de cidade.
-- Totais globais por cidade que a pessoa não pode ver aparecem como "Indisponível", nunca como 0.
+- Valores globais sem cidade (faturas, avenças) numa consulta filtrada por cidade: "Indisponível", nunca 0 nem atribuídos à cidade. Cidades fora do alcance da pessoa nem aparecem.
 - Totais financeiros: `canSeeFinanceTotalsFor` / `requireFinanceTotals`; esconder € e taxas a quem não os vê, também em ferramentas e exportações.
 - `requireRole` só para limiares finos dentro de um módulo. Mudanças de quem vê o quê seguem as decisões do Jorge (`decisoes.md`) e atualizam o gerado das permissões.
 - Ações via MCP (`server/mcpProceduresApi.ts`): correm como quem criou a chave; ações externas pedem `confirmExternal`.
@@ -45,7 +45,7 @@ Trabalho novo — onde registar:
    — estes 3 o teste apanha (`server/cronScheduler.test.ts`, `server/agendadorArrumar.test.ts`);
 4. a função `*Cron` em `server/cronJobs.ts`;
 5. `docs/ajuda/agendador.md` ("O que corre e quando");
-6. endpoint manual `/api/cron/<nome>` em `server/_core/api-entry.ts` (Bearer `CRON_SECRET`) — só se fizer sentido correr à mão (14 dos trabalhos não têm).
+6. endpoint manual `/api/cron/<nome>` em `server/_core/api-entry.ts` (Bearer `CRON_SECRET`) — só se fizer sentido correr à mão (vários não têm, ex.: ops-presence, terminal-watch, partner-close).
    — os pontos 4–6 não têm teste geral: acrescenta tu um (ex.: `server/mpvF7Extras.test.ts`).
 - Idempotente; retoma por cursor; prazo próprio; nunca envia duas vezes (reserva por compare-and-set). Testes com relógio simulado, incluindo o domingo da mudança de hora (último domingo de outubro e março).
 
@@ -79,12 +79,12 @@ Trabalho novo — onde registar:
 ## 11. Testes e validação
 - Antes de cada push: `pnpm check` · `npx vitest run` (completo) · `pnpm build:api` + `node -e "import('./api/index.js')"` + `git checkout -- api/index.js` · geradores se aplicável.
 - Testes sem rede: `fetch` global falso/bloqueado; IA com fornecedores falsos; BD com `createFakeDb` (`server/_core/ai/testUtils.ts`) ou dependências injetadas.
-- Os testes correm em **UTC** (`vitest.config.ts` fixa `TZ=UTC`, como a produção); datas lidas da BD em texto → `parseDbDate` (UTC), nunca `new Date(texto)`.
+- Os testes correm em **UTC** (`vitest.config.ts` fixa `TZ=UTC`, como a produção); datas lidas da BD em texto → leitura UTC explícita (`parseDbDate` em `server/payroll/shifts.ts` / `server/trainingRules.ts`; no cliente não existe — converte à mão), nunca `new Date(texto)`.
 - Para provar que algo existente não mudou: teste de equivalência ou hash (ex.: v1 do Multis).
 - Testes de texto/linha (ex.: `ui24g.test.ts` com números de linha) podem precisar de ajuste legítimo — o auditor confirma que não esconde regressão.
 
 ## 12. Produção e ferramentas
-- **Ver produção sem pedido do Jorge** (só leituras sem dados pessoais): MCP `Agente_Multipark` → `dashboard_query` **apenas** em `settings.values.list` (gravado vs omissão: `isSet`/`value`), `settings.aiUsage*`, `settings.aiPilotStats`, `settings.scheduler`, `extrasDia.schedule`. Tudo o resto (reservas, clientes, RH, caixa) só a pedido dele nessa conversa. `dashboard_action` e as ferramentas `create_*`/`update_*`/`delete_*` do MCP: nunca por iniciativa própria; mesmo a pedido, mostra o resumo e espera o sim. (O MCP corre como o Jorge, super admin.)
+- **Ver produção sem pedido do Jorge** (só leituras de configuração): MCP `Agente_Multipark` → `dashboard_query` **apenas** em `settings.values.list` (gravado vs omissão: `isSet`/`value`), `settings.aiUsage*`, `settings.aiPilotStats`, `settings.scheduler`, `extrasDia.schedule`. `settings.values.list` traz emails e telefones de colegas (`emails.handoverCc`, `ops.presencePhones`) e o `extrasDia.schedule` texto livre: lê só as chaves de que precisas e nunca copies esses valores para relatórios, PRs ou chat. Tudo o resto (reservas, clientes, RH, caixa) só a pedido dele nessa conversa. `dashboard_action` e as ferramentas `create_*`/`update_*`/`delete_*` do MCP: nunca por iniciativa própria; mesmo a pedido, mostra o resumo e espera o sim. (O MCP corre como o Jorge, super admin.)
 - Logs: Vercel MCP `get_runtime_logs` (projeto `prj_ccvzHCH8edMfjELxjbi4M9FzxlIv`, team `team_lYkibOdgNjvjOVfHUg46s926`).
 - Ler a BD de produção diretamente (scripts READ ONLY): só a pedido do Jorge nessa conversa.
 - Deploy = merge para `main` (Vercel). Variáveis de ambiente: o Jorge muda na Vercel (nunca peças os valores).

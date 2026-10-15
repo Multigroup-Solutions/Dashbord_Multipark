@@ -12,7 +12,7 @@ Antes de lhe perguntar alguma coisa, vê aqui. As já tomadas **não se voltam a
 **Dados e leituras**
 - Nada se apaga em dados de negócio; nunca apagar webhook nem `multipark_bookings`.
 - Reservas leem a BD da Multipark ao vivo; a cópia local só como recurso ou para histórico antes de 2 mar 2026.
-- Produção só se lê quando ele pede nessa conversa.
+- Produção só se lê quando ele pede nessa conversa (salvo as leituras de configuração de `regras.md` §12).
 
 **Caixa** (fora do MPV; ativação ainda por aprovar — ver abaixo)
 - Tolerância 0,01 €; condutor entrega ao líder no próprio dia (validação até às 6 h), líder ao back office no dia seguinte; fatura em 48 h só com NIF, as outras no fim do mês; só Faturação → gerir fecha casos; Stripe/Viva/InvoiceExpress desligados por omissão; o "era" começa no preço inicial do histórico (`booking_initial_prices`).
@@ -33,17 +33,17 @@ Antes de lhe perguntar alguma coisa, vê aqui. As já tomadas **não se voltam a
 - Condutores e Agentes: só supervisor, back office, admin e super admin (módulo `condutores_agentes`); Desempenho só super admin. Movimentos ≠ mudanças de lugar (mostrados à parte).
 - Team leaders nas listas = só quem tem permissões de TL.
 - Despesas: pagar/dar como paga só admin e super admin; centros de custo Multipark, Lisboa, Porto, Faro e Marketplace; escolher funcionário só TL para cima; categorias com acentos certos (inclui sinistros).
-- Centro de custos é obrigatório para todos (mesmo admin); sem ele só se vê o próprio. Totais de cidades que a pessoa não vê: "Indisponível", nunca 0 (`docs/CIDADES-E-FICHA-2026-09-15.md`).
-- Avaliação: velocidade a partir de 120 sem tolerância; atraso ≥ 5 min = −5 para quem tem horário; o GPS conta no máximo 1 excesso por dia (−10).
+- Centro de custos é obrigatório para todos (mesmo admin); sem ele só se vê o próprio. Valores globais sem cidade (faturas, avenças) numa consulta por cidade: "Indisponível", nunca 0 nem atribuídos à cidade; cidades fora do alcance não aparecem (`docs/CIDADES-E-FICHA-2026-09-15.md`).
+- Avaliação: velocidade conta acima de 120 km/h, sem tolerância (`DEFAULT_SPEED_RULE`); atraso ≥ 5 min = −5 para quem tem horário (escala do Extras-Dia ou horário fixo), máx. 1 por dia; o GPS conta no máximo 1 excesso por dia (−10).
 
-**Ponto e férias (plano 63; PRs #392, #395, #397, #416 — atrás de interruptores)**
-- Modo do ponto por pessoa (horário fixo, isenção, sempre em serviço), com histórico "a partir de" e motivo interno (`PONTO_MODOS`).
-- No horário: "Pôr folga" em vez de apagar; dispensar uma possível falta pede motivo e cria a ausência; falta de funcionário = 0 pontos; horário só com folgas = sem horário (176 h) na folha.
-- Fins de semana por rotação, com exceções por data e folga de compensação (`FINS_DE_SEMANA`); nunca mexe no passado.
-- Férias: basta uma aprovação, recusa sempre com motivo, ninguém aprova as suas, as do super admin aprovam-se sozinhas; extras avisam "Não vou estar" sem aprovação; os leitores (folha, avaliação, faltas) só contam ausências aprovadas; mês fechado não muda (`FERIAS_MAPA`).
+**Ponto e férias (plano 63; PRs #392, #395, #397, #416)**
+- Modo do ponto por pessoa (horário fixo, isenção, sempre em serviço), com histórico "a partir de" e motivo interno (atrás de `PONTO_MODOS`, desligado).
+- No horário (ativo, sem interruptor): "Pôr folga" em vez de apagar; dispensar uma possível falta pede motivo e cria a ausência; possível falta no Extras-Dia de um funcionário (não extra) = 0 pontos para o bloqueio das 3 faltas, o extra continua com 1 (`extraDiaNoShowPoints`); horário só com folgas = sem horário (176 h) na folha.
+- Fins de semana por rotação, com exceções por data e folga de compensação (atrás de `FINS_DE_SEMANA`, desligado); nunca mexe no passado.
+- Férias: basta uma aprovação, recusa sempre com motivo, ninguém aprova as suas, as do super admin aprovam-se sozinhas; extras avisam "Não vou estar" sem aprovação; os leitores (folha, avaliação, faltas) só contam ausências aprovadas; mês fechado não muda (atrás de `FERIAS_MAPA`, desligado).
 
 **PDAs e telemóveis (plano 56; #364, #368, #374)**
-- PDAs sem Google (entrada com código ao superior), sessão do PDA acaba na saída do ponto; QR só TL para cima (`ENTRAR_COM_CODIGO`).
+- PDAs sem Google (entrada com código ao superior), sessão do PDA acaba na saída do ponto; QR só TL para cima — atrás de `ENTRAR_COM_CODIGO` (desligado); `GOOGLE_NOS_PDAS` está ligado por omissão, por isso hoje os PDAs ainda entram com Google.
 - Terminal: 1 pessoa por cidade, cada pessoa num só terminal (`PONTO_TERMINAL`).
 - Telemóveis pessoais à parte dos PDAs partilhados (Perfil → Este telemóvel).
 

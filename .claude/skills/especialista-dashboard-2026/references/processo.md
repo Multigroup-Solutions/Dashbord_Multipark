@@ -45,6 +45,7 @@ Implementa <fase/tarefa> (<plano ou pedido do Jorge, com citação curta>). Lê 
 Cria o branch `<ramo>` a partir de origin/main <hash>. PT-PT; segue o estilo do código à volta.
 Se o worktree não tiver node_modules: em PowerShell
   cmd /c mklink /J "<wt>\node_modules" "C:\Users\jorge\Dashbord_Multipark\Dashbord_Multipark\node_modules"
+No fim, depois do push: tira a junção (`cmd /c rmdir "<wt>\node_modules"`) se o coordenador não precisar do worktree — a limpeza automática do worktree com a junção lá dentro apagaria o node_modules principal.
 
 Âmbito
 1. <o quê, com ficheiros e linhas que já conheces>
@@ -84,8 +85,10 @@ Ataca:
 Verificações (PowerShell):
   $wt = "<scratchpad>\wt-<fase>"; git worktree add --detach $wt origin/<ramo>
   cmd /c mklink /J "$wt\node_modules" "C:\Users\jorge\Dashbord_Multipark\Dashbord_Multipark\node_modules"
+  Push-Location $wt
   npx tsc --noEmit ; npx vitest run ; pnpm build:api ; node -e "import('./api/index.js')" ; git checkout -- api/index.js
-  pnpm tsx scripts/gen-ajuda.ts  (não pode deixar diferenças)
+  pnpm tsx scripts/gen-ajuda.ts ; if (git status --porcelain) { throw 'gen-ajuda deixou diferenças' }
+  Pop-Location
   NUNCA corras evals reais, envios ou leituras de produção.
   No fim: cmd /c rmdir "$wt\node_modules" ; if (Test-Path "$wt\node_modules") { throw 'junção ainda lá' } ; git worktree remove --force $wt
 
@@ -109,26 +112,26 @@ git merge-tree --write-tree origin/main origin/<ramo>                           
 2. PR com o corpo num ficheiro (PT-PT: O que muda / Auditoria com a nota / Validação; termina com `🤖 Generated with [Claude Code](https://claude.com/claude-code)`):
 ```powershell
 gh pr create --base main --head <ramo> --title "<Fase>: <o que muda, em linguagem do Jorge>" --body-file <scratchpad>\pr.md
-gh pr checks <n> --watch --fail-fast          # CI + preview da Vercel verdes
-gh pr merge <n> --squash --match-head-commit <hash auditado (ou o do merge do main já verificado)>
+gh pr checks <n> --watch --fail-fast          # CI + preview da Vercel verdes (se disser "no checks reported", espera uns segundos e repete)
+gh pr merge <n> --squash --delete-branch --match-head-commit <hash auditado (ou o do merge do main já verificado)>
 ```
-3. Depois do merge: Vercel MCP `list_deployments` / `get_deployment` até `READY`, e `get_runtime_errors` nos 10 min seguintes. Se o deploy falhar ou houver erros novos: `request_rollback` e avisar o Jorge.
+3. Depois do merge: Vercel MCP `list_deployments` / `get_deployment` até `READY`, e `get_runtime_errors` nos 10 min seguintes. Se o deploy falhar ou houver erros novos: `request_rollback` e avisar o Jorge. Atenção: depois de um rollback a Vercel desliga a atribuição automática do domínio — os merges seguintes só chegam a produção quando alguém fizer promote do deploy novo (diz-lho).
 4. **Hora do deploy**: se a mudança mexe em horários de trabalhos que avisam/enviam (ex.: Extras Dia), confirma antes nas Definições de produção (`settings.values.list`: `isSet`/`value`) se há valores gravados e se o envio automático está ligado, e escolhe a hora do merge em conformidade.
 5. Notas baixas que sobram e valem a pena → ramo `<ramo>-seguimento` a partir do main, mesmo processo (ronda curta no mesmo auditor).
-6. Limpeza: ramo remoto apagado pelo merge; worktrees das tuas fases removidos (com a junção tirada antes, §8). Nunca mexas em worktrees/ramos de outras sessões (`git worktree list` mostra várias).
+6. Limpeza: ramo remoto apagado pelo `--delete-branch` (se falhar a parte local por o ramo estar num worktree: `git push origin --delete <ramo>`); worktrees das tuas fases removidos (com a junção tirada antes, §8). Nunca mexas em worktrees/ramos de outras sessões (`git worktree list` mostra várias).
 
 ## 8. Git, worktrees e Windows (armadilhas reais)
 - **Shell**: comandos com `cmd /c` correm em **PowerShell**. No Git Bash o `/c` é convertido e o comando não faz nada sem dar erro — lá usa `cmd //c …`.
 - **node_modules em junção**: criar com `cmd /c mklink /J "<wt>\node_modules" "<raiz>\node_modules"`; antes de remover um worktree, tirar SEMPRE a junção (`cmd /c rmdir "<wt>\node_modules"` e confirmar com `Test-Path`) — senão a remoção apaga o node_modules principal. Se acontecer: `pnpm install --frozen-lockfile --force`.
 - **Ramo preso a um worktree**: `git checkout -B <ramo>` falha ("already used by worktree"). Usa outro nome local e empurra com refspec: `git checkout -B x-merge origin/<ramo>` … `git push origin x-merge:<ramo>`.
-- **`git add`**: no checkout principal nunca `git add -A`/`.` — `.claude/worktrees/` não está no `.gitignore` e meteria worktrees embebidos. Adiciona por caminho.
+- **`git add`**: no checkout principal nunca `git add -A`/`.` — há worktrees, `.codex/` e ficheiros soltos de outras sessões (`.claude/worktrees/` está no `.gitignore` desde a entrada desta skill). Adiciona por caminho.
 - **Nunca** `push --force` para o `main`, nunca `--no-verify`, nunca reescrever histórico de um ramo que outra fase usa como base.
 - **CRLF**: edições por scripts no Windows metem CRLF; os commits vão em LF. PowerShell: `[IO.File]::WriteAllText(p, s, (New-Object Text.UTF8Encoding $false))`; Python: `open(..., newline='')`. Cuidado com crases dentro de strings em PowerShell (são escape).
 - **Heredocs com crases** partem no Bash; para substituições grandes usa um script Python no scratchpad com `assert s.count(a) == 1`.
 - **Migrações — número livre** no main e nos ramos abertos:
   `git for-each-ref --format='%(refname:short)' refs/remotes/origin | % { git ls-tree --name-only $_ server/migrations/ } | sort -u | select -Last 5`
 - **Testes que falham por tempo** com a máquina carregada (`globalSearch.test`, `migrations/index.test`): repete sozinho; se passar, é carga — diz-o no relatório.
-- **Testes correm em UTC** (`vitest.config.ts` fixa `TZ=UTC`, como a produção); código que lê datas da BD em texto tem de usar UTC explícito (`parseDbDate`), senão dá +1 h fora de UTC (#372, #375).
+- **Testes correm em UTC** (`vitest.config.ts` fixa `TZ=UTC`, como a produção); código que lê datas da BD em texto tem de usar UTC explícito (`parseDbDate` em `server/payroll/shifts.ts`), senão dá +1 h fora de UTC (#372, #375).
 - **`api/index.js`** é gerado pelo build: repõe com `git checkout -- api/index.js` depois de `pnpm build:api`.
 - **PR em rascunho** não faz merge: `gh pr ready <n>` primeiro.
 - `git stash` é partilhado entre worktrees — evita; usa commits WIP.
