@@ -159,11 +159,12 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
   let fixedSchedules: any[] = [], leaveRows: any[] = [];
   try {
     fixedSchedules = rowsOf(await db.execute(sql`
-      SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
+      SELECT s.id, s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
              DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
         FROM schedules s JOIN employees e ON e.id = s.employeeId
        WHERE e.isActive = 1 AND s.isWorkDay = 1
-         AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+         AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'
+       ORDER BY s.id`));
     leaveRows = rowsOf(await db.execute(sql`
       SELECT employeeId, fromDate, toDate FROM employee_leaves
        WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
@@ -271,7 +272,8 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       driverPenaltyPoints: Number(r.driverPoints ?? 0),
     })),
     fixedSchedules: fixedSchedules.map((r) => ({
-      employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
+      // plano 63 (10a): nos dias duplicados conta a linha de id mais baixo
+      id: r.id != null ? Number(r.id) : null, employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
       isWorkDay: Number(r.isWorkDay) === 1, contractStart: r.contractStart ? String(r.contractStart).slice(0, 10) : null, contractEnd: r.contractEnd ? String(r.contractEnd).slice(0, 10) : null,
       city: cityOfProjectId(r.projectId != null ? Number(r.projectId) : null),
     })),

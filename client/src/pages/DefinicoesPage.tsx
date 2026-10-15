@@ -40,7 +40,8 @@ import { GarageRolesEditor, ParkZonesEditor, parkZonesFromDraft, parkZonesToDraf
 import { AIRPORT_LABELS, type AirportCityId, type AirportFence } from "@shared/pontoTerminal";
 import { SPEED_RULE_SETTING_KEY, speedThresholdOf } from "@shared/speedRules";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY } from "@shared/evaluationClose";
-import { addDays, operationalDayOf } from "@shared/lisbonDay";
+import { addDays, lisbonDayOf, operationalDayOf } from "@shared/lisbonDay";
+import { NO_SHOW_SKIP_SETTING_KEY } from "@shared/scheduleReview";
 import { parksInsideZones } from "@shared/terminalWatch";
 import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -604,7 +605,7 @@ function ParametersCard() {
         <Card key={group}>
           <CardHeader className="pb-2"><CardTitle className="text-base">{GROUP_LABEL[group] ?? group}</CardTitle></CardHeader>
           <CardContent className="space-y-5">
-            {items.map((s) => (
+            {items.map((s) => s.key === NO_SHOW_SKIP_SETTING_KEY ? <NoShowSkipSummary key={s.key} item={s} /> : (
               <SettingEditor key={s.key} item={s} saving={save.isPending} isSuperAdmin={isSuperAdmin}
                 locked={!canEdit || (!!s.superAdminOnly && !isSuperAdmin)}
                 codeValue={s.key === "finance.vat" ? code.data?.vatRate : s.key === "finance.tsu" ? code.data?.tsuEmployerRate : undefined}
@@ -639,6 +640,30 @@ function ParametersCard() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * Plano 63 (10a): "Fora das faltas automáticas (horário fixo)" vê-se aqui, só para ler. Muda-se em
+ * RH → Horários por rever, pessoa a pessoa, com as regras de quem gere a ficha (o editor genérico
+ * deixava escrever a lista à mão, sem essas regras). O histórico fica em baixo.
+ */
+function NoShowSkipSummary({ item }: { item: SettingItem }) {
+  const list = (Array.isArray(item.value) ? item.value : []) as Array<{ employeeId: number; until: string; reason: string }>;
+  const today = lisbonDayOf(Date.now());
+  const active = list.filter((e) => typeof e.until === "string" && e.until >= today).sort((a, b) => a.until.localeCompare(b.until));
+  return (
+    <div className="space-y-1">
+      <p className="text-sm font-medium">{item.label}</p>
+      <p className="text-xs text-muted-foreground">{item.description}</p>
+      {item.invalid && <p className="text-xs text-red-700 dark:text-red-400">A lista gravada não é válida: até se gravar de novo em Horários por rever, ninguém fica de fora.</p>}
+      <p className="text-sm">
+        {active.length
+          ? <>{active.length} pessoa{active.length === 1 ? "" : "s"} fora das faltas automáticas (a primeira volta a contar depois de {`${active[0].until.slice(8, 10)}/${active[0].until.slice(5, 7)}/${active[0].until.slice(0, 4)}`}).</>
+          : <>Ninguém fora das faltas automáticas.</>}
+        {" "}<span className="text-muted-foreground">Vê quem e muda em Pessoas → Recursos Humanos → ⋮ → Horários por rever.</span>
+      </p>
     </div>
   );
 }
