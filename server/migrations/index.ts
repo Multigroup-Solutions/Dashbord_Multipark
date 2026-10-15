@@ -200,7 +200,7 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   // Plano MPV (F7): avisos da escala que só saem uma vez (extras_dia_alerts) e a fila das respostas automáticas às 5★ (review_auto_publish).
   ["0705", () => import("./migration_0705").then((m) => step(m.MIGRATION_0705_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0705))],
   // Plano 63 (passo 1): modo do ponto por pessoa, histórico, alertas, avisos lidos e rasto das picagens.
-  ["0720", () => import("./migration_0720").then((m) => step(m.MIGRATION_0720_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0720))],
+  ["0820", () => import("./migration_0820").then((m) => step(m.MIGRATION_0820_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0820))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
