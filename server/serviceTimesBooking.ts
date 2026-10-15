@@ -44,6 +44,13 @@ export interface BookingTimesEntry {
 }
 
 const ms = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? null : v);
+/**
+ * Notas que vêm do GPS (a chegada, a paragem, a precisão, a saída do P2):
+ * com o portão fechado também não vão para quem não é super admin.
+ */
+export const GPS_FLAGS: ReadonlySet<string> = new Set([
+  "chegada_a_pe", "chegada_ajustada", "posicao_duvidosa", "precisao_fraca", "inicio_no_terminal", "nosso_aproximado", "saida_do_p2_pelo_gps",
+]);
 const DELIVERY_KEYS: TimeMetric[] = ["fila", "transito", "cliente", "nosso", "total"];
 const PICKUP_KEYS: TimeMetric[] = ["cliente_recolha", "terminal", "ate_garagem", "p2", "ate_arrumado"];
 
@@ -106,7 +113,7 @@ export function bookingTimesView(rows: readonly ServiceRow[], o: { gate: GpsGate
         checkIn: ms(r.checkInAt), terminalExit: terminalOk ? ms(r.terminalExitAt) : null,
       },
       times, firstGarage: r.firstGarage ?? null, parkedGarage: r.parkedGarage ?? null,
-      flags: (r.flags ?? "").split(",").map((f) => f.trim()).filter(Boolean),
+      flags: (r.flags ?? "").split(",").map((f) => f.trim()).filter(Boolean).filter((f) => !GPS_FLAGS.has(f) || (kind === "entrega" ? transitOk : terminalOk)),
     };
   });
   return { entries, gpsNote: o.isSuperAdmin && !gate.visible ? "em calibração" : null };

@@ -82,6 +82,40 @@ describe("P9 — hora apertada (extras.tightUsesQueue)", () => {
     expect(pressureSummary(slots, "Lisboa", 3, null)).toEqual(pressureSummary(slots, "Lisboa"));
     expect(today.size).toBeGreaterThan(0);
   });
+  it("desligada: igual à regra antiga (cópia congelada da origin/main) em 300 grupos aleatórios", () => {
+    // a regra de antes desta fase, copiada tal e qual (tightThresholds + tightReason + tightHoursForDay)
+    const load = (s: PressureSlot) => (s.days > 0 ? (s.checkinsDone + s.checkoutsDone) / s.days : 0);
+    const oldHours = (sl: PressureSlot[], day: string, hs: number[]) => {
+      const loads = sl.map(load).filter((x) => x > 0);
+      const p75s = sl.filter((s) => s.deliveryN >= MIN_SAMPLE && s.deliveryP75 != null).map((s) => s.deliveryP75 as number);
+      const t = { load: loads.length ? percentile(loads, 0.8) : null, deliveryP75: p75s.length ? percentile(p75s, 0.8) : null };
+      const byKey = new Map(sl.map((s) => [`${s.weekday}:${s.hour}`, s]));
+      const wd = new Date(`${day}T12:00:00Z`).getUTCDay() || 7;
+      const out = new Map<number, { load: boolean; delivery: boolean }>();
+      for (const h of hs) {
+        const s = byKey.get(`${h >= 24 ? (wd % 7) + 1 : wd}:${h % 24}`);
+        if (!s) continue;
+        const byLoad = t.load != null && load(s) > 0 && load(s) >= t.load;
+        const byDelivery = t.deliveryP75 != null && s.deliveryN >= MIN_SAMPLE && s.deliveryP75 != null && s.deliveryP75 >= t.deliveryP75;
+        if (byLoad || byDelivery) out.set(h, { load: byLoad, delivery: byDelivery });
+      }
+      return out;
+    };
+    let tight = 0;
+    for (let g = 0; g < 300; g++) {
+      const sl: PressureSlot[] = [];
+      for (let wd = 1; wd <= 7; wd++) for (let h = 0; h < 24; h++) if (rnd() > 0.3) sl.push(slot(wd, h, { days: 1 + Math.floor(rnd() * 9), checkoutsDone: Math.floor(rnd() * 50), checkinsDone: Math.floor(rnd() * 30), deliveryN: Math.floor(rnd() * 12), deliveryP75: rnd() > 0.1 ? Math.round(rnd() * 90) : null }));
+      for (const day of ["2026-10-12", "2026-10-16", "2026-10-18"]) {
+        const now = tightHoursForDay(sl, day, hours, null);
+        expect(now).toEqual(oldHours(sl, day, hours));
+        tight += now.size;
+      }
+    }
+    expect(tight).toBeGreaterThan(100);
+    // o ecrã só passa a Fila quando o servidor a manda (definição ligada E cobertura ≥ 60 %)
+    expect(src("client/src/pages/ExtrasDiaPage.tsx")).toContain("queue ? { queue } : null");
+    expect(src("client/src/pages/extrasDia/PressureTab.tsx")).toContain("tg?.queue ? { queue: tg.queue } : null");
+  });
   it("desligada na cidade: o servidor nem manda a Fila (mesmo com cobertura cheia)", () => {
     const rows = Array.from({ length: 40 }, (_, i) => row({ q: 3 + (i % 7), refHour: 17 }));
     const t = pressureTimesFrom(rows, { from: "2026-10-01", to: "2026-10-14", isSuperAdmin: false, gate: OPEN.gate, targetMinutes: 15, tightUsesQueue: OFF });

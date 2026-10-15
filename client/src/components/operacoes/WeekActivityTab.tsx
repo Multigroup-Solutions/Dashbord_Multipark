@@ -45,7 +45,7 @@ const TIMES_BY_KIND: Record<WeekKind, Array<{ key: TimesPick; label: string; hel
     { key: "fila", label: "Fila", help: "da chamada do cliente (ou do pendente) até pegar no carro" },
     { key: "transito", label: "Trânsito", help: "de pegar no carro até chegar ao terminal (GPS)" },
     { key: "nosso", label: "Nosso tempo", help: "Fila + Trânsito" },
-    { key: "meta", label: "% na meta", help: "entregas com o nosso tempo dentro da meta" },
+    { key: "meta", label: "% na meta", help: "entregas com o nosso tempo dentro da meta (aqui mais escuro = mais na meta, melhor)" },
     { key: "cliente", label: "Cliente", help: "do terminal à assinatura (espera pelo cliente)" },
     { key: "total", label: "Total", help: "da chamada (ou do pendente) à assinatura" },
   ],
@@ -55,6 +55,8 @@ const TIMES_BY_KIND: Record<WeekKind, Array<{ key: TimesPick; label: string; hel
     { key: "p2", label: "No P2", help: "do P2 até ir para um parque" },
   ],
 };
+/** Cobertura (% medidos) com vírgula decimal: "62,5 %"; sem valor "—". */
+const fmtCoverage = (v: number | null | undefined) => (v == null ? "—" : `${String(Math.round(v * 10) / 10).replace(".", ",")} %`);
 /** Valor de uma célula dos tempos: p75 em minutos (ou a % na meta); null = sem casos suficientes. */
 function timesCellValue(c: GridCell | undefined, pick: TimesPick): number | null {
   if (!c) return null;
@@ -228,7 +230,7 @@ export default function WeekActivityTab() {
               ? kind === "entregas" ? "Carros entregues (entrega feita) em cada hora." : "Carros recolhidos (recolha feita) em cada hora."
               : measure === "tempo"
                 ? `Minutos entre o início de ${kind === "entregas" ? "uma entrega" : "uma recolha"} e o início do serviço seguinte do mesmo condutor (a métrica da Pressão), dos serviços começados nessa hora. Mostra-se o p75: em 3 de cada 4 vezes foi isto ou menos.`
-                : `${TIMES_BY_KIND[kind].find((o) => o.key === timesPick)?.label}: ${TIMES_BY_KIND[kind].find((o) => o.key === timesPick)?.help}. ${timesPick === "meta" ? "Mostra-se a %" : "Mostra-se o p75"}, pela hora em que ${kind === "entregas" ? "o cliente ligou (ou ficou pendente)" : "o cliente ligou (ou ficou em recolha)"}; células com menos de ${MIN_SAMPLE} casos ficam em branco. Medido em ${times?.cells.coverage[(timesPick === "meta" ? "nosso" : timesPick) as TimeMetric] ?? "—"} % na semana.`}
+                : `${TIMES_BY_KIND[kind].find((o) => o.key === timesPick)?.label}: ${TIMES_BY_KIND[kind].find((o) => o.key === timesPick)?.help}. ${timesPick === "meta" ? "Mostra-se a %" : "Mostra-se o p75"}, pela hora em que ${kind === "entregas" ? "o cliente ligou (ou ficou pendente)" : "o cliente ligou (ou ficou em recolha)"}; células com menos de ${MIN_SAMPLE} casos ficam em branco. Medido em ${fmtCoverage(times?.cells.coverage[(timesPick === "meta" ? "nosso" : timesPick) as TimeMetric])} na semana.`}
             {" "}Cada linha é um dia operacional (03:00 → 03:00): as colunas 00–02 são a madrugada a seguir, ainda desse dia.
           </p>
           {measure === "tempos" && !times?.available && <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-[10px] px-3 py-2">Ainda não há tempos guardados para esta semana: o cálculo da noite dos tempos está desligado ou ainda não correu.</p>}

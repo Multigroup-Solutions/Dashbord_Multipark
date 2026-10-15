@@ -20,11 +20,11 @@ import { useNow } from "@/hooks/useNow";
 
 // Tarefa 62 (P2c): os rótulos vêm de shared/livePhases.ts (fluxo A) — o cliente deixou de ter a sua cópia.
 const PHASE_TONE: Partial<Record<LivePhase, string>> = {
-  pending_checkout: "border-red-300 text-red-700",
-  at_delivery: "border-blue-300 text-blue-700",
-  checking_out: "border-blue-300 text-blue-700",
-  checking_in: "border-emerald-300 text-emerald-700",
-  moving: "border-violet-300 text-violet-700",
+  pending_checkout: "border-red-300 text-red-700 dark:border-red-700 dark:text-red-300",
+  at_delivery: "border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300",
+  checking_out: "border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300",
+  checking_in: "border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300",
+  moving: "border-violet-300 text-violet-700 dark:border-violet-700 dark:text-violet-300",
 };
 /** 15 out 2026: só "Na fila" tem a cor da meta (âmbar a partir da meta, vermelho a partir do dobro). */
 const QUEUE_TONE: Record<Exclude<QueueTone, null>, string> = {
@@ -32,7 +32,7 @@ const QUEUE_TONE: Record<Exclude<QueueTone, null>, string> = {
   late: "border-red-400 bg-red-50 text-red-800 dark:bg-red-950/30 dark:text-red-300",
 };
 /** Na fila, ainda dentro da meta: sem cor de alerta (o vermelho de antes era para qualquer pendente). */
-const QUEUE_OK = "border-slate-300 text-slate-700 dark:text-slate-300";
+const QUEUE_OK = "border-slate-300 text-slate-700 dark:border-slate-600 dark:text-slate-300";
 const APPLIES_LABELS: Record<string, string> = { CHECK_IN: "recolhas", CHECK_OUT: "entregas", BOTH: "recolhas e entregas" };
 const eur = (n: number | null) => (n == null ? "" : `${n.toFixed(2).replace(".", ",")} €`);
 const place = (c: { garage: string | null; spot: string | null }) => [c.garage, c.spot].filter(Boolean).join(" · ");

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { elapsedMinutes, fmtElapsed, liveTimer, queueTone } from "../shared/liveTimers";
 import { mapLiveCar, type LiveCar, type ShiftState } from "./multiparkDb/shiftState";
 import { draftPartsFromLive } from "./shiftHandoverDraft";
-import { bookingRowsLive, bookingTimesView, buildBookingScopeSql } from "./serviceTimesBooking";
+import { GPS_FLAGS, bookingRowsLive, bookingTimesView, buildBookingScopeSql } from "./serviceTimesBooking";
 import { buildServiceBookingHistorySql, buildServiceHistorySql, mapServiceHistoryRow } from "./multiparkDb/serviceRows";
 import { assertReadOnlySql } from "./multiparkDb/client";
 import { DEFAULT_GARAGE_ROLES, type ServiceEvent } from "../shared/serviceTimes";
@@ -103,6 +103,16 @@ describe("P10 — Ficha da reserva: cada tempo com a fonte e o motivo", () => {
     expect(o.entries.find((e) => e.kind === "entrega")!.times.find((t) => t.key === "transito")!.hidden).toBe("Sem dados suficientes nesta cidade e dia");
     const ok = bookingTimesView(withGps, { gate: { visible: true, minCoveragePct: 60, minN: 20 }, isSuperAdmin: false, open: () => true });
     expect(ok.entries.find((e) => e.kind === "entrega")!.times.find((t) => t.key === "transito")!.ms).toBe(12 * MIN);
+  });
+  it("portão fechado: as notas que vêm do GPS também não vão (as outras sim)", () => {
+    const flagged: ServiceRow[] = rows.map((r) => (r.kind === "entrega" ? { ...r, flags: "precisao_fraca,chegada_ajustada,condutor_esperou,chamada_perdida" } : { ...r, flags: "saida_do_p2_pelo_gps,garagem_sem_papel" }));
+    const closed = { visible: false, minCoveragePct: 60, minN: 20 };
+    const v = bookingTimesView(flagged, { gate: closed, isSuperAdmin: false });
+    expect(v.entries.find((e) => e.kind === "entrega")!.flags).toEqual(["condutor_esperou", "chamada_perdida"]);
+    expect(v.entries.find((e) => e.kind === "recolha")!.flags).toEqual(["garagem_sem_papel"]);
+    for (const f of GPS_FLAGS) expect(JSON.stringify(v)).not.toContain(f);
+    const s = bookingTimesView(flagged, { gate: closed, isSuperAdmin: true });
+    expect(s.entries.find((e) => e.kind === "entrega")!.flags).toContain("precisao_fraca");
   });
   it("sem medição mostra o motivo, nunca 0", () => {
     const v = bookingTimesView(rows, { gate: { visible: false, minCoveragePct: 60, minN: 20 }, isSuperAdmin: true });

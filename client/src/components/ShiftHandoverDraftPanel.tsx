@@ -128,7 +128,7 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
             const t = liveTimer("pending_checkout", b.sinceAt, now, draft.targetMinutes ?? 15);
             return (
               <p key={b.externalId}>
-                {t?.mins != null ? <span className={`tabular-nums ${t.tone === "late" ? "text-red-700 font-semibold" : t.tone === "warn" ? "text-amber-700 font-semibold" : ""}`}>na fila há {fmtElapsed(t.mins)}</span> : b.since}
+                {t?.mins != null ? <span className={`tabular-nums ${t.tone === "late" ? "text-red-700 dark:text-red-400 font-semibold" : t.tone === "warn" ? "text-amber-700 dark:text-amber-400 font-semibold" : ""}`}>na fila há {fmtElapsed(t.mins)}</span> : b.since}
                 {t?.mins != null && b.since ? <span className="text-muted-foreground"> (desde {b.since})</span> : null} · {b.bookingNumber ?? b.externalId} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}
               </p>
             );

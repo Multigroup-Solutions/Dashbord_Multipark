@@ -36,7 +36,7 @@ const TIMES_OPTIONS: Array<{ key: TimesPick; label: string; kind: "Entregas" | "
   { key: "fila", label: "Fila", kind: "Entregas", help: "Da chamada do cliente (ou do pendente) até o condutor pegar no carro: mostra como está o trabalho e serve para acertar os extras." },
   { key: "transito", label: "Trânsito", kind: "Entregas", help: "De pegar no carro até chegar ao terminal (paragem pelo GPS)." },
   { key: "nosso", label: "Nosso tempo", kind: "Entregas", help: "Fila + Trânsito: \"entregámos em X min\" (a meta é a das Definições)." },
-  { key: "meta", label: "% na meta", kind: "Entregas", help: "Entregas com o nosso tempo dentro da meta, das que o têm medido." },
+  { key: "meta", label: "% na meta", kind: "Entregas", help: "Entregas com o nosso tempo dentro da meta, das que o têm medido. Aqui mais escuro = mais entregas na meta (melhor)." },
   { key: "cliente", label: "Cliente", kind: "Entregas", help: "Do terminal à assinatura: a espera pelo cliente (não é tempo nosso)." },
   { key: "total", label: "Total", kind: "Entregas", help: "Da chamada (ou do pendente) à assinatura do cliente." },
   { key: "cliente_recolha", label: "Cliente", kind: "Recolhas", help: "Da chamada (ou do \"em recolha\") ao check-in: quanto o cliente demora a chegar." },
