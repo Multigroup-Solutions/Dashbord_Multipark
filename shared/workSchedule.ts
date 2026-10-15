@@ -145,7 +145,7 @@ export type DayPlan =
 export interface DayPlanInput {
   /** dia de CALENDÁRIO (Lisboa) */
   calendarDay: string;
-  /** linhas do horário fixo DESTA pessoa; com dias duplicados ganha a de id mais baixo */
+  /** linhas do horário fixo DESTA pessoa; com dias duplicados ganha a de trabalho de id mais baixo (fixedRowOn) */
   schedules: readonly FixedScheduleRow[];
   /** exceções DESTA pessoa (ativas; com duas no mesmo dia ganha a mais recente) */
   overrides?: readonly ScheduleOverrideRow[];
@@ -177,18 +177,28 @@ export function activeOverrideOn(overrides: readonly ScheduleOverrideRow[], day:
   return best;
 }
 
-/** A linha do horário fixo desse dia da semana: com duplicados, a de id mais baixo (sem id, a 1.ª da lista). PURA. */
+const isWork = (s: FixedScheduleRow) => !(s.isWorkDay === false || Number(s.isWorkDay) === 0);
+
+/**
+ * A linha do horário fixo desse dia da semana. Com dias duplicados (não há
+ * UNIQUE pessoa+dia) ganha a de TRABALHO de id mais baixo (sem id, a 1.ª da
+ * lista); só quando nenhuma é de trabalho fica a folga. É o que a Avaliação e
+ * as faltas sempre leram (a consulta delas só traz `isWorkDay = 1`; o 10a
+ * escolhe a de id mais baixo entre essas) e o que a folha conta como dia de
+ * trabalho (qualquer linha de trabalho) — assim o ecrã, o Perfil e os
+ * leitores dizem o mesmo. PURA.
+ */
 export function fixedRowOn(schedules: readonly FixedScheduleRow[], weekday: number): FixedScheduleRow | null {
   let best: FixedScheduleRow | null = null;
   for (const s of schedules) {
     if (Number(s.weekday) !== weekday) continue;
     if (!best) { best = s; continue; }
-    if (s.id != null && best.id != null && s.id < best.id) best = s;
+    const sw = isWork(s), bw = isWork(best);
+    if (sw !== bw) { if (sw) best = s; continue; }
+    if (s.id != null && best.id != null && Number(s.id) < Number(best.id)) best = s;
   }
   return best;
 }
-
-const isWork = (s: FixedScheduleRow) => !(s.isWorkDay === false || Number(s.isWorkDay) === 0);
 
 /**
  * O horário de uma pessoa num dia de CALENDÁRIO, por esta ordem (plano 63, §10.3):
@@ -243,12 +253,15 @@ export function planInstants(calendarDay: string, startHour: number, endHour: nu
  * mesmo que antes do passo 10b. PURA.
  */
 export function fixedScheduledStarts(startDay: string, endDay: string, schedules: readonly FixedScheduleRow[], leaves: readonly LeaveRow[] = [], overrides: readonly ScheduleOverrideRow[] = []): FixedStart[] {
+  // primeiro as linhas de trabalho (a mesma ordem de pessoas de antes do 10b), depois as folgas
   const byEmp = new Map<number, FixedScheduleRow[]>();
-  for (const s of schedules) {
-    if (!s.employeeId) continue;
-    const list = byEmp.get(s.employeeId) ?? [];
-    list.push(s);
-    byEmp.set(s.employeeId, list);
+  for (const work of [true, false]) {
+    for (const s of schedules) {
+      if (!s.employeeId || isWork(s) !== work) continue;
+      const list = byEmp.get(s.employeeId) ?? [];
+      list.push(s);
+      byEmp.set(s.employeeId, list);
+    }
   }
   const overridesOf = new Map<number, ScheduleOverrideRow[]>();
   for (const o of overrides) {

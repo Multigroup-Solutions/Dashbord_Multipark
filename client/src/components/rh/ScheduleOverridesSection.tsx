@@ -37,11 +37,16 @@ export function ScheduleOverridesSection({ employeeId }: { employeeId: number })
 
   const refresh = () => { utils.rh.weekends.forEmployee.invalidate({ employeeId }); utils.rh.weekends.mine.invalidate(); };
   const set = trpc.rh.weekends.set.useMutation({
-    onSuccess: (r) => { refresh(); toast.success(r.unchanged ? "Já estava assim." : r.replaced ? "Exceção substituída (a anterior ficou cancelada)." : "Exceção marcada."); setOpen(false); setNote(""); },
+    onSuccess: (r) => {
+      refresh();
+      const comp = r.compensationCancelled ? ` A folga de compensação de ${dayLabelPt(r.compensationCancelled)} também foi cancelada.` : "";
+      toast.success(r.unchanged ? "Já estava assim." : `${r.replaced ? "Exceção substituída (a anterior ficou cancelada)." : "Exceção marcada."}${comp}`);
+      setOpen(false); setNote("");
+    },
     onError: (e) => toast.error(e.message),
   });
   const cancel = trpc.rh.weekends.cancel.useMutation({
-    onSuccess: () => { refresh(); toast.success("Exceção cancelada: nesse dia volta o horário fixo."); },
+    onSuccess: (r) => { refresh(); toast.success(`Exceção cancelada: nesse dia volta o horário fixo.${r.compensationCancelled ? ` A folga de compensação de ${dayLabelPt(r.compensationCancelled)} também foi cancelada.` : ""}`); },
     onError: (e) => toast.error(e.message),
   });
 

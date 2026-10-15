@@ -110,22 +110,71 @@ export function proposeCompensationDay(p: PersonSchedule, workedDay: string, tak
 /**
  * Cada dia de serviço (exceção "trabalha" num dia que o horário fixo não
  * tinha) com a sua folga de compensação (exceção "folga" com o motivo
- * "compensação", até 7 dias antes ou depois; a mais perto, cada folga só
- * serve um dia) ou null. PURA.
+ * "compensação", até 7 dias antes ou depois) ou null. Cada folga só serve um
+ * dia, e os pares mais perto juntam-se primeiro (um serviço sem folga duas
+ * semanas antes nunca "rouba" a folga do sábado ao lado); empate: a folga
+ * depois do serviço, depois o serviço mais antigo. PURA.
  */
 export function compensationMatches(p: PersonSchedule, workedDays: readonly string[]): Map<string, string | null> {
-  const comps = p.overrides
+  const comps = Array.from(new Set(p.overrides
     .filter((o) => o.kind === "off" && o.reason === "compensation" && !(o.cancelledAt != null && String(o.cancelledAt) !== ""))
-    .map((o) => o.day).sort();
-  const used = new Set<string>();
-  const out = new Map<string, string | null>();
-  for (const w of [...workedDays].sort()) {
-    const dist = (c: string) => Math.abs(Date.parse(`${c}T00:00:00Z`) - Date.parse(`${w}T00:00:00Z`)) / 86_400_000;
-    const best = comps.filter((c) => !used.has(c) && dist(c) <= 7).sort((a, b) => dist(a) - dist(b) || (a > w ? -1 : 1))[0] ?? null;
-    if (best) used.add(best);
-    out.set(w, best);
+    .map((o) => o.day))).sort();
+  const worked = Array.from(new Set(workedDays)).sort();
+  const dist = (a: string, b: string) => Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000;
+  const pairs: Array<{ w: string; c: string; d: number }> = [];
+  for (const w of worked) for (const c of comps) { const d = dist(w, c); if (d <= 7) pairs.push({ w, c, d }); }
+  pairs.sort((a, b) => a.d - b.d || (a.c > a.w ? 0 : 1) - (b.c > b.w ? 0 : 1) || a.w.localeCompare(b.w) || a.c.localeCompare(b.c));
+  const out = new Map<string, string | null>(worked.map((w) => [w, null]));
+  const usedC = new Set<string>();
+  for (const { w, c } of pairs) {
+    if (out.get(w) || usedC.has(c)) continue;
+    out.set(w, c);
+    usedC.add(c);
   }
   return out;
+}
+
+/**
+ * Os dias de serviço (que precisam de folga) entre `from` e `to`, cada um com a
+ * folga de compensação que o serve (ou null) — a mesma conta no quadro, ao
+ * marcar e ao cancelar, para uma folga nunca servir dois dias. PURA.
+ */
+export function compensationMap(p: PersonSchedule, from: string, to: string): Map<string, string | null> {
+  const worked: string[] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) if (needsCompensation(p, d)) worked.push(d);
+  return compensationMatches(p, worked);
+}
+
+/** A folga de compensação que serve este dia de serviço (ou null). PURA. */
+export function compensationServing(p: PersonSchedule, day: string): string | null {
+  if (!needsCompensation(p, day)) return null;
+  return compensationMap(p, addDays(day, -14), addDays(day, 14)).get(day) ?? null;
+}
+
+/**
+ * As folgas de compensação a marcar para estes dias de serviço (PURA): só os
+ * dias que precisam (o horário fixo não os tinha) e que ainda não têm uma
+ * folga a servi-los; o dia útil mais perto em que a pessoa trabalha pelo
+ * horário fixo, de preferência no MESMO mês; nunca num dia passado nem num dia
+ * que já tem exceção; cada folga serve um só dia. `without`: os dias sem
+ * nenhum dia útil livre à volta.
+ */
+export function planCompensations(p: PersonSchedule, workedDays: readonly string[], today: string): { compensations: Array<{ forDay: string; day: string; sameMonth: boolean }>; without: string[] } {
+  const need = Array.from(new Set(workedDays)).sort().filter((d) => needsCompensation(p, d));
+  if (!need.length) return { compensations: [], without: [] };
+  const served = compensationMap(p, addDays(need[0], -14), addDays(need[need.length - 1], 14));
+  const taken = new Set(p.overrides.filter((o) => !(o.cancelledAt != null && String(o.cancelledAt) !== "")).map((o) => o.day));
+  for (const d of need) for (let k = -7; k <= 7; k++) { const c = addDays(d, k); if (c < today) taken.add(c); }
+  const compensations: Array<{ forDay: string; day: string; sameMonth: boolean }> = [];
+  const without: string[] = [];
+  for (const d of need) {
+    if (served.get(d)) continue;
+    const prop = proposeCompensationDay(p, d, taken);
+    if (!prop) { without.push(d); continue; }
+    taken.add(prop.day);
+    compensations.push({ forDay: d, day: prop.day, sameMonth: prop.sameMonth });
+  }
+  return { compensations, without };
 }
 
 // ─── Quadro e avisos ─────────────────────────────────────────────────────────
@@ -149,10 +198,11 @@ export interface BoardWeek { saturday: string; sunday: string; days: [BoardDay, 
 
 /** Quem está de serviço (e quem tem folga marcada) em cada sábado e domingo. PURA. */
 export function weekendBoard(people: readonly PersonSchedule[], saturdays: readonly string[], city?: string | null): BoardWeek[] {
+  // a mesma conta de marcar e de cancelar: todos os dias de serviço à volta (também um feriado a meio da semana)
   const comp = new Map<number, Map<string, string | null>>();
-  for (const p of people) {
-    const worked = saturdays.flatMap((s) => [s, addDays(s, 1)]).filter((d) => needsCompensation(p, d));
-    comp.set(p.employeeId, compensationMatches(p, worked));
+  if (saturdays.length) {
+    const from = addDays(saturdays[0], -7), to = addDays(saturdays[saturdays.length - 1], 8);
+    for (const p of people) comp.set(p.employeeId, compensationMap(p, from, to));
   }
   const dayOf = (day: string): BoardDay => {
     const onDuty: BoardDuty[] = [], off: BoardOff[] = [];

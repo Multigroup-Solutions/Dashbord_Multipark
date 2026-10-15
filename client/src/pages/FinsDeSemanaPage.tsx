@@ -26,7 +26,7 @@ type City = "lisbon" | "porto" | "faro";
 const CITY_LABELS: Record<City, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
 const WEEK_OPTIONS = [4, 8, 12, 26];
 const STATUS_LABELS: Record<string, string> = {
-  create: "marca", existing: "já tem exceção nesse dia", leave: "de férias/baixa", past: "dia passado", forbidden: "não podes marcar", inactive: "já não está na cidade",
+  create: "marca", existing: "já tem exceção nesse dia", leave: "de férias/baixa", past: "dia passado", forbidden: "não podes marcar", inactive: "já não está na cidade", contract: "fora do contrato",
 };
 
 const weekendTitle = (sat: string) => {
@@ -48,7 +48,13 @@ export default function FinsDeSemanaPage() {
   const [rotation, setRotation] = useState(false);
 
   const set = trpc.rh.weekends.set.useMutation({ onSuccess: () => { refresh(); toast.success("Folga marcada nesse dia."); }, onError: (e) => toast.error(e.message) });
-  const cancel = trpc.rh.weekends.cancel.useMutation({ onSuccess: () => { refresh(); toast.success("Cancelado: nesse dia volta o horário fixo."); }, onError: (e) => toast.error(e.message) });
+  const cancel = trpc.rh.weekends.cancel.useMutation({
+    onSuccess: (r) => {
+      refresh();
+      toast.success(`Cancelado: nesse dia volta o horário fixo.${r.compensationCancelled ? ` A folga de compensação de ${dayLabelPt(r.compensationCancelled)} também foi cancelada.` : ""}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   if (status.isLoading) return <div className="py-24 flex justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   if (status.error) return <div className="p-4"><QueryErrorNote error={status.error} onRetry={() => status.refetch()} retrying={status.isFetching} what="os fins de semana" /></div>;
@@ -145,12 +151,12 @@ export default function FinsDeSemanaPage() {
                       return (
                         <div key={p.employeeId} className="rounded-lg border bg-primary/5 px-2 py-1.5 text-xs space-y-0.5">
                           <div className="flex items-center gap-1.5">
-                            <span className="font-semibold truncate">{p.name}</span>
+                            <span className="font-semibold truncate min-w-0">{p.name}</span>
                             <span className="text-primary font-semibold shrink-0">{p.startTime}–{p.endTime ?? "?"}</span>
                             {p.source === "fixed" && <span className="text-[11px] text-muted-foreground shrink-0">horário fixo</span>}
                             {canEdit && p.source === "override" && p.overrideId != null && (
                               <Button size="sm" variant="ghost" className="ml-auto h-6 w-6 p-0 text-destructive" aria-label={`Tirar ${p.name} de serviço`} disabled={cancel.isPending}
-                                onClick={() => { if (confirm(`Tirar ${p.name} de serviço em ${dayLabelPt(d.day)}? Nesse dia volta o horário fixo.`)) cancel.mutate({ id: p.overrideId! }); }}>
+                                onClick={() => { if (confirm(`Tirar ${p.name} de serviço em ${dayLabelPt(d.day)}? Nesse dia volta o horário fixo${p.compensationDay ? ` e a folga de compensação de ${dayLabelPt(p.compensationDay)} também é cancelada` : ""}.`)) cancel.mutate({ id: p.overrideId! }); }}>
                                 <X className="w-3.5 h-3.5" />
                               </Button>
                             )}
@@ -173,7 +179,7 @@ export default function FinsDeSemanaPage() {
                       const canEdit = people.find((x) => x.employeeId === p.employeeId)?.canEdit;
                       return (
                         <div key={`off-${p.employeeId}`} className="flex items-center gap-1.5 rounded-lg border border-dashed px-2 py-1 text-xs text-muted-foreground">
-                          <span className="truncate">{p.name}</span>
+                          <span className="truncate min-w-0">{p.name}</span>
                           <span className="shrink-0">· folga{p.reason === "weekend" ? " (não é a vez)" : ""}</span>
                           {canEdit && p.overrideId != null && (
                             <Button size="sm" variant="ghost" className="ml-auto h-6 w-6 p-0" aria-label={`Cancelar a folga de ${p.name}`} disabled={cancel.isPending}
@@ -280,7 +286,12 @@ function RotationDialog({ city, saturdays, weeks, onClose, onDone }: {
   const [count, setCount] = useState(8);
   const [compensation, setCompensation] = useState(true);
   const input = { city, patternFrom, patternTo, weeks: count, compensation };
-  const [preview, setPreview] = useState<null | { items: Array<{ saturday: string; day: string; name: string; kind: string; startTime: string | null; endTime: string | null; status: string }>; counts: Record<string, number> }>(null);
+  const [preview, setPreview] = useState<null | {
+    items: Array<{ saturday: string; day: string; name: string; kind: string; startTime: string | null; endTime: string | null; status: string }>;
+    counts: Record<string, number>;
+    compensations: Array<{ name: string; forDay: string; day: string; sameMonth: boolean }>;
+    withoutCompensation: Array<{ name: string; day: string }>;
+  }>(null);
   const run = trpc.rh.weekends.repeatRotation.useMutation({ onError: (e) => toast.error(e.message) });
   const doPreview = () => run.mutate({ ...input, dryRun: true }, { onSuccess: (r) => setPreview(r) });
   const apply = () => run.mutate({ ...input, dryRun: false }, {
@@ -342,6 +353,23 @@ function RotationDialog({ city, saturdays, weeks, onClose, onDone }: {
                   </ul>
                 </div>
               ))}
+              {preview.compensations.length > 0 && (
+                <div>
+                  <div className="font-medium text-muted-foreground">Folgas de compensação ({preview.compensations.length})</div>
+                  <ul className="pl-3">
+                    {preview.compensations.map((c, k) => (
+                      <li key={k} className={c.sameMonth ? "" : "text-amber-700 dark:text-amber-300"}>
+                        {c.name} · folga {dayLabelPt(c.day)} (serviço de {dayLabelPt(c.forDay)}){c.sameMonth ? "" : " — noutro mês"}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {preview.withoutCompensation.length > 0 && (
+                <div className="text-muted-foreground">
+                  Sem dia útil para a folga: {preview.withoutCompensation.map((w) => `${w.name} (${dayLabelPt(w.day)})`).join(", ")}
+                </div>
+              )}
             </div>
           )}
         </div>

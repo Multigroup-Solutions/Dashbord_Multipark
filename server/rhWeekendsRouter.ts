@@ -26,8 +26,8 @@ import {
 import { addDays } from "../shared/lisbonDay";
 import { OVERRIDE_REASONS, activeOverrideOn, fixedRowOn, weekdayOf, type ScheduleOverrideRow } from "../shared/workSchedule";
 import {
-  HHMM_RE, MAX_WEEKENDS, boardWarnings, compensationMatches, dayLabelPt, defaultDutyHours, isValidDay, isWeekendDay, needsCompensation, planOf,
-  proposeCompensationDay, rotationPattern, rotationTargets, saturdaysFrom, warningText, weekendBoard, type PersonSchedule,
+  HHMM_RE, MAX_WEEKENDS, boardWarnings, compensationMap, compensationServing, dayLabelPt, defaultDutyHours, isValidDay, isWeekendDay, planCompensations, planOf,
+  rotationPattern, rotationTargets, saturdaysFrom, warningText, weekendBoard, type PersonSchedule,
 } from "../shared/weekendRotation";
 
 type User = { id: number; role: string };
@@ -39,6 +39,10 @@ const hhmm = z.string().regex(HHMM_RE, "Hora inválida: usa HH:MM (ex.: 09:00)."
 const noteSchema = z.string().trim().max(255).optional().nullable();
 
 const fmtDay = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
+/** Extra (posto ou contrato): escala-se no Extras-Dia, sem exceções por data. */
+const isExtraEmp = (e: { position?: string | null }) => e.position === "extra" || (e as any).contractType === "extra";
+/** Até onde se marca para a frente (dias). */
+const MAX_AHEAD_DAYS = 400;
 
 async function assertWeekendsOn(): Promise<void> {
   if (!(await flagOn(WEEKENDS_FLAG))) throw new TRPCError({ code: "PRECONDITION_FAILED", message: WEEKENDS_OFF_MESSAGE });
@@ -64,7 +68,7 @@ async function assertCanMark(user: User, employeeId: number) {
   }
   const emp = (await getEmployeeById(employeeId))?.employee;
   if (!emp) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
-  if (emp.position === "extra" || (emp as any).contractType === "extra") {
+  if (isExtraEmp(emp)) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Os extras são escalados no Extras-Dia: as exceções por data são para quem tem horário fixo." });
   }
   if (!emp.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "A ficha está desativada." });
@@ -73,7 +77,7 @@ async function assertCanMark(user: User, employeeId: number) {
 
 /** Datas de hoje para a frente (até um ano); para trás, só dias que a Avaliação ainda não fechou. */
 async function assertDayOpen(day: string, today = todayLisbon()): Promise<void> {
-  if (day > addDays(today, 400)) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo um ano para a frente." });
+  if (day > addDays(today, MAX_AHEAD_DAYS)) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo um ano para a frente." });
   if (day >= today) return;
   const { readEvaluationClosedUntil } = await import("./evaluationClose");
   const closed = await readEvaluationClosedUntil();
@@ -120,28 +124,43 @@ async function loadCityPeople(user: User, city: City, from: string, to: string) 
   return { staff, people, canEdit };
 }
 
+/** Férias/baixas nesse dia (as exceções não ganham a uma ausência registada). */
+const onLeave = (p: PersonSchedule, day: string) => p.leaves.some((l) => day >= l.fromDate && day <= l.toDate);
+/** Dentro do contrato da ficha nesse dia. */
+const inContract = (p: PersonSchedule, day: string) => (!p.contractStart || day >= String(p.contractStart).slice(0, 10)) && (!p.contractEnd || day <= String(p.contractEnd).slice(0, 10));
+/** Junta uma exceção acabada de marcar (ou só simulada, sem id) à pessoa em memória. */
+const pushOverride = (p: PersonSchedule, o: Omit<ScheduleOverrideRow, "employeeId" | "contractStart" | "contractEnd">) =>
+  (p.overrides as ScheduleOverrideRow[]).push({ ...o, employeeId: p.employeeId, contractStart: p.contractStart, contractEnd: p.contractEnd });
+/** Janela de leitura de uma pessoa à volta de um dia (as folgas de compensação servem até 7 dias para cada lado). */
+const personWindow = (from: string, to: string = from) => ({ from: addDays(from, -21), to: addDays(to, 21) });
+
 /**
- * Folgas de compensação para os dias de serviço que o horário fixo não tinha e
- * ainda não têm folga: o dia útil mais perto no MESMO mês (senão noutro, com
- * aviso). Nunca num dia passado nem num dia que já tem exceção.
+ * Grava as folgas de compensação planeadas (planCompensations: o dia útil mais
+ * perto no MESMO mês, senão noutro, com aviso; nunca num dia passado nem num
+ * dia que já tem exceção) e junta-as à pessoa em memória.
  */
-async function addCompensations(person: PersonSchedule, workedDays: readonly string[], userId: number, city: string | null, today: string) {
-  const compensations: Array<{ forDay: string; day: string; sameMonth: boolean }> = [];
-  const without: string[] = [];
-  const need = workedDays.filter((d) => needsCompensation(person, d));
-  const matched = compensationMatches(person, need);
-  const taken = new Set(person.overrides.map((o) => o.day));
-  for (const d of need) for (let k = -7; k <= 7; k++) { const c = addDays(d, k); if (c < today) taken.add(c); }
-  for (const d of need) {
-    if (matched.get(d)) continue;
-    const p = proposeCompensationDay(person, d, taken);
-    if (!p) { without.push(d); continue; }
-    const r = await setOverride({ employeeId: person.employeeId, day: p.day, kind: "off", reason: "compensation", note: `Compensação do serviço de ${dayLabelPt(d)}`, city, userId });
-    taken.add(p.day);
-    (person.overrides as ScheduleOverrideRow[]).push({ id: r.id, employeeId: person.employeeId, day: p.day, kind: "off", reason: "compensation", contractStart: person.contractStart, contractEnd: person.contractEnd });
-    compensations.push({ forDay: d, day: p.day, sameMonth: p.sameMonth });
+async function writeCompensations(person: PersonSchedule, plan: ReturnType<typeof planCompensations>, userId: number, city: string | null) {
+  for (const c of plan.compensations) {
+    const r = await setOverride({ employeeId: person.employeeId, day: c.day, kind: "off", reason: "compensation", note: `Compensação do serviço de ${dayLabelPt(c.forDay)}`, city, userId });
+    pushOverride(person, { id: r.id, day: c.day, kind: "off", reason: "compensation" });
   }
-  return { compensations, without };
+}
+
+/**
+ * Tirar alguém de serviço (cancelar, ou trocar por folga) deixa sem razão a
+ * folga de compensação que servia esse dia: cancela-se também (nunca se
+ * apaga), se ainda não passou e já não serve outro dia de serviço. Devolve o
+ * dia da folga cancelada, ou null.
+ */
+async function releaseCompensation(employeeId: number, day: string, servedBefore: string | null, userId: number, today: string): Promise<string | null> {
+  if (!servedBefore || servedBefore < today) return null;
+  const win = personWindow(day);
+  const after = await loadPerson(employeeId, win.from, win.to);
+  if (compensationServing(after, day) === servedBefore) return null; // ainda serve este dia (ex.: só mudaram as horas)
+  if (Array.from(compensationMap(after, addDays(servedBefore, -7), addDays(servedBefore, 7)).values()).includes(servedBefore)) return null;
+  const comp = after.overrides.find((o) => o.day === servedBefore && o.kind === "off" && o.reason === "compensation" && o.id != null);
+  if (!comp) return null;
+  return (await cancelOverride(Number(comp.id), userId)) ? servedBefore : null;
 }
 
 export const weekendsRouter = router({
@@ -162,9 +181,12 @@ export const weekendsRouter = router({
       const ref = await rhEmployeeRef(input.employeeId);
       if (!isRhAdmin(viewer) && (!ref || !canViewTimeAndSchedule(viewer, ref))) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
       if (!isOwn(viewer, input.employeeId)) await assertEmployeeAccess(input.employeeId);
+      // os extras escalam-se no Extras-Dia: a secção não aparece na ficha deles
+      const emp = (await getEmployeeById(input.employeeId))?.employee;
+      if (!emp || isExtraEmp(emp)) return { enabled: false as const, canEdit: false, items: [] as OverrideRecord[] };
       const today = todayLisbon();
       const items = await listOverrides([input.employeeId], addDays(today, -31), addDays(today, 400), { includeCancelled: input.includeCancelled });
-      const canEdit = !!ref && canAccess(ctx.user as any, "rh", "manage") && canMarkScheduleOverride(viewer, ref);
+      const canEdit = !!ref && !!emp.isActive && canAccess(ctx.user as any, "rh", "manage") && canMarkScheduleOverride(viewer, ref);
       return { enabled: true as const, canEdit, items };
     }),
 
@@ -184,11 +206,24 @@ export const weekendsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const { emp } = await assertCanMark(ctx.user, input.employeeId);
-      await assertDayOpen(input.day);
+      const today = todayLisbon();
+      await assertDayOpen(input.day, today);
+      const win = personWindow(input.day);
+      const before = await loadPerson(input.employeeId, win.from, win.to);
+      if (input.kind === "work" && onLeave(before, input.day)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `${before.name} está de férias ou de baixa a ${dayLabelPt(input.day)}: a ausência ganha à exceção. Marca outra pessoa.` });
+      }
+      const servedBefore = compensationServing(before, input.day);
       const city = (await cityResolver())(emp.projectId ?? null);
       const r = await setOverride({ ...input, city, userId: ctx.user.id });
-      if (!r.unchanged) await notifyOverrideChanges(input.employeeId, [{ day: input.day, kind: input.kind, startTime: input.startTime, endTime: input.endTime, reason: input.reason }], ctx.user.id);
-      return { id: r.id, unchanged: r.unchanged, replaced: !!r.replaced };
+      let compensationCancelled: string | null = null;
+      if (!r.unchanged) {
+        const changes: OverrideChange[] = [{ day: input.day, kind: input.kind, startTime: input.startTime, endTime: input.endTime, reason: input.reason }];
+        compensationCancelled = await releaseCompensation(input.employeeId, input.day, servedBefore, ctx.user.id, today);
+        if (compensationCancelled) changes.push({ day: compensationCancelled, kind: "off", reason: "compensation", cancelled: true });
+        await notifyOverrideChanges(input.employeeId, changes, ctx.user.id);
+      }
+      return { id: r.id, unchanged: r.unchanged, replaced: !!r.replaced, compensationCancelled };
     }),
 
   cancel: protectedProcedure
@@ -197,10 +232,19 @@ export const weekendsRouter = router({
       const o = await getOverride(input.id);
       if (!o) throw new TRPCError({ code: "NOT_FOUND", message: "Exceção não encontrada." });
       await assertCanMark(ctx.user, o.employeeId);
-      await assertDayOpen(o.day);
+      const today = todayLisbon();
+      await assertDayOpen(o.day, today);
+      const win = personWindow(o.day);
+      const servedBefore = o.active && o.kind === "work" ? compensationServing(await loadPerson(o.employeeId, win.from, win.to), o.day) : null;
       const before = await cancelOverride(input.id, ctx.user.id);
-      if (before) await notifyOverrideChanges(o.employeeId, [{ day: o.day, kind: o.kind, cancelled: true }], ctx.user.id);
-      return { success: true, alreadyCancelled: !before };
+      let compensationCancelled: string | null = null;
+      if (before) {
+        const changes: OverrideChange[] = [{ day: o.day, kind: o.kind, cancelled: true }];
+        compensationCancelled = await releaseCompensation(o.employeeId, o.day, servedBefore, ctx.user.id, today);
+        if (compensationCancelled) changes.push({ day: compensationCancelled, kind: "off", reason: "compensation", cancelled: true });
+        await notifyOverrideChanges(o.employeeId, changes, ctx.user.id);
+      }
+      return { success: true, alreadyCancelled: !before, compensationCancelled };
     }),
 
   // ── RH → Fins de semana
@@ -241,6 +285,10 @@ export const weekendsRouter = router({
       const { emp } = await assertCanMark(ctx.user, input.employeeId);
       const today = todayLisbon();
       for (const d of days) await assertDayOpen(d, today);
+      const win = personWindow(days[0], days[days.length - 1]);
+      const person = await loadPerson(input.employeeId, win.from, win.to);
+      const away = days.filter((d) => onLeave(person, d));
+      if (away.length) throw new TRPCError({ code: "BAD_REQUEST", message: `${person.name} está de férias ou de baixa a ${away.map(dayLabelPt).join(" e ")}: marca outra pessoa.` });
       const city = (await cityResolver())(emp.projectId ?? null);
       const changes: OverrideChange[] = [];
       for (const d of days) {
@@ -249,8 +297,10 @@ export const weekendsRouter = router({
       }
       let compensations: Array<{ forDay: string; day: string; sameMonth: boolean }> = [], without: string[] = [];
       if (input.compensation) {
-        const person = await loadPerson(input.employeeId, addDays(days[0], -8), addDays(days[days.length - 1], 8));
-        ({ compensations, without } = await addCompensations(person, days, ctx.user.id, city, today));
+        const now = await loadPerson(input.employeeId, win.from, win.to);
+        const plan = planCompensations(now, days, today);
+        await writeCompensations(now, plan, ctx.user.id, city);
+        ({ compensations, without } = plan);
         for (const c of compensations) changes.push({ day: c.day, kind: "off", reason: "compensation" });
       }
       await notifyOverrideChanges(input.employeeId, changes, ctx.user.id);
@@ -283,50 +333,55 @@ export const weekendsRouter = router({
       if (patternSats.length > 12) throw new TRPCError({ code: "BAD_REQUEST", message: "O modelo tem no máximo 12 fins de semana." });
       const lastTarget = addDays(input.patternTo, 7 * input.weeks);
       const today = todayLisbon();
-      const { people, canEdit } = await loadCityPeople(ctx.user, input.city, addDays(input.patternFrom, -7), addDays(lastTarget, 8));
+      if (addDays(lastTarget, 1) > addDays(today, MAX_AHEAD_DAYS)) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo um ano para a frente: repete menos semanas." });
+      const { people, canEdit } = await loadCityPeople(ctx.user, input.city, addDays(input.patternFrom, -21), addDays(lastTarget, 22));
       const pattern = rotationPattern(people, patternSats);
       if (pattern.every((w) => !w.length)) throw new TRPCError({ code: "BAD_REQUEST", message: "Os fins de semana do modelo não têm ninguém marcado: marca-os primeiro com \"Pôr de serviço\"." });
       const byId = new Map(people.map((p) => [p.employeeId, p]));
-      type Status = "create" | "existing" | "leave" | "past" | "forbidden" | "inactive";
+      type Status = "create" | "existing" | "leave" | "past" | "forbidden" | "inactive" | "contract";
       const items = rotationTargets(pattern, input.patternTo, input.weeks).flatMap((t) => t.entries.map((e) => {
         const p = byId.get(e.employeeId);
         const status: Status = !p ? "inactive" : !canEdit.get(e.employeeId) ? "forbidden" : e.day < today ? "past"
-          : activeOverrideOn(p.overrides, e.day) ? "existing" : p.leaves.some((l) => e.day >= l.fromDate && e.day <= l.toDate) ? "leave" : "create";
+          : activeOverrideOn(p.overrides, e.day) ? "existing" : onLeave(p, e.day) ? "leave" : !inContract(p, e.day) ? "contract" : "create";
         return { saturday: t.saturday, day: e.day, employeeId: e.employeeId, name: p?.name ?? `#${e.employeeId}`, kind: e.kind, startTime: e.startTime, endTime: e.endTime, status };
       }));
-      const counts = items.reduce<Record<Status, number>>((acc, i) => ({ ...acc, [i.status]: acc[i.status] + 1 }), { create: 0, existing: 0, leave: 0, past: 0, forbidden: 0, inactive: 0 });
-      if (input.dryRun) return { dryRun: true as const, items, counts, compensations: [] as Array<{ employeeId: number; forDay: string; day: string; sameMonth: boolean }>, withoutCompensation: [] as Array<{ employeeId: number; day: string }> };
+      const counts = items.reduce<Record<Status, number>>((acc, i) => ({ ...acc, [i.status]: acc[i.status] + 1 }), { create: 0, existing: 0, leave: 0, past: 0, forbidden: 0, inactive: 0, contract: 0 });
+      // o mesmo caminho a ver (dryRun: só simula, nada se grava) e a marcar — o que se vê é o que se marca, folgas de compensação incluídas
       const changesOf = new Map<number, OverrideChange[]>();
       const workedOf = new Map<number, string[]>();
       for (const i of items.filter((x) => x.status === "create")) {
         const p = byId.get(i.employeeId)!;
-        const r = await setOverride({ employeeId: i.employeeId, day: i.day, kind: i.kind, startTime: i.startTime, endTime: i.endTime, reason: "weekend", note: "Repetir a rotação", city: input.city, userId: ctx.user.id });
-        (p.overrides as ScheduleOverrideRow[]).push({ id: r.id, employeeId: i.employeeId, day: i.day, kind: i.kind, startTime: i.startTime, endTime: i.endTime, reason: "weekend", contractStart: p.contractStart, contractEnd: p.contractEnd });
+        const id = input.dryRun ? null
+          : (await setOverride({ employeeId: i.employeeId, day: i.day, kind: i.kind, startTime: i.startTime, endTime: i.endTime, reason: "weekend", note: "Repetir a rotação", city: input.city, userId: ctx.user.id })).id;
+        pushOverride(p, { id, day: i.day, kind: i.kind, startTime: i.startTime, endTime: i.endTime, reason: "weekend" });
         changesOf.set(i.employeeId, [...(changesOf.get(i.employeeId) ?? []), { day: i.day, kind: i.kind, startTime: i.startTime, endTime: i.endTime, reason: "weekend" }]);
         if (i.kind === "work") workedOf.set(i.employeeId, [...(workedOf.get(i.employeeId) ?? []), i.day]);
       }
-      const compensations: Array<{ employeeId: number; forDay: string; day: string; sameMonth: boolean }> = [];
-      const withoutCompensation: Array<{ employeeId: number; day: string }> = [];
+      const compensations: Array<{ employeeId: number; name: string; forDay: string; day: string; sameMonth: boolean }> = [];
+      const withoutCompensation: Array<{ employeeId: number; name: string; day: string }> = [];
       if (input.compensation) {
         for (const [emp, days] of workedOf) {
           const p = byId.get(emp)!;
-          const r = await addCompensations(p, days, ctx.user.id, input.city, today);
-          for (const c of r.compensations) {
-            compensations.push({ employeeId: emp, ...c });
+          const plan = planCompensations(p, days, today);
+          if (input.dryRun) for (const c of plan.compensations) pushOverride(p, { id: null, day: c.day, kind: "off", reason: "compensation" });
+          else await writeCompensations(p, plan, ctx.user.id, input.city);
+          for (const c of plan.compensations) {
+            compensations.push({ employeeId: emp, name: p.name, ...c });
             changesOf.get(emp)!.push({ day: c.day, kind: "off", reason: "compensation" });
           }
-          for (const d of r.without) withoutCompensation.push({ employeeId: emp, day: d });
+          for (const d of plan.without) withoutCompensation.push({ employeeId: emp, name: p.name, day: d });
         }
       }
-      for (const [emp, changes] of changesOf) await notifyOverrideChanges(emp, changes, ctx.user.id);
-      return { dryRun: false as const, items, counts, compensations, withoutCompensation };
+      if (!input.dryRun) for (const [emp, changes] of changesOf) await notifyOverrideChanges(emp, changes, ctx.user.id);
+      return { dryRun: input.dryRun, items, counts, compensations, withoutCompensation };
     }),
 
   // ── Perfil → "O meu horário"
   mine: protectedProcedure.query(async ({ ctx }) => {
     if (!(await flagOn(WEEKENDS_FLAG))) return { enabled: false as const };
     const me = (await getEmployeeByUserId(ctx.user.id))?.employee;
-    if (!me) return { enabled: true as const, employeeId: null, fixed: [], weekends: [], exceptions: [] };
+    // sem ficha, ou extra (escala-se no Extras-Dia): o cartão não aparece
+    if (!me || isExtraEmp(me)) return { enabled: true as const, employeeId: null, fixed: [], weekends: [], exceptions: [] };
     const today = todayLisbon();
     const person = await loadPerson(me.id, addDays(today, -7), addDays(today, 120));
     const fixed = [1, 2, 3, 4, 5, 6, 0].map((weekday) => {

@@ -199,9 +199,9 @@ Cada funcionário tem o **seu horário fixo** (ficha → **Horário**: 07–17, 
 - **Uma por dia**: marcar outra no mesmo dia substitui a anterior. **Cancelar não apaga**: nesse dia volta o horário fixo e a cancelada continua em **Ver as canceladas**. Fica tudo no registo de atividade (Logs).
 - Nesse dia a exceção **ganha ao horário fixo**: no **atraso ao trabalho** (−5) da Avaliação e nas **possíveis faltas**. A ordem é: escala do Extras-Dia, depois a exceção da data, depois o horário fixo.
 - Num **feriado** não há horário fixo; com uma exceção "trabalha" nessa data conta (feriado de serviço).
-- Férias e baixas registadas e os dias fora do contrato continuam sem horário, mesmo com exceção.
+- Férias e baixas registadas e os dias fora do contrato continuam sem horário, mesmo com exceção. Por isso não dá para pôr de serviço (nem marcar "trabalha") num dia de férias ou de baixa: marca outra pessoa.
 - Para trás só se marca nos dias que a Avaliação ainda não fechou; para a frente, até um ano.
-- **Quem marca**: o supervisor da cidade, o RH (back office) e os administradores. Ninguém marca o próprio horário (menos os administradores). Os extras escalam-se no Extras-Dia.
+- **Quem marca**: o supervisor da cidade, o RH (back office) e os administradores. Ninguém marca o próprio horário, nem os administradores: marca-o outra pessoa. Os extras escalam-se no Extras-Dia.
 
 **RH → Fins de semana** (no menu **⋮** do RH; supervisor, back office e administradores)
 1. Escolhe a **cidade**, **a partir de** que dia e **quantos fins de semana** (4, 8, 12 ou 26).
@@ -209,8 +209,8 @@ Cada funcionário tem o **seu horário fixo** (ficha → **Horário**: 07–17, 
 3. **Pôr de serviço**: escolhe a pessoa, o sábado, o domingo ou os dois, e as horas. As horas vêm do horário dela nesse dia; sem ele, **09:00–18:00**.
 4. **Marcar a folga de compensação no mesmo mês** (ligado por omissão): a app marca a folga no **dia útil mais perto** em que a pessoa trabalha (a sexta antes do sábado, a segunda depois do domingo…), **no mesmo mês**. Se não houver nenhum nesse mês, fica no mês seguinte e aparece o aviso. Porquê: as horas fecham mês a mês; uma folga noutro mês não desconta e o dia de serviço paga-se como horas a mais.
 5. Quem tem o sábado no horário fixo mas **não é a vez**: carrega em **Folga** ao lado do nome (fica "folga (não é a vez)"; o **X** desfaz).
-6. O **X** ao lado de quem foi marcado tira-o de serviço (cancela a exceção; volta o horário fixo). A folga de compensação cancela-se à parte, na ficha.
-7. **Repetir a rotação**: escolhe os fins de semana do **modelo** (de um sábado a outro) e **quantas semanas** repetir. A mesma ordem continua: com o modelo A, B, C fica A, B, C, A, B, C… com as mesmas horas. **Ver o que vai marcar** mostra tudo antes; só depois **Marcar**. Nunca mexe num dia que já tem exceção, em férias/baixas nem no passado. Repete só o que foi marcado aqui (de serviço e "não é a vez").
+6. O **X** ao lado de quem foi marcado tira-o de serviço (cancela a exceção; volta o horário fixo). A **folga de compensação** desse dia, se ainda não passou, também é cancelada (o mesmo na ficha, ao cancelar ou ao trocar um dia de serviço por folga).
+7. **Repetir a rotação**: escolhe os fins de semana do **modelo** (de um sábado a outro) e **quantas semanas** repetir. A mesma ordem continua: com o modelo A, B, C fica A, B, C, A, B, C… com as mesmas horas. **Ver o que vai marcar** mostra tudo antes, também as folgas de compensação que vai marcar; só depois **Marcar**. Nunca mexe num dia que já tem exceção, em férias/baixas, fora do contrato nem no passado, e nunca marca duas vezes o mesmo dia (repetir outra vez não muda nada). Vai no máximo um ano para a frente. Repete só o que foi marcado aqui (de serviço e "não é a vez").
 - **Avisos** (em cima, a amarelo; só avisam, não bloqueiam):
   - um sábado ou domingo **sem ninguém de serviço**;
   - alguém com **7 dias seguidos sem folga** (a lei pede pelo menos um dia de descanso por semana);

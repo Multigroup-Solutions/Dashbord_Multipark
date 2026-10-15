@@ -71,10 +71,12 @@ import { detectFixedScheduleNoShows } from "./rhService";
 import { computeEmployeeDays, scheduledStartUtcMs, type EngineInput } from "./evaluationCore";
 import { buildEvaluationIdentity } from "./evaluationIdentity";
 import { activeOverrideOn, dayPlan, fixedRowOn, fixedScheduledStarts, OVERRIDE_REASONS, type FixedScheduleRow, type ScheduleOverrideRow } from "../shared/workSchedule";
-import { lisbonWallTimeUtcMs } from "../shared/lisbonDay";
+import { addDays, lisbonWallTimeUtcMs, operationalDayOf } from "../shared/lisbonDay";
+import { correctionRange } from "../shared/terminalWatch";
+import { hoursOfHhmm, ptHolidayOf, type LeaveRow } from "../shared/workSchedule";
 import {
-  boardWarnings, compensationMatches, dayLabelPt, defaultDutyHours, isValidDay, needsCompensation, proposeCompensationDay, rotationPattern, rotationTargets,
-  saturdayOnOrAfter, saturdaysFrom, warningText, weekendBoard, workRuns, type PersonSchedule,
+  boardWarnings, compensationMap, compensationMatches, compensationServing, dayLabelPt, defaultDutyHours, isValidDay, needsCompensation, planCompensations, planOf,
+  proposeCompensationDay, rotationPattern, rotationTargets, saturdayOnOrAfter, saturdaysFrom, warningText, weekendBoard, workRuns, type PersonSchedule,
 } from "../shared/weekendRotation";
 import { AUTOMATION_FLAGS, automationFlagDefault, automationFlagSuperAdminOnly } from "../shared/appSettings";
 import { kindDef } from "../shared/notificationRouting";
@@ -132,6 +134,16 @@ describe("dayPlan — Extras-Dia > exceção > horário fixo", () => {
     expect(fixedRowOn(dup, 3)).toMatchObject({ id: 7, startTime: "08:00" });
     expect(dayPlan({ calendarDay: "2026-11-04", schedules: dup })).toMatchObject({ startTime: "08:00" });
   });
+  it("duplicados com uma folga e um dia de trabalho → ganha o de trabalho (o que a Avaliação e as faltas leem, e o que a folha conta)", () => {
+    // a consulta dos leitores só traz isWorkDay = 1: a linha 9; o quadro e o Perfil leem as duas e têm de dizer o mesmo
+    const dup = [row(2, 3, "00:00", "00:00", { id: 7, isWorkDay: false }), row(2, 3, "08:00", "17:00", { id: 9 }), row(2, 3, "10:00", "19:00", { id: 12 })];
+    expect(fixedRowOn(dup, 3)).toMatchObject({ id: 9 });
+    expect(dayPlan({ calendarDay: "2026-11-04", schedules: dup })).toMatchObject({ kind: "work", startTime: "08:00" });
+    expect(fixedScheduledStarts("2026-11-04", "2026-11-04", dup).map((f) => iso(f.startMs))).toEqual(["2026-11-04T08:00:00.000Z"]);
+    expect(fixedScheduledStarts("2026-11-04", "2026-11-04", dup.filter((r) => r.isWorkDay))).toEqual(fixedScheduledStarts("2026-11-04", "2026-11-04", dup));
+    // só folgas nesse dia → folga
+    expect(dayPlan({ calendarDay: "2026-11-04", schedules: [row(2, 3, "08:00", "17:00", { id: 3, isWorkDay: 0 as any })] })).toMatchObject({ kind: "none", reason: "day_off" });
+  });
 });
 
 describe("atraso (−5) pela hora do dayPlan", () => {
@@ -181,6 +193,106 @@ describe("atraso (−5) pela hora do dayPlan", () => {
   });
 });
 
+// ─── Sem exceções e com o interruptor desligado, nada muda (prova com a regra de antes, tal e qual) ───
+
+/** fixedScheduledStarts do main antes do passo 10b (copiado tal e qual), para comparar. */
+function legacyFixedScheduledStarts(startDay: string, endDay: string, schedules: readonly FixedScheduleRow[], leaves: readonly LeaveRow[] = []) {
+  const weekdayOf = (day: string): number => new Date(`${day}T00:00:00Z`).getUTCDay();
+  const within = (day: string, from?: string | null, to?: string | null) => (!from || day >= String(from).slice(0, 10)) && (!to || day <= String(to).slice(0, 10));
+  const byEmp = new Map<number, FixedScheduleRow[]>();
+  for (const s of schedules) {
+    if (!s.employeeId || s.isWorkDay === false || Number(s.isWorkDay) === 0) continue;
+    const list = byEmp.get(s.employeeId) ?? [];
+    list.push(s);
+    byEmp.set(s.employeeId, list);
+  }
+  const leavesOf = new Map<number, LeaveRow[]>();
+  for (const l of leaves) leavesOf.set(l.employeeId, [...(leavesOf.get(l.employeeId) ?? []), l]);
+  const out: Array<{ employeeId: number; calendarDay: string; day: string; startMs: number; endMs: number | null }> = [];
+  for (let cal = addDays(startDay, -1); cal <= addDays(endDay, 1); cal = addDays(cal, 1)) {
+    const wd = weekdayOf(cal);
+    for (const [emp, list] of byEmp) {
+      const s = list.find((x) => Number(x.weekday) === wd);
+      if (!s) continue;
+      const h = hoursOfHhmm(s.startTime);
+      if (h == null) continue;
+      if (!within(cal, s.contractStart, s.contractEnd)) continue;
+      if (ptHolidayOf(cal, s.city)) continue;
+      if ((leavesOf.get(emp) ?? []).some((l) => cal >= l.fromDate && cal <= l.toDate)) continue;
+      const startMs = lisbonWallTimeUtcMs(cal, h);
+      const day = operationalDayOf(startMs);
+      if (day < startDay || day > endDay) continue;
+      const he = hoursOfHhmm(s.endTime ?? null);
+      const endMs = he == null ? null : lisbonWallTimeUtcMs(he > h ? cal : addDays(cal, 1), he);
+      out.push({ employeeId: emp, calendarDay: cal, day, startMs, endMs });
+    }
+  }
+  return out;
+}
+
+describe("sem exceções = exatamente o mesmo que antes do 10b (2 000 horários ao acaso)", () => {
+  // gerador reprodutível
+  const rng = (seed: number) => () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = <T,>(r: () => number, xs: readonly T[]): T => xs[Math.floor(r() * xs.length)];
+  const TIMES = ["07:00", "09:00", "11:00", "08:30", "23:00", "22:30", "01:30", "02:15", "00:00", "03:00", "9h", "", "25:00", "08:30:00", "7:05"];
+  const ENDS = [...TIMES, null, "17:00", "20:00", "07:00"];
+  // à volta das mudanças da hora, dos feriados nacionais e municipais, da Páscoa e de meses normais
+  const STARTS = ["2026-03-26", "2027-03-25", "2026-10-22", "2027-10-28", "2026-06-10", "2026-06-22", "2026-09-05", "2026-12-06", "2027-03-24", "2026-11-02", "2026-04-01", "2026-12-23"];
+  const strip = (xs: ReturnType<typeof fixedScheduledStarts>) => xs.map(({ source: _s, ...x }) => x);
+
+  it("mesmas entradas e saídas, pela mesma ordem (com folgas, duplicados, horas inválidas, contratos, férias, cidades e a mudança da hora)", () => {
+    const r = rng(20261015);
+    let compared = 0, nonEmpty = 0;
+    for (let n = 0; n < 2000; n++) {
+      const emps = 1 + Math.floor(r() * 4);
+      const rows: FixedScheduleRow[] = [];
+      const leaves: LeaveRow[] = [];
+      let nextId = 1;
+      const start = pick(r, STARTS);
+      const end = addDays(start, Math.floor(r() * 10));
+      for (let e = 1; e <= emps; e++) {
+        const contractStart = r() < 0.3 ? addDays(start, Math.floor(r() * 6) - 2) : null;
+        const contractEnd = r() < 0.3 ? addDays(start, Math.floor(r() * 10)) : null;
+        const city = pick(r, ["lisbon", "porto", "faro", null] as const);
+        const nRows = Math.floor(r() * 10);
+        for (let k = 0; k < nRows; k++) {
+          rows.push({ id: nextId++, employeeId: e, weekday: Math.floor(r() * 7), startTime: pick(r, TIMES), endTime: pick(r, ENDS), isWorkDay: pick(r, [true, true, true, false, 1, 0] as const) as any, contractStart, contractEnd, city });
+        }
+        if (r() < 0.4) { const f = addDays(start, Math.floor(r() * 8) - 2); leaves.push({ employeeId: e, fromDate: f, toDate: addDays(f, Math.floor(r() * 4)) }); }
+      }
+      // os leitores leem por ORDER BY s.id; sem ids, a ordem da lista
+      const shuffled = [...rows].sort(() => r() - 0.5);
+      const byId = [...shuffled].sort((a, b) => Number(a.id) - Number(b.id));
+      const noIds = shuffled.map(({ id: _id, ...x }) => x);
+      for (const input of [byId, noIds]) {
+        const before = legacyFixedScheduledStarts(start, end, input, leaves);
+        expect(strip(fixedScheduledStarts(start, end, input, leaves))).toEqual(before);
+        expect(strip(fixedScheduledStarts(start, end, input, leaves, []))).toEqual(before);
+        // só as linhas de trabalho (o que a consulta dos leitores traz) dá o mesmo
+        expect(strip(fixedScheduledStarts(start, end, input.filter((x) => !(x.isWorkDay === false || Number(x.isWorkDay) === 0)), leaves))).toEqual(before);
+        compared++;
+        if (before.length) nonEmpty++;
+      }
+    }
+    expect(compared).toBe(4000);
+    expect(nonEmpty).toBeGreaterThan(2000);
+  });
+
+  it("a Avaliação (atraso −5) com exceções vazias = sem exceções, num mês inteiro com a mudança da hora", () => {
+    const identity = buildEvaluationIdentity({ employees: [2, 3].map((id) => ({ id, fullName: `P${id}`, userId: id + 10, multiparkAgentName: null, multiparkAgentUserId: null })), agentAliases: [], accountAliases: [] });
+    const ponto = [] as EngineInput["ponto"];
+    for (let d = "2026-10-01"; d <= "2026-10-31"; d = addDays(d, 1)) {
+      ponto.push({ id: ponto.length + 1, employeeId: 2, type: "check_in", recordedAt: `${d} 06:0${d.endsWith("5") ? 6 : 2}:00` });
+      ponto.push({ id: ponto.length + 1, employeeId: 3, type: "check_in", recordedAt: `${d} 00:3${d.endsWith("3") ? 7 : 1}:00` });
+    }
+    const fixedSchedules = [...weekdays(2, "07:00", "17:00"), row(3, 0, "01:30", "09:00"), row(3, 6, "01:30", "09:00")];
+    const base: EngineInput = { startDay: "2026-10-01", endDay: "2026-10-31", identity, employees: new Map(), actions: [], ponto, assignments: [], incidents: [], complaints: [], speedAlerts: [], penalties: [], rate: () => 10, tlWorkingDaysPerMonth: 15, fixedSchedules };
+    const a = computeEmployeeDays(base), b = computeEmployeeDays({ ...base, scheduleOverrides: [] });
+    expect(b.rows).toEqual(a.rows);
+    expect(a.rows.reduce((n, x) => n + (x.metrics.delays ?? 0), 0)).toBeGreaterThan(0);
+  });
+});
+
 describe("noite, e a exceção pelo dia de calendário da entrada", () => {
   it("noite 23–07: a hora de entrada é a do próprio dia (sexta 23:00 → dia operacional de sexta)", () => {
     const [f] = fixedScheduledStarts("2026-11-06", "2026-11-06", [row(2, 5, "23:00", "07:00")]);
@@ -218,6 +330,16 @@ describe("mudança da hora", () => {
     expect(iso(lisbonWallTimeUtcMs("2026-10-25", 2))).toBe("2026-10-25T02:00:00.000Z");
     // escala do Extras-Dia com startHour 25 no sábado 27 mar 2027 → 02:00 de verão (01:00 UTC)
     expect(iso(scheduledStartUtcMs("2027-03-27", 25))).toBe("2027-03-28T01:00:00.000Z");
+  });
+  it("correção das horas do terminal: um troço escrito dentro da hora que não existe nunca vira 23 h; o resto fica igual", () => {
+    // "01:30–02:00" a 28 mar 2027 (essa meia hora não existe): vazio, e não até ao dia seguinte
+    expect(correctionRange("2027-03-27 23:40:00", "01:30", "02:00")).toEqual({ from: "2027-03-28 01:30:00", until: "2027-03-28 01:30:00" });
+    // à volta, igual
+    expect(correctionRange("2027-03-27 23:40:00", "00:30", "03:00")).toEqual({ from: "2027-03-28 00:30:00", until: "2027-03-28 02:00:00" });
+    expect(correctionRange("2027-03-27 21:00:00", "22:30", "01:00")).toEqual({ from: "2027-03-27 22:30:00", until: "2027-03-28 01:00:00" });
+    // 25 out 2026 (dia de 25 h): 01:30 é a 1.ª (de verão), como antes
+    expect(correctionRange("2026-10-25 00:10:00", "01:30", "01:50")).toEqual({ from: "2026-10-25 00:30:00", until: "2026-10-25 00:50:00" });
+    expect(correctionRange("2026-10-24 22:00:00", "23:00", "03:00")).toEqual({ from: "2026-10-24 22:00:00", until: "2026-10-25 03:00:00" });
   });
   it("sem −5 a quem chega às 02:30 nesse domingo (antes dava −5 falso); às 02:35 já é atraso", () => {
     // 28 mar 2027 é domingo de Páscoa (feriado): só há horário com uma exceção "trabalha" (feriado de serviço)
@@ -344,6 +466,34 @@ describe("fins de semana: quadro, horas por omissão, folga de compensação e a
     expect(needsCompensation(sabExtra, "2026-11-07")).toBe(true);
     expect(compensationMatches({ ...sabExtra, overrides: [...sabExtra.overrides, ov(3, "2026-11-09", "off", { id: 3 })] }, ["2026-11-07"]).get("2026-11-07")).toBe("2026-11-09");
   });
+  it("folgas de compensação: os pares mais perto primeiro — um serviço antigo sem folga não rouba a do sábado ao lado", () => {
+    // domingo 1 nov de serviço sem folga; sábado 7 nov de serviço com a folga na sexta 6
+    const ana = person(2, "Ana", { overrides: [ov(2, "2026-11-01", "work", { id: 1 }), ov(2, "2026-11-07", "work", { id: 2 }), ov(2, "2026-11-06", "off", { id: 3 })] });
+    const m = compensationMatches(ana, ["2026-11-01", "2026-11-07"]);
+    expect(m.get("2026-11-07")).toBe("2026-11-06");
+    expect(m.get("2026-11-01")).toBeNull();
+    expect(compensationServing(ana, "2026-11-07")).toBe("2026-11-06");
+    expect(compensationMap(ana, "2026-10-25", "2026-11-14")).toEqual(new Map([["2026-11-01", null], ["2026-11-07", "2026-11-06"]]));
+    // marcar o domingo 1 nov agora não reaproveita a sexta 6 (já serve o sábado 7): propõe outra
+    expect(planCompensations(ana, ["2026-11-01"], "2026-10-15")).toEqual({ compensations: [{ forDay: "2026-11-01", day: "2026-11-02", sameMonth: true }], without: [] });
+  });
+  it("planCompensations: o mesmo mês, nunca no passado, nunca em dia com exceção, nada para quem já tinha o dia no horário fixo", () => {
+    const ana = person(2, "Ana", { overrides: [ov(2, "2026-11-07", "work", { id: 1 }), ov(2, "2026-11-08", "work", { id: 2 })] });
+    expect(planCompensations(ana, ["2026-11-07", "2026-11-08"], "2026-10-15")).toEqual({
+      compensations: [{ forDay: "2026-11-07", day: "2026-11-06", sameMonth: true }, { forDay: "2026-11-08", day: "2026-11-09", sameMonth: true }], without: [],
+    });
+    // hoje é sábado 7 nov: a sexta 6 já passou → segunda 9 e terça 10
+    expect(planCompensations(ana, ["2026-11-07", "2026-11-08"], "2026-11-07").compensations.map((c) => c.day)).toEqual(["2026-11-09", "2026-11-10"]);
+    // a sexta 6 já tem uma troca marcada → não serve
+    const comTroca = { ...ana, overrides: [...ana.overrides, ov(2, "2026-11-06", "work", { id: 3, reason: "swap", startTime: "13:00", endTime: "22:00" })] };
+    expect(planCompensations(comTroca, ["2026-11-07"], "2026-10-15").compensations[0].day).toBe("2026-11-09");
+    // quem já tem o sábado no horário fixo não precisa de folga
+    const sabFixo = person(3, "Rui", { schedules: [...weekdays(3), row(3, 6, "10:00", "14:00")], overrides: [ov(3, "2026-11-07", "work", { id: 4 })] });
+    expect(planCompensations(sabFixo, ["2026-11-07"], "2026-10-15")).toEqual({ compensations: [], without: [] });
+    // com a folga já marcada, marcar outra vez não duplica
+    const comFolga = { ...ana, overrides: [...ana.overrides, ov(2, "2026-11-06", "off", { id: 5 }), ov(2, "2026-11-09", "off", { id: 6 })] };
+    expect(planCompensations(comFolga, ["2026-11-07", "2026-11-08"], "2026-10-15").compensations).toEqual([]);
+  });
   it("quadro: quem está de serviço (marcado ou pelo horário fixo), quem tem folga, e a folga de compensação", () => {
     const ana = person(2, "Ana", { overrides: [ov(2, "2026-11-07", "work", { id: 1 }), ov(2, "2026-11-09", "off", { id: 2 })] });
     const rui = person(3, "Rui", { schedules: [...weekdays(3), row(3, 0, "10:00", "16:00")], overrides: [ov(3, "2026-11-15", "off", { id: 3, reason: "weekend" })] });
@@ -399,6 +549,11 @@ describe("quem marca (supervisor da cidade, RH, administradores)", () => {
     expect(canMarkScheduleOverride(v("super_admin"), e({ role: "super_admin" }))).toBe(true);
     expect(canMarkScheduleOverride(v("admin"), e())).toBe(true);
     expect(canMarkScheduleOverride(v("admin"), e({ role: "super_admin" }))).toBe(false);
+  });
+  it("ninguém marca o próprio horário — nem o super admin nem o admin", () => {
+    for (const role of ["super_admin", "admin", "backoffice", "supervisor"]) {
+      expect(canMarkScheduleOverride(v(role), e({ id: 50, role })), role).toBe(false);
+    }
   });
   it("back office (o RH) em todas as cidades; supervisor só na sua; nunca na própria ficha nem a admins", () => {
     expect(canMarkScheduleOverride(v("backoffice", { scopeProjectIds: null }), e({ projectId: 99 }))).toBe(true);
@@ -483,5 +638,7 @@ describe("router rh.weekends", () => {
     await expect(caller("admin").rh.weekends.set({ employeeId: 7, day: "2026-11-07", kind: "work", startTime: "09:00", endTime: "09:00", reason: "weekend" })).rejects.toThrow(/não podem ser iguais/);
     await expect(caller("admin").rh.weekends.markDuty({ employeeId: 7, days: ["2026-11-09"], startTime: "09:00", endTime: "18:00" })).rejects.toThrow(/só sábados e domingos/);
     await expect(caller("admin").rh.weekends.repeatRotation({ city: "lisbon", patternFrom: "2026-11-09", patternTo: "2026-11-14", weeks: 4 })).rejects.toThrow(/de um sábado a outro sábado/);
+    const far = saturdayOnOrAfter("2090-01-01");
+    await expect(caller("admin").rh.weekends.repeatRotation({ city: "lisbon", patternFrom: far, patternTo: far, weeks: 4 })).rejects.toThrow(/um ano para a frente/);
   });
 });

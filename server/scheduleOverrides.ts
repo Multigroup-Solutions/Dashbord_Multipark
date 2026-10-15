@@ -43,12 +43,13 @@ export const todayLisbon = (): string => lisbonDayOf(Date.now());
  * Quem marca as exceções de uma ficha (PURA): o super admin; os
  * administradores (nunca numa ficha protegida acima deles); o back office (o
  * RH, em todas as cidades) e o supervisor (na sua cidade) nas fichas abaixo
- * de administrador — nunca na própria.
+ * de administrador. NINGUÉM na própria ficha (nem o super admin: o horário de
+ * cada um marca-o outra pessoa — como validar os próprios documentos).
  */
 export function canMarkScheduleOverride(v: RhViewer, e: EmployeeRef): boolean {
+  if (isOwn(v, e.id)) return false;
   if (v.role === "super_admin") return true;
   if (rank(v.role) >= ROLE_RANK.admin) return !isProtectedTarget(v, e);
-  if (isOwn(v, e.id)) return false;
   const belowAdmin = e.role ? rank(e.role) >= 0 && rank(e.role) < ROLE_RANK.admin : true;
   if (!belowAdmin) return false;
   if (v.role === "backoffice") return true;
@@ -206,9 +207,12 @@ export async function cancelOverride(id: number, userId: number): Promise<Overri
   const db = await dbOrThrow();
   const before = await getOverride(id);
   if (!before || !before.active) return null;
-  await db.update(scheduleOverrides)
+  const res: any = await db.update(scheduleOverrides)
     .set({ activeFlag: null, cancelledAt: toMysqlDateTime(new Date()), cancelledById: userId, updatedById: userId })
     .where(and(eq(scheduleOverrides.id, id), eq(scheduleOverrides.activeFlag, 1)));
+  // outra pessoa cancelou-a (ou substituiu-a) entretanto: não regista nem avisa duas vezes
+  const affected = (Array.isArray(res) ? res[0] : res)?.affectedRows;
+  if (affected === 0) return null;
   await logActivity({
     userId, action: "schedule_override_cancel", entity: "schedule_overrides", entityId: id,
     details: `Exceção ao horário da ficha #${before.employeeId} cancelada — era: ${describe(before)} (volta o horário fixo nesse dia)`.slice(0, 1000),
@@ -295,5 +299,9 @@ export async function loadSchedulesAndLeaves(employeeIds: readonly number[], fro
   return { schedules, leaves };
 }
 
-/** Janela de leitura à volta dos fins de semana (uma semana para cada lado, para os 7 dias e as folgas). */
-export const boardWindow = (firstSaturday: string, lastSaturday: string) => ({ from: addDays(firstSaturday, -7), to: addDays(lastSaturday, 8) });
+/**
+ * Janela de leitura à volta dos fins de semana: três semanas para cada lado —
+ * os 7 dias seguidos e os dias de serviço à volta (uma semana), mais as folgas
+ * de compensação deles (até 7 dias) e as que essas disputam (outra semana).
+ */
+export const boardWindow = (firstSaturday: string, lastSaturday: string) => ({ from: addDays(firstSaturday, -21), to: addDays(lastSaturday, 22) });

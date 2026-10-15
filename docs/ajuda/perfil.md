@@ -15,7 +15,7 @@ O **Perfil** tem o teu cartão, atalhos e o que é só teu. Abre para todos (ext
 - **A minha ficha** abre a tua ficha nos RH (dados, documentos, IBAN — ver a ajuda "RH e ponto").
 - **A minha disponibilidade** abre a página onde marcas os dias e turnos em que podes trabalhar (ver a ajuda "Disponibilidade").
 
-**O meu horário** (só com **"RH: fins de semana e exceções por data"** ligado nas Definições; só para quem tem ficha)
+**O meu horário** (só com **"RH: fins de semana e exceções por data"** ligado nas Definições; só para quem tem ficha de funcionário — os extras escalam-se no Extras-Dia)
 - Mostra o teu **horário fixo** (de segunda a domingo) e os **próximos 8 fins de semana** em que estás **de serviço**, com as horas.
 - Em **Outros dias diferentes** aparecem as folgas de compensação, as trocas e os outros dias marcados fora do teu horário fixo.
 - É só para ver: quem muda é o RH ou o teu supervisor (RH → Fins de semana, ou a tua ficha → Horário → Exceções por data).
