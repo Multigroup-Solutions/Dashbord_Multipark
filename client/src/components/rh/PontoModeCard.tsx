@@ -75,6 +75,12 @@ function PontoModeCardBody({ data: d }: { data: View }) {
         Por agora o modo fica só marcado: horas, ordenado, atrasos e faltas não mudam. As regras de cada modo entram depois, cada uma com o seu interruptor.
       </p>
 
+      {d.stateWarnings.map((w) => (
+        <p key={w} className="flex items-start gap-1.5 rounded-[10px] border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden />{w}
+        </p>
+      ))}
+
       {d.notice && (
         <div className="rounded-[10px] border px-3 py-2 space-y-2 text-sm">
           <div className="flex flex-wrap items-center gap-2">
@@ -202,6 +208,8 @@ function PontoModeEditor({ data: d, onSaved }: { data: View; onSaved: () => void
       toast.success(`Modo do ponto: ${pontoModeLabel(r.mode)} a partir de ${fmtIsoDayPt(r.effectiveFrom)}.`);
       for (const w of r.warnings) toast.warning(w, { duration: 10000 });
       setNote("");
+      // volta a "hoje": senão, depois de gravar para trás, o cartão mostrava "Nada muda" a vermelho
+      setFrom(d.today);
       onSaved();
     },
     onError: (e) => toast.error(e.message),

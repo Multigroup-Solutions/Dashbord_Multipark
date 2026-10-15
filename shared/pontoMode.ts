@@ -15,6 +15,7 @@
  *    histórico, marcadas "substituída"; nada se apaga). O ordenado e a Avaliação
  *    leem o histórico (`pontoModeOn`), nunca a cópia em `employees.pontoMode`.
  */
+import { z } from "zod";
 
 export const PONTO_MODOS_FLAG = "PONTO_MODOS";
 
@@ -172,7 +173,7 @@ function daysFromTo(start: string, end: string): string[] {
  * até hoje (sem nenhum mês fechado pelo meio), no máximo 366 dias para trás.
  * O servidor confirma sempre (`pontoModeChangeCheck`). PURA.
  */
-export function pontoModeEarliestFrom(o: { mode: PontoMode | null; currentMode: PontoMode | null; today: string; closedMonths: ReadonlySet<string> }): string {
+export function pontoModeEarliestFrom(o: { mode: PontoMode | null; currentMode: PontoMode | null; today: string; closedMonths: ReadonlySet<string>; history?: readonly PontoModeEntry[] }): string {
   if (isForwardOnlyMode(o.mode) || isForwardOnlyMode(o.currentMode)) return o.today;
   const limit = addDaysIso(o.today, -PONTO_MODE_MAX_BACK_DAYS);
   let first = o.today;
@@ -183,7 +184,29 @@ export function pontoModeEarliestFrom(o: { mode: PontoMode | null; currentMode: 
     if (monthStart <= limit) break;
     monthStart = `${addDaysIso(monthStart, -1).slice(0, 7)}-01`;
   }
+  // nunca por cima de dias que estiveram em isenção ou "sempre em serviço" (também só para a frente)
+  if (o.history?.length) {
+    for (let d = addDaysIso(o.today, -1); d >= first; d = addDaysIso(d, -1)) {
+      if (isForwardOnlyMode(pontoModeOn(d, o.history))) return addDaysIso(d, 1);
+    }
+  }
   return first;
+}
+
+/**
+ * Avisos sobre o modo de HOJE da ficha (o cartão mostra-os ao RH e ao super
+ * admin): um extra só pode estar em "Sempre em serviço" — se o posto ou o
+ * contrato passou a extra depois de pôr o modo 1 ou 2, avisa para o tirar; um
+ * extra em "Sempre em serviço" não recebe pelas horas automáticas. PURA.
+ */
+export function pontoModeStateWarnings(mode: PontoMode | null, employee: { position?: string | null; contractType?: string | null }): string[] {
+  const out: string[] = [];
+  if (!mode) return out;
+  if (isExtraLike(employee) && (mode === "fixed" || mode === "exempt")) {
+    out.push(`É extra e está em "${pontoModeLabel(mode)}": os modos 1 e 2 são só para funcionários. Muda para "Sem modo" (ou "Sempre em serviço").`);
+  }
+  if (isExtraLike(employee) && mode === "always_on") out.push("É extra: as horas automáticas não pagam (ficam a 0 € na folha e no custo dos extras).");
+  return out;
 }
 
 /**
@@ -377,12 +400,24 @@ export type PhotoSource = (typeof PHOTO_SOURCES)[number];
 
 export interface PontoTrailInput {
   /** a selfie veio da câmara ou de "Escolher foto" (ficheiro/galeria) */
-  photoSource?: PhotoSource | null;
+  photoSource?: PhotoSource | string | null;
   /** idade do ficheiro escolhido (segundos), só como pista */
   photoFileAgeS?: number | null;
   /** imprecisão do GPS (metros) */
   gpsAccuracyM?: number | null;
 }
+
+/**
+ * O rasto na entrada e na saída do ponto (`rh.timeRecords.checkIn/checkOut`).
+ * Tolerante: um rasto estranho (texto onde vai um número, NaN, infinito…) fica
+ * VAZIO em vez de recusar a picagem — o ponto nunca falha por causa do rasto.
+ * Os valores são depois limpos em `pontoTrailColumns`.
+ */
+export const pontoTrailInputSchema = z.object({
+  photoSource: z.string().max(16).nullable().optional(),
+  photoFileAgeS: z.number().nullable().optional(),
+  gpsAccuracyM: z.number().nullable().optional(),
+}).optional().catch(undefined);
 
 export interface PontoTrailColumns {
   pontoMode: PontoMode | null;
@@ -407,7 +442,8 @@ const intIn = (v: unknown, min: number, max: number): number | null => {
  * aos limites; o que não for número fica vazio. PURA.
  */
 export function pontoTrailColumns(o: { input?: PontoTrailInput | null; hasPhoto: boolean; actorUserId: number | null; mode: PontoMode | null }): PontoTrailColumns {
-  const source = o.hasPhoto && o.input?.photoSource && (PHOTO_SOURCES as readonly string[]).includes(o.input.photoSource) ? o.input.photoSource : null;
+  const raw = o.input?.photoSource;
+  const source: PhotoSource | null = o.hasPhoto && typeof raw === "string" && (PHOTO_SOURCES as readonly string[]).includes(raw) ? (raw as PhotoSource) : null;
   return {
     pontoMode: o.mode ?? null,
     photoSource: source,

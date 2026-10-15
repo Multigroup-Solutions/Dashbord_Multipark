@@ -10,7 +10,7 @@
  */
 import {
   PONTO_MODOS_FLAG, PONTO_NOTICES, latestAck, noticeForMode, normalizePontoMode, pontoAlertVisible,
-  pontoModeChangeCheck, pontoModeEarliestFrom, pontoModeLabel, pontoModeOn, pontoModeTimeline, pontoTrailColumns,
+  pontoModeChangeCheck, pontoModeEarliestFrom, pontoModeLabel, pontoModeOn, pontoModeStateWarnings, pontoModeTimeline, pontoTrailColumns,
   type PontoAckChannel, type PontoAlertStatus, type PontoMode, type PontoModeEntry, type PontoNoticeKey,
   type PontoTrailColumns, type PontoTrailInput,
 } from "../shared/pontoMode";
@@ -157,7 +157,10 @@ export interface PontoModeView {
   today: string;
   current: PontoMode | null;
   viewer: { isOwn: boolean; isSuperAdmin: boolean; canEdit: boolean; canRecordPaper: boolean };
+  /** o motivo (`note`) é interno: na própria ficha só o vê o super admin (como as notas internas) */
   history: Array<{ id: number; mode: PontoMode | null; effectiveFrom: string; note: string | null; setByName: string | null; setAt: string | null; superseded: boolean }>;
+  /** avisos sobre o modo de hoje (ex.: extra em horário fixo) — ao RH e ao super admin, nunca na própria ficha */
+  stateWarnings: string[];
   notice: null | {
     key: PontoNoticeKey; title: string; text: string;
     ack: null | { at: string; channel: string; byName: string | null };
@@ -200,7 +203,7 @@ export async function pontoModeView(store: PontoModeStore, o: { employeeId: numb
     try { closedMonths = Array.from(await store.closedMonths()).sort(); } catch { closedMonthsReadFailed = true; }
     const closed = new Set(closedMonths);
     const hasOpenCheckIn = await store.hasOpenCheckIn(o.employeeId);
-    const earliest = (mode: PontoMode | null) => pontoModeEarliestFrom({ mode, currentMode: current, today, closedMonths: closed });
+    const earliest = (mode: PontoMode | null) => pontoModeEarliestFrom({ mode, currentMode: current, today, closedMonths: closed, history });
     guard = {
       employee: { position: emp.position, contractType: emp.contractType, zelloUsername: emp.zelloUsername, hasMultiparkAgent: emp.hasMultiparkAgent, isActive: emp.isActive },
       closedMonths, closedMonthsReadFailed, hasOpenCheckIn,
@@ -221,9 +224,11 @@ export async function pontoModeView(store: PontoModeStore, o: { employeeId: numb
       canRecordPaper: !o.viewer.isOwn && (isSuperAdmin || o.viewer.canManage),
     },
     history: pontoModeTimeline(history).reverse().map((h) => ({
-      id: h.id, mode: normalizePontoMode(h.mode), effectiveFrom: String(h.effectiveFrom).slice(0, 10), note: h.note ?? null,
+      id: h.id, mode: normalizePontoMode(h.mode), effectiveFrom: String(h.effectiveFrom).slice(0, 10),
+      note: o.viewer.isOwn && !isSuperAdmin ? null : h.note ?? null,
       setByName: nameOf(h.setById), setAt: h.setAt ?? null, superseded: h.superseded,
     })),
+    stateWarnings: o.viewer.isOwn ? [] : pontoModeStateWarnings(current, emp),
     notice: noticeKey ? {
       key: noticeKey, title: PONTO_NOTICES[noticeKey].title, text: PONTO_NOTICES[noticeKey].text,
       ack: ack ? { at: ack.ackAt, channel: ack.channel, byName: nameOf(ack.ackByUserId) } : null,

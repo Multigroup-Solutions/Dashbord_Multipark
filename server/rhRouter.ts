@@ -14,6 +14,7 @@ import { DEACTIVATION_NOTES_MAX, DIALOG_DEACTIVATION_REASON_CODES, DEACTIVATION_
 import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
+import { pontoTrailInputSchema } from "../shared/pontoMode";
 import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { importExtrasFromCsv } from "./extrasImport";
 import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
@@ -1377,8 +1378,8 @@ export const rhRouter = router({
         terminal: z.boolean().optional(),
         accuracy: z.number().min(0).max(1_000_000).optional(),
         // Plano 63 (passo 1): rasto da picagem (de onde veio a selfie, idade do ficheiro, imprecisão do GPS).
-        // Tolerante (nunca recusa o ponto): os valores são limpos em shared/pontoMode.ts pontoTrailColumns.
-        trail: z.object({ photoSource: z.string().max(16).nullable().optional(), photoFileAgeS: z.number().nullable().optional(), gpsAccuracyM: z.number().nullable().optional() }).optional(),
+        // Tolerante (nunca recusa o ponto): um rasto estranho fica vazio (pontoTrailInputSchema) e os valores são limpos em pontoTrailColumns.
+        trail: pontoTrailInputSchema,
       }))
       .mutation(async ({ ctx, input }) => {
         // admin pode picar a qualquer um; outros só ao próprio
@@ -1461,7 +1462,7 @@ export const rhRouter = router({
         }
         // Plano 63 (passo 1): rasto da picagem — só com PONTO_MODOS ligado; só informação (não mexe nas horas).
         const { pontoTrailForRecord } = await import("./pontoModes");
-        const trail = await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id, input: input.trail as import("../shared/pontoMode").PontoTrailInput | undefined, hasPhoto: !!photoKey });
+        const trail = await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id, input: input.trail, hasPhoto: !!photoKey });
         // Inserção ATÓMICA (linha do colaborador bloqueada): dois toques
         // simultâneos já não criam duas entradas.
         try {
@@ -1522,8 +1523,8 @@ export const rhRouter = router({
         locationName: z.string().optional(),
         notes: z.string().optional(),
         // Plano 63 (passo 1): rasto da picagem (de onde veio a selfie, idade do ficheiro, imprecisão do GPS).
-        // Tolerante (nunca recusa o ponto): os valores são limpos em shared/pontoMode.ts pontoTrailColumns.
-        trail: z.object({ photoSource: z.string().max(16).nullable().optional(), photoFileAgeS: z.number().nullable().optional(), gpsAccuracyM: z.number().nullable().optional() }).optional(),
+        // Tolerante (nunca recusa o ponto): um rasto estranho fica vazio (pontoTrailInputSchema) e os valores são limpos em pontoTrailColumns.
+        trail: pontoTrailInputSchema,
       }))
       .mutation(async ({ ctx, input }) => {
         if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
@@ -1555,7 +1556,7 @@ export const rhRouter = router({
         }
         // Plano 63 (passo 1): rasto da picagem — só com PONTO_MODOS ligado; só informação (não mexe nas horas).
         const { pontoTrailForRecord } = await import("./pontoModes");
-        const trail = await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id, input: input.trail as import("../shared/pontoMode").PontoTrailInput | undefined, hasPhoto: !!photoKey });
+        const trail = await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id, input: input.trail, hasPhoto: !!photoKey });
         // Regra do Jorge (turnos máx. 12h): entrada aberta há >16h = esquecimento
         // de check-out. Corta às 12h (sem extraordinárias) e marca a VERMELHO
         // para revisão — não paga dias inteiros de horas fantasma.

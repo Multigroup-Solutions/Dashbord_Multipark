@@ -211,14 +211,15 @@ Regras da mudança:
 - **Sempre em serviço** pede que a pessoa não tenha uma entrada do ponto aberta. Sem conta Zello ou sem agente da Multipark na ficha, só avisa.
 - Datas no futuro não. "Hoje" é o dia operacional (até às 03:00 ainda conta o dia anterior).
 - Fica tudo no **Histórico** do cartão (modo, a partir de quando, motivo, quem e quando) e no registo de atividade. Uma mudança com uma data igual ou anterior a outra substitui-a: a antiga fica marcada "substituída", nunca é apagada.
-- O RH e quem vê o ponto da ficha veem o modo e o histórico; só o super admin muda.
+- O RH e quem vê o ponto da ficha veem o modo e o histórico; só o super admin muda. Na própria ficha a pessoa vê o seu modo e o histórico, mas não o motivo (é interno, como as notas internas).
+- Se o posto ou o contrato de alguém em **Horário fixo** ou **Isenção** passar a extra, o cartão avisa a laranja para mudar o modo (os extras só podem ficar em **Sempre em serviço**).
 
 **Aviso escrito ("Li")**
 - Cada modo tem um aviso que diz à pessoa o que se guarda e como contam as horas. No cartão aparece **Por ler** ou **Lido em … (na app / em papel)**.
 - A própria pessoa abre a sua ficha → **Horário**, lê o aviso e carrega em **Li**.
 - Se a pessoa assinou o aviso em papel, o RH carrega em **Registar leitura em papel** (fica em nome de quem registou). Ninguém regista o papel na própria ficha.
 
-**Alertas do ponto** (no mesmo cartão, só quando houver): fora da zona, GPS, caras, turnos longos, fim de semana da isenção… Ninguém vê os alertas da própria ficha; a zona, as caras e o fim de semana da isenção só o super admin vê; os outros, o RH da cidade. Cada um revê-se com **Visto**, **Justificado** ou **Confirmado**. Neste passo ainda nada cria alertas.
+**Alertas do ponto** (no mesmo cartão, só quando houver): fora da zona, GPS, caras, turnos longos, fim de semana da isenção… Ninguém vê os alertas da própria ficha; a zona, as caras e o fim de semana da isenção só o super admin vê; os outros, o RH da cidade. Cada um revê-se com **Visto**, **Justificado** ou **Confirmado**. Por agora ainda nada cria alertas.
 
 **Rasto das picagens**: com o interruptor ligado, cada entrada e saída guarda também o modo desse dia, se a selfie veio da **câmara** ou de **"Escolher foto"** (e, num ficheiro, a idade dele), a imprecisão do GPS e a conta que picou. É só informação: não muda horas, ordenado, atrasos nem faltas, e nunca impede o ponto.
 

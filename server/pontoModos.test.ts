@@ -7,13 +7,13 @@
  *  - avisos lidos ("Li" e papel), alertas (quem vê), juntar fichas com modos;
  *  - interruptor PONTO_MODOS desligado por omissão (só o super admin), migração 0690.
  */
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   PONTO_ALERT_KINDS, PONTO_MODOS_FLAG, PONTO_NOTICES, isPontoNoticeKey, latestAck, noticeForMode, pontoAlertDedupeKey,
   pontoAlertVisible, pontoModeChangeCheck, pontoModeChangeError, pontoModeEarliestFrom, pontoModeLabel, pontoModeMergeWarning,
-  pontoModeOn, pontoModeTimeline, pontoTrailColumns, type PontoModeChangeInput, type PontoModeEntry,
+  pontoModeOn, pontoModeStateWarnings, pontoModeTimeline, pontoTrailColumns, pontoTrailInputSchema, type PontoModeChangeInput, type PontoModeEntry,
 } from "../shared/pontoMode";
 import { AUTOMATION_FLAGS, automationFlagDefault, automationFlagSuperAdminOnly } from "../shared/appSettings";
 import { operationalDayOf } from "../shared/lisbonDay";
@@ -162,6 +162,56 @@ describe("guardas da mudança", () => {
     expect(far >= "2025-10-14").toBe(true);
     expect(pontoModeChangeError(base({ effectiveFrom: far, closedMonths: new Set() }))).toBeNull();
   });
+
+  it("o dia mais antigo nunca passa por cima de dias em isenção ou \"sempre em serviço\" (o servidor recusava)", () => {
+    const history = [entry(1, "exempt", "2026-09-10"), entry(2, null, "2026-10-08")];
+    const e = pontoModeEarliestFrom({ mode: "fixed", currentMode: null, today: TODAY, closedMonths: new Set(["2026-08"]), history });
+    expect(e).toBe("2026-10-08");
+    expect(pontoModeChangeError(base({ history, effectiveFrom: e }))).toBeNull();
+    expect(pontoModeChangeError(base({ history, effectiveFrom: "2026-10-07" }))).toMatch(/só valem a partir de hoje/);
+    // só horário fixo para trás → o limite é o do mês aberto
+    expect(pontoModeEarliestFrom({ mode: "fixed", currentMode: null, today: TODAY, closedMonths: new Set(["2026-08"]), history: [entry(1, "fixed", "2026-09-10"), entry(2, null, "2026-10-08")] })).toBe("2026-09-01");
+  });
+
+  it("avisos do modo de hoje: extra em horário fixo ou isenção (o posto mudou depois); extra em \"sempre em serviço\" não paga", () => {
+    expect(pontoModeStateWarnings("fixed", { position: "extra", contractType: "extra" }).join(" ")).toMatch(/É extra e está em "1 · Horário fixo"/);
+    expect(pontoModeStateWarnings("exempt", { position: "driver", contractType: "extra" }).join(" ")).toMatch(/É extra e está em "2 · Isenção"/);
+    expect(pontoModeStateWarnings("always_on", { position: "extra", contractType: "extra" }).join(" ")).toMatch(/não pagam/);
+    expect(pontoModeStateWarnings("fixed", { position: "backoffice", contractType: "permanent" })).toEqual([]);
+    expect(pontoModeStateWarnings(null, { position: "extra", contractType: "extra" })).toEqual([]);
+  });
+});
+
+describe("fuso e dia operacional (03:00; mudança da hora a 25 out 2026)", () => {
+  it("na noite da mudança da hora, até às 03:00 de Lisboa ainda é o dia 24; às 03:00 passa a 25", () => {
+    // 25 out 2026: às 02:00 de verão (01:00 UTC) o relógio volta à 01:00 — a hora 01:xx acontece duas vezes
+    expect(operationalDayOf(Date.parse("2026-10-25T00:30:00Z"))).toBe("2026-10-24"); // 01:30 de verão
+    expect(operationalDayOf(Date.parse("2026-10-25T01:30:00Z"))).toBe("2026-10-24"); // 01:30 de inverno (a 2.ª)
+    expect(operationalDayOf(Date.parse("2026-10-25T02:59:00Z"))).toBe("2026-10-24"); // 02:59 de inverno
+    expect(operationalDayOf(Date.parse("2026-10-25T03:00:00Z"))).toBe("2026-10-25"); // 03:00 de inverno
+    // antes da mudança, as 03:00 de Lisboa são as 02:00 UTC
+    expect(operationalDayOf(Date.parse("2026-10-24T01:59:00Z"))).toBe("2026-10-23");
+    expect(operationalDayOf(Date.parse("2026-10-24T02:00:00Z"))).toBe("2026-10-24");
+  });
+
+  it("às 02:30 do dia 25 (inverno) ainda não se pode pôr um modo a partir de 25; às 03:00 já", async () => {
+    const { store } = memStore();
+    const at0230 = Date.parse("2026-10-25T02:30:00Z");
+    await expect(setPontoMode(store, { actor: { id: 1, role: "super_admin" }, employeeId: 7, mode: "exempt", effectiveFrom: "2026-10-25", note: "abc", nowMs: at0230 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const ok = await setPontoMode(store, { actor: { id: 1, role: "super_admin" }, employeeId: 7, mode: "exempt", effectiveFrom: "2026-10-25", note: "abc", nowMs: Date.parse("2026-10-25T03:00:00Z") });
+    expect(ok.current).toBe("exempt");
+  });
+
+  it("a cópia em employees.pontoMode é sempre o modo de HOJE: sem datas no futuro, não há nada que mude sozinho à meia-noite", async () => {
+    const { store, st } = memStore();
+    // pôr "a partir de amanhã" é recusado — não fica nenhuma linha à espera
+    await expect(setPontoMode(store, { actor: { id: 1, role: "super_admin" }, employeeId: 7, mode: "fixed", effectiveFrom: "2026-10-16", note: "abc", nowMs: NOW })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(st.history).toHaveLength(0);
+    // para trás: a cópia é o modo de hoje (não o da data escolhida)
+    await setPontoMode(store, { actor: { id: 1, role: "super_admin" }, employeeId: 7, mode: "fixed", effectiveFrom: "2026-10-01", note: "abc", nowMs: NOW });
+    expect(st.cache).toBe("fixed");
+    for (const day of ["2026-10-16", "2026-11-01", "2027-01-01"]) expect(pontoModeOn(day, st.history as PontoModeEntry[])).toBe("fixed");
+  });
 });
 
 describe("o rasto das picagens não muda nada nas contas", () => {
@@ -224,13 +274,44 @@ describe("o rasto das picagens não muda nada nas contas", () => {
     expect(broken).toMatchObject({ pontoMode: null, createdByUserId: 2 });
   });
 
+  it("nenhum ficheiro do servidor lê as colunas do rasto, fora do modo do ponto (lista fechada)", () => {
+    const root = resolve(import.meta.dirname, "..");
+    const allowed = new Set([
+      "shared/pontoMode.ts", "server/pontoModes.ts", "server/pontoModesRouter.ts", "server/employeeMerge.ts",
+      "server/migrations/migration_0690.ts", "drizzle/schema.ts",
+    ]);
+    const files = globSync("{server,shared,drizzle}/**/*.ts", { cwd: root }).map((f) => f.replaceAll("\\", "/"))
+      .filter((f) => !f.endsWith(".test.ts") && !allowed.has(f));
+    expect(files.length).toBeGreaterThan(100);
+    const offenders: string[] = [];
+    for (const f of files) {
+      const text = src(f);
+      if (/\b(photoSource|photoFileAgeS|gpsAccuracyM)\b/.test(text)) offenders.push(f);
+      // o modo e a conta que picou, lidos de uma picagem (timeRecords.x / time_records … x)
+      if (/timeRecords\.(pontoMode|createdByUserId)\b|time_records[^;]{0,400}\b(pontoMode|createdByUserId)\b/.test(text)) offenders.push(f);
+    }
+    // o rhRouter só recebe o rasto (o esquema tolerante) e passa-o ao pontoTrailForRecord
+    const r = src("server/rhRouter.ts");
+    expect(r.match(/\b(photoSource|photoFileAgeS|gpsAccuracyM)\b/g) ?? []).toEqual([]);
+    expect(offenders).toEqual([]);
+  });
+
+  it("o rasto que chega é tolerante: um valor estranho fica vazio em vez de recusar a picagem", () => {
+    expect(pontoTrailInputSchema.parse(undefined)).toBeUndefined();
+    expect(pontoTrailInputSchema.parse({ photoSource: "camera", photoFileAgeS: null, gpsAccuracyM: 12 })).toEqual({ photoSource: "camera", photoFileAgeS: null, gpsAccuracyM: 12 });
+    for (const bad of [{ photoSource: 5 }, { gpsAccuracyM: "doze" }, { photoFileAgeS: Number.NaN }, { gpsAccuracyM: Number.POSITIVE_INFINITY }, { photoSource: "x".repeat(40) }, "lixo", 42, null]) {
+      expect(() => pontoTrailInputSchema.parse(bad)).not.toThrow();
+      expect(pontoTrailInputSchema.parse(bad)).toBeUndefined();
+    }
+  });
+
   it("a entrada e a saída do ponto gravam o rasto (só pelo pontoTrailForRecord) e aceitam-no sem nunca recusar", () => {
     const r = src("server/rhRouter.ts");
     const checkIn = r.slice(r.indexOf("    checkIn: protectedProcedure"), r.indexOf("    checkOut: protectedProcedure"));
     const checkOut = r.slice(r.indexOf("    checkOut: protectedProcedure"), r.indexOf("    monthlyHours:"));
     for (const block of [checkIn, checkOut]) {
-      expect(block).toContain("trail: z.object({ photoSource: z.string().max(16).nullable().optional(), photoFileAgeS: z.number().nullable().optional(), gpsAccuracyM: z.number().nullable().optional() }).optional()");
-      expect(block).toContain("await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id");
+      expect(block).toContain("trail: pontoTrailInputSchema,");
+      expect(block).toContain("await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id, input: input.trail,");
       expect(block).toContain("...trail,");
     }
     // os dois ecrãs do ponto mandam o rasto
@@ -409,9 +490,22 @@ describe("o cartão da ficha", () => {
     expect(v.viewer).toEqual({ isOwn: false, isSuperAdmin: true, canEdit: true, canRecordPaper: true });
     expect(v.guard?.closedMonths).toEqual(["2026-09"]);
     expect(v.guard?.earliestFrom).toEqual({ none: "2026-10-01", fixed: "2026-10-01", exempt: TODAY, always_on: TODAY });
+    expect(v.history.map((h) => h.note)).toEqual(["afinal sim", "engano", "back office"]);
     const own = await pontoModeView(store, { employeeId: 7, viewer: { id: 7, role: "backoffice", isOwn: true, canManage: false }, nowMs: NOW });
     expect(own.viewer).toEqual({ isOwn: true, isSuperAdmin: false, canEdit: false, canRecordPaper: false });
     expect(own.guard).toBeNull();
+    // o motivo é interno: a própria pessoa vê o modo e o histórico, sem o motivo
+    expect(own.history.map((h) => [h.mode, h.effectiveFrom, h.note])).toEqual([["fixed", "2026-10-05", null], [null, "2026-10-10", null], ["fixed", "2026-09-01", null]]);
+    const ownSuper = await pontoModeView(store, { employeeId: 7, viewer: { id: 7, role: "super_admin", isOwn: true, canManage: false }, nowMs: NOW });
+    expect(ownSuper.history[0].note).toBe("afinal sim");
+  });
+
+  it("extra em horário fixo (o posto mudou depois) → aviso ao RH e ao super admin, nunca na própria ficha", async () => {
+    const { store } = memStore({ history: [{ id: 1, employeeId: 7, mode: "fixed", effectiveFrom: "2026-10-01", note: "x", setById: 1, setAt: null }], employee: { position: "extra", contractType: "extra" } });
+    const rh = await pontoModeView(store, { employeeId: 7, viewer: { id: 3, role: "backoffice", isOwn: false, canManage: true }, nowMs: NOW });
+    expect(rh.stateWarnings.join(" ")).toMatch(/É extra e está em "1 · Horário fixo"/);
+    const own = await pontoModeView(store, { employeeId: 7, viewer: { id: 7, role: "extra", isOwn: true, canManage: false }, nowMs: NOW });
+    expect(own.stateWarnings).toEqual([]);
   });
 
   it("sem modo: nada para ler", async () => {
@@ -423,7 +517,8 @@ describe("o cartão da ficha", () => {
 
   it("o cartão está na ficha → Horário e só aparece com o interruptor ligado", () => {
     const hr = src("client/src/pages/HRPage.tsx");
-    expect(hr).toContain('<TabsContent value="schedules" className="mt-4 space-y-4"><PontoModeCard employeeId={employeeId} /><SchedulesTab employeeId={employeeId} /></TabsContent>');
+    const schedulesTab = hr.slice(hr.indexOf('<TabsContent value="schedules"'), hr.indexOf("</TabsContent>", hr.indexOf('<TabsContent value="schedules"')));
+    expect(schedulesTab).toContain("<PontoModeCard employeeId={employeeId} />");
     const card = src("client/src/components/rh/PontoModeCard.tsx");
     expect(card).toContain("if (!d || !d.enabled) return null;");
     const r = src("server/pontoModesRouter.ts");
@@ -460,6 +555,10 @@ describe("juntar fichas com modos", () => {
     const m = src("server/employeeMerge.ts");
     expect(m).toContain("const modeWarning = await pontoModeMergeWarningFor(d, keepId, dropId);");
     expect(m).toContain("await refreshPontoModeCache(d, o.keepId);");
+    // a que sai fica sem histórico → a cópia dela também se limpa (só escreve se mudar; sem leitura, não mexe)
+    expect(m).toContain("await refreshPontoModeCache(d, o.dropId);");
+    expect(m).toContain("if (history == null) return;");
+    expect(m).toContain("AND NOT (pontoMode <=> ${mode})");
     expect(m).not.toMatch(/DELETE\s+FROM/i);
   });
 });
