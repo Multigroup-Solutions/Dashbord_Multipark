@@ -136,3 +136,16 @@ export function isAiFeature(v: string): v is AiFeature {
 export function isAiTier(v: unknown): v is AiTier {
   return typeof v === "string" && (AI_TIERS as readonly string[]).includes(v);
 }
+
+/**
+ * Raciocínio (Gemini 3.x) por funcionalidade — Definições → Parâmetros,
+ * `ai.thinkingLevels` (plano MPV, F0a). "default" = não manda o nível (fica o
+ * do próprio modelo); uma funcionalidade fora da lista segue a env
+ * AI_THINKING_LEVEL (omissão "low"), como até aqui.
+ */
+export type AiThinkingLevel = "minimal" | "low" | "medium" | "high" | "default";
+export const AI_THINKING_LEVELS: readonly AiThinkingLevel[] = ["minimal", "low", "medium", "high", "default"];
+
+export function isAiThinkingLevel(v: unknown): v is AiThinkingLevel {
+  return typeof v === "string" && (AI_THINKING_LEVELS as readonly string[]).includes(v);
+}

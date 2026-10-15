@@ -65,3 +65,30 @@ export function fallbackTier(tier: AiTier): AiTier | null {
 export function supportsThinkingLevel(model: string): boolean {
   return /^gemini-(3|[4-9])/.test(model);
 }
+
+/**
+ * Mínimo de `maxOutputTokens` por nível de raciocínio (o raciocínio gasta do
+ * mesmo teto que a resposta — plano MPV §3.6). null = não se manda o nível:
+ * o modelo decide (nos Gemini 3 costuma ser alto), por isso o teto é o maior.
+ */
+export const THINKING_MAX_TOKENS_FLOOR: Readonly<Record<"minimal" | "low" | "medium" | "high" | "model", number>> = {
+  minimal: 0,
+  low: 900,
+  medium: 4096,
+  high: 8192,
+  model: 8192,
+};
+
+/**
+ * Teto de saída para um nível de raciocínio: nunca abaixo do pedido
+ * (`baseMaxTokens`) nem do mínimo do nível. Ex.: lite com "low" e 700 → 900;
+ * Argon "low" com 2048 → 2048, "medium" → 4096. `level` é o nível EFETIVO
+ * (thinkingLevelFor) ou null; um modelo sem raciocínio passa `noThinking`. PURA.
+ */
+export function maxTokensFor(baseMaxTokens: number, level: string | null, opts: { noThinking?: boolean } = {}): number {
+  const base = Math.max(16, Math.floor(Number(baseMaxTokens) || 0));
+  if (opts.noThinking) return base;
+  const key = level == null ? "model" : level;
+  const floor = (THINKING_MAX_TOKENS_FLOOR as Record<string, number>)[key] ?? THINKING_MAX_TOKENS_FLOOR.low;
+  return Math.max(base, floor);
+}

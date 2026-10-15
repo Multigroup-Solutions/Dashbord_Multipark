@@ -2,7 +2,7 @@
 modulo: ia
 titulo: Onde é que a IA trabalha no dashboard
 rotas: /definicoes
-palavras: resumir agora, resumo desatualizado, vertex ai, vertex ai na ue, gemini na ue, rgpd, ia na ue, só corre com a ia em vertex, quem pede o resumo ia, condutor não vê a explicação, onde corre a ia, onde está a ia, o que faz a ia, ia automática, ia sozinha, resumo da ia, resumos da ia, resumo ia, rascunho ia, rascunho com ia, gerar com ia, interruptores da ia, desligar a ia, ligar a ia, dados pessoais na ia, quem vê o resumo, inteligência artificial
+palavras: uso da ia por dia, leituras repetidas, custo da ia, gasto da ia, só ue bloqueada, raciocínio da ia, resumir agora, resumo desatualizado, vertex ai, vertex ai na ue, gemini na ue, rgpd, ia na ue, só corre com a ia em vertex, quem pede o resumo ia, condutor não vê a explicação, onde corre a ia, onde está a ia, o que faz a ia, ia automática, ia sozinha, resumo da ia, resumos da ia, resumo ia, rascunho ia, rascunho com ia, gerar com ia, interruptores da ia, desligar a ia, ligar a ia, dados pessoais na ia, quem vê o resumo, inteligência artificial
 ---
 # Onde é que a IA trabalha no dashboard
 
@@ -56,3 +56,9 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - Os ficheiros vão inteiros: faturas, áudio do rádio, documentos e CV do RH, e PDFs dos manuais. Os documentos e CV do RH só com a IA em Vertex AI na UE.
 
 **Nunca, sem uma pessoa:** emails ou respostas a clientes e publicações no Google.
+
+**Quanto a IA usa (administradores)**
+- Em **Definições → Estado**, o cartão **IA — custo do mês** mostra o gasto por funcionalidade.
+- Logo abaixo, **IA — uso por dia**: carrega em **Ver o uso por dia** e escolhe os dias (7 a 62) e, se quiseres, uma funcionalidade. Por dia vês as chamadas, os erros, as **bloqueadas** (orçamento ou "só UE" dos documentos do RH), os tokens, o custo e a hora da primeira e da última chamada (UTC).
+- Por baixo, **Leituras repetidas**: a mesma coisa (por exemplo, a mesma crítica) lida pela IA mais de uma vez, as 100 com mais vezes. As conversas do Multis não contam.
+- Só leitura: nada muda ao abrir. O raciocínio de cada funcionalidade muda-se em **Definições → Parâmetros → Raciocínio da IA por funcionalidade**.

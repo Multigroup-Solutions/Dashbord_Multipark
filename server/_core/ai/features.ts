@@ -14,7 +14,7 @@
  */
 import { ensureFeatureFlagOverrides, isFeatureEnabled, type EnvLike } from "../featureFlags";
 import { automationFlagDefault } from "../../../shared/appSettings";
-import { AI_FEATURES, isAiTier, type AiFeature, type AiTier } from "../../../shared/aiFeatures";
+import { AI_FEATURES, isAiThinkingLevel, isAiTier, type AiFeature, type AiThinkingLevel, type AiTier } from "../../../shared/aiFeatures";
 
 export { AI_FEATURES, AI_FEATURE_IDS, isAiFeature, type AiFeature, type AiFeatureDef, type AiFlag } from "../../../shared/aiFeatures";
 
@@ -50,6 +50,30 @@ export async function loadFeatureTierSettings(): Promise<Partial<Record<string, 
   try {
     const { getSetting } = await import("../../appSettings");
     return (await getSetting("ai.featureTiers")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Raciocínio pedido para uma funcionalidade: Definições `ai.thinkingLevels`
+ * ganha ao ponto de chamada; nenhum dos dois = undefined (o cliente segue a
+ * env AI_THINKING_LEVEL, como até aqui). PURA.
+ */
+export function resolveThinkingLevel(
+  feature: AiFeature,
+  opts: { requested?: AiThinkingLevel; settings?: Partial<Record<string, AiThinkingLevel>> | null } = {},
+): AiThinkingLevel | undefined {
+  const fromSettings = opts.settings?.[feature];
+  if (isAiThinkingLevel(fromSettings)) return fromSettings;
+  return isAiThinkingLevel(opts.requested) ? opts.requested : undefined;
+}
+
+/** `ai.thinkingLevels` (cache de 30 s das definições). Nunca lança. */
+export async function loadThinkingLevelSettings(): Promise<Partial<Record<string, AiThinkingLevel>> | null> {
+  try {
+    const { getSetting } = await import("../../appSettings");
+    return (await getSetting("ai.thinkingLevels")) ?? null;
   } catch {
     return null;
   }
