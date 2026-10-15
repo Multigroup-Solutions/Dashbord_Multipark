@@ -113,7 +113,7 @@ git merge-tree --write-tree origin/main origin/<ramo>                           
 ```powershell
 gh pr create --base main --head <ramo> --title "<Fase>: <o que muda, em linguagem do Jorge>" --body-file <scratchpad>\pr.md
 gh pr checks <n> --watch --fail-fast          # CI + preview da Vercel verdes (se disser "no checks reported", espera uns segundos e repete)
-gh pr merge <n> --squash --delete-branch --match-head-commit <hash auditado (ou o do merge do main já verificado)>
+gh pr merge <n> --squash --delete-branch --match-head-commit <hash COMPLETO (40 caracteres; `git rev-parse <curto>`) auditado ou do merge do main já verificado>
 ```
 3. Depois do merge: Vercel MCP `list_deployments` / `get_deployment` até `READY`, e `get_runtime_errors` nos 10 min seguintes. Se o deploy falhar ou houver erros novos: `request_rollback` e avisar o Jorge. Atenção: depois de um rollback a Vercel desliga a atribuição automática do domínio — os merges seguintes só chegam a produção quando alguém fizer promote do deploy novo (diz-lho).
 4. **Hora do deploy**: se a mudança mexe em horários de trabalhos que avisam/enviam (ex.: Extras Dia), confirma antes nas Definições de produção (`settings.values.list`: `isSet`/`value`) se há valores gravados e se o envio automático está ligado, e escolhe a hora do merge em conformidade.
