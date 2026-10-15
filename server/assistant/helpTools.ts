@@ -169,9 +169,27 @@ export function searchHelpSections(
   question: string,
   opts: { canSee?: (page: HelpTreePage) => boolean; currentPage?: string | null; exclude?: ReadonlySet<string>; max?: number } = {},
 ): HelpSectionHit[] {
+  const max = Math.max(1, opts.max ?? 8);
+  const scored = scoreHelpSections(tree, question, opts).filter((h) => h.score >= 2);
+  const best = scored[0]?.score ?? 0;
+  return scored.filter((h) => h.score * 2 >= best).slice(0, max);
+}
+
+/** A regra de "passa" da pesquisa lexical (≥ 2 pontos e ≥ metade da melhor). PURA. */
+export const lexicalPasses = (score: number, best: number): boolean => score >= 2 && score * 2 >= best;
+
+/**
+ * A pontuação lexical de hoje para TODAS as secções com alguma palavra no
+ * título ou no texto (sem os cortes do `searchHelpSections`), da maior para a
+ * menor — a pesquisa por significado (MPV F5) junta-lhe o cosseno. PURA.
+ */
+export function scoreHelpSections(
+  tree: HelpTree,
+  question: string,
+  opts: { canSee?: (page: HelpTreePage) => boolean; currentPage?: string | null; exclude?: ReadonlySet<string> } = {},
+): HelpSectionHit[] {
   const qs = [...stems(question)];
   if (!qs.length) return [];
-  const max = Math.max(1, opts.max ?? 8);
   const scored: HelpSectionHit[] = [];
   for (const it of sectionIndex(tree)) {
     if (opts.exclude?.has(it.section.id)) continue;
@@ -186,12 +204,25 @@ export function searchHelpSections(
     }
     if (!title && !text) continue;
     const score = 3 * title + pageTitle + text + 0.5 * kw + (opts.currentPage && it.page.id === opts.currentPage ? 1 : 0);
-    if (score >= 2) scored.push({ page: it.page, section: it.section, score });
+    scored.push({ page: it.page, section: it.section, score });
   }
-  scored.sort((a, b) => b.score - a.score || a.section.text.length - b.section.text.length || a.section.id.localeCompare(b.section.id));
-  const best = scored[0]?.score ?? 0;
-  return scored.filter((h) => h.score * 2 >= best).slice(0, max);
+  scored.sort(compareHits);
+  return scored;
 }
+
+/** Ordem das secções: pontos, depois a mais curta, depois o id (estável). PURA. */
+export const compareHits = (a: HelpSectionHit, b: HelpSectionHit): number =>
+  b.score - a.score || a.section.text.length - b.section.text.length || a.section.id.localeCompare(b.section.id);
+
+/**
+ * A pesquisa das secções que o Multis do piloto usa (MPV F5: lexical ∪ vizinhos
+ * por vetor — server/assistant/helpSearch.ts). Vem no contexto das ferramentas;
+ * sem ela (o v1, os testes) fica a lexical de sempre.
+ */
+export type SectionSearchFn = (
+  text: string,
+  opts: { canSee: (page: HelpTreePage) => boolean; currentPage?: string | null; exclude?: ReadonlySet<string>; max: number },
+) => Promise<HelpSectionHit[]>;
 
 const hitRow = (h: HelpSectionHit) => ({
   id: h.section.id,
@@ -259,7 +290,10 @@ export const HELP_NAV_TOOLS: ChatTool<StaffToolCtx>[] = [
     async run(args, ctx) {
       const texto = String(args.texto ?? "").trim().slice(0, 300);
       if (!texto) throw new ToolUserError("Escreve o que procuras.");
-      const hits = searchHelpSections(knowledgeTree(), texto, { canSee: visibleFor(ctx), max: HELP_SEARCH_MAX });
+      // Piloto (MPV F5): também pelo significado; sem a pesquisa no contexto, a lexical de sempre.
+      const hits = ctx.sectionSearch
+        ? await ctx.sectionSearch(texto, { canSee: visibleFor(ctx), max: HELP_SEARCH_MAX })
+        : searchHelpSections(knowledgeTree(), texto, { canSee: visibleFor(ctx), max: HELP_SEARCH_MAX });
       return hits.length
         ? { resultados: hits.map(hitRow) }
         : { resultados: [], nota: "Nada encontrado com essas palavras: tenta outras ou abre a página certa pelo índice." };

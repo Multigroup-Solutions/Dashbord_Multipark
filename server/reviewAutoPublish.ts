@@ -80,6 +80,8 @@ export interface QueuePatch {
   verifiedAt?: string;
   verifyFailures?: number;
   alertedAt?: string;
+  /** 0715: gravado ANTES de enviar à Google/Windsor. */
+  sentAt?: string;
 }
 
 /** Erro "já tem resposta cá dentro" no publicar (compare-and-set): não é uma falha, é "não se publica". */
@@ -107,8 +109,11 @@ export interface AutoPublishDeps {
   loadReview(id: number): Promise<ReviewRow | null>;
   readAtSource(review: ReviewRow, timeoutMs: number): Promise<SourceRead>;
   replyChannel(): Promise<"google" | "windsor" | "none">;
-  /** Publica (compare-and-set: lança AlreadyAnsweredError se a crítica já tiver resposta cá). */
-  publish(reviewId: number, text: string): Promise<{ channel: string }>;
+  /**
+   * Publica (compare-and-set: lança AlreadyAnsweredError se a crítica já tiver resposta cá). `stored: false` =
+   * enviada, mas uma pessoa respondeu cá ao mesmo tempo (perdeu a corrida depois do envio).
+   */
+  publish(reviewId: number, text: string): Promise<{ channel: string; stored?: boolean }>;
   /** UPDATE da linha; com `expectStatus`, só se ainda estiver nesse estado (true = mudou). */
   markRow(id: number, patch: QueuePatch, expectStatus?: string): Promise<boolean>;
   verifyRows(limit: number): Promise<QueueRow[]>;
@@ -159,8 +164,9 @@ export async function runReviewAutoPublish(o: { deadlineAt?: number } = {}, deps
       if (!src.ok) continue; // tenta noutra corrida
       if (!src.hasReply) {
         await deps.markRow(row.id, { status: "scheduled", reason: "estava presa em «a publicar»; relida na fonte, sem resposta — volta à espera" }, "publishing");
-      } else if (review.googleReply && matchKey(review.googleReply) === matchKey(row.replyText)) {
-        await deps.markRow(row.id, { status: "published", publishedAt: iso(deps.nowMs()), reason: null }, "publishing");
+      } else if (matchKey(src.replyText ?? review.googleReply) === matchKey(row.replyText)) {
+        // A resposta que está na fonte é a que enviámos (a corrida morreu depois de enviar).
+        await deps.markRow(row.id, { status: "published", publishedAt: iso(deps.nowMs()), reason: "estava presa em «a publicar»; a resposta na fonte é a nossa" }, "publishing");
       } else {
         await deps.markRow(row.id, { status: "skipped", reason: "estava presa em «a publicar» e a crítica já tem resposta na fonte" }, "publishing");
       }
@@ -217,9 +223,23 @@ export async function runReviewAutoPublish(o: { deadlineAt?: number } = {}, deps
           outcome = { ok: false, error: changed };
         } else {
           try {
+            // Marcador ANTES de enviar: se a corrida morrer a seguir, a releitura sabe que pode ter saído.
+            await deps.markRow(row.id, { sentAt: iso(deps.nowMs()) }, "publishing");
             const r = await deps.publish(row.reviewId, String(row.replyText));
-            await deps.markRow(row.id, { status: "published", publishedAt: iso(deps.nowMs()), channel: r.channel, reason: null });
-            await deps.log({ reviewId: row.reviewId, details: `Resposta automática (5★) publicada${r.channel === "windsor" ? " pela Windsor" : " no Google"} (6 h à vista; 5★, mesmo texto e sem resposta na fonte antes de publicar)` });
+            const lost = r.stored === false;
+            await deps.markRow(row.id, { status: "published", publishedAt: iso(deps.nowMs()), channel: r.channel, reason: lost ? "publicada, mas uma pessoa respondeu cá ao mesmo tempo — ver qual ficou no Google" : null });
+            await deps.log({ reviewId: row.reviewId, details: lost
+              ? `Resposta automática (5★) publicada${r.channel === "windsor" ? " pela Windsor" : " no Google"}, mas uma pessoa respondeu ao mesmo tempo (a de cá não foi gravada por cima) — ver qual ficou no perfil`
+              : `Resposta automática (5★) publicada${r.channel === "windsor" ? " pela Windsor" : " no Google"} (6 h à vista; 5★, mesmo texto e sem resposta na fonte antes de publicar)` });
+            if (lost) {
+              await deps.notify({
+                kind: "review_auto_publish", noCityToAll: true, recipientFilter: (c) => c.role === "super_admin",
+                title: "Críticas 5★: a resposta automática cruzou-se com uma pessoa",
+                body: `A crítica #${row.reviewId} foi respondida por uma pessoa no mesmo instante em que saiu a resposta automática. Cá ficou a da pessoa; no Google fica a última que chegou. Abre a crítica e confirma no perfil Google qual ficou.`,
+                link: `/criticas?id=${row.reviewId}`, entity: { type: "review_auto_publish_race", id: row.reviewId },
+              }).catch(() => undefined);
+              report.alerts++;
+            }
             report.published++;
             outcome = { ok: true };
           } catch (err: any) {
@@ -498,7 +518,7 @@ export const realAutoPublishDeps: AutoPublishDeps = {
     const [{ publishReply }, { getSystemUserId }] = await Promise.all([import("./integrations/googleBusiness/service"), import("./db")]);
     // O "utilizador do sistema" é o 1.º super admin (getSystemUserId). Compare-and-set: só se continuar sem resposta.
     const r = await publishReply(reviewId, text, await getSystemUserId(), { onlyIfNoReply: true });
-    return { channel: r.channel };
+    return { channel: r.channel, stored: r.stored };
   },
   markRow: async (id, patch, expectStatus) => {
     const d = await db();
@@ -513,6 +533,7 @@ export const realAutoPublishDeps: AutoPublishDeps = {
     if (patch.verifiedAt !== undefined) sets.push(sql`verifiedAt = ${patch.verifiedAt}`);
     if (patch.verifyFailures !== undefined) sets.push(sql`verifyFailures = ${patch.verifyFailures}`);
     if (patch.alertedAt !== undefined) sets.push(sql`alertedAt = ${patch.alertedAt}`);
+    if (patch.sentAt !== undefined) sets.push(sql`sentAt = ${patch.sentAt}`);
     if (!sets.length) return false;
     const res = await d.execute(sql`UPDATE review_auto_publish SET ${sql.join(sets, sql`, `)} WHERE id = ${id}${expectStatus ? sql` AND status = ${expectStatus}` : sql``}`);
     return affected(res) > 0;
