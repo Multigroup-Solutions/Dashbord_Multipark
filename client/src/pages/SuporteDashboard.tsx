@@ -97,8 +97,9 @@ export default function SuporteDashboard() {
     ?? (incidentsQ.data && !incidentsQ.data.available ? incidentsQ.data.reason : "as contagens não responderam");
   // Perdidos "abertos" = o painel da página Perdidos (getLostDashboard: Novo, Em investigação e
   // Encontrado ainda por devolver), contado no servidor. Quem só vê os próprios casos não o pede (16c).
+  // Só os contadores: sem o cruzamento dos condutores (lê a Multipark ao vivo e aqui não se mostra).
   const seesLost = seesBeyondOwn(user, "perdidos");
-  const lostQ = trpc.lostFound.dashboard.useQuery(scope, { enabled: seesLost, retry: retryTransient, staleTime: 60_000 });
+  const lostQ = trpc.lostFound.dashboard.useQuery({ ...scope, countsOnly: true }, { enabled: seesLost, retry: retryTransient, staleTime: 60_000 });
   const loadingLostFound = lostQ.isLoading;
   const pendingQ = trpc.complaints.list.useQuery({ status: "new", ...scope }, { retry: retryTransient });
   const pendingComplaints = pendingQ.data ?? [];

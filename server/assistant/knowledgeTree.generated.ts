@@ -136,7 +136,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Reclamações, críticas Google, ocorrências e perdidos e achados.",
        "children": [],
        "container": false,
-       "chars": 1798
+       "chars": 1904
       },
       {
        "id": "dashboards.md#marketing-dashboards-marketing",
@@ -2858,7 +2858,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "atividade-diaria.md#o-que-se-passava-e-quem-trabalhou"
        ],
        "container": false,
-       "chars": 2508
+       "chars": 2537
       },
       {
        "id": "atividade-diaria.md#entregas-tarde-e-recolhas-manha-os-tempos",
@@ -4594,7 +4594,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "As caixas ficam à esquerda, umas por baixo das outras, como no Gmail: carregas numa e a lista muda logo ao lado, sem sair da página.",
        "children": [],
        "container": false,
-       "chars": 4807
+       "chars": 4909
       },
       {
        "id": "comunicacao.md#o-resto-da-comunicacao-menu-por-esta-ordem",

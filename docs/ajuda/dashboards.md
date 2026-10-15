@@ -68,10 +68,10 @@ RH, desempenho e formação. A barra de filtros desta página **não muda nenhum
 
 ## Suporte (/suporte-dashboard)
 Reclamações, críticas Google, ocorrências e perdidos e achados. A barra tem só **Cidade** e **Marca** (já não tem Período: os números são os de agora) e vale para **todos** os cartões — com uma cidade escolhida, o Suporte mostra só essa cidade; sem cidade, as cidades que podes ver. Cada número é o mesmo da página do módulo, com a mesma cidade.
-- **Reclamações Abertas**: Novas + Em análise + Aguarda cliente, não arquivadas — a mesma conta do Geral. "N de sempre" = todas as não arquivadas, de sempre (a página Reclamações abre nos últimos 90 dias, por isso o total dela é outro).
+- **Reclamações Abertas**: Novas + Em análise + Aguarda cliente, não arquivadas — a soma dos cartões **Novos**, **Em Análise** e **Aguarda Cliente** da página **Reclamações** com a mesma cidade (sem filtros). "N de sempre" = todas as não arquivadas, de sempre (a página Reclamações abre nos últimos 90 dias, por isso o Total dela é outro).
 - **Rating Médio Google** (de 0 a 5) e **Reviews Pendentes** (sem resposta enviada): a **mesma consulta** do separador Dashboard das **Críticas**, com a mesma cidade/marca.
 - **Ocorrências Abertas**: ao vivo da app Multipark, não resolvidas (fecham sozinhas do nosso lado, ao fim de 3 dias, só as de prioridade **média** sem palavras de dinheiro, danos ou reclamação no tipo nem nas notas; na Multipark continuam por resolver), sem os parques que a operação não faz. A marca filtra pela **cidade** dela.
-- **Itens Perdidos**: os **abertos** do painel da página Perdidos — Novos, Em investigação e **Encontrados ainda por devolver** —, não arquivados. Quem só vê os próprios casos vê "Sem acesso".
+- **Itens Perdidos**: o **Abertos** do Painel da página **Perdidos** — Novos, Em investigação e **Encontrados ainda por devolver** —, não arquivados. Quem só vê os próprios casos vê "Sem acesso".
 - Gráficos: **Reclamações por Estado** ("Fechadas" inclui as convertidas), **Distribuição de Ratings Google** (1★ a 5★) e **Ocorrências por Tipo** (pelo título da ocorrência).
 - **Últimas reclamações novas**: as 5 reclamações no estado **Novo** mais recentes, com cliente, matrícula, data e prioridade.
 - Se uma leitura falhar, o cartão mostra **"—"** com "Leitura falhou — não é 0" (e o gráfico diz o que não carregou, com **Tentar de novo**); sem a permissão do módulo diz **"Sem acesso"**. Nunca aparece 0 por erro.
