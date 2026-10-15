@@ -47,7 +47,7 @@ import { RULES_DOCS } from "./rulesDocs.generated";
 import { askAssistant, staffHelpDocs, type AssistantMode } from "./service";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS, type StaffToolCtx } from "./tools";
 import {
-  CUT_NOTE, MPV_DATA_TOOLS, MPV_DATA_TOOL_NAMES, MPV_TOOL_RESULT_MAX_CHARS, SLOW_CALL_MESSAGE, cutText, evaluationRulesFor, fitToolResult, setSlowCallMsForTests,
+  CUT_NOTE, MPV_DATA_TOOLS, MPV_DATA_TOOL_NAMES, MPV_TOOL_RESULT_MAX_CHARS, SLOW_CALL_MESSAGE, cutText, evaluationRulesFor, fitToolResult, resetSlowCallsForTests,
   summarizeTimesGrid, weekdayArg,
 } from "./mpvDataTools";
 import { mpvSuggestions } from "./mpv";
@@ -69,12 +69,12 @@ beforeEach(() => {
   resetFinalCallModeForTests();
   resetMaskedColumnsForTests(null);
   invalidateSettingsCache();
-  setSlowCallMsForTests(null);
+  resetSlowCallsForTests();
 });
 afterEach(() => {
   for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   setAiProvidersForTests(null);
-  setSlowCallMsForTests(null);
+  resetSlowCallsForTests();
 });
 
 const LISBOA: CityAccess = { all: false, defaultCityId: 10, cityName: "Lisboa", cityNames: ["Lisboa"], cityIds: [10], projectIds: [10, 11, 12], missingCostCenter: false };
@@ -623,19 +623,63 @@ describe("o que cada ferramenta devolve", () => {
     expect((await runTool(none, "tempos_resumo")).result).toEqual({ error: TOOL_REFUSED_ERROR });
   });
 
-  it("leituras lentas com prazo próprio: \"demorou demasiado\" em vez de comer as voltas", async () => {
-    setSlowCallMsForTests(20);
+  it("leituras lentas com prazo próprio (injetado no ctx): \"demorou demasiado\" em vez de comer as voltas", async () => {
+    const quick = (srv = fakeServer({ hang: true })) => ({ ...ctxFor("supervisor", LISBOA, srv), slowCallMs: 20 }) as StaffToolCtx;
     for (const [name, args] of [["pressao_explicar", {}], ["tempos_resumo", {}], ["tempos_resumo", { semana: "2026-10-14" }]] as const) {
-      const ctx = ctxFor("supervisor", LISBOA, fakeServer({ hang: true }));
+      resetSlowCallsForTests();
       const t0 = Date.now();
-      const { result } = await runTool(ctx, name, args);
+      const { result } = await runTool(quick(), name, args);
       expect(result, name).toEqual({ error: SLOW_CALL_MESSAGE });
       expect(Date.now() - t0).toBeLessThan(2000);
     }
     // Na situação do Extras Dia a Pressão é só um extra: sem ela, as horas apertadas ficam "indisponível".
-    const sit = await runTool(ctxFor("supervisor", LISBOA, fakeServer({ hang: true })), "extras_dia_situacao");
+    resetSlowCallsForTests();
+    const sit = await runTool(quick(), "extras_dia_situacao");
     expect(sit.result.horasApertadas).toBe("indisponível");
     expect(sit.result.cobertura).toBeDefined();
+    // O indicador de pessoal e a lista das críticas também têm prazo.
+    for (const [path, name] of [["extrasDia.staffing", "extras_dia_situacao"], ["reviews.list", "criticas_por_responder"]] as const) {
+      resetSlowCallsForTests();
+      const srv = fakeServer();
+      const call = vi.fn(async (p: string, i?: any) => (p === path ? new Promise(() => {}) : srv.call(p, i)));
+      const { result } = await runTool({ ...quick(), call } as StaffToolCtx, name);
+      expect(result, path).toEqual({ error: SLOW_CALL_MESSAGE });
+    }
+  });
+
+  it("prazo: uma 2.ª leitura igual espera pela 1.ª (single-flight) e o resultado atrasado serve a pergunta seguinte", async () => {
+    let release!: (v: unknown) => void;
+    const srv = fakeServer();
+    const pressure = await srv.call("extrasDia.pressure");
+    let pressureCalls = 0;
+    const call = vi.fn(async (p: string, i?: any) => {
+      if (p !== "extrasDia.pressure") return srv.call(p, i);
+      pressureCalls++;
+      return new Promise((res) => { release = res; });
+    });
+    const ctx = { ...ctxFor("supervisor", LISBOA, srv), call, slowCallMs: 30 } as StaffToolCtx;
+    // Duas perguntas ao mesmo tempo: UMA leitura; as duas passam o prazo.
+    const [a, b] = await Promise.all([runTool(ctx, "pressao_explicar", { dia: 5, hora: 9 }), runTool(ctx, "tempos_resumo")]);
+    expect(a.result).toEqual({ error: SLOW_CALL_MESSAGE });
+    expect(b.result).toEqual({ error: SLOW_CALL_MESSAGE });
+    expect(pressureCalls).toBe(1);
+    // Ainda a correr: uma 3.ª pergunta não lança outra leitura.
+    await runTool(ctx, "pressao_explicar", { dia: 5, hora: 9 });
+    expect(pressureCalls).toBe(1);
+    // A leitura chega (tarde): a pergunta seguinte usa-a logo, sem ler outra vez.
+    release(pressure);
+    await new Promise((r) => setTimeout(r, 5));
+    const c = await runTool(ctx, "pressao_explicar", { dia: 5, hora: 9 });
+    expect(c.result.error).toBeUndefined();
+    expect(c.result).toMatchObject({ percentilDaCidade: "p75", celula: { hora: "09h" } });
+    expect(pressureCalls).toBe(1);
+    // Outra pessoa (ou outras cidades) não aproveita a leitura desta.
+    const other = { ...ctx, user: { id: 8, role: "supervisor" } } as StaffToolCtx;
+    const d = runTool(other, "pressao_explicar", { dia: 5, hora: 9 });
+    await new Promise((r) => setTimeout(r, 1));
+    expect(pressureCalls).toBe(2);
+    release(pressure);
+    expect((await d).result.error).toBeUndefined();
   });
 
   it("avaliacao_minha: evaluation.mine + as regras em vigor (sem IA): dias com mais negativos e as regras desses pontos primeiro", async () => {
@@ -643,7 +687,7 @@ describe("o que cada ferramenta devolve", () => {
     const { result } = await runTool(ctx, "avaliacao_minha");
     expect((ctx.call as any).mock.calls.map((c: any[]) => c[0])).toEqual(["evaluation.mine"]);
     expect(result).toMatchObject({ pontos: { total: 150, negativos: -25 }, contestacoes: { abertas: 1, total: 1 } });
-    expect((result.diasComMaisNegativos as any[])[0]).toMatchObject({ dia: "2026-10-03", negativos: -15, regras: ["Excesso de velocidade ×1", "Atraso ao trabalho (≥ 5 min) ×1"] });
+    expect((result.diasComMaisNegativos as any[])[0]).toMatchObject({ dia: "2026-10-03", negativos: -15, regrasDoDia: ["Excesso de velocidade ×1", "Atraso ao trabalho (≥ 5 min) ×1"] });
     const rules = result.regras as string[];
     expect(rules.length).toBeGreaterThan(2);
     expect(rules[0]).toMatch(/Excesso de velocidade|Recolha ou entrega/);
@@ -732,6 +776,44 @@ describe("teto do resultado (~4 000 caracteres)", () => {
         expect(out, String(n)).not.toEqual({ cortado: CUT_NOTE });
       }
     }
+  });
+
+  it("o 2.º corte (a nota não coube na reserva) volta a acertar os contadores", () => {
+    const input = { total: 50, lista: Array.from({ length: 50 }, (_, i) => ({ n: i, t: "x".repeat(30) })) };
+    const shown = [{ at: [] as string[], list: "lista", count: "mostrados", total: "total" }];
+    // Sem reserva: o 1.º corte vai até ao teto, a nota passa-o e o 2.º corte tira mais linhas.
+    const first = fitToolResult(input, 900, { shown, noteReserve: 1_000_000 });
+    const out = fitToolResult(input, 900, { shown, noteReserve: 0 });
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(900);
+    expect(out.mostrados).toBe((out.lista as any[]).length);
+    expect(out.total).toBe(50);
+    expect(out.cortado).toMatch(/encurtado/);
+    expect((first.lista as any[]).length).toBeLessThanOrEqual((out.lista as any[]).length);
+  });
+
+  it("redigir antes de cortar também nos campos curtos (parceiro, perfil, percurso, em falta, regras, previsão, horas)", async () => {
+    const email = "geral.da.agencia@exemplo-longo.pt";
+    const phone = "+351 912 345 678";
+    const pad = (n: number) => "p".repeat(n);
+    const srv = fakeServer({ totals: true });
+    const call = vi.fn(async (p: string, i?: any) => {
+      const base: any = await srv.call(p, i);
+      if (p === "partnerships.live") return { ...base, partners: base.partners.map((x: any) => ({ ...x, name: `${pad(70)} ${email}` })) };
+      if (p === "reviews.list") return base.map((x: any) => ({ ...x, locationTitle: `${pad(50)} ${phone}` }));
+      if (p === "training.myTraining") return { ...base, assignments: base.assignments.map((a: any) => ({ ...a, pathName: `${pad(72)} ${email}`, items: a.items.map((it: any) => ({ ...it, title: `${pad(73)} ${phone}` })) })) };
+      if (p === "evaluation.mine") return { ...base, days: [{ day: "2026-10-03", score: { totalPoints: -5, negativePoints: -5, lines: [{ label: `${pad(60)} ${email}`, count: 1, subtotal: -5 }] } }] };
+      if (p === "extrasDia.staffing") return { ...base, incomplete: `${pad(190)} ${email}`, people: [{ id: 1, name: "João Pereira", hours: `${pad(32)} ${phone}` }] };
+      return base;
+    });
+    const ctx = { ...ctxFor("admin", ALL, srv, true), call } as StaffToolCtx;
+    const all: string[] = [];
+    for (const name of ["parcerias_resumo", "criticas_por_responder", "formacao_progresso", "avaliacao_minha", "extras_dia_situacao"]) {
+      const { json } = await runTool(ctx, name, lisboaIfNeeded(name));
+      all.push(json);
+    }
+    const sent = all.join("\n");
+    for (const part of ["geral.da", "agencia@", "exemplo-longo", "+351", "912 345", "345 678"]) expect(sent, part).not.toContain(part);
+    expect(sent).not.toMatch(/\[(EMAIL|TELEFONE)_?\d*…/);
   });
 
   it("os contadores batem certo depois do corte (mostrados = linhas que ficaram)", async () => {
