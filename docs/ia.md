@@ -310,11 +310,17 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   `ai.assistantSmartBudget` (`{"eurPerDay": 10, "eurPerMonth": 150, "eurPerUserPerDay": 3}`; os
   três têm de ser > 0 — não há "sem teto"; o dia é o **dia de Lisboa**, como no resto da app; o mês
   é o civil UTC, como o orçamento global), verificado **antes** do orçamento global. Cada turno
-  **reserva à cabeça** 0,20 € (o máximo estimado de uma pergunta) na instância, libertado quando o
-  custo real fica registado; a partir de 80 % de um teto o gasto lê-se sempre da BD (sem a cache de
-  60 s). **Limite do excesso**: cada instância só vê as suas reservas, por isso o teto pode passar,
-  no máximo, ≈ (turnos em curso noutras instâncias × 0,20 €) + o que um turno gastar acima da
-  estimativa. Se não se conseguir medir o gasto (erro da BD), o piloto também desce para o lite
+  **reserva à cabeça** na instância o custo **máximo estimado do turno**
+  (`ownBudgetTurnEstimateEur`: por chamada, o teto de saída × preço de saída + a entrada estimada —
+  sistema, histórico, pergunta e ferramentas, ≈ 4 car./token — × preço de entrada; × as chamadas
+  possíveis, voltas de ferramentas + a final; nunca abaixo de 0,20 €. Ex.: Argon com raciocínio
+  `default` (teto 8 192), 4 voltas e ~10 k tokens de entrada ≈ 0,44 €). A reserva faz-se mesmo antes
+  do pedido, colada a um try/finally (se a preparação do pedido falhar, não fica nada reservado),
+  liberta-se quando o custo real fica registado e **expira sozinha** ao fim de 2× o prazo do pedido
+  (se a função morrer pelo limite da Vercel). A partir de 80 % de um teto o gasto lê-se sempre da BD
+  (sem a cache de 60 s). **Limite do excesso**: cada instância só vê as suas reservas, por isso o
+  teto pode passar, no máximo, ≈ (turnos em curso noutras instâncias × a estimativa de cada um) + o
+  que um turno gastar acima da estimativa. Se não se conseguir medir o gasto (erro da BD), o piloto também desce para o lite
   (motivo "unknown"). Desligar o `AI_ASSISTANT` pára também o piloto. Ao chegar lá, o Multis
   responde com o `assistant` (lite) e a nota "modo económico" — não bloqueia nada. O gasto por pessoa
   lê-se pelo índice `(feature, userId, createdAt)` com cache de 60 s. As funcionalidades com teto
