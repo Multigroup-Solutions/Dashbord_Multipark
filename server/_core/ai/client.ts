@@ -106,6 +106,8 @@ export interface ProviderResponse {
 export interface ContextCacheHandle {
   name: string;
   expiresAt: number;
+  /** Tokens guardados na cache (usageMetadata.totalTokenCount), quando a API os dá. */
+  tokens?: number;
 }
 
 /** Pedido de embeddings (só Gemini). */
@@ -380,7 +382,8 @@ export function createGeminiProvider(env: Env = process.env): AiProvider {
       });
       if (!c?.name) throw new Error("cache sem nome");
       const exp = c.expireTime ? Date.parse(c.expireTime) : NaN;
-      return { name: String(c.name), expiresAt: Number.isFinite(exp) ? exp : Date.now() + ttlSeconds * 1000 };
+      const tokens = Number((c as any)?.usageMetadata?.totalTokenCount);
+      return { name: String(c.name), expiresAt: Number.isFinite(exp) ? exp : Date.now() + ttlSeconds * 1000, ...(Number.isFinite(tokens) && tokens > 0 ? { tokens } : {}) };
     },
   };
 }

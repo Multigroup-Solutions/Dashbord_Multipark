@@ -4,7 +4,9 @@
  * ([EMAIL_1], [TELEFONE_1], [IBAN_1], [NIF_1], [MATRICULA_1]). Quando a
  * resposta precisa dos valores (ex.: resumo da passagem de turno com a
  * matrícula de um carro), `restore()` repõe-nos DEPOIS de a resposta chegar —
- * o fornecedor nunca os vê. Nomes: só o primeiro nome (`firstName`).
+ * o fornecedor nunca os vê. Nomes: só o primeiro nome (`firstName`); no chat,
+ * os nomes de colaboradores dos resultados das ferramentas vão como [NOME_n]
+ * e são repostos no fim (`createRedactionContext`).
  *
  * Tudo PURO (sem I/O).
  */
@@ -44,19 +46,25 @@ const NINE_DIGITS = /\b\d{3}[\s.-]?\d{3}[\s.-]?\d{3}\b/g;
 const PLATE_DASH = /\b(?:[A-Z]{2}-?\d{2}-?\d{2}|\d{2}-?[A-Z]{2}-?\d{2}|\d{2}-?\d{2}-?[A-Z]{2}|[A-Z]{2}-?\d{2}-?[A-Z]{2})\b/gi;
 const PLATE_SPACE = /\b(?:[A-Z]{2} \d{2} \d{2}|\d{2} [A-Z]{2} \d{2}|\d{2} \d{2} [A-Z]{2}|[A-Z]{2} \d{2} [A-Z]{2})\b/g;
 
-export function redactPii(input: string | null | undefined, opts: { kinds?: readonly PiiKind[] } = {}): Redaction {
-  const kinds = new Set<PiiKind>(opts.kinds ?? ["email", "iban", "phone", "nif", "plate"]);
-  const counts: Record<PiiKind, number> = { email: 0, iban: 0, phone: 0, nif: 0, plate: 0 };
-  const byValue = new Map<string, string>();
-  const byToken = new Map<string, string>();
+interface RedactState {
+  counts: Record<PiiKind, number>;
+  names: number;
+  byValue: Map<string, string>;
+  byToken: Map<string, string>;
+}
+
+const newState = (): RedactState => ({ counts: { email: 0, iban: 0, phone: 0, nif: 0, plate: 0 }, names: 0, byValue: new Map(), byToken: new Map() });
+
+/** Troca os dados pessoais de um texto por marcadores, com a numeração de `st`. PURA (muda só `st`). */
+function redactInto(st: RedactState, input: string | null | undefined, kinds: Set<PiiKind>): string {
   const token = (kind: PiiKind, value: string): string => {
     const key = `${kind}:${value.replace(/[\s.-]/g, "").toUpperCase()}`;
-    const existing = byValue.get(key);
+    const existing = st.byValue.get(key);
     if (existing) return existing;
-    counts[kind] += 1;
-    const t = `[${LABEL[kind]}_${counts[kind]}]`;
-    byValue.set(key, t);
-    byToken.set(t, value);
+    st.counts[kind] += 1;
+    const t = `[${LABEL[kind]}_${st.counts[kind]}]`;
+    st.byValue.set(key, t);
+    st.byToken.set(t, value);
     return t;
   };
 
@@ -84,13 +92,64 @@ export function redactPii(input: string | null | undefined, opts: { kinds?: read
     const plate = (m: string) => (/\d/.test(m) && /[A-Z]/i.test(m) ? token("plate", m) : m);
     text = text.replace(PLATE_DASH, plate).replace(PLATE_SPACE, plate);
   }
+  return text;
+}
 
-  const MARK = /\[(EMAIL|IBAN|TELEFONE|NIF|MATRICULA)_\d+\]/g;
+const MARK = /\[(EMAIL|IBAN|TELEFONE|NIF|MATRICULA|NOME)_\d+\]/g;
+const restoreWith = (st: RedactState) => (out: string) => String(out ?? "").replace(MARK, (t) => st.byToken.get(t) ?? t);
+const stripMarks = (out: string) => String(out ?? "").replace(MARK, "").replace(/[ \t]{2,}/g, " ").replace(/ +([,.;:!?])/g, "$1").trim();
+const ALL_KINDS: readonly PiiKind[] = ["email", "iban", "phone", "nif", "plate"];
+
+export function redactPii(input: string | null | undefined, opts: { kinds?: readonly PiiKind[] } = {}): Redaction {
+  const st = newState();
+  const text = redactInto(st, input, new Set<PiiKind>(opts.kinds ?? ALL_KINDS));
+  return { text, counts: st.counts, restore: restoreWith(st), strip: stripMarks };
+}
+
+/**
+ * UM contexto de redação por turno do chat (plano MPV §3.7, F0b): a pergunta,
+ * o histórico, o conhecimento e os RESULTADOS DAS FERRAMENTAS passam todos por
+ * aqui, com numeração CONTÍNUA dos marcadores (o email da pergunta é o
+ * [EMAIL_1], o de uma ferramenta o [EMAIL_2]) e o restauro faz-se UMA vez, no
+ * fim, com tudo.
+ *  - `text()`: texto livre → emails, telefones, IBAN, NIF, matrículas;
+ *  - `person()`: nome COMPLETO de um colaborador → [NOME_n], reposto no fim
+ *    (a pessoa vê o nome completo; o fornecedor não) — dois "João" diferentes
+ *    têm marcadores diferentes;
+ *  - clientes/avaliadores: `firstName` (não se repõe).
+ * PURO.
+ */
+export interface RedactionContext {
+  text(input: string | null | undefined): string;
+  person(fullName: string | null | undefined): string | null;
+  restore(output: string): string;
+  strip(output: string): string;
+  readonly counts: Readonly<Record<PiiKind, number>>;
+  /** Quantos nomes de colaboradores foram tapados. */
+  readonly names: number;
+}
+
+export function createRedactionContext(opts: { kinds?: readonly PiiKind[] } = {}): RedactionContext {
+  const st = newState();
+  const kinds = new Set<PiiKind>(opts.kinds ?? ALL_KINDS);
   return {
-    text,
-    counts,
-    restore: (out: string) => String(out ?? "").replace(MARK, (t) => byToken.get(t) ?? t),
-    strip: (out: string) => String(out ?? "").replace(MARK, "").replace(/[ \t]{2,}/g, " ").replace(/ +([,.;:!?])/g, "$1").trim(),
+    text: (input) => redactInto(st, input, kinds),
+    person: (fullName) => {
+      const name = String(fullName ?? "").replace(/\s+/g, " ").trim();
+      if (!name) return null;
+      const key = `name:${name.toLowerCase()}`;
+      const existing = st.byValue.get(key);
+      if (existing) return existing;
+      st.names += 1;
+      const t = `[NOME_${st.names}]`;
+      st.byValue.set(key, t);
+      st.byToken.set(t, name);
+      return t;
+    },
+    restore: restoreWith(st),
+    strip: stripMarks,
+    get counts() { return st.counts; },
+    get names() { return st.names; },
   };
 }
 

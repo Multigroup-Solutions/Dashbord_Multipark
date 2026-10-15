@@ -10,6 +10,7 @@ import { can, seesBeyondOwn } from "@shared/access";
 import { FAQsTab, ManualsTab, VideoPlayerDialog, VideosTab, useDoneSet } from "./training/ContentTabs";
 import { CareerTab, QuizTab, type QuizPreset } from "./training/Assessments";
 import { DashboardTab, MyTrainingTab, PathsAdminTab } from "./training/Management";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 export default function TrainingPage() {
   const { user } = useAuth();
@@ -20,6 +21,8 @@ export default function TrainingPage() {
   const isSupervisor = seesBeyondOwn(user, "formacao") && can(user, "formacao", "edit");
   const seesProgress = seesBeyondOwn(user, "formacao");
   const [tab, setTab] = usePersistedState("training.tab", "mine");
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab });
   const [openManualId, setOpenManualId] = useState<number | null>(null);
   const [playVideo, setPlayVideo] = useState<any>(null);
   // Tema do próximo quiz: o da formação (categoria do percurso) ou o procurado em "A minha formação".

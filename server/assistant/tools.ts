@@ -7,7 +7,9 @@
  *  - só é declarada ao modelo se a pessoa tiver o módulo (`available`);
  *  - valida a cidade pedida contra as cidades da pessoa ANTES de chamar;
  *  - devolve só agregados ou listas curtas (≤ 20 linhas), sem emails,
- *    telefones, matrículas nem nomes completos de clientes.
+ *    telefones, matrículas nem nomes completos de clientes; os nomes de
+ *    colegas e o texto livre declaram-se em `pii` (plano MPV F0b) e passam
+ *    pela redação única do turno ([NOME_n] repostos no fim).
  */
 import { can, roleRank, ROLE_RANK, seesBeyondOwn, type AccessOverrides } from "../../shared/access";
 import type { CityAccess } from "../cityAccess";
@@ -100,7 +102,6 @@ export function rangeArgs(args: Record<string, unknown>, today: string, opts: { 
   return { from, to };
 }
 
-const firstName = (s: unknown) => String(s ?? "").trim().split(/\s+/)[0] || null;
 const num = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0)) || 0;
 
 const cityParam = { type: "string", enum: [...CITY_NAMES], description: "Cidade (opcional). Omite para todas as cidades a que a pessoa tem acesso." };
@@ -113,6 +114,29 @@ const rangeParams = {
 
 const OPEN_COMPLAINT = ["new", "analyzing", "waiting_client"];
 const OPEN_LOST = ["new", "investigating", "found"];
+
+/**
+ * A ajuda pedida pelo modelo (`abrir_ajuda`): primeiro pelo FICHEIRO
+ * ("google-tempo-real", "google-tempo-real.md"), depois pelo módulo só se for
+ * o único com esse módulo, depois pelo título. Módulo com várias ajudas →
+ * a lista dos candidatos (antes devolvia sempre a 1.ª: definicoes.md,
+ * marketing.md, integracoes.md…). PURA.
+ */
+export function findHelpDoc(docs: HelpDoc[], query: unknown): { doc: HelpDoc } | { candidates: HelpDoc[] } | null {
+  const q = String(query ?? "").trim().toLowerCase().replace(/\.md$/, "");
+  if (!q) return null;
+  const byFile = docs.find((d) => d.file === `${q}.md` || d.file === `${q.replace(/_/g, "-")}.md`);
+  if (byFile) return { doc: byFile };
+  const byModule = docs.filter((d) => d.module === q || d.module === q.replace(/-/g, "_"));
+  if (byModule.length === 1) return { doc: byModule[0] };
+  if (byModule.length > 1) return { candidates: byModule };
+  const byTitle = docs.filter((d) => d.title.toLowerCase() === q);
+  if (byTitle.length === 1) return { doc: byTitle[0] };
+  if (byTitle.length > 1) return { candidates: byTitle };
+  return null;
+}
+
+const helpId = (d: HelpDoc) => d.file.replace(/\.md$/, "");
 
 function countBy<T>(rows: T[], key: (r: T) => string): Record<string, number> {
   const out: Record<string, number> = {};
@@ -130,17 +154,23 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     parameters: {
       type: "object",
       properties: {
-        modulo: { type: "string", description: "Módulo, como aparece entre parênteses no índice da ajuda (ex.: extras_dia, tarefas)." },
+        modulo: { type: "string", description: "A ajuda, como aparece entre parênteses no índice: o módulo (ex.: extras_dia, tarefas) ou, quando o índice o mostra, o ficheiro (ex.: google-tempo-real)." },
         tema: { type: "string", description: "O que procuras dentro dessa ajuda (palavras da pergunta) — traz a parte certa de uma ajuda longa." },
       },
       required: ["modulo"],
     },
     available: () => true,
     async run(args, ctx) {
-      const m = String(args.modulo ?? "").trim().toLowerCase();
-      const doc = ctx.helpDocs.find((d) => d.module === m || d.file === `${m}.md` || d.title.toLowerCase() === m);
-      if (!doc) return { error: "Não há ajuda para esse módulo.", modulos: ctx.helpDocs.map((d) => d.module) };
-      return { titulo: doc.title, ajuda: excerptHelp(doc.body, 3500, String(args.tema ?? "").slice(0, 300)) };
+      const hit = findHelpDoc(ctx.helpDocs, args.modulo);
+      if (!hit) return { error: "Não há ajuda para esse módulo.", ajudas: ctx.helpDocs.map(helpId) };
+      if ("candidates" in hit) {
+        return {
+          error: "Há várias ajudas com esse nome: chama outra vez com o ficheiro certo.",
+          candidatos: hit.candidates.map((d) => ({ ficheiro: helpId(d), titulo: d.title, resumo: d.summary.slice(0, 160) })),
+        };
+      }
+      const doc = hit.doc;
+      return { ficheiro: helpId(doc), titulo: doc.title, ajuda: excerptHelp(doc.body, 3500, String(args.tema ?? "").slice(0, 300)) };
     },
   },
   {
@@ -175,6 +205,8 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
       properties: { data: { type: "string", description: "Dia (AAAA-MM-DD). Omissão: amanhã." }, cidade: cityParam },
     },
     available: (ctx) => can(ctx.user, "extras_dia", "view"),
+    // Colaboradores: o fornecedor vê [NOME_n]; a pessoa vê o nome completo (dois "João" não se confundem).
+    pii: { people: ["nome"] },
     async run(args, ctx) {
       const date = dayArg(args.data, addDays(ctx.today, 1), "Data");
       const city = extrasCityArg(ctx.access, args.cidade);
@@ -190,7 +222,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
         data: date, cidade: city.name,
         escalados: { total: list.length, condutores: drivers.length, teamLeaders: list.length - drivers.length,
           manha: list.filter((x) => x.shift === "morning").length, noite: list.filter((x) => x.shift === "night").length },
-        pessoas: capRows(list.map((x) => ({ nome: firstName(x.personName), turno: x.shift, inicio: hour(num(x.startHour)), fim: hour(num(x.endHour)), tl: !!x.isTeamLeader }))).rows,
+        pessoas: capRows(list.map((x) => ({ nome: String(x.personName ?? "").trim() || null, turno: x.shift, inicio: hour(num(x.startHour)), fim: hour(num(x.endHour)), tl: !!x.isTeamLeader }))).rows,
         faltas: gaps == null ? "indisponível" : capRows(gapRows.map((g) => ({ hora: hour(num(g.hour)), precisos: num(g.needed), escalados: num(g.have) }))).rows,
         horasComFalta: gapRows.length,
       };
@@ -204,6 +236,8 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
       properties: { tipo: { type: "string", enum: ["reclamacoes", "ocorrencias", "perdidos", "todos"], description: "Omissão: todos." }, cidade: cityParam },
     },
     available: (ctx) => can(ctx.user, "reclamacoes", "view") || can(ctx.user, "ocorrencias", "view") || can(ctx.user, "perdidos", "view"),
+    // Títulos e tipos são texto livre escrito à mão (podem ter emails, telefones, matrículas).
+    pii: { text: ["titulo", "tipo", "objeto"] },
     async run(args, ctx) {
       const tipo = String(args.tipo ?? "todos");
       const city = resolveCityArg(ctx.access, args.cidade);

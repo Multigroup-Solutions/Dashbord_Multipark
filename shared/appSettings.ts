@@ -394,6 +394,23 @@ export const closedUntilSchema = z.preprocess(
 export const userIdListSchema = z.array(z.number({ error: "Escolhe as contas na lista." }).int().positive()).max(50, "No máximo 50 contas.")
   .transform((ids) => Array.from(new Set(ids)));
 
+/** Plano MPV §5.2 (F0b): quem está no piloto do Multis (ids de utilizador). */
+export const aiAssistantPilotSchema = z.object({
+  userIds: z.array(z.number({ error: "userIds: só números (ids das contas)." }).int().positive()).max(50, "No máximo 50 contas no piloto.")
+    .transform((ids) => Array.from(new Set(ids))),
+}).strict();
+export type AiAssistantPilot = z.infer<typeof aiAssistantPilotSchema>;
+
+/** Plano MPV §5.3 (F0b): teto € próprio do Multis do piloto (assistant_smart). 0 = sem esse teto. */
+export const aiAssistantSmartBudgetSchema = z.object({
+  eurPerDay: z.number({ error: "eurPerDay tem de ser um número." }).min(0, "eurPerDay: não pode ser negativo.").max(10_000, "eurPerDay: máximo 10 000 €."),
+  eurPerMonth: z.number({ error: "eurPerMonth tem de ser um número." }).min(0, "eurPerMonth: não pode ser negativo.").max(100_000, "eurPerMonth: máximo 100 000 €."),
+  eurPerUserPerDay: z.number({ error: "eurPerUserPerDay tem de ser um número." }).min(0, "eurPerUserPerDay: não pode ser negativo.").max(10_000, "eurPerUserPerDay: máximo 10 000 €."),
+}).strict();
+export type AiAssistantSmartBudget = z.infer<typeof aiAssistantSmartBudgetSchema>;
+export const AI_ASSISTANT_SMART_DEFAULT_BUDGET: AiAssistantSmartBudget = { eurPerDay: 10, eurPerMonth: 150, eurPerUserPerDay: 3 };
+export const AI_ASSISTANT_SMART_DEFAULT_LIMITS = { perMinute: 10, perDay: 80, maxInputChars: 1000 } as const;
+
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
   group: SettingGroup;
@@ -671,7 +688,7 @@ export const SETTINGS = {
     key: "ai.thinkingLevels",
     group: "ia",
     label: "Raciocínio da IA por funcionalidade",
-    description: "Quanto o modelo \"pensa\" antes de responder (só os Gemini 3.x): minimal (quase nada, o mais barato), low, medium, high, ou default (o do próprio modelo). O raciocínio paga-se como saída. JSON: {\"mail_routing\": \"minimal\", \"assistant\": \"low\"}. Funcionalidades fora da lista seguem AI_THINKING_LEVEL (omissão low). Vazio = como até aqui.",
+    description: "Quanto o modelo \"pensa\" antes de responder (só os Gemini 3.x): minimal (quase nada, o mais barato), low, medium, high, ou default (o do próprio modelo). O raciocínio paga-se como saída. JSON: {\"mail_routing\": \"minimal\", \"assistant\": \"low\"}. Atenção: os modelos Pro/smart podem não aceitar \"minimal\" — nas funcionalidades em nível smart (ex.: assistant_smart) o \"minimal\" é ignorado e fica o da env (low). Funcionalidades fora da lista seguem AI_THINKING_LEVEL (omissão low). Vazio = como até aqui.",
     schema: aiThinkingLevelsSchema,
     defaultValue: {},
     wiring: "live",
@@ -683,6 +700,34 @@ export const SETTINGS = {
     description: "Pedidos por pessoa ao assistente e tamanho máximo da pergunta. JSON: {\"perMinute\": 20, \"perDay\": 200, \"maxInputChars\": 1000}. Acima do limite, a pessoa vê \"Muitos pedidos\" e o tempo de espera.",
     schema: aiAssistantLimitsSchema,
     defaultValue: { ...AI_ASSISTANT_DEFAULT_LIMITS },
+    wiring: "live",
+  }),
+  // Plano MPV §5.2/§5.3 (F0b): piloto do Multis no modelo smart (Argon).
+  "ai.assistantPilot": def({
+    key: "ai.assistantPilot",
+    group: "ia",
+    label: "Multis: quem está no piloto (modelo smart)",
+    description: "Contas (ids) que usam o Multis do piloto no modelo smart (assistant_smart), com o interruptor «Multis por página (MPV)» e «IA: Multis do piloto (smart)» ligados. As outras pessoas ficam no Multis de sempre (lite). JSON: {\"userIds\": [1, 12]}. Vazio = ninguém.",
+    schema: aiAssistantPilotSchema,
+    defaultValue: { userIds: [] },
+    wiring: "live",
+  }),
+  "ai.assistantSmartLimits": def({
+    key: "ai.assistantSmartLimits",
+    group: "ia",
+    label: "Multis do piloto: limites de perguntas",
+    description: "Pedidos por pessoa ao Multis do piloto (assistant_smart) e tamanho máximo da pergunta. JSON: {\"perMinute\": 10, \"perDay\": 80, \"maxInputChars\": 1000}. No modo económico valem os limites do assistente de sempre.",
+    schema: aiAssistantLimitsSchema,
+    defaultValue: { ...AI_ASSISTANT_SMART_DEFAULT_LIMITS },
+    wiring: "live",
+  }),
+  "ai.assistantSmartBudget": def({
+    key: "ai.assistantSmartBudget",
+    group: "ia",
+    label: "Multis do piloto: teto de gasto (€)",
+    description: "Teto próprio do Multis do piloto (assistant_smart), em € estimados: por dia (UTC), por mês civil (UTC) e por pessoa por dia. Ao chegar a um deles, a pessoa continua a ter o Multis no modelo de sempre (lite), com a nota \"modo económico\" — não bloqueia nada. Este gasto não conta para o orçamento mensal da IA que pára as outras funcionalidades (o cartão do custo mostra-o na mesma). 0 = sem esse teto. JSON: {\"eurPerDay\": 10, \"eurPerMonth\": 150, \"eurPerUserPerDay\": 3}.",
+    schema: aiAssistantSmartBudgetSchema,
+    defaultValue: { ...AI_ASSISTANT_SMART_DEFAULT_BUDGET },
     wiring: "live",
   }),
   "ai.commsRouting": def({
@@ -1198,6 +1243,9 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "AI_LOST_FOUND_MATCH", label: "IA: correspondências nos Perdidos & Achados", description: "Compara as descrições dos perdidos com os objetos encontrados (depois de um filtro por data, matrícula/reserva e parque). Contactar o cliente é sempre humano.", group: "ia" },
   { name: "AI_CRM_IDENTITY", label: "IA: fichas de clientes duvidosas", description: "Nas sugestões para juntar que as regras não resolvem (nome diferente, nome de uma palavra…), a IA dá o parecer e junta sozinha só com certeza alta (≥ 85 %); o resto fica em Rever fichas com o parecer à vista. Recebe só o primeiro nome e factos (\"telefone igual\", \"NIF diferente\"), nunca emails, telefones ou matrículas. Empresas, clientes Pro e NIF pessoais diferentes nunca vão à IA. Só funciona com a junção automática (CRM_AUTO_MERGE) ligada.", defaultEnabled: false, group: "ia" },
   { name: "AI_ASSISTANT", label: "IA: assistente (chat)", description: "Botão de ajuda em todas as páginas: explica como se usa a app e responde a perguntas sobre os dados que a pessoa já pode ver (só leitura).", group: "ia" },
+  // Plano MPV (F0b): piloto do Multis no modelo smart. Gasta mais → desligado por omissão.
+  { name: "AI_ASSISTANT_SMART", label: "IA: Multis do piloto (modelo smart)", description: "Para as pessoas do piloto (Definições → Parâmetros → IA, ai.assistantPilot), com o «Multis por página (MPV)» ligado, o Multis responde com o modelo smart (AI_MODEL_SMART, ex.: gemini-4-argon). Tem teto de gasto próprio (ai.assistantSmartBudget): ao chegar lá, a pessoa continua no modelo de sempre com a nota \"modo económico\". Não conta para o orçamento mensal que pára as outras funcionalidades. Desligado: toda a gente fica no Multis de sempre.", defaultEnabled: false, group: "ia" },
+  { name: "MPV", label: "Multis por página (MPV) — piloto", description: "Liga o piloto do Multis por página: as pessoas em ai.assistantPilot passam a usar o Multis do piloto (com «IA: Multis do piloto (modelo smart)» ligado). As outras pessoas não mudam. Desligado por omissão; só o super admin muda.", defaultEnabled: false, group: "ia", superAdminOnly: true },
   // Multis 2 (Jorge, 8 out 2026: pediu a memória) → ligado por omissão. Não chama a IA:
   // o "Lembra-te" grava sem IA; as notas só vão no contexto das perguntas ao Multis.
   { name: "AI_ASSISTANT_MEMORY", label: "IA: memória do Multis", description: "Quem escreve no Multis uma mensagem a começar por \"Lembra-te\" (ou \"Memoriza\", \"Não te esqueças\") fica com essa nota guardada (até 30 por pessoa), e os admins escrevem notas da empresa (até 100) que toda a gente vê. O Multis segue-as em todas as conversas, mas nunca para contornar permissões ou cidades. Tudo à vista no separador Memória do Multis; arquivar não apaga. Desligado: não guarda, não usa as notas e esconde a Memória.", group: "ia" },

@@ -34,6 +34,11 @@ export class AiError extends Error {
   /** Estado HTTP do fornecedor, quando houver (nunca o corpo). */
   readonly status: number | null;
   readonly retryable: boolean;
+  /**
+   * A mensagem do fornecedor fala de "function"/"tool" (só este sinal, nunca o
+   * texto) — para a chamada final saber se o 400 foi mesmo pelas ferramentas.
+   */
+  toolsHint = false;
   constructor(code: AiErrorCode, opts: { status?: number | null; retryable?: boolean; detail?: string } = {}) {
     super(opts.detail ? `${code}: ${opts.detail}` : code);
     this.name = "AiError";
@@ -57,7 +62,13 @@ export class AiEuOnlyError extends AiError {
   constructor(feature: string) { super("eu_only", { detail: feature }); this.name = "AiEuOnlyError"; }
 }
 export class AiBudgetExceededError extends AiError {
-  constructor() { super("budget"); this.name = "AiBudgetExceededError"; }
+  /** "global" = orçamento mensal da IA; "own" = teto próprio da funcionalidade (plano MPV §5.3). */
+  readonly scope: "global" | "own";
+  constructor(scope: "global" | "own" = "global") {
+    super("budget", scope === "own" ? { detail: "own" } : {});
+    this.name = "AiBudgetExceededError";
+    this.scope = scope;
+  }
 }
 export class AiTimeoutError extends AiError {
   constructor() { super("timeout"); this.name = "AiTimeoutError"; }
@@ -106,7 +117,11 @@ export function toAiError(err: unknown): AiError {
   if (name === "AbortError" || name === "TimeoutError" || name === "FetchTimeoutError") return new AiTimeoutError();
   const status = typeof e?.status === "number" ? e.status : typeof e?.code === "number" ? e.code : null;
   if (status === 429) return new AiRateLimitError();
-  if (status != null) return new AiProviderError(status, isRetryableStatus(status));
+  if (status != null) {
+    const pe = new AiProviderError(status, isRetryableStatus(status));
+    pe.toolsHint = /function|tool/i.test(String(e?.message ?? ""));
+    return pe;
+  }
   // Falha de rede (fetch failed, ECONNRESET…): vale nova tentativa.
   const netCode = String(e?.cause?.code ?? e?.code ?? "");
   if (name === "TypeError" || /ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR/.test(netCode)) return new AiProviderError(null, true, "network");

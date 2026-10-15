@@ -102,8 +102,10 @@ describe("IA: níveis e modelos", () => {
     expect(fallbackTier("lite")).toBeNull();
   });
 
-  it("regra do dono: tudo lite por omissão; fast só onde o lite falha; smart em lado nenhum", () => {
-    for (const id of AI_FEATURE_IDS) expect(AI_FEATURES[id].tier).not.toBe("smart");
+  it("regra do dono: tudo lite por omissão; fast só onde o lite falha; smart só no piloto do Multis (teto próprio)", () => {
+    // Plano MPV §5.2: o assistant_smart (piloto, interruptor desligado por omissão, teto € próprio) é o único smart.
+    expect(AI_FEATURE_IDS.filter((id) => AI_FEATURES[id].tier === "smart")).toEqual(["assistant_smart"]);
+    expect((AI_FEATURES.assistant_smart as { ownBudget?: boolean }).ownBudget).toBe(true);
     const fast = AI_FEATURE_IDS.filter((id) => AI_FEATURES[id].tier === "fast");
     // As perguntas de escolha múltipla (rascunhos e o quiz novo em cada jogo, 14 out 2026): com o lite a resposta certa falha.
     expect(fast).toEqual(["quiz_generation", "quiz_live"]);

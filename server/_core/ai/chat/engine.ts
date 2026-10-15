@@ -11,11 +11,18 @@
  *
  * Nunca lança: devolve `{ ok: false, reason, message }` com texto PT-PT
  * para mostrar tal e qual (IA desligada, orçamento, muitos pedidos…).
+ *
+ * Dados pessoais (plano MPV §3.7, F0b): UM contexto de redação por turno —
+ * histórico, conhecimento, memória, pergunta E os resultados das ferramentas
+ * (campos `pii` de cada uma) partilham a numeração dos marcadores; a resposta
+ * é reposta UMA vez, no fim, com tudo. Limitação conhecida: as respostas
+ * anteriores da mesma conversa (já repostas e guardadas) voltam no histórico
+ * só com a redação dos padrões (emails, telefones…), não dos nomes.
  */
-import { isAiError, aiUserMessage } from "../errors";
+import { AiBudgetExceededError, isAiError, aiUserMessage } from "../errors";
 import { selectProvider } from "../client";
 import type { AiFeature } from "../features";
-import { redactPii } from "../pii";
+import { createRedactionContext } from "../pii";
 import { checkRateLimit, type RateLimitRule } from "../rateLimit";
 import { runAi } from "../run";
 import { aiFeatureAvailableFresh } from "../status";
@@ -100,8 +107,14 @@ export type ChatTurnResult =
       citations?: KbCitation[];
       /** Turno do "Lembra-te" (sem IA): o que aconteceu à nota. */
       memory?: "saved" | "exists" | "rejected";
+      /** Nível do modelo que respondeu (lite/fast/smart); ausente sem IA. */
+      tier?: string;
     }
-  | { ok: false; reason: ChatFailure; message: string; retryAfterSec?: number; conversationId?: number | null };
+  | {
+      ok: false; reason: ChatFailure; message: string; retryAfterSec?: number; conversationId?: number | null;
+      /** reason "budget": o orçamento global ou o teto próprio da funcionalidade (plano MPV §5.3). */
+      budgetScope?: "global" | "own";
+    };
 
 export const CHAT_MESSAGES: Record<Exclude<ChatFailure, "too_long" | "rate_limited" | "error">, string> = {
   empty: "Escreve uma pergunta.",
@@ -159,8 +172,9 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   const kbAt = kb ? parts.push(kb.block) - 1 : -1;
   const memAt = memory ? parts.push(memory) - 1 : -1;
   parts.push(question);
-  const red = redactPii(parts.join(SEP));
-  const redParts = red.text.split(SEP);
+  // Um só contexto de redação no turno: as ferramentas continuam a numeração.
+  const red = createRedactionContext();
+  const redParts = red.text(parts.join(SEP)).split(SEP);
   const history = turns.map((t, i) => ({ role: t.role, text: redParts[i] ?? t.text }));
   const safeQuestion = redParts[redParts.length - 1] ?? question;
   const safeKnowledge = kbAt >= 0 ? redParts[kbAt] ?? "" : "";
@@ -204,23 +218,28 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
                   await input.onToolCall?.(name, args, conversationId);
                 },
                 onError: (name, error) => { toolErrors.push({ tool: name, error: error.slice(0, 200) }); },
-              }),
+              }, { redact: red }),
             },
           }
         : {}),
     });
-    const cited = kb ? appendCitations(red.restore(r.output), kb.citations) : null;
-    const answer = (cited ? cited.text : red.restore(r.output)).trim();
+    // Restauro UMA vez, no fim (pergunta, conhecimento e ferramentas).
+    const restored = red.restore(r.output);
+    const cited = kb ? appendCitations(restored, kb.citations) : null;
+    const answer = (cited ? cited.text : restored).trim();
     const helpFiles = help.map((d) => d.file);
     let messageId: number | null = null;
     if (conversationId) {
       const saved = await appendExchange(conversationId, question, answer, { tools: used, helpFiles, path: input.path, variant: input.variant ?? null, tier: r.tier }).catch(() => null);
       messageId = saved?.answerId ?? null;
     }
-    return { ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, ...(cited ? { citations: cited.used } : {}) };
+    return { ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, tier: r.tier, ...(cited ? { citations: cited.used } : {}) };
   } catch (err) {
     if (isAiError(err)) {
-      if (err.code === "disabled" || err.code === "not_configured" || err.code === "budget") {
+      if (err.code === "budget") {
+        return { ok: false, reason: "budget", message: CHAT_MESSAGES.budget, conversationId, budgetScope: err instanceof AiBudgetExceededError ? err.scope : "global" };
+      }
+      if (err.code === "disabled" || err.code === "not_configured") {
         return { ok: false, reason: err.code, message: CHAT_MESSAGES[err.code], conversationId };
       }
       if (err.code === "rate_limited") return { ok: false, reason: "rate_limited", message: aiUserMessage(err), conversationId };

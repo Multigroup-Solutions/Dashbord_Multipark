@@ -127,20 +127,22 @@ describe("function calling: máximo de voltas → chamada final sem cache e sem 
     expect(ins.params.slice(-4)).toEqual(["STOP", 2, "v1", 1]);
   });
 
-  it("a final volta a pedir ferramentas → texto de recurso (sem erro), registado como ok/final_fallback", async () => {
+  it("a final volta a pedir ferramentas → texto de recurso (sem erro para a pessoa), registado como error/final_fallback", async () => {
     h.db = createFakeDb();
     const provider = createFakeProvider("gemini", [toolsResp(1)]);
     setAiProvidersForTests({ gemini: provider });
     const r = await runAi({ feature: "assistant", input: "?", tools: { declarations: [TOOL], execute: async () => ({}), maxRounds: 1 } });
     expect(r).toMatchObject({ output: TOOLS_FALLBACK_TEXT, fallback: true, forcedFinal: true });
     const ins = usageInserts().at(-1)!;
-    expect(ins.params).toEqual(expect.arrayContaining(["ok", "final_fallback"]));
+    expect(ins.params).toEqual(expect.arrayContaining(["error", "final_fallback"]));
     // e entra sozinha em "Perguntas que falharam"
     expect(detectUnanswered(TOOLS_FALLBACK_TEXT)).toMatch(/não conseguiu juntar/);
   });
 
   it("fornecedor recusa (400) o histórico sem ferramentas → resumo em texto; a seguir vai logo pelo resumo", async () => {
-    const steps: Array<ProviderResponse | Error> = [toolsResp(1), toolsResp(1), httpError(400), okResponse("Pelo resumo: 7.")];
+    // 400 a falar das ferramentas (só este sinal se guarda) → o resumo resulta → fica lembrado para este modelo.
+    const toolsRejected = Object.assign(new Error("Please ensure that function call turns come with function declarations"), { status: 400 });
+    const steps: Array<ProviderResponse | Error> = [toolsResp(1), toolsResp(1), toolsRejected, okResponse("Pelo resumo: 7.")];
     const provider = createFakeProvider("gemini", steps);
     setAiProvidersForTests({ gemini: provider });
     const execute = async () => ({ total: 7 });

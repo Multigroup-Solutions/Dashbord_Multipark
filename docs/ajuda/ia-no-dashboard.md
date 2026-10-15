@@ -2,7 +2,7 @@
 modulo: ia
 titulo: Onde é que a IA trabalha no dashboard
 rotas: /definicoes
-palavras: uso da ia por dia, leituras repetidas, custo da ia, gasto da ia, só ue bloqueada, raciocínio da ia, resumir agora, resumo desatualizado, vertex ai, vertex ai na ue, gemini na ue, rgpd, ia na ue, só corre com a ia em vertex, quem pede o resumo ia, condutor não vê a explicação, onde corre a ia, onde está a ia, o que faz a ia, ia automática, ia sozinha, resumo da ia, resumos da ia, resumo ia, rascunho ia, rascunho com ia, gerar com ia, interruptores da ia, desligar a ia, ligar a ia, dados pessoais na ia, quem vê o resumo, inteligência artificial
+palavras: teto do piloto, gasto do piloto, orçamento do piloto, uso da ia por dia, leituras repetidas, custo da ia, gasto da ia, só ue bloqueada, raciocínio da ia, resumir agora, resumo desatualizado, vertex ai, vertex ai na ue, gemini na ue, rgpd, ia na ue, só corre com a ia em vertex, quem pede o resumo ia, condutor não vê a explicação, onde corre a ia, onde está a ia, o que faz a ia, ia automática, ia sozinha, resumo da ia, resumos da ia, resumo ia, rascunho ia, rascunho com ia, gerar com ia, interruptores da ia, desligar a ia, ligar a ia, dados pessoais na ia, quem vê o resumo, inteligência artificial
 ---
 # Onde é que a IA trabalha no dashboard
 
@@ -61,4 +61,10 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - Em **Definições → Estado**, o cartão **IA — custo do mês** mostra o gasto por funcionalidade.
 - Logo abaixo, **IA — uso por dia**: carrega em **Ver o uso por dia** e escolhe os dias (7 a 62) e, se quiseres, uma funcionalidade. Por dia vês as chamadas, os erros, as **bloqueadas** (orçamento ou "só UE" dos documentos do RH), os tokens, o custo e a hora da primeira e da última chamada (UTC).
 - Por baixo, **Leituras repetidas**: a mesma coisa (por exemplo, a mesma crítica) lida pela IA mais de uma vez, as 100 com mais vezes. As conversas do Multis não contam.
-- Só leitura: nada muda ao abrir. O raciocínio de cada funcionalidade muda-se em **Definições → Parâmetros → Raciocínio da IA por funcionalidade**.
+- Na tabela do uso por dia vês também as respostas em que a IA **não conseguiu juntar tudo** (texto de recurso, contam como erro), as que tiveram de **acabar sem ferramentas** e as **cortadas por tamanho** (MAX_TOKENS).
+- Só leitura: nada muda ao abrir. O raciocínio de cada funcionalidade muda-se em **Definições → Parâmetros → Raciocínio da IA por funcionalidade** (o "minimal" não vale no modelo smart).
+
+**Multis do piloto e o orçamento**
+- O **Multis do piloto** (modelo smart) tem **teto próprio** em **Definições → Parâmetros → IA → Multis do piloto: teto de gasto** (omissão: 10 € por dia, 150 € por mês, 3 € por pessoa por dia; dia e mês em UTC). Ao chegar lá, a pessoa fica com o Multis de sempre, com a nota **Modo económico**.
+- Esse gasto **não conta** para o **Orçamento mensal da IA** que pára as outras funcionalidades: o cartão **IA — custo do mês** mostra-o na lista (com "teto próprio"), mas a barra e o "Orçamento atingido" só contam o resto.
+- A cache de contexto também custa (por hora guardada): aparece no registo da funcionalidade que a criou.
