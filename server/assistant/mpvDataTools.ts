@@ -39,7 +39,7 @@ import { RULES_DOCS } from "./rulesDocs.generated";
 import { runRulesInForce } from "./rulesTool";
 import { addDays, dayArg, extrasCityArg, normCity, num, rangeArgs, resolveCityArg } from "./toolArgs";
 import type { StaffToolCtx } from "./tools";
-import { SlowCallTimeout, slowRead } from "./slowCallCache";
+import { SlowCallTimeout, slowCallDefaultMs, slowRead } from "./slowCallCache";
 
 export { resetSlowCallsForTests } from "./slowCallCache";
 
@@ -270,7 +270,7 @@ export function cacheStamp(...cachedAt: Array<number | null | undefined>): Recor
 async function slowCall(ctx: StaffToolCtx, path: string, input?: unknown): Promise<{ data: any; cachedAt: number | null }> {
   const project = SLOW_PROJECTIONS[path] ?? ((x: unknown) => x);
   try {
-    return await slowRead({ key: slowCallKey(ctx, path, input), userId: ctx.user.id, ms: ctx.slowCallMs ?? SLOW_CALL_MS, read: () => ctx.call(path, input), project });
+    return await slowRead({ key: slowCallKey(ctx, path, input), userId: ctx.user.id, ms: ctx.slowCallMs ?? slowCallDefaultMs(SLOW_CALL_MS), read: () => ctx.call(path, input), project });
   } catch (err) {
     if (err instanceof SlowCallTimeout) throw new ToolUserError(SLOW_CALL_MESSAGE);
     throw err;

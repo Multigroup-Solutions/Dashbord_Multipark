@@ -784,6 +784,32 @@ describe("cache das leituras lentas (dados velhos, totais, memória)", () => {
     expect(String(again.result.lidoAs)).toMatch(/Lisboa/);
   });
 
+  it("«lidoAs» é a hora em que a leitura COMEÇOU; uma leitura que acaba depois dos 90 s (já fora do mapa) não entra na cache", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-10-15T13:00:00Z") });
+    try {
+      const a = deferred();
+      const first = slowRead({ key: "inicio", userId: 7, ms: 10, read: () => a.promise, project: (x) => x }).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await first).toBeInstanceOf(SlowCallTimeout);
+      await vi.advanceTimersByTimeAsync(60_000); // chega 1 min depois de começar
+      a.release({ v: 1 });
+      await vi.advanceTimersByTimeAsync(1);
+      const hit = await slowRead({ key: "inicio", userId: 7, ms: 10, read: async () => ({ v: 2 }), project: (x) => x });
+      expect(hit).toEqual({ data: { v: 1 }, cachedAt: Date.parse("2026-10-15T13:00:00Z") });
+      expect(readAtLabel(hit.cachedAt!)).toBe("14:00");
+      // Acaba aos 91 s: já saiu do mapa → não se guarda (a pergunta seguinte lê outra vez).
+      const b = deferred();
+      const slow = slowRead({ key: "tarde", userId: 7, ms: 10, read: () => b.promise, project: (x) => x }).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await slow).toBeInstanceOf(SlowCallTimeout);
+      await vi.advanceTimersByTimeAsync(SLOW_CALL_INFLIGHT_MAX_MS + 1_000);
+      expect(slowCallSizesForTests().inflight).toBe(0);
+      b.release({ velho: true });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(slowCallSizesForTests().cached).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("memória: no máximo 20 entradas; as vencidas saem ao escrever; só a projeção; penduradas saem aos 90 s", async () => {
     for (let i = 0; i < LATE_CACHE_MAX + 5; i++) await lateEntry(`m${i}`, 7);
     expect(slowCallSizesForTests().cached).toBe(LATE_CACHE_MAX);

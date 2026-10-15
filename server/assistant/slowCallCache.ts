@@ -45,7 +45,16 @@ const inflight = new Map<string, Flight>();
 const lateCache = new Map<string, { at: number; userId: number; value: unknown }>();
 
 /** Só para os testes (o estado é do processo). */
-export function resetSlowCallsForTests(): void { inflight.clear(); lateCache.clear(); }
+export function resetSlowCallsForTests(): void { inflight.clear(); lateCache.clear(); defaultMsOverride = null; }
+
+/**
+ * O prazo por omissão (quando o pedido não traz `slowCallMs`). Só os testes o
+ * mudam — os que passam pelo router a sério (assistant.ask), onde o contexto
+ * das ferramentas é montado pelo servidor e não dá para injetar o prazo.
+ */
+let defaultMsOverride: number | null = null;
+export function setSlowCallDefaultMsForTests(ms: number | null): void { defaultMsOverride = ms; }
+export function slowCallDefaultMs(fallback: number): number { return defaultMsOverride ?? fallback; }
 /** Só para os testes: quantas entradas há. */
 export function slowCallSizesForTests(): { inflight: number; cached: number } { return { inflight: inflight.size, cached: lateCache.size }; }
 
@@ -61,11 +70,45 @@ function sweep(now: number): void {
   for (const [k, f] of inflight) if (now - f.at > SLOW_CALL_INFLIGHT_MAX_MS) inflight.delete(k);
 }
 
-function remember(key: string, userId: number, value: unknown): void {
-  const now = Date.now();
-  sweep(now);
+/** Guarda um resultado atrasado com a hora em que a LEITURA COMEÇOU (`startedAt`: é dessa hora que os dados são). */
+function remember(key: string, userId: number, value: unknown, startedAt: number): void {
+  sweep(Date.now());
   while (lateCache.size >= LATE_CACHE_MAX) lateCache.delete(lateCache.keys().next().value as string);
-  lateCache.set(key, { at: now, userId, value });
+  lateCache.set(key, { at: startedAt, userId, value });
+}
+
+/**
+ * Uma mutação tRPC limpa as leituras guardadas da pessoa (a pessoa pode ter
+ * mudado os dados que lá estão)? Lista do que NÃO limpa (e não a inversa):
+ * uma mutação desconhecida ou nova limpa sempre — o erro seguro é perder a
+ * cache, nunca mostrar dados velhos depois de a pessoa os mudar. Ficam de
+ * fora só as técnicas, que não mudam o que as ferramentas leem e que, se
+ * limpassem, anulavam a cache:
+ *  - `assistant.*`: a própria pergunta ao Multis (`assistant.ask` é uma
+ *    mutation), a memória, o 👍/👎 e apagar conversas;
+ *  - batimentos e presença: `googleAccount.sync.*` (heartbeat de 5 em 5 min),
+ *    `operational.personalDevices.*` (que telemóvel é este), os PDAs ao
+ *    entrar/sair (`claimOnLogin`/`releaseOnLogout`);
+ *  - marcar como lido: notificações, `*.markRead`, `*.markAllRead`, `*.markUnread`;
+ *  - mutations que só leem: `knowledge.open`, `googleDrive.sheets.readCsv`,
+ *    as pré-visualizações `*Preview`. PURA.
+ */
+const SKIP_PREFIXES: readonly string[] = [
+  "assistant.",
+  "googleAccount.sync.",
+  "operational.personalDevices.",
+  "operational.pdas.claimOnLogin",
+  "operational.pdas.releaseOnLogout",
+  "notifications.",
+  "knowledge.open",
+  "googleDrive.sheets.readCsv",
+];
+const SKIP_LEAF = /^(heartbeat|seen|markRead|markAllRead|markUnread|[a-zA-Z]*Preview)$/;
+export function mutationClearsSlowCalls(path: string | null | undefined): boolean {
+  const p = String(path ?? "");
+  if (!p) return true;
+  if (SKIP_PREFIXES.some((s) => p === s || p.startsWith(s))) return false;
+  return !SKIP_LEAF.test(p.split(".").pop() ?? "");
 }
 
 /**
@@ -97,9 +140,11 @@ export async function slowRead<T>(o: {
     promise.then(
       (value) => {
         clearTimeout(hang);
-        if (inflight.get(o.key) === entry) inflight.delete(o.key);
+        // Já fora do mapa (passou dos 90 s, ou a pessoa fez uma mutação): não se guarda.
+        if (inflight.get(o.key) !== entry) return;
+        inflight.delete(o.key);
         if (entry.stale) return;
-        if (entry.timedOut && entry.waiting === 0) remember(o.key, o.userId, value);
+        if (entry.timedOut && entry.waiting === 0) remember(o.key, o.userId, value, entry.at);
       },
       () => { clearTimeout(hang); if (inflight.get(o.key) === entry) inflight.delete(o.key); },
     );
