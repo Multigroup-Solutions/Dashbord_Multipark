@@ -3654,10 +3654,17 @@ export const aiUsageLog = mysqlTable("ai_usage_log", {
 	latencyMs: int().default(0).notNull(),
 	status: varchar({ length: 16 }).notNull(),
 	errorCode: varchar({ length: 40 }),
+	// 0690 (plano MPV §8.3): finishReason da última resposta, voltas de
+	// ferramentas, versão do chamador e chamada final sem ferramentas.
+	finishReason: varchar({ length: 32 }),
+	rounds: tinyint(),
+	variant: varchar({ length: 16 }),
+	forcedFinal: tinyint(),
 },
 (table) => [
 	index("idx_ai_usage_created").on(table.createdAt),
 	index("idx_ai_usage_feature_created").on(table.feature, table.createdAt),
+	index("idx_ai_usage_feature_user_created").on(table.feature, table.userId, table.createdAt),
 ]);
 
 // Mês (AAAA-MM) em que o orçamento da IA foi excedido — o aviso sai uma vez.
@@ -3791,6 +3798,9 @@ export const aiChatMessages = mysqlTable("ai_chat_messages", {
 	helpFiles: varchar({ length: 255 }),
 	path: varchar({ length: 200 }),
 	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	// 0690: versão ("v1" | "mpv") e nível (lite/fast/smart) da resposta — para o 👍/👎.
+	variant: varchar({ length: 16 }),
+	tier: varchar({ length: 16 }),
 },
 (table) => [
 	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),

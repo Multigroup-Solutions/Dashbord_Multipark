@@ -31,6 +31,15 @@ export interface AiUsageRow {
   latencyMs: number;
   status: AiUsageStatus;
   errorCode?: string | null;
+  // 0690 (plano MPV §8.3): observabilidade — nunca conteúdo.
+  /** finishReason da última resposta (STOP, MAX_TOKENS…). */
+  finishReason?: string | null;
+  /** Voltas de ferramentas (null = sem ferramentas). */
+  rounds?: number | null;
+  /** Versão do chamador ("v1" | "mpv" no Multis). */
+  variant?: string | null;
+  /** Houve chamada final sem ferramentas (null = sem ferramentas). */
+  forcedFinal?: boolean | null;
 }
 
 export const DEFAULT_MONTHLY_BUDGET_EUR = 30;
@@ -162,15 +171,33 @@ export async function logAiUsage(row: AiUsageRow, now: Date = new Date()): Promi
   try {
     const d = await db();
     if (!d) return;
-    await d.execute(sql`
-      INSERT INTO ai_usage_log
-        (createdAt, feature, tier, provider, model, userId, entity, entityId,
-         inputTokens, outputTokens, cachedTokens, costEur, latencyMs, status, errorCode)
-      VALUES
-        (${mysqlUtc(now)}, ${cut(row.feature, 40)}, ${cut(row.tier, 8)}, ${cut(row.provider, 16)}, ${cut(row.model, 80)},
-         ${row.userId ?? null}, ${cut(row.entity ?? null, 40)}, ${row.entityId ?? null},
-         ${int(row.inputTokens)}, ${int(row.outputTokens)}, ${int(row.cachedTokens)}, ${cost.toFixed(6)}, ${int(row.latencyMs)},
-         ${row.status}, ${cut(row.errorCode ?? null, 40)})`);
+    const rounds = row.rounds == null ? null : Math.max(0, Math.min(127, Math.round(Number(row.rounds) || 0)));
+    const forcedFinal = row.forcedFinal == null ? null : row.forcedFinal ? 1 : 0;
+    try {
+      await d.execute(sql`
+        INSERT INTO ai_usage_log
+          (createdAt, feature, tier, provider, model, userId, entity, entityId,
+           inputTokens, outputTokens, cachedTokens, costEur, latencyMs, status, errorCode,
+           finishReason, rounds, variant, forcedFinal)
+        VALUES
+          (${mysqlUtc(now)}, ${cut(row.feature, 40)}, ${cut(row.tier, 8)}, ${cut(row.provider, 16)}, ${cut(row.model, 80)},
+           ${row.userId ?? null}, ${cut(row.entity ?? null, 40)}, ${row.entityId ?? null},
+           ${int(row.inputTokens)}, ${int(row.outputTokens)}, ${int(row.cachedTokens)}, ${cost.toFixed(6)}, ${int(row.latencyMs)},
+           ${row.status}, ${cut(row.errorCode ?? null, 40)},
+           ${cut(row.finishReason ?? null, 32)}, ${rounds}, ${cut(row.variant ?? null, 16)}, ${forcedFinal})`);
+    } catch (err: any) {
+      // Antes da migração 0690 (colunas novas ainda não existem): a linha de sempre.
+      if ((err?.code ?? err?.cause?.code) !== "ER_BAD_FIELD_ERROR") throw err;
+      await d.execute(sql`
+        INSERT INTO ai_usage_log
+          (createdAt, feature, tier, provider, model, userId, entity, entityId,
+           inputTokens, outputTokens, cachedTokens, costEur, latencyMs, status, errorCode)
+        VALUES
+          (${mysqlUtc(now)}, ${cut(row.feature, 40)}, ${cut(row.tier, 8)}, ${cut(row.provider, 16)}, ${cut(row.model, 80)},
+           ${row.userId ?? null}, ${cut(row.entity ?? null, 40)}, ${row.entityId ?? null},
+           ${int(row.inputTokens)}, ${int(row.outputTokens)}, ${int(row.cachedTokens)}, ${cost.toFixed(6)}, ${int(row.latencyMs)},
+           ${row.status}, ${cut(row.errorCode ?? null, 40)})`);
+    }
   } catch (err: any) {
     console.warn("[ai] registo de uso falhou:", String(err?.code ?? err?.name ?? "erro"));
   }
@@ -233,4 +260,151 @@ export async function aiUsageSummary(now: number = Date.now()) {
     blocked: budgetDecision(spentEur, budgetEur, false) === "blocked",
     features,
   };
+}
+
+// ─── Uso por dia e leituras repetidas (plano MPV F0a, Definições → Estado) ──
+
+export const AI_USAGE_DAILY_MAX_DAYS = 62;
+export const AI_USAGE_REPEATS_MAX_DAYS = 31;
+export const AI_USAGE_REPEATS_LIMIT = 100;
+/** As conversas do chat têm várias chamadas de propósito (uma por pergunta): não são leituras repetidas. */
+export const AI_USAGE_REPEATS_EXCLUDED_ENTITIES = ["ai_chat_conversation"] as const;
+
+/** Início (UTC, 00:00) do 1.º dia de uma janela de `days` dias que acaba hoje. PURA. */
+export function usageWindowStart(days: number, now: number = Date.now()): string {
+  const d = new Date(now);
+  const n = Math.max(1, Math.floor(days));
+  const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - (n - 1)));
+  return mysqlUtc(start).slice(0, 19);
+}
+
+const num = (v: unknown) => Number(v) || 0;
+const eur4 = (v: unknown) => Math.round(num(v) * 10_000) / 10_000;
+const str = (v: unknown) => (v == null ? null : v instanceof Date ? mysqlUtc(v).slice(0, 19) : String(v));
+
+export interface AiUsageDailyRow {
+  /** AAAA-MM-DD (UTC) */
+  day: string;
+  feature: string;
+  label: string;
+  calls: number;
+  errors: number;
+  blocked: number;
+  /** Bloqueadas pelo portão "só Vertex AI na UE" (RGPD). */
+  euOnly: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  costEur: number;
+  /** Primeira e última chamada do dia (UTC, "AAAA-MM-DD HH:MM:SS"). */
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+/**
+ * Uso da IA por dia (UTC) × funcionalidade, dos últimos `days` dias (≤ 62).
+ * Só metadados do registo — serve, p. ex., para confirmar quando correram as
+ * chamadas do RH (primeira/última de cada dia). Só leitura.
+ */
+export async function aiUsageDaily(days: number, feature?: string | null, now: number = Date.now()) {
+  const n = Math.max(1, Math.min(AI_USAGE_DAILY_MAX_DAYS, Math.floor(days)));
+  const since = usageWindowStart(n, now);
+  const d = await db();
+  const rows: AiUsageDailyRow[] = [];
+  if (d) {
+    const res = await d.execute(sql`
+      SELECT DATE_FORMAT(createdAt, '%Y-%m-%d') AS day,
+             feature,
+             COUNT(*) AS calls,
+             SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
+             SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+             SUM(CASE WHEN status = 'blocked' AND errorCode = 'eu_only' THEN 1 ELSE 0 END) AS euOnly,
+             COALESCE(SUM(inputTokens), 0) AS inTok,
+             COALESCE(SUM(outputTokens), 0) AS outTok,
+             COALESCE(SUM(cachedTokens), 0) AS cachedTok,
+             COALESCE(SUM(costEur), 0) AS totalCost,
+             DATE_FORMAT(MIN(createdAt), '%Y-%m-%d %H:%i:%s') AS firstAt,
+             DATE_FORMAT(MAX(createdAt), '%Y-%m-%d %H:%i:%s') AS lastAt
+        FROM ai_usage_log
+       WHERE createdAt >= ${since}${feature ? sql` AND feature = ${feature}` : sql``}
+       GROUP BY day, feature
+       ORDER BY day DESC, totalCost DESC, feature ASC
+       LIMIT 3000`);
+    for (const r of rowsOf(res)) {
+      const f = String(r.feature);
+      rows.push({
+        day: String(str(r.day) ?? "").slice(0, 10),
+        feature: f,
+        label: isAiFeature(f) ? AI_FEATURES[f].label : f,
+        calls: num(r.calls),
+        errors: num(r.errors),
+        blocked: num(r.blocked),
+        euOnly: num(r.euOnly),
+        inputTokens: num(r.inTok),
+        outputTokens: num(r.outTok),
+        cachedTokens: num(r.cachedTok),
+        costEur: eur4(r.totalCost),
+        firstAt: str(r.firstAt),
+        lastAt: str(r.lastAt),
+      });
+    }
+  }
+  return { days: n, since, feature: feature ?? null, rows };
+}
+
+export interface AiUsageRepeatRow {
+  feature: string;
+  label: string;
+  entity: string;
+  entityId: number;
+  calls: number;
+  okCalls: number;
+  costEur: number;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+/**
+ * Leituras repetidas: a mesma coisa (feature, entity, entityId) lida pela IA
+ * mais de uma vez nos últimos `days` dias (≤ 31) — top 100 por chamadas. As
+ * conversas do chat ficam de fora (várias perguntas por conversa). Só leitura.
+ */
+export async function aiUsageRepeats(days: number, feature?: string | null, now: number = Date.now()) {
+  const n = Math.max(1, Math.min(AI_USAGE_REPEATS_MAX_DAYS, Math.floor(days)));
+  const since = usageWindowStart(n, now);
+  const d = await db();
+  const rows: AiUsageRepeatRow[] = [];
+  if (d) {
+    const excluded = sql.join(AI_USAGE_REPEATS_EXCLUDED_ENTITIES.map((e) => sql`${e}`), sql`, `);
+    const res = await d.execute(sql`
+      SELECT feature, entity, entityId,
+             COUNT(*) AS calls,
+             SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS okCalls,
+             COALESCE(SUM(costEur), 0) AS totalCost,
+             DATE_FORMAT(MIN(createdAt), '%Y-%m-%d %H:%i:%s') AS firstAt,
+             DATE_FORMAT(MAX(createdAt), '%Y-%m-%d %H:%i:%s') AS lastAt
+        FROM ai_usage_log
+       WHERE createdAt >= ${since}
+         AND entity IS NOT NULL AND entityId IS NOT NULL
+         AND entity NOT IN (${excluded})${feature ? sql` AND feature = ${feature}` : sql``}
+       GROUP BY feature, entity, entityId
+      HAVING COUNT(*) > 1
+       ORDER BY calls DESC, totalCost DESC
+       LIMIT ${AI_USAGE_REPEATS_LIMIT}`);
+    for (const r of rowsOf(res)) {
+      const f = String(r.feature);
+      rows.push({
+        feature: f,
+        label: isAiFeature(f) ? AI_FEATURES[f].label : f,
+        entity: String(r.entity),
+        entityId: num(r.entityId),
+        calls: num(r.calls),
+        okCalls: num(r.okCalls),
+        costEur: eur4(r.totalCost),
+        firstAt: str(r.firstAt),
+        lastAt: str(r.lastAt),
+      });
+    }
+  }
+  return { days: n, since, feature: feature ?? null, rows };
 }
