@@ -33,7 +33,8 @@ export function sourceReadOf(r: GoogleReview | null | undefined): SourceRead {
   if (!r) return { ok: false, reason: 'a crítica já não aparece na fonte' };
   const rating = STARS[String(r.starRating ?? '')];
   if (!rating) return { ok: false, reason: 'a fonte não deu as estrelas' };
-  return { ok: true, rating, text: r.comment ?? null, hasReply: !!String(r.reviewReply?.comment ?? '').trim() };
+  const reply = String(r.reviewReply?.comment ?? '').trim();
+  return { ok: true, rating, text: r.comment ?? null, hasReply: !!reply, replyText: reply || null };
 }
 
 /** Do dia antes da crítica (UTC) até hoje — apanha as editadas depois. Sem data: os últimos 60 dias. PURA. */

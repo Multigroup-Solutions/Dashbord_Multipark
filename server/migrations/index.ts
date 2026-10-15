@@ -199,6 +199,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0700", () => import("./migration_0700").then((m) => step(m.MIGRATION_0700_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0700))],
   // Plano MPV (F7): avisos da escala que só saem uma vez (extras_dia_alerts) e a fila das respostas automáticas às 5★ (review_auto_publish).
   ["0705", () => import("./migration_0705").then((m) => step(m.MIGRATION_0705_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0705))],
+  // Plano MPV (F7, seguimento): as colunas novas da 0705 também numa BD onde a 1.ª versão já criou as tabelas; sentAt das 5★.
+  ["0715", () => import("./migration_0715").then((m) => step(m.MIGRATION_0715_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0715))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
