@@ -31,7 +31,19 @@ import {
   zScore,
   type ExpenseLite,
 } from "./anomalyMath";
-import { anomalyPrompt, bookingSeries, marketingSeries, seriesDetail } from "./anomalies";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import {
+  ANOMALY_EXPLAIN_MAX_ATTEMPTS,
+  ANOMALY_EXPLAIN_RETRY_MS,
+  anomalyExplainDue,
+  anomalyExplainMaxTokens,
+  anomalyPrompt,
+  bookingSeries,
+  explainPendingAnomalies,
+  marketingSeries,
+  nextAnomalyExplainAttempts,
+  seriesDetail,
+} from "./anomalies";
 import {
   briefingFacts,
   briefingFallbackSummary,
@@ -259,6 +271,89 @@ describe("tryAi", () => {
     expect(h.runAi.mock.calls[0][0].input).not.toContain("912 345 678");
     expect(r).toEqual({ ok: true, output: "Ligar para 912 345 678" });
     expect(h.runAi.mock.calls[0][0]).toMatchObject({ feature: "tasks_from_text" });
+  });
+});
+
+// ─── Explicação das anomalias (MPV A1) ──────────────────────────────────────
+
+describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
+  const dialect = new MySqlDialect();
+  const NOW = Date.parse("2026-10-15T07:30:00Z");
+  let pending: any[];
+  let state: string | null;
+  let updates: number[];
+
+  beforeEach(() => {
+    pending = [1, 2, 3].map((id) => ({ id, domain: "bookings", detail: `Anomalia ${id}` }));
+    state = null;
+    updates = [];
+    h.db = {
+      execute: async (q: any) => {
+        const c = dialect.sqlToQuery(q);
+        const s = c.sql.replace(/\s+/g, " ").trim();
+        if (s.startsWith("SELECT id, domain, detail FROM ops_anomalies")) return [pending.filter((r) => !updates.includes(r.id))];
+        if (s.startsWith("SELECT `value` FROM app_settings")) return [state == null ? [] : [{ value: state }]];
+        if (s.startsWith("INSERT INTO app_settings")) { state = String(c.params[1]); return [{ affectedRows: 1 }]; }
+        if (s.startsWith("UPDATE ops_anomalies SET explanation")) { updates.push(Number(c.params[1])); return [{ affectedRows: 1 }]; }
+        return [[]];
+      },
+    };
+  });
+
+  it("maxTokens ≥ 400 + 80·n", async () => {
+    expect(anomalyExplainMaxTokens(1)).toBe(480);
+    expect(anomalyExplainMaxTokens(13)).toBe(1440);
+    h.runAi.mockResolvedValue({ output: { lines: [{ n: 1, text: "a" }, { n: 2, text: "b" }, { n: 3, text: "c" }] } });
+    const r = await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW });
+    expect(r).toEqual({ explained: 3 });
+    expect(h.runAi.mock.calls[0][0].maxTokens).toBeGreaterThanOrEqual(400 + 80 * 3);
+    expect(JSON.parse(state!)).toEqual({});
+  });
+
+  it("falha → no máximo 2 repetições, espaçadas de 12 h; depois nunca mais é enviada", async () => {
+    h.runAi.mockRejectedValue(new Error("truncado"));
+    const cap = () => new AiCallCap(5);
+    expect(await explainPendingAnomalies("2026-10-14", cap(), 20, { nowMs: NOW })).toEqual({ explained: 0, skipped: "error" });
+    expect(JSON.parse(state!)["1"]).toEqual({ n: 1, at: NOW });
+    // Logo a seguir (nova corrida no mesmo dia): ainda não → nenhuma chamada.
+    await explainPendingAnomalies("2026-10-14", cap(), 20, { nowMs: NOW + 3_600_000 });
+    expect(h.runAi).toHaveBeenCalledTimes(1);
+    // 2.ª e 3.ª tentativas, um dia de intervalo cada.
+    await explainPendingAnomalies("2026-10-15", cap(), 20, { nowMs: NOW + 86_400_000 });
+    await explainPendingAnomalies("2026-10-16", cap(), 20, { nowMs: NOW + 2 * 86_400_000 });
+    expect(h.runAi).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(state!)["2"].n).toBe(3);
+    // Esgotada: não volta a ser enviada.
+    expect(await explainPendingAnomalies("2026-10-17", cap(), 20, { nowMs: NOW + 3 * 86_400_000 })).toEqual({ explained: 0 });
+    expect(h.runAi).toHaveBeenCalledTimes(3);
+  });
+
+  it("a que o modelo omite conta como tentativa; as explicadas saem do estado; nova anomalia segue logo", async () => {
+    h.runAi.mockResolvedValue({ output: { lines: [{ n: 1, text: "Feriado" }, { n: 3, text: "Campanha" }] } });
+    expect(await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW })).toEqual({ explained: 2 });
+    expect(JSON.parse(state!)).toEqual({ 2: { n: 1, at: NOW } });
+    pending.push({ id: 4, domain: "expenses", detail: "Despesa nova" });
+    h.runAi.mockResolvedValue({ output: { lines: [{ n: 1, text: "Fatura duplicada" }] } });
+    await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW + 60_000 });
+    // Só a 4 (a 2 espera pelo intervalo).
+    expect(h.runAi.mock.calls[1][0].input).toBe("1. [expenses] Despesa nova");
+    expect(updates).toEqual([1, 3, 4]);
+  });
+
+  it("IA desligada ou teto da corrida → nada enviado, não conta como tentativa", async () => {
+    h.available.mockImplementation(async () => false);
+    expect(await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW })).toEqual({ explained: 0, skipped: "disabled" });
+    expect(state).toBeNull();
+    expect(h.runAi).not.toHaveBeenCalled();
+  });
+
+  it("regras puras do estado", () => {
+    expect(anomalyExplainDue(undefined, NOW)).toBe(true);
+    expect(anomalyExplainDue({ n: 1, at: NOW - ANOMALY_EXPLAIN_RETRY_MS + 1 }, NOW)).toBe(false);
+    expect(anomalyExplainDue({ n: 2, at: NOW - ANOMALY_EXPLAIN_RETRY_MS }, NOW)).toBe(true);
+    expect(anomalyExplainDue({ n: ANOMALY_EXPLAIN_MAX_ATTEMPTS, at: 0 }, NOW)).toBe(false);
+    // Saiu da janela de pendentes → esquecida (o estado não cresce).
+    expect(nextAnomalyExplainAttempts({ 9: { n: 3, at: 1 }, 2: { n: 1, at: 1 } }, { pendingIds: [2], sentIds: [], explainedIds: [], nowMs: NOW })).toEqual({ 2: { n: 1, at: 1 } });
   });
 });
 

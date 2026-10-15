@@ -18,7 +18,7 @@ import {
   type Candidate, type IdentitySide, type Observation,
 } from "../../shared/crmIdentity";
 import { MiniDb, ficha } from "./miniDb.testutil";
-import { autoMergeConfident, mergeClients, splitMerge } from "./merge";
+import { AI_OMITTED_REASON, AI_PAIRS_PER_CALL, autoMergeConfident, mergeClients, splitMerge } from "./merge";
 import { dismissSuggestion, replaceGenericEmail, undismissSuggestion } from "./edit";
 import { planBatch, type BookingRow } from "./plan";
 import { clampOffset } from "./review";
@@ -226,6 +226,34 @@ describe("21c — junção automática: regras e IA", () => {
     const merges = logged.calls.filter((c) => c.action === "crm_merge" || c.action === "crm_merged_into");
     expect(merges).toHaveLength(4);
     expect(merges.every((c) => c.source === "cron" && c.userId === 0)).toBe(true);
+  });
+  it("MPV K1: par que a IA omite fica \"não sei\" (com aiAt) e não volta a ser pedido", async () => {
+    const db = pairs();
+    ai.output = { results: [] }; // a IA não devolveu o 602
+    const r = await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+    expect(r).toMatchObject({ mergedByAi: 0, aiChecked: 0, aiOmitted: 1 });
+    const s = db.rows("crm_merge_suggestions", (x) => x.id === 602)[0];
+    expect(s).toMatchObject({ status: "pending", aiVerdict: "unsure", aiConfidence: null, aiReason: AI_OMITTED_REASON });
+    expect(s.aiAt).toBeTruthy();
+    ai.calls = [];
+    await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+    expect(ai.calls).toHaveLength(0);
+  });
+  it("MPV K1: no máximo 10 pares por chamada", async () => {
+    expect(AI_PAIRS_PER_CALL).toBe(10);
+    const db = new MiniDb();
+    for (let i = 0; i < 12; i++) {
+      const a = 100 + 2 * i, b = a + 1;
+      ficha(db, a, { displayName: `Alice${String.fromCharCode(65 + i)} Ferreira`, bookings: 2 });
+      ficha(db, b, { displayName: `Alice${String.fromCharCode(65 + i)} F.`, bookings: 1 });
+      db.insert("crm_client_phones", { clientId: a, phone: `+3519120001${String(i).padStart(2, "0")}` });
+      db.insert("crm_client_phones", { clientId: b, phone: `+3519120001${String(i).padStart(2, "0")}` });
+      db.insert("crm_merge_suggestions", { id: 700 + i, clientA: a, clientB: b, score: 50, reasons: "same_phone", status: "pending" });
+    }
+    await autoMergeConfident(db as any, { deadlineAt: Date.now() + 120_000, userId: 0 });
+    expect(ai.calls.map((c) => (c.input.match(/Par \d+:/g) ?? []).length)).toEqual([10, 2]);
+    // todos omitidos → todos "não sei"; nenhum fica por pedir
+    expect(db.rows("crm_merge_suggestions").every((s) => s.aiVerdict === "unsure" && s.aiAt)).toBe(true);
   });
   it("IA pouco certa ou desligada → fica em Rever (com o parecer à vista)", async () => {
     const db = pairs();

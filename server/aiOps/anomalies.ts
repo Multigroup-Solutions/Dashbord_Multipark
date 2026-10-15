@@ -278,31 +278,108 @@ export function anomalyPrompt(rows: Array<{ n: number; domain: string; detail: s
   return rows.map((r) => `${r.n}. [${r.domain}] ${r.detail}`).join("\n");
 }
 
+/**
+ * Teto de tokens da explicação (MPV A1): 400 de base + 80 por anomalia. Com o
+ * antigo `60·n + 100` o modelo com raciocínio esgotava o teto antes de
+ * escrever o JSON e 7 de 13 explicações falhavam. PURA.
+ */
+export function anomalyExplainMaxTokens(n: number): number {
+  return 400 + 80 * Math.max(0, n);
+}
+
+/**
+ * Tentativas falhadas por anomalia (MPV A1): 1.ª tentativa + no máximo 2
+ * repetições, espaçadas de pelo menos 12 h. Antes, uma explicação que falhava
+ * voltava a ser enviada em todas as corridas enquanto a anomalia estivesse na
+ * janela. O estado vive numa linha técnica de `app_settings` (como o
+ * `serviceTimes._state`), sem coluna nova.
+ */
+export const ANOMALY_EXPLAIN_MAX_ATTEMPTS = 3;
+export const ANOMALY_EXPLAIN_RETRY_MS = 12 * 3_600_000;
+export const ANOMALY_EXPLAIN_STATE_KEY = "aiOps.anomalyExplain._state";
+export type AnomalyExplainAttempts = Record<string, { n: number; at: number }>;
+
+/** Esta anomalia (ainda sem explicação) pode ir no pedido agora? PURA. */
+export function anomalyExplainDue(a: { n: number; at: number } | undefined, nowMs: number): boolean {
+  if (!a) return true;
+  if (a.n >= ANOMALY_EXPLAIN_MAX_ATTEMPTS) return false;
+  return nowMs - a.at >= ANOMALY_EXPLAIN_RETRY_MS;
+}
+
+/**
+ * Estado seguinte: as enviadas e não explicadas contam +1 tentativa; as
+ * explicadas e as que já saíram da lista de pendentes deixam de ser guardadas
+ * (o estado nunca cresce). PURA.
+ */
+export function nextAnomalyExplainAttempts(prev: AnomalyExplainAttempts, o: { pendingIds: number[]; sentIds: number[]; explainedIds: number[]; nowMs: number }): AnomalyExplainAttempts {
+  const pending = new Set(o.pendingIds.map(String));
+  const explained = new Set(o.explainedIds.map(String));
+  const out: AnomalyExplainAttempts = {};
+  for (const [id, a] of Object.entries(prev)) if (pending.has(id) && !explained.has(id)) out[id] = a;
+  for (const id of o.sentIds.map(String)) {
+    if (explained.has(id)) continue;
+    out[id] = { n: (prev[id]?.n ?? 0) + 1, at: o.nowMs };
+  }
+  return out;
+}
+
+async function loadExplainAttempts(db: any): Promise<AnomalyExplainAttempts> {
+  try {
+    const { parseJsonValue } = await import("../appSettings");
+    const r = rowsOf(await db.execute(sql`SELECT \`value\` FROM app_settings WHERE settingKey = ${ANOMALY_EXPLAIN_STATE_KEY} LIMIT 1`))[0];
+    const v = r ? parseJsonValue(r.value) : null;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    const out: AnomalyExplainAttempts = {};
+    for (const [id, a] of Object.entries(v as Record<string, any>)) {
+      if (a && Number.isFinite(Number(a.n)) && Number.isFinite(Number(a.at))) out[id] = { n: Number(a.n), at: Number(a.at) };
+    }
+    return out;
+  } catch { return {}; }
+}
+
+async function saveExplainAttempts(db: any, s: AnomalyExplainAttempts): Promise<void> {
+  try {
+    await db.execute(sql`INSERT INTO app_settings (settingKey, \`value\`) VALUES (${ANOMALY_EXPLAIN_STATE_KEY}, ${JSON.stringify(s)})
+      ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`)`);
+  } catch { /* best-effort: na pior das hipóteses tenta outra vez */ }
+}
+
 /** Explica (UMA chamada lite) as anomalias ainda sem explicação dos últimos dias. */
-export async function explainPendingAnomalies(day: string, cap: AiCallCap, max = 20): Promise<{ explained: number; skipped?: string }> {
+export async function explainPendingAnomalies(day: string, cap: AiCallCap, max = 20, opts: { nowMs?: number } = {}): Promise<{ explained: number; skipped?: string }> {
   const db = await getDb();
   if (!db) return { explained: 0 };
+  const nowMs = opts.nowMs ?? Date.now();
+  // Lê mais do que `max`: as esgotadas ficam de fora sem tapar as outras.
   const rows = rowsOf(await db.execute(sql`
     SELECT id, domain, detail FROM ops_anomalies
      WHERE explanation IS NULL AND day >= ${addDays(day, -3)}
      ORDER BY FIELD(severity, 'critical', 'warning'), id DESC
-     LIMIT ${max}`));
+     LIMIT ${max * 5}`));
   if (!rows.length) return { explained: 0 };
-  const numbered = rows.map((r, i) => ({ n: i + 1, id: Number(r.id), domain: String(r.domain), detail: String(r.detail) }));
+  const attempts = await loadExplainAttempts(db);
+  const due = rows.filter((r) => anomalyExplainDue(attempts[String(Number(r.id))], nowMs)).slice(0, max);
+  // Só esgotadas / à espera do intervalo: não é um aviso, é o comportamento normal.
+  if (!due.length) return { explained: 0 };
+  const numbered = due.map((r, i) => ({ n: i + 1, id: Number(r.id), domain: String(r.domain), detail: String(r.detail) }));
   const res = await tryAi({
     feature: "anomaly_explain", system: ANOMALY_SYSTEM, input: anomalyPrompt(numbered), schema: anomalyExplainSchema,
-    maxTokens: 60 * numbered.length + 100, cap, entity: "ops_anomalies",
+    maxTokens: anomalyExplainMaxTokens(numbered.length), cap, entity: "ops_anomalies",
   });
-  if (!res.ok) return { explained: 0, skipped: res.skipped };
-  let explained = 0;
-  for (const line of res.output.lines) {
-    const target = numbered.find((x) => x.n === line.n);
-    const text = oneLine(line.text, 400);
-    if (!target || !text) continue;
-    await db.execute(sql`UPDATE ops_anomalies SET explanation = ${text} WHERE id = ${target.id} AND explanation IS NULL`);
-    explained++;
+  const pendingIds = rows.map((r) => Number(r.id));
+  // Desligada / orçamento / teto da corrida: nada foi enviado → não conta como tentativa.
+  if (!res.ok && res.skipped !== "error") return { explained: 0, skipped: res.skipped };
+  const explainedIds: number[] = [];
+  if (res.ok) {
+    for (const line of res.output.lines) {
+      const target = numbered.find((x) => x.n === line.n);
+      const text = oneLine(line.text, 400);
+      if (!target || !text || explainedIds.includes(target.id)) continue;
+      await db.execute(sql`UPDATE ops_anomalies SET explanation = ${text} WHERE id = ${target.id} AND explanation IS NULL`);
+      explainedIds.push(target.id);
+    }
   }
-  return { explained };
+  await saveExplainAttempts(db, nextAnomalyExplainAttempts(attempts, { pendingIds, sentIds: numbered.map((x) => x.id), explainedIds, nowMs }));
+  return res.ok ? { explained: explainedIds.length } : { explained: 0, skipped: res.skipped };
 }
 
 export async function runAnomalyDetection(day: string, cap: AiCallCap): Promise<{ found: number; inserted: number; explained: number; aiSkipped?: string }> {

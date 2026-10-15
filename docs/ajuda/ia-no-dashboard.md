@@ -28,9 +28,9 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 1. **Passagem de turno:** resumo para o turno seguinte **quando entregas** a passagem (a 1.ª vez que a guardas); à segunda-feira, o resumo da semana.
    - Se a alterares depois, a IA não volta a correr sozinha: aparece **resumo desatualizado** e carregas em **Resumir agora**.
 2. **Briefing do dia** (Dashboard e Tarefas): um parágrafo por cidade a partir das 07:30, também por email às chefias.
-3. **Alertas** em Operações, Despesas e Marketing: uma linha a explicar cada anomalia (feita uma vez por dia). Condutores e extras veem o alerta, mas não a linha da IA. Nas Reservas ficam ao lado do Dashboard (no telemóvel, por cima). Carrega no título para os encolher. O **✕** tira um alerta da lista para toda a gente; nada se apaga, e em **Tirados** dá para o **Repor**.
+3. **Alertas** em Operações, Despesas e Marketing: uma linha a explicar cada anomalia (feita uma vez por dia; se a IA falhar, tenta no máximo mais 2 vezes, com pelo menos 12 h de intervalo, e depois o alerta fica só com a frase dos números). Condutores e extras veem o alerta, mas não a linha da IA. Nas Reservas ficam ao lado do Dashboard (no telemóvel, por cima). Carrega no título para os encolher. O **✕** tira um alerta da lista para toda a gente; nada se apaga, e em **Tirados** dá para o **Repor**.
 4. **Avaliação:** a explicação aparece ao abrir. Só se refaz quando os números mudam.
-5. **Críticas:** rascunho automático para as críticas novas, que fica por aprovar.
+5. **Críticas:** rascunho automático para as críticas novas (escritas nos últimos 14 dias; nunca na 1.ª importação de um perfil), que fica por aprovar.
 6. **Reclamações:** sugestões de tipo, prioridade, SLA e reserva, com um rascunho de resposta.
    - Com confiança alta, preenche sozinha os campos vazios. Há sempre **Desfazer**.
 7. **WhatsApp:** etiqueta a intenção e a urgência; uma conversa **nova** vai para a caixa do tema (a que já tem caixa fica onde está).

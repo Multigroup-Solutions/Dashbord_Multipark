@@ -141,7 +141,11 @@ export async function importReview(locationId: number, payload: GoogleReview, us
       }).where(eq(googleReviews.id, id));
     } else {
       const result = await tx.insert(googleReviews).values({ ...data, createdById: userId,
-        importedAt: now(), respondedAt: review.replyAt, status: review.reply ? 'manually_responded' : 'pending_response' });
+        importedAt: now(), respondedAt: review.replyAt, status: review.reply ? 'manually_responded' : 'pending_response',
+        // MPV R1: a 1.ª importação de um perfil (histórico todo de uma vez) nunca
+        // faz rascunho automático — fica marcada como já tentada. "Gerar" à mão
+        // continua a funcionar.
+        ...(opts.firstImport ? { aiDraftAttemptedAt: now() } : {}) });
       id = result[0].insertId;
     }
     if (shouldOpenComplaint({ rating: review.rating, hasComplaint: !!existing?.complaintId, dismissed: existing?.status === 'dismissed',

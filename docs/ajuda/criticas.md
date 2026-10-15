@@ -30,6 +30,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 
 **Responder (respondida = publicada)**
 - A IA só prepara rascunhos; **publica sempre uma pessoa**. Guardar um texto é rascunho, não conta como respondida.
+- O rascunho **automático** só é feito para críticas **escritas nos últimos 14 dias** (conta a data da crítica, não a do dia em que entrou no dashboard). A **1.ª importação** de um perfil (o histórico todo de uma vez) nunca faz rascunhos automáticos. Para uma crítica antiga, abre-a e carrega em **Gerar com IA** (ou **Regenerar**).
 - **Ligada ao Google**: **Aprovar e publicar** (pede confirmação; fica visível para todos). Sai pela Google quando a conta está ligada; senão pela Windsor, com o interruptor **Críticas: publicar respostas no Google pela Windsor** ligado (vem desligado). Sem nenhum dos dois, o aviso diz o que falta — publica no perfil Google e marca **Já publiquei no Google**.
 - **Veio por email**: **Aprovar** (o texto está bom) → publica-o no perfil Google → **Já publiquei no Google**. Se marcaste por engano, **Desfazer** (o texto fica).
 - Depois de marcada como publicada, o texto fica como foi enviado: para o mudar, primeiro **Desfazer**.
