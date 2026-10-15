@@ -357,6 +357,12 @@ describe("condutor (§2.4, §4.2)", () => {
     expect(dispatchStartIds([{ id: "f1", agentUserId: "faro", at: T("16:00") }, { id: "f2", agentUserId: "faro", at: T("16:05") }]).size).toBe(0);
     // exatamente 2 min já não é despacho (o corte é "menos de")
     expect(dispatchStartIds([{ id: "g1", agentUserId: "g", at: T("16:00") }, { id: "g2", agentUserId: "g", at: T("16:02") }]).size).toBe(0);
+    // condutor que entregou a 1.ª em 40 s (assinou ele) e começou a 2.ª logo a seguir: conduziu as duas
+    expect(dispatchStartIds([{ id: "q1", agentUserId: "q", at: T("16:00"), doneAt: T("16:00") + 40_000, doneBy: "q" }, { id: "q2", agentUserId: "q", at: T("16:01") + 30_000 }]).size).toBe(0);
+    // quem despacha não assina a anterior (assina o condutor, mais tarde): continua despacho
+    expect([...dispatchStartIds([{ id: "d1", agentUserId: "tl", at: T("16:00"), doneAt: T("16:20"), doneBy: "drv" }, { id: "d2", agentUserId: "tl", at: T("16:01") }])].sort()).toEqual(["d1", "d2"]);
+    // assinou a anterior, mas DEPOIS de começar a seguinte: não chega
+    expect(dispatchStartIds([{ id: "w1", agentUserId: "w", at: T("16:00"), doneAt: T("16:05"), doneBy: "w" }, { id: "w2", agentUserId: "w", at: T("16:01") }]).size).toBe(2);
     expect(driverBlockOf({ kind: "colaborador", role: "LEADER", dispatch: false })).toBe("condutor_por_confirmar");
     expect(driverBlockOf({ kind: "colaborador", role: "DRIVER", dispatch: true })).toBe("condutor_por_confirmar");
     expect(driverBlockOf({ kind: "colaborador", role: "DRIVER", dispatch: false })).toBeNull();

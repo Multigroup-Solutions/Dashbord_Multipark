@@ -8,7 +8,10 @@
  *    §4.5) — a andar de carro, não a pé;
  *  - arrivalZoneFor: que zona é a de chegada (§4.3, por esta ordem: zona T1/T2
  *    do terminal, ponto da assinatura, círculo do aeroporto);
- *  - posição no início (`inicio_no_terminal`, coerência com o parque, §4.6);
+ *  - posição no início (`inicio_no_terminal`, coerência com o parque, §4.6) —
+ *    o "parque" são as GARAGENS (zonas da operação e o centro tirado das
+ *    marcas "estacionado aqui" dos movimentos: garageMarkCenters), nunca o
+ *    Park.lat/lng da Multipark (fica junto ao aeroporto, P0);
  *  - zonas da operação (P2, PD, central…: definição `operations.parkZones`) e
  *    os avisos do editor (zonas que se tocam, rótulos T1/T2).
  *
@@ -18,10 +21,11 @@
  *
  * PARÂMETROS (§11.1): a P0 (29 set–12 out 2026; o GPS só existia em Lisboa:
  * 85 entregas e 98 recolhas com pontos) fechou os da paragem, do intervalo e
- * da saída — cada constante diz o que se mediu. O raio das zonas T1/T2 e a
- * coerência com o parque (D_PARK_OK/D_MISMATCH) continuam provisórios: não há
- * zonas T1/T2 definidas e o Park.lat/lng da Multipark não é a garagem (fica
- * junto ao aeroporto; o GPS no "em entrega" está a ~3,9 km dele em Lisboa).
+ * da saída — cada constante diz o que se mediu. O raio das zonas T1/T2 e as
+ * distâncias ao parque (D_PARK_OK/D_MISMATCH) continuam provisórios: não há
+ * zonas T1/T2 definidas, e a P0 mostrou que o Park.lat/lng da Multipark não é
+ * a garagem (fica junto ao aeroporto; o GPS no "em entrega" está a ~3,9 km
+ * dele em Lisboa) — por isso as regras do parque passaram a usar as garagens.
  */
 import { distanceMeters, type AirportFence } from "./pontoTerminal";
 import { matchKey } from "./textKey";
@@ -37,14 +41,14 @@ export const V_STOP_KMH = 3;
  * A pé (km/h): até aqui conta como "parou ou anda a pé". P0 (item 3): é a
  * melhor velocidade (7 > 5 > 3 > 2 km/h: 66 / 58 / 39 / 31 % das entregas com
  * paragem de 60 s); com a regra completa (§4.4) 79 % das entregas com GPS têm
- * chegada, p50 5,1 min antes da assinatura. Fecha.
+ * chegada (67 de 85), p50 4,9 min antes da assinatura (raio 150 m). Fecha.
  */
 export const V_WALK_KMH = 7;
 /** De carro (km/h): acima disto é uma saída de carro. P0 (item 11): 5, 10 ou 15 dão o mesmo (93 % com saída). Fecha. */
 export const V_CAR_KMH = 10;
 /** Pontos densos: parado/a pé dentro da zona durante isto confirma a chegada. P0 (item 3): 60 s é a melhor (120 s cai de 66 % para 51 %). Fecha. */
 export const T_STOP_MIN_S = 60;
-/** O ponto seguinte até isto confirma a chegada (pontos espaçados). P0: 60 % das chegadas vêm por aqui. Fecha. */
+/** O ponto seguinte até isto confirma a chegada (pontos espaçados). P0: 55 % das chegadas vêm por aqui (raio 150 m). Fecha. */
 export const T_CONFIRM_S = 6 * 60;
 /**
  * Intervalo normal entre pontos; até G_WEAK fica "precisão fraca"; acima,
@@ -58,10 +62,11 @@ export const R_SIGNATURE_M = 150;
 /** Raio proposto para as zonas T1/T2 (só sugestão no editor). AINDA PROVISÓRIO: não há zonas T1/T2 definidas em nenhuma cidade. */
 export const TERMINAL_ZONE_RADIUS_HINT_M = 200;
 /**
- * Posição no início: até isto do parque está bem; a mais de D_MISMATCH do
- * parque e da linha = não bate. AINDA PROVISÓRIOS (P0, item 8): o
- * Park.lat/lng da Multipark fica junto ao aeroporto, não na garagem — volta ao
- * auditor (usar as zonas das garagens em vez do Park).
+ * Posição no início: até isto da garagem mais perto está bem; a mais de
+ * D_MISMATCH da garagem mais perto e da linha = não bate. O "parque" são as
+ * garagens da cidade (zonas da operação + centros das marcas "estacionado
+ * aqui"), não o Park.lat/lng (P0, item 8: fica junto ao aeroporto). Os valores
+ * continuam PROVISÓRIOS (a P0 mediu-os contra o Park, que não serve).
  */
 export const D_PARK_OK_M = 500;
 export const D_START_ROW_OK_M = 300;
@@ -76,8 +81,19 @@ export const COHERENCE_SLACK_MPS = 15;
 export const D_START_FAR_FROM_PARK_M = 1000;
 /** Saída de carro: a mais de raio + isto do centro (mesmo devagar). P0 (item 11): 150 e 300 m dão o mesmo. Fecha. */
 export const D_EXIT_MARGIN_M = 300;
-/** Zona "parque" à volta do Park (ou da garagem de origem) para a saída do parque. */
+/** Zona "parque" à volta da garagem de origem (a mais perto da posição antes de sair) para a saída do parque. */
 export const PARK_EXIT_RADIUS_M = 300;
+/**
+ * Centro de uma garagem pelas marcas "estacionado aqui" (a linha MOVEMENT do
+ * FIM do movimento, com `garageName.to`, e a posição da app — Jorge: "eles
+ * são obrigados a clicar 'o carro está aqui estacionado'"): pelo menos
+ * GARAGE_MARK_MIN_N marcas, e pelo menos GARAGE_MARK_CLUSTER_SHARE delas a
+ * ≤ GARAGE_MARK_SPREAD_M da mediana (marcas espalhadas — feitas longe da
+ * garagem — não dão centro).
+ */
+export const GARAGE_MARK_MIN_N = 5;
+export const GARAGE_MARK_SPREAD_M = 300;
+export const GARAGE_MARK_CLUSTER_SHARE = 0.6;
 /** Sem chegada: se o trajeto nunca se afasta isto da posição no início → "gps_parado". */
 export const MOVE_PROOF_M = 500;
 /** Último ponto antes da assinatura: conta como chegada se a assinatura vier até isto depois. */
@@ -173,6 +189,36 @@ export function terminalZoneFor(airport: AirportFence | null | undefined, which:
 
 // ─── Posição no início e coerência (§4.6) ───────────────────────────────────
 
+const validLatLng = (p: LatLng | null | undefined): LatLng | null =>
+  p && Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0) ? { lat: p.lat, lng: p.lng } : null;
+const validLatLngs = (list: readonly LatLng[] | null | undefined): LatLng[] => (list ?? []).map(validLatLng).filter((p): p is LatLng => !!p);
+
+/** A garagem (centro) mais perto de `pos`, até `maxM` (sem limite por omissão). PURA. */
+export function nearestPark(pos: LatLng | null | undefined, parks: readonly LatLng[] | null | undefined, maxM = Infinity): { park: LatLng; distanceM: number } | null {
+  const p0 = validLatLng(pos);
+  if (!p0) return null;
+  let best: { park: LatLng; distanceM: number } | null = null;
+  for (const c of validLatLngs(parks)) {
+    const d = distanceMeters(p0.lat, p0.lng, c.lat, c.lng);
+    if (d <= maxM && (!best || d < best.distanceM)) best = { park: c, distanceM: d };
+  }
+  return best;
+}
+
+/**
+ * A zona "parque" para a saída do parque (§4.6, "em entrega" marcado no
+ * terminal): PARK_EXIT_RADIUS_M à volta da garagem de ORIGEM — a garagem mais
+ * perto (≤ D_PARK_OK) da posição em `fromAt` (o último ponto até G_GOOD antes;
+ * senão o 1.º ponto até `untilAt`). Sem posição ou sem garagem perto → null
+ * (não se adivinha; nunca o Park.lat/lng). PURA.
+ */
+export function parkExitZone(points: readonly GpsFix[], fromAt: number, untilAt: number, parks: readonly LatLng[] | null | undefined): Zone | null {
+  const p = positionAt(points, fromAt) ?? fixesIn(points, fromAt, untilAt)[0] ?? null;
+  if (!p) return null;
+  const o = nearestPark({ lat: p.lat as number, lng: p.lon as number }, parks, D_PARK_OK_M);
+  return o ? { label: "parque", lat: o.park.lat, lng: o.park.lng, radiusM: PARK_EXIT_RADIUS_M } : null;
+}
+
 /** O último ponto até `at` (no máximo `maxBeforeS` antes). PURA. */
 export function positionAt(points: readonly GpsFix[], at: number, maxBeforeS = G_GOOD_S): GpsFix | null {
   let best: GpsFix | null = null;
@@ -185,14 +231,15 @@ export function positionAt(points: readonly GpsFix[], at: number, maxBeforeS = G
 }
 
 /**
- * A posição no início bate com a reserva? Perto do parque (≤ 500 m) ou da
- * linha "em entrega" (≤ 300 m) = ok; a mais de 1 km dos dois = `gps_nao_bate`;
- * no meio = `duvidosa`. Sem referências = ok. PURA.
+ * A posição no início bate com a reserva? Perto de uma garagem da cidade
+ * (≤ 500 m da mais perto) ou da linha "em entrega" (≤ 300 m) = ok; a mais de
+ * 1 km das duas = `gps_nao_bate`; no meio = `duvidosa`. Sem referências = ok.
+ * PURA.
  */
-export function startCoherence(pos: LatLng | null, park: LatLng | null | undefined, startRow: LatLng | null | undefined, slackM = 0): "ok" | "duvidosa" | "gps_nao_bate" {
+export function startCoherence(pos: LatLng | null, parks: readonly LatLng[] | null | undefined, startRow: LatLng | null | undefined, slackM = 0): "ok" | "duvidosa" | "gps_nao_bate" {
   if (!pos) return "ok";
   const d = (c: LatLng | null | undefined) => (c && Number.isFinite(c.lat) && Number.isFinite(c.lng) ? distanceMeters(pos.lat, pos.lng, c.lat, c.lng) : null);
-  const dp = d(park), dr = d(startRow);
+  const dp = nearestPark(pos, parks)?.distanceM ?? null, dr = d(startRow);
   const slack = Math.max(0, slackM);
   if (dp == null && dr == null) return "ok";
   if ((dp != null && dp <= D_PARK_OK_M + slack) || (dr != null && dr <= D_START_ROW_OK_M + slack)) return "ok";
@@ -214,8 +261,11 @@ export type StopResult =
  *  1. sem pontos depois de S → `sem_pontos`;
  *  6. (primeiro) a posição EM S — o último ponto ≤ S até G_GOOD antes — já na
  *     zona → `inicio_no_terminal`; sem esse ponto, a lat/lng da linha "em
- *     entrega" na zona e a ≥ 1 km do parque. Um parque perto do aeroporto que
- *     faz o 1.º ponto DEPOIS de S cair na zona é uma chegada rápida, não isto;
+ *     entrega" na zona e a ≥ 1 km da garagem mais perto. Uma garagem perto do
+ *     aeroporto que faz o 1.º ponto DEPOIS de S cair na zona é uma chegada
+ *     rápida, não isto. `parks` = as GARAGENS da cidade (centros); a de
+ *     ORIGEM é a mais perto da posição em S (≤ D_PARK_OK): só ela dentro da
+ *     zona dá `destino_ambiguo` (sem posição em S: qualquer uma);
  *  2–3. candidatos = pontos dentro da zona a ≤ V_WALK, confirmados por (a)
  *     pontos densos parados na zona durante T_STOP_MIN, (b) o ponto seguinte
  *     (até T_CONFIRM) a ≤ V_WALK (dentro, ou fora a pé) — ou ainda dentro e
@@ -233,7 +283,8 @@ export function detectStop(o: {
   startAt: number;
   endAt: number;
   zone: Zone;
-  park?: LatLng | null;
+  /** As garagens da cidade (centros). Nunca o Park.lat/lng da Multipark. */
+  parks?: readonly LatLng[] | null;
   startRow?: LatLng | null;
 }): StopResult {
   const S = o.startAt, E = o.endAt, z = o.zone;
@@ -241,17 +292,22 @@ export function detectStop(o: {
   const after = pts.filter((p) => ms(p) >= S);
   if (!after.length) return { kind: "sem_chegada", status: "sem_pontos", flags: [] };
   const flags: string[] = [];
-  const parkInZone = !!o.park && latLngInside(o.park, z);
+  const parks = validLatLngs(o.parks);
+  const startRow = validLatLng(o.startRow);
 
-  // 6. posição em S
+  // 6. posição em S (e a garagem de onde o carro saiu: a mais perto dela)
   const q = positionAt(pts, S);
-  if (q ? insideZone(q, z) : (latLngInside(o.startRow, z) && (!o.park || distanceMeters(o.startRow!.lat, o.startRow!.lng, o.park.lat, o.park.lng) >= D_START_FAR_FROM_PARK_M))) {
+  const posS: LatLng | null = q ? { lat: q.lat as number, lng: q.lon as number } : startRow;
+  const origin = posS ? nearestPark(posS, parks, D_PARK_OK_M) : null;
+  const parkInZone = posS ? !!origin && latLngInside(origin.park, z) : parks.some((p) => latLngInside(p, z));
+  const rowFarFromParks = () => !parks.length || (nearestPark(startRow!, parks)?.distanceM ?? Infinity) >= D_START_FAR_FROM_PARK_M;
+  if (q ? insideZone(q, z) : (latLngInside(startRow, z) && rowFarFromParks())) {
     if (parkInZone) return { kind: "sem_chegada", status: "destino_ambiguo", flags };
     return { kind: "inicio_no_terminal", flags };
   }
   const pos0 = q ?? after[0];
   // a folga cresce com a distância no tempo entre o ponto e S (o carro pode já ir a andar)
-  const coh = startCoherence({ lat: pos0.lat as number, lng: pos0.lon as number }, o.park, o.startRow, (Math.abs(ms(pos0) - S) / 1000) * COHERENCE_SLACK_MPS);
+  const coh = startCoherence({ lat: pos0.lat as number, lng: pos0.lon as number }, parks, startRow, (Math.abs(ms(pos0) - S) / 1000) * COHERENCE_SLACK_MPS);
   if (coh === "gps_nao_bate") return { kind: "sem_chegada", status: "gps_nao_bate", flags };
   if (coh === "duvidosa") flags.push("posicao_duvidosa");
 
@@ -476,6 +532,77 @@ export function effectiveParkZones(garages: readonly GarageCoord[], exceptions: 
     });
   }
   return { zones, withoutCoords };
+}
+
+// ─── Centro das garagens pelas marcas "estacionado aqui" (a) ────────────────
+//
+// A tabela "Garage" da Multipark não tem coordenadas (0 de 26 com o link do
+// mapa a dá-las, P0), mas cada FIM de movimento (linha MOVEMENT com
+// `garageName.to`) fica com a posição da app no sítio onde o carro foi
+// deixado. A mediana dessas posições é o centro da garagem. Lê-se da MESMA
+// leitura da History que o trabalho já faz (sem leituras novas) e não se
+// grava do nosso lado.
+
+/** Cidade das zonas pela posição (as mesmas faixas da mediana do "Sugerir"); fora de Portugal continental → null. PURA. */
+export const PARK_ZONE_CITY_LAT = { portoAbove: 40.5, faroBelow: 37.6 } as const;
+export function parkZoneCityOf(lat: number, lng: number): ParkZoneCity | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < 36.8 || lat > 42.2 || lng < -9.6 || lng > -6.1) return null;
+  return lat > PARK_ZONE_CITY_LAT.portoAbove ? "porto" : lat < PARK_ZONE_CITY_LAT.faroBelow ? "faro" : "lisbon";
+}
+
+export interface GarageMarkCenter { city: ParkZoneCity; garage: string; lat: number; lng: number; n: number; /** fração das marcas a ≤ GARAGE_MARK_SPREAD_M do centro */ near: number }
+
+/**
+ * Centros das garagens pelas marcas "estacionado aqui": por (cidade, garagem
+ * por matchKey), a mediana da latitude e da longitude. Só fica com ≥
+ * GARAGE_MARK_MIN_N marcas e ≥ GARAGE_MARK_CLUSTER_SHARE delas a ≤
+ * GARAGE_MARK_SPREAD_M da mediana. PURA.
+ */
+export function garageMarkCenters(marks: ReadonlyArray<{ garage: string | null | undefined; lat: number | null | undefined; lng: number | null | undefined }>): GarageMarkCenter[] {
+  const groups = new Map<string, { city: ParkZoneCity; names: Map<string, number>; pts: LatLng[] }>();
+  for (const m of marks) {
+    const key = matchKey(m.garage);
+    const p = validLatLng(m.lat == null || m.lng == null ? null : { lat: m.lat, lng: m.lng });
+    if (!key || !p) continue;
+    const city = parkZoneCityOf(p.lat, p.lng);
+    if (!city) continue;
+    const k = `${city}|${key}`;
+    const g = groups.get(k) ?? { city, names: new Map<string, number>(), pts: [] };
+    const name = String(m.garage).trim();
+    g.names.set(name, (g.names.get(name) ?? 0) + 1);
+    g.pts.push(p);
+    groups.set(k, g);
+  }
+  const out: GarageMarkCenter[] = [];
+  for (const g of groups.values()) {
+    if (g.pts.length < GARAGE_MARK_MIN_N) continue;
+    const lat = median(g.pts.map((p) => p.lat)), lng = median(g.pts.map((p) => p.lng));
+    if (lat == null || lng == null) continue;
+    const near = g.pts.filter((p) => distanceMeters(p.lat, p.lng, lat, lng) <= GARAGE_MARK_SPREAD_M).length / g.pts.length;
+    if (near < GARAGE_MARK_CLUSTER_SHARE) continue;
+    const garage = [...g.names].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+    out.push({ city: g.city, garage, lat, lng, n: g.pts.length, near });
+  }
+  return out.sort((a, b) => a.city.localeCompare(b.city) || a.garage.localeCompare(b.garage));
+}
+
+/**
+ * As garagens de uma cidade para as regras do parque (coerência em S,
+ * `destino_ambiguo`, saída do parque, "em entrega" no terminal sem GPS): os
+ * centros das zonas da operação (Multipark + exceções) e, para as garagens
+ * que não têm zona, o centro pelas marcas. Nunca o Park.lat/lng. PURA.
+ */
+export function parkRefsFor(zones: readonly ParkZone[] | null | undefined, marks: readonly GarageMarkCenter[] | null | undefined): LatLng[] {
+  const out: LatLng[] = [];
+  const covered = new Set<string>();
+  for (const z of zones ?? []) {
+    const c = validLatLng(z);
+    if (!c) continue;
+    out.push(c);
+    for (const n of [z.label, ...(z.garages ?? [])]) { const k = matchKey(n); if (k) covered.add(k); }
+  }
+  for (const m of marks ?? []) if (!covered.has(matchKey(m.garage))) out.push({ lat: m.lat, lng: m.lng });
+  return out;
 }
 
 /** Dois círculos tocam-se (distância entre centros ≤ soma dos raios)? PURA. */

@@ -150,6 +150,10 @@ function dayHistory(o: { withE9?: boolean } = {}): Raw[] {
     h("r7", "CHECK_IN", "08:50", "uSys", { pos: inT1 }),
     // r8: P2 ainda (por arrumar)
     h("r8", "CHECK_IN", "09:20", "uX", { pos: inT1 }), mv("r8", "09:25", "uX", "inicio", null, null, inT1), mv("r8", "09:40", "uX", "arrumar", "P2"),
+    // marcas "estacionado aqui" na PD (fim de movimentos de manhã, antes dos pedidos): a PD não tem
+    // coordenadas na Multipark, o centro sai da mediana destas posições (= PARK)
+    mv("e1", "10:00", "uA", "lugar", "PD", "PD", PARK), mv("e2", "10:01", "uA", "lugar", "PD", "PD", at(PARK, 20)), mv("e3", "10:02", "uA", "lugar", "PD", "PD", at(PARK, -20)),
+    mv("e5", "10:03", "uA", "lugar", "PD", "PD", at(PARK, 0, 20)), mv("e9", "10:04", "uA", "lugar", "PD", "PD", at(PARK, 0, -20)),
   ];
 }
 
@@ -181,7 +185,7 @@ const calls: CallRecord[] = [
 
 interface Harness { deps: ServiceTimesDeps; rows: Map<string, ServiceTimesRow & { id: number; voidedAt: string | null }>; sqls: string[]; historyReads: string[]; timeouts: Array<{ history: boolean; ms: number | undefined }>; gpsAsked: string[]; state: { value: ServiceTimesState | null }; upserts: number }
 
-function harness(o: { now: number; history: () => Raw[]; files: () => Map<string, GpsFile>; settings?: Partial<Awaited<ReturnType<ServiceTimesDeps["settings"]>>>; failQuery?: boolean; prev?: Harness }): Harness {
+function harness(o: { now: number; history: () => Raw[]; files: () => Map<string, GpsFile>; settings?: Partial<Awaited<ReturnType<ServiceTimesDeps["settings"]>>>; failQuery?: boolean; prev?: Harness; parkRows?: Raw[]; garageRows?: Raw[] }): Harness {
   const rows = o.prev?.rows ?? new Map();
   const state = o.prev?.state ?? { value: null };
   const H: Harness = { rows, sqls: [], historyReads: [], timeouts: [], gpsAsked: [], state, upserts: 0, deps: null as any };
@@ -200,8 +204,8 @@ function harness(o: { now: number; history: () => Raw[]; files: () => Map<string
       if (sql.includes('FROM "Booking"')) return params.map((id) => bookings[String(id)]).filter(Boolean) as any;
       if (sql.includes('FROM "Driver"')) return [];
       if (sql.includes('FROM "Agent"')) return agents.filter((a) => params.includes(a.user_id)) as any;
-      if (sql.includes('FROM "Park"')) return parks as any;
-      if (sql.includes('FROM "Garage"')) return garages as any;
+      if (sql.includes('FROM "Park"')) return (o.parkRows ?? parks) as any;
+      if (sql.includes('FROM "Garage"')) return (o.garageRows ?? garages) as any;
       throw new Error(`SQL inesperado: ${sql.slice(0, 60)}`);
     },
     now: () => o.now,
@@ -415,6 +419,49 @@ describe("trabalho service-times — dia sintético de Lisboa", () => {
     const H2 = harness({ now: NOW1, history: () => [], files: () => new Map(), prev: H, settings: { garageRoles: [{ garage: "P3", role: "provisoria" }] } });
     await runServiceTimes(H2.deps, { deadlineAt: Date.now() + 40_000 });
     expect(H2.state.value!.h).not.toBe(h1);
+  });
+
+  // P0: o Park.lat/lng da Multipark não é a garagem — em Lisboa fica junto ao aeroporto
+  const transitOf = (H: Harness) => Object.fromEntries([...H.rows.values()].filter((r) => r.kind === "entrega")
+    .map((r) => [`${r.bookingId}|${r.anchorHistoryId}`, { transitStatus: r.transitStatus, transitMs: r.transitMs, startedAt: r.startedAt, flags: r.flags }]));
+  const noPdMarks = () => dayHistory().filter((r) => !(r.change_type === "MOVEMENT" && r.move_kind === "lugar" && r.garage_to === "PD"));
+
+  it("o Park.lat/lng junto ao aeroporto não muda nenhum tempo: o \"parque\" são as garagens (zonas e marcas \"estacionado aqui\")", async () => {
+    const base = harness({ now: NOW1, history: () => dayHistory(), files: () => filesFor("sameday") });
+    await runServiceTimes(base.deps, { deadlineAt: Date.now() + 40_000 });
+    const nearAirport = parks.map((p) => (p.id === "pLX" ? { ...p, ...at(T1, 50) } : p));
+    const H = harness({ now: NOW1, history: () => dayHistory(), files: () => filesFor("sameday"), parkRows: nearAirport });
+    await runServiceTimes(H.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(transitOf(H)).toEqual(transitOf(base));
+    expect(del(H, "e1")[0]).toMatchObject({ transitStatus: "medido", transitMs: 11.5 * MIN });
+    expect(del(H, "e4")[0]).toMatchObject({ startedAt: utc(T("18:11") + 30_000), transitStatus: "medido" });
+    // e a impressão digital não depende das marcas (não refaz 14 dias de cada vez que a mediana mexe)
+    expect(H.state.value!.h).toBe(base.state.value!.h);
+    const H2 = harness({ now: NOW1, history: noPdMarks, files: () => filesFor("sameday") });
+    await runServiceTimes(H2.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(H2.state.value!.h).toBe(base.state.value!.h);
+  });
+
+  it("garagem de origem dentro da zona do terminal → `destino_ambiguo`; as marcas de um parque que não operamos não contam", async () => {
+    const markAtT1 = (b: string, i: number) => mv(b, `10:1${i}`, "uZ", "lugar", "JUNTO AO T1", "JUNTO AO T1", at(inT1, (i % 2 ? 1 : -1) * 15, 10 * (i - 2)));
+    // 5 marcas num parque que a operação não faz (Top Parking): ignoradas — o e4 continua "em entrega" no terminal
+    const Hx = harness({ now: NOW1, history: () => [...dayHistory(), ...[0, 1, 2, 3, 4].map((i) => markAtT1("eMK", i))], files: () => filesFor("sameday") });
+    await runServiceTimes(Hx.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(del(Hx, "e4")[0]).toMatchObject({ transitStatus: "medido", startedAt: utc(T("18:11") + 30_000) });
+    // as mesmas marcas numa reserva nossa: há uma garagem nossa no T1 — o e4 (posição em S lá dentro) fica ambíguo; o e1 (saiu da PD) não
+    const Hy = harness({ now: NOW1, history: () => [...dayHistory(), ...[0, 1, 2, 3, 4].map((i) => markAtT1("e7", i))], files: () => filesFor("sameday") });
+    await runServiceTimes(Hy.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(del(Hy, "e4")[0]).toMatchObject({ transitStatus: "destino_ambiguo" });
+    expect(del(Hy, "e1")[0]).toMatchObject({ transitStatus: "medido", transitMs: 11.5 * MIN });
+  });
+
+  it("sem garagens conhecidas (nem zona nem marcas): a coerência fica pela linha \"em entrega\"; a saída do parque não se adivinha", async () => {
+    const H = harness({ now: NOW1, history: noPdMarks, files: () => filesFor("sameday"), garageRows: [] });
+    await runServiceTimes(H.deps, { deadlineAt: Date.now() + 40_000 });
+    expect(del(H, "e1")[0]).toMatchObject({ transitStatus: "medido", transitMs: 11.5 * MIN });
+    const e4 = del(H, "e4")[0];
+    expect(e4.flags).toEqual(expect.stringContaining("inicio_no_terminal"));
+    expect(e4.transitStatus).not.toBe("medido");
   });
 });
 

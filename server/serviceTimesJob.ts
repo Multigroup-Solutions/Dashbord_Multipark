@@ -40,12 +40,12 @@ import {
   type PdaCheckinLike, type PickupCycle, type ServiceEvent, type TransitStatus,
 } from "../shared/serviceTimes";
 import {
-  AFTER_SIGNATURE_S, EXIT_SEARCH_MAX_MIN, G_GOOD_S, PARK_EXIT_RADIUS_M,
-  arrivalZoneFor, detectExit, detectStop, effectiveParkZones, lastZoneArrival, latLngInside, p2ZoneOf, terminalZoneFor, zonesTouch,
+  AFTER_SIGNATURE_S, D_START_FAR_FROM_PARK_M, EXIT_SEARCH_MAX_MIN, G_GOOD_S,
+  arrivalZoneFor, detectExit, detectStop, effectiveParkZones, garageMarkCenters, lastZoneArrival, latLngInside, nearestPark, p2ZoneOf, parkExitZone, parkRefsFor,
+  terminalZoneFor, zonesTouch,
   type GpsFix, type LatLng, type ParkZoneCity, type ParkZoneExceptionsMap, type ParkZonesMap, type TerminalClass, type Zone,
 } from "../shared/serviceGps";
 import type { AirportFence } from "../shared/pontoTerminal";
-import { distanceMeters } from "../shared/pontoTerminal";
 import { classifyPark, marketplaceOperated } from "../shared/multiparkParks";
 import { addDays, lisbonDayOf, lisbonHourOf, operationalDayOf, operationalDayRangeUtc, zelloLatestDay } from "../shared/lisbonDay";
 import { percentile } from "../shared/extrasPressure";
@@ -333,7 +333,12 @@ export function nextServiceState(prev: ServiceTimesState | null, o: { version: n
 
 const CITY_OF: Record<string, ParkZoneCity> = { lisboa: "lisbon", porto: "porto", faro: "faro" };
 
-interface ParkInfo { id: string; name: string; cityKey: string | null; zoneCity: ParkZoneCity | null; group: string; operated: boolean; pos: LatLng | null }
+/**
+ * Parque da reserva (o "Park" da Multipark): cidade, grupo e se é operado. A
+ * posição do Park NÃO entra (P0: fica junto ao aeroporto, não na garagem) — as
+ * regras do parque usam as garagens (parkRefsFor).
+ */
+interface ParkInfo { id: string; name: string; cityKey: string | null; zoneCity: ParkZoneCity | null; group: string; operated: boolean }
 
 function parkInfos(rows: Array<Record<string, unknown>>, excluded: readonly string[]): Map<string, ParkInfo> {
   const out = new Map<string, ParkInfo>();
@@ -343,11 +348,9 @@ function parkInfos(rows: Array<Record<string, unknown>>, excluded: readonly stri
     if (!id) continue;
     const name = String(r.name ?? id);
     const cls = classifyPark({ name, city: r.city as string | null, address: r.address as string | null, firebaseBrand: r.firebase_brand as string | null, listingType: r.listing_type as string | null });
-    const lat = Number(r.lat), lng = Number(r.lng);
     out.set(id, {
       id, name, cityKey: cls.city, zoneCity: cls.city ? CITY_OF[cls.city] ?? null : null, group: cls.key,
       operated: marketplaceOperated({ id, name, ours: cls.ours }, ex) && !ex.has(id),
-      pos: Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0) ? { lat, lng } : null,
     });
   }
   return out;
@@ -511,6 +514,18 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   rep.deliveries = deliveries.length;
   rep.pickups = pickups.length;
   const liveIds = [...new Set([...deliveries, ...pickups].map((x) => x.bookingId))];
+  // (a) as garagens da cidade: as zonas da operação e, para as que não têm zona, o centro das
+  // marcas "estacionado aqui" (fim dos movimentos) desta mesma leitura, só das reservas dos
+  // parques que operamos — nunca o Park.lat/lng (P0: fica junto ao aeroporto)
+  const liveSet = new Set(liveIds);
+  const marks = garageMarkCenters(events.filter((e) => e.type === "MOVEMENT" && e.garageTo && liveSet.has(e.bookingId)).map((e) => ({ garage: e.garageTo, lat: e.lat, lng: e.lng })));
+  const garageRefs = new Map<ParkZoneCity, LatLng[]>();
+  const parkRefs = (city: ParkZoneCity | null): LatLng[] => {
+    if (!city) return [];
+    let r = garageRefs.get(city);
+    if (!r) { r = parkRefsFor(c.zones[city] ?? [], marks.filter((m) => m.city === city)); garageRefs.set(city, r); }
+    return r;
+  };
   const driverPhones = new Map<string, string[]>();
   for (const batch of idBatches(liveIds)) {
     const q = buildServiceDriverPhonesSql(batch);
@@ -550,7 +565,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     ...deliveries.map((d) => ({ day: operationalDayOf(d.requests[0]?.at ?? d.start?.at ?? d.anchor.at), bookingId: d.bookingId, phones: [...phonesOf(d.bookingId)] })),
     ...pickups.map((p) => ({ day: operationalDayOf(p.checkingIn?.at ?? p.anchor.at), bookingId: p.bookingId, phones: [...phonesOf(p.bookingId)] })),
   ]);
-  const dispatch = dispatchStartIds(deliveries.filter((d) => d.start).map((d) => ({ id: d.start!.id, agentUserId: d.start!.agentUserId, at: d.start!.at })));
+  const dispatch = dispatchStartIds(deliveries.filter((d) => d.start).map((d) => ({ id: d.start!.id, agentUserId: d.start!.agentUserId, at: d.start!.at, doneAt: d.checkout?.at ?? null, doneBy: d.checkout?.agentUserId ?? null })));
 
   // 4. Linhas já guardadas (finais e atuais não se refazem); ao vivo não se lê nem grava nada
   const existing = c.live ? [] : await deps.store.existing(utc0(w.anchorFromMs), utc0(w.anchorToMs));
@@ -625,10 +640,8 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     let inicioNoTerminal: { parkExitAt: number | null } | null = null;
     let held: HeldGps | null = null;
     let noGps: TransitStatus = "sem_pontos";
-    const zoneRes = arrivalZoneFor({
-      terminalClass: cls, airport: city ? settings.airports[city] : null, signature: posOf(d.checkout),
-      parks: [...parks.values()].filter((p) => p.zoneCity === city && p.operated && p.pos).map((p) => p.pos!),
-    });
+    const refs = parkRefs(city);
+    const zoneRes = arrivalZoneFor({ terminalClass: cls, airport: city ? settings.airports[city] : null, signature: posOf(d.checkout), parks: refs });
     if (d.outcome !== "cancelado" && S != null && E != null && !driverBlock) {
       if (!gpsOnAt(S)) noGps = noGpsStatus;
       else if (who?.employeeId == null) noGps = "condutor_desconhecido";
@@ -638,12 +651,13 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
         if (held.kind === "no") noGps = held.status;
         else if (zoneRes.kind === "sem_zona") gps = { kind: "sem_chegada", status: zoneRes.status, flags: [] };
         else {
-          const parkPos = park?.pos ?? null;
-          let stop = detectStop({ points: held.points, startAt: S, endAt: E, zone: zoneRes.zone, park: parkPos, startRow: posOf(d.start) });
+          let stop = detectStop({ points: held.points, startAt: S, endAt: E, zone: zoneRes.zone, parks: refs, startRow: posOf(d.start) });
           if (stop.kind === "inicio_no_terminal") {
-            const exit = parkPos ? detectExit({ points: held.points, fromAt: Q0 - 5 * 60_000, untilAt: S, zone: { label: "parque", lat: parkPos.lat, lng: parkPos.lng, radiusM: PARK_EXIT_RADIUS_M } }) : null;
+            // a saída da garagem de ORIGEM (a mais perto da posição antes de sair)
+            const parkZone = parkExitZone(held.points, Q0 - 5 * 60_000, S, refs);
+            const exit = parkZone ? detectExit({ points: held.points, fromAt: Q0 - 5 * 60_000, untilAt: S, zone: parkZone }) : null;
             inicioNoTerminal = { parkExitAt: exit?.kind === "saida" ? exit.at : null };
-            if (exit?.kind === "saida") stop = detectStop({ points: held.points, startAt: exit.at, endAt: E, zone: zoneRes.zone, park: parkPos });
+            if (exit?.kind === "saida") stop = detectStop({ points: held.points, startAt: exit.at, endAt: E, zone: zoneRes.zone, parks: refs });
             else stop = { kind: "sem_chegada", status: "sem_pontos", flags: [] };
           }
           if (stop.kind === "chegada") gps = { kind: "chegada", at: stop.at, source: zoneRes.source, precisionS: stop.precisionS, flags: [...zoneRes.flags, ...stop.flags] };
@@ -656,12 +670,12 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
       // sem GPS: o "em entrega" marcado no terminal pela posição da linha (longe do parque)
       if (!inicioNoTerminal && (!held || held.kind === "no") && zoneRes.kind === "zona" && zoneRes.source === "gps_zona") {
         const sp = posOf(d.start);
-        if (sp && latLngInside(sp, zoneRes.zone) && (!park?.pos || distanceMeters(sp.lat, sp.lng, park.pos.lat, park.pos.lng) >= 1000)) inicioNoTerminal = { parkExitAt: null };
+        if (sp && latLngInside(sp, zoneRes.zone) && (nearestPark(sp, refs)?.distanceM ?? Infinity) >= D_START_FAR_FROM_PARK_M) inicioNoTerminal = { parkExitAt: null };
       }
     }
     const btn = d.button && S != null && E != null
       ? { at: d.button.at, coherent: buttonCoherent({ buttonAt: d.button.at, startAt: S, endAt: E, pressedBy: d.button.event?.agentUserId ?? null, driverAgentId: d.start?.agentUserId ?? null,
-          distanceFromParkM: d.button.event && posOf(d.button.event) && park?.pos ? distanceMeters(d.button.event.lat!, d.button.event.lng!, park.pos.lat, park.pos.lng) : null }) }
+          distanceFromParkM: nearestPark(posOf(d.button.event ?? null), refs)?.distanceM ?? null }) }
       : null;
     const arrival = resolveArrival(gps, btn, noGps);
     const t = deliveryTimes({ cycle: d, call: cm.call, arrival, inicioNoTerminal, driverBlock });
@@ -692,7 +706,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     const cm = callsOn ? matchCallToBooking({ calls, phones: phonesOf(p.bookingId), crmIds: new Set(crm.get(p.bookingId)?.crmIds ?? []), anchorAt: K, fallbackAt: I, untilAt: I, shared: shared.get(operationalDayOf(K ?? p.anchor.at)) })
       : { call: null, flags: [] as string[] };
     const airport = city ? settings.airports[city] : null;
-    const zoneRes = arrivalZoneFor({ terminalClass: cls, airport, signature: posOf(p.checkIn), parks: [...parks.values()].filter((x) => x.zoneCity === city && x.operated && x.pos).map((x) => x.pos!) });
+    const zoneRes = arrivalZoneFor({ terminalClass: cls, airport, signature: posOf(p.checkIn), parks: parkRefs(city) });
     const zone: Zone | null = zoneRes.kind === "zona" ? zoneRes.zone : null;
     const p2Zone = p2ZoneOf(c.zones, city);
     const overlap = !!p2Zone && (airport?.zones ?? []).some((z) => zonesTouch(p2Zone, z));

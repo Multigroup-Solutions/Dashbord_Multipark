@@ -42,7 +42,10 @@ import { lisbonHourOf, operationalDayOf } from "./lisbonDay";
 
 /**
  * Versão do cálculo: mudar regras ou parâmetros sobe-a (o trabalho recomeça o
- * preenchimento para trás). 2 = parâmetros da P0 (DISPATCH_MIN_MINUTES 8 → 2).
+ * preenchimento para trás). 2 = parâmetros da P0 (DISPATCH_MIN_MINUTES 8 → 2,
+ * sem despacho quando o mesmo agente assinou a anterior) e o "parque" das
+ * regras do GPS passa a ser a garagem (zonas + marcas "estacionado aqui"),
+ * não o Park.lat/lng.
  */
 export const SERVICE_TIMES_CALC_VERSION = 2;
 
@@ -65,10 +68,10 @@ export const REPEATED_REQUEST_GAP_MIN = 30;
 /**
  * Dois inícios do mesmo agente a menos disto = quem despacha, não quem conduz
  * (P0, itens 7–8). Medido: quem despacha marca os "em entrega" quase seguidos
- * (Lisboa: 8 dos 10 inícios a < 8 min estão a < 2 min; nenhum entre 2 e 5);
- * em Faro as viagens são curtas (em entrega → assinatura p50 5 min, 91 % dos
- * "em entrega" do próprio condutor) e 14,5 % dos inícios seguidos de um
- * condutor ficam abaixo de 8 min, sem corte. Era 8 (provisório) → 2.
+ * (Lisboa: 8 dos 10 pares a < 8 min estão a < 2 min; nenhum entre 2 e 5);
+ * em Faro as viagens são curtas (em entrega → assinatura p50 5 min; 91 % dos
+ * "em entrega" são de condutores) e 14,5 % dos inícios seguidos do mesmo
+ * agente ficam abaixo de 8 min, sem corte. Era 8 (provisório) → 2.
  */
 export const DISPATCH_MIN_MINUTES = 2;
 /** Papéis de chefia na Multipark (Agent.role): quem marca o "em entrega" a despachar. */
@@ -595,21 +598,28 @@ export function agentRoleIn(rows: ReadonlyArray<{ userId: string; parkId: string
 /**
  * Inícios de quem DESPACHA: dois CHECKING_OUT do mesmo agente a menos de
  * DISPATCH_MIN_MINUTES (um condutor não começa duas entregas em 2 min; em
- * Faro, com o carro já perto do terminal, começa duas em 5). PURA.
+ * Faro, com o carro já perto do terminal, começa duas em 5). Exceção: se o
+ * MESMO agente assinou a 1.ª (CHECK_OUT, `doneBy`/`doneAt`) antes de começar
+ * a 2.ª, conduziu-a — não é despacho (em Faro 8 % das entregas vão do "em
+ * entrega" à assinatura em < 2 min, P0). PURA.
  */
-export function dispatchStartIds(starts: ReadonlyArray<{ id: string; agentUserId: string | null; at: number }>, minMinutes = DISPATCH_MIN_MINUTES): Set<string> {
+export function dispatchStartIds(starts: ReadonlyArray<{ id: string; agentUserId: string | null; at: number; doneAt?: number | null; doneBy?: string | null }>, minMinutes = DISPATCH_MIN_MINUTES): Set<string> {
   const out = new Set<string>();
-  const byAgent = new Map<string, Array<{ id: string; at: number }>>();
+  const byAgent = new Map<string, Array<{ id: string; at: number; doneAt: number | null; doneBy: string | null }>>();
   for (const s of starts) {
     if (!s.agentUserId) continue;
     const l = byAgent.get(s.agentUserId) ?? [];
-    l.push({ id: s.id, at: s.at });
+    l.push({ id: s.id, at: s.at, doneAt: s.doneAt ?? null, doneBy: s.doneBy ?? null });
     byAgent.set(s.agentUserId, l);
   }
-  for (const l of byAgent.values()) {
+  for (const [agent, l] of byAgent) {
     l.sort((a, b) => a.at - b.at);
     for (let i = 1; i < l.length; i++) {
-      if (l[i].at - l[i - 1].at < minMinutes * 60_000) { out.add(l[i].id); out.add(l[i - 1].id); }
+      if (l[i].at - l[i - 1].at >= minMinutes * 60_000) continue;
+      const drovePrev = l[i - 1].doneBy === agent && l[i - 1].doneAt != null && l[i - 1].doneAt! <= l[i].at;
+      if (drovePrev) continue;
+      out.add(l[i].id);
+      out.add(l[i - 1].id);
     }
   }
   return out;

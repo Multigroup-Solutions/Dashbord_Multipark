@@ -101,7 +101,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - estados e sequências das recolhas, e onde se marca o "em recolha";
    - garagens de destino e se há **P2**;
    - saída do terminal e chegada ao T2 (conta como **atrasada** quando o condutor chega mais de **15 min** depois de o cliente ligar);
-   - **coordenadas das garagens** na Multipark: de onde vêm, quantas garagens há na cidade, quantas têm coordenadas válidas e se a posição da app no fim dos movimentos bate com elas (distância mediana);
+   - **coordenadas das garagens** na Multipark: de onde vêm, quantas garagens há na cidade, quantas têm coordenadas válidas e se a posição da app no fim dos movimentos bate com elas (distância mediana). Mostra também o **centro pelas marcas "estacionado aqui"** (o que os tempos usam): que garagens o têm, quão juntas estão as marcas e a distância do GPS no "em entrega" à garagem mais perto;
    - ficheiros do GPS, relógio e definições.
    - Em cima, a **Leitura rápida** diz o que cada critério dá com os números de agora.
 4. Carrega em **Copiar resumo** e cola na conversa com o Claude. Cada corrida também fica no registo do servidor (linhas `[sonda62]`), por isso também basta dizer "corri".
@@ -110,13 +110,16 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 - O que dependia de uma leitura que falhou **não entra nas contas desse dia** (não conta como zero). Em cima, a **Leitura rápida** diz quantos dias têm dados e que leituras falharam.
 
 **O que deu a 1.ª calibração (29 set – 12 out 2026, 14 dias, as três cidades)**
-- **O GPS do Zello, quando existe, é bom:** um ponto a cada 7 s (metade dos casos) e a cada 26 s (9 em cada 10) durante as entregas. A regra da paragem no terminal (carro parado ou condutor a pé, até 7 km/h) encontra a chegada em 79 % das entregas com GPS, uns 5 min antes da assinatura. Esses parâmetros ficaram como estavam.
+- **O GPS do Zello, quando existe, é bom:** durante as entregas há um ponto a cada 7 s (metade dos casos) e a cada 26 s (9 em cada 10). Só havia GPS em Lisboa (85 entregas). A regra da paragem no terminal (carro parado ou condutor a pé, até 7 km/h) encontra a chegada em 79 % dessas entregas, uns 5 min antes da assinatura. Esses parâmetros ficaram como estavam.
 - **Quase não há GPS:** 14 % das entregas em Lisboa e 0 % no Porto e em Faro. Na maior parte dos casos a pessoa não tem linha do Zello nesse dia, ou a linha não tem ficheiro. Por isso o **portão dos tempos com GPS continua fechado** em todas as cidades: primeiro é preciso ligar os PDAs e os Zellos às fichas.
 - **Chamadas:** a consola registou muito poucas chamadas nesses dias. A **Fila conta desde o pendente** (como antes).
-- **Quem despacha:** dois "em entrega" do mesmo agente com **menos de 2 min** entre eles contam como quem despachou, não como quem conduziu (era 8 min; em Faro um condutor começa duas entregas em 5 min).
-- **Ainda por fazer** (fora da app):
-  - as zonas **T1/T2** em Definições → Parâmetros → Extras-dia → **Aeroportos (terminal no ponto)**. Sem a zona T2 não se mede a recolha atrasada no T2;
-  - as **coordenadas das garagens**: nenhuma garagem tem coordenadas na Multipark, por isso as zonas dos parques põem-se à mão em Definições → Parâmetros → **Zonas da operação (GPS)**;
+- **Quem despacha:** dois "em entrega" do mesmo agente com **menos de 2 min** entre eles contam como quem despachou, não como quem conduziu (era 8 min; em Faro um condutor começa duas entregas em 5 min). Não conta como despacho se o mesmo agente assinou a primeira antes de começar a segunda (foi ele que a levou).
+- **O parque da reserva na Multipark não é a garagem:** a posição do parque fica junto ao aeroporto (em Lisboa, o "em entrega" está a uns 4 km dela). Os tempos deixaram de a usar. O "parque" passou a ser a **garagem**, nas regras que dizem se o GPS bate com a reserva, se o destino é ambíguo e quando o carro saiu do parque:
+  - as garagens não têm coordenadas na Multipark (nenhuma das 26 tem coordenadas no link do mapa);
+  - por isso o centro de cada garagem sai das **marcas "estacionado aqui"**, ou seja, a posição da app no fim de cada movimento para essa garagem;
+  - não é preciso fazer nada. As **Zonas da operação** só servem para o P2 ou para corrigir uma garagem.
+- **Ainda por fazer:**
+  - as zonas **T1/T2** em Definições → Parâmetros → Extras-dia → **Aeroportos (terminal no ponto)**: carrega em **Sugerir T1/T2 pelas assinaturas**, confere no mapa e carrega em **Guardar**. Sem a zona T2 não se mede a recolha atrasada no T2. No Porto, as assinaturas estão a 1,8 km do centro do aeroporto: confere esse centro também;
   - o **P2**: existe em Lisboa, mas nenhum movimento acaba lá.
 
 **Recolha pelo meio de uma entrega**
