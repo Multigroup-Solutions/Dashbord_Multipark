@@ -37,7 +37,7 @@ Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demor
 4. O **gráfico** mostra a evolução, **por mês** ou **por semana**: a mediana do condutor a azul e a dos colegas a cinzento. Passa o rato (ou toca) num ponto para ver os números; **Ver em tabela** mostra-os todos.
 - Com menos de **10 medições** numa linha aparece **"sem dados suficientes"** (nunca 0); no gráfico, esse ponto fica em falta.
 - O Trânsito, o Cliente e o tempo no terminal dependem do GPS: até a calibração acabar só o super admin os vê, como provisórios; os outros veem **"Em calibração"**. Depois de o portão abrir (Definições → Parâmetros → **Tempos com GPS: portão**), aparecem por cidade e período quando há pelo menos 60 % de medições e 20 casos; abaixo disso, "Sem dados suficientes". A Fila e o P2 veem-se sempre.
-- Os números vêm da tabela dos tempos (o cálculo da noite), até ontem. Sem ela, aparece "Sem tempos deste condutor".
+- Os números vêm da tabela dos tempos (o cálculo da noite), até ontem. Sem ela, aparece "Sem tempos deste condutor". Se a leitura for grande de mais e chegar ao limite, entram os dias mais recentes e o cartão diz "Leitura cortada no limite".
 - **Só informação: não dá pontos.** Não entra na Avaliação nem no ranking do Desempenho.
 - Quem vê: quem vê os Condutores (supervisor nas suas cidades, back office, admin e super admin), só para fichas das suas cidades.
 
