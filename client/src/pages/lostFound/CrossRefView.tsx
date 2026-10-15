@@ -35,6 +35,10 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STATUS_CONFIG, TYPE_CONFIG, PRIORITY_CONFIG, KANBAN_COLUMNS, BASE_PATH, CHANGE_TYPE_CONFIG } from "./config";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { ACCIDENTS_FROM_DAY } from "@shared/evaluationRules";
+
+/** Plano 64 (F4): de onde vem a coluna Ocorrências (a mesma fonte da Avaliação). */
+const OCCURRENCES_TITLE = `Ocorrências contra o condutor no período: os acidentes confirmados pelo team leader nas Ocorrências (desde ${ACCIDENTS_FROM_DAY.split("-").reverse().join("/")}, como na Avaliação) e, antes disso, as ocorrências antigas do dashboard`;
 
 /**
  * "Cruzamento de condutores" — o valor principal dos Perdidos: num período e
@@ -147,7 +151,7 @@ export function CrossRefView({ onBack }: { onBack: () => void }) {
                     <th className="p-2">Condutor</th>
                     <th className="p-2 text-right">Casos</th>
                     <th className="p-2 text-right">Anexado / Reserva</th>
-                    <th className="p-2 text-right">Ocorrências</th>
+                    <th className="p-2 text-right" title={OCCURRENCES_TITLE}>Ocorrências</th>
                     <th className="p-2 text-right">Reclamações</th>
                     <th className="p-2 text-right">Mov. no período</th>
                     <th className="p-2 text-right">% mov. em casos</th>

@@ -9,13 +9,14 @@
  */
 import { incidentCountsAgainstDriver } from "../shared/caseRules";
 import {
-  ACCIDENTS_FROM_DAY,
   DAMAGE_INCIDENT_TYPES,
   LATE_ARRIVAL_FROM_MINUTES,
   MAX_LATE_ARRIVALS_PER_DAY,
+  accidentCounts,
   actionCategory,
   actionPoints,
   emptyDayMetrics,
+  legacyIncidentCounts,
   round2,
   speedingWithGpsDay,
   type DayMetrics,
@@ -513,10 +514,12 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
     }
   }
 
-  // ── Ocorrências (acidentes/danos + informativos)
+  // ── Ocorrências antigas do dashboard (tabela `incidents`, informativas). Plano 64 (F3): só nos dias antes
+  // de LEGACY_INCIDENTS_UNTIL_DAY — a partir daí vêm da app Multipark ao vivo (agentOccurrences, acima) e
+  // dos acidentes confirmados (abaixo); contar as duas era contar a mesma ocorrência duas vezes.
   for (const i of input.incidents) {
     const d = operationalDayOf(i.at);
-    if (!inRange(d, startDay, endDay)) continue;
+    if (!inRange(d, startDay, endDay) || !legacyIncidentCounts(d)) continue;
     const reporter = identity.user(i.reportedBy);
     if (reporter != null) row(reporter, d).metrics.incidentsReported += 1;
     if (i.employeeId && incidentCountsAgainstDriver(i)) {
@@ -529,7 +532,7 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
   // ── Acidentes confirmados pelo TL nas ocorrências da app Multipark (D15),
   // só a partir de ACCIDENTS_FROM_DAY (os antigos não contam).
   for (const a of input.confirmedAccidents ?? []) {
-    if (!a.employeeId || !inRange(a.day, startDay, endDay) || a.day < ACCIDENTS_FROM_DAY) continue;
+    if (!a.employeeId || !inRange(a.day, startDay, endDay) || !accidentCounts(a)) continue;
     const m = row(a.employeeId, a.day).metrics;
     m.incidentsAgainst += 1;
     m.accidents += 1;

@@ -770,7 +770,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Regra 20 % (Jorge, 6 out 2026): o orçamento do Google Ads de cada marca/cidade é 20 % da faturação do mês anterior dessa marca/cidade (reservas concluídas…",
        "children": [],
        "container": false,
-       "chars": 5913
+       "chars": 6047
       },
       {
        "id": "marketing.md#conversoes-e-reservas-lado-a-lado-dashboard-anuncios-por-mar",
@@ -781,7 +781,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Conversões (Google + Meta): o que cada plataforma conta (Google à parte, Meta à parte).",
        "children": [],
        "container": false,
-       "chars": 3224
+       "chars": 3821
       }
      ]
     },
@@ -1361,7 +1361,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Movimentos: quem mexeu em que reserva, quando e em que fase.",
        "children": [],
        "container": false,
-       "chars": 1696
+       "chars": 2339
       },
       {
        "id": "avaliacao.md#separador-dia",
@@ -4325,7 +4325,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "perdidos.md#quem-pode"
        ],
        "container": false,
-       "chars": 680
+       "chars": 1176
       },
       {
        "id": "perdidos.md#arquivar-em-vez-de-eliminar",

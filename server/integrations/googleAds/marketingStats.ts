@@ -329,9 +329,17 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     cityRow(node).spend += d.cost;
   }
   let bookingsWithoutBrand = 0;
+  // Plano 64 (F6): as reservas sem parque/marca ficam numa linha "Sem marca" da tabela, com as mesmas
+  // colunas das marcas — o total da tabela passa a bater com o Painel (as mesmas reservas, `live`).
+  const withoutBrand = { bookings: 0, attributed: 0, revenue: 0, revenueAttributed: 0, bookingsWeb: 0, revenueWeb: 0, webWithLink: 0 };
   for (const r of bookingRows) {
     const brand = brandNameForProject(r.projectId ?? null, allProjects);
-    if (!brand) { bookingsWithoutBrand += Number(r.n); continue; }
+    if (!brand) {
+      bookingsWithoutBrand += Number(r.n);
+      withoutBrand.bookings += Number(r.n); withoutBrand.attributed += Number(r.attributed ?? 0); withoutBrand.revenue += Number(r.rev); withoutBrand.revenueAttributed += Number(r.revAttributed ?? 0);
+      withoutBrand.bookingsWeb += r.web; withoutBrand.revenueWeb += r.revWeb; withoutBrand.webWithLink += r.webLink;
+      continue;
+    }
     const k = key(brand);
     const row = brands.get(k) ?? newRow(brand, true);
     row.bookings += Number(r.n); row.attributed += Number(r.attributed ?? 0); row.revenue += Number(r.rev); row.revenueAttributed += Number(r.revAttributed ?? 0);
@@ -361,6 +369,8 @@ export async function getSpendAndBookingsByBrand(f: { from: string; to: string; 
     brands: Array.from(brands.values()).sort((a, b) => b.spend - a.spend || b.bookings - a.bookings),
     byBrandCity: Array.from(byBrandCity.values()),
     bookingsWithoutBrand,
+    /** Plano 64 (F6): as reservas sem marca com as colunas da tabela (null sem reservas da Multipark) */
+    withoutBrand: bookingsError ? null : withoutBrand,
     unassignedSpend,
     /** 8 out 2026: todas as reservas do Marketplace (operado / não operado / sem cidade) e os parques sem cidade (aviso) */
     marketplace: bookingsError ? null : marketplace,

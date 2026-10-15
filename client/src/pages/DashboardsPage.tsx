@@ -8,7 +8,7 @@ import FinanceiroDashboard from "./FinanceiroDashboard";
 import OperacoesDashboard from "./OperacoesDashboard";
 import PessoasDashboard from "./PessoasDashboard";
 import SuporteDashboard from "./SuporteDashboard";
-import { MarketingDashboardPanel } from "./MarketingPage";
+import { MarketingDashboardPanel, MarketingTopAlerts } from "./MarketingPage";
 
 export default function DashboardsPage() {
   const [tab, setTab] = useState("geral");
@@ -29,7 +29,8 @@ export default function DashboardsPage() {
         <TabsContent value="operacoes" className="mt-4"><OperacoesDashboard /></TabsContent>
         <TabsContent value="pessoas" className="mt-4"><PessoasDashboard /></TabsContent>
         <TabsContent value="suporte" className="mt-4"><SuporteDashboard /></TabsContent>
-        <TabsContent value="marketing" className="mt-4"><MarketingDashboardPanel /></TabsContent>
+        {/* Plano 64 (F7): os mesmos avisos do topo de /marketing (recolhas a vermelho e anomalias) */}
+        <TabsContent value="marketing" className="mt-4 space-y-4"><MarketingTopAlerts /><MarketingDashboardPanel /></TabsContent>
       </Tabs>
     </div>
   );

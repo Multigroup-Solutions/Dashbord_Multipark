@@ -18,7 +18,7 @@ import {
   lostFoundItems, projects, users,
 } from "../drizzle/schema";
 import { getDb, resolveProjectIds } from "./db";
-import { projectScope, scopedProjectIds } from "./cityScope";
+import { cityNameScope, projectScope, scopedProjectIds } from "./cityScope";
 import { resolveCityAccess } from "./cityAccess";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
 import {
@@ -264,12 +264,29 @@ export async function getDriverCrossRef(input: CrossRefInput): Promise<{ rows: C
     total: a.total, inCase: inCase.get(a.agentName as string) ?? 0,
   }));
 
-  const incRows = rowsOf(await d.execute(sql`
+  // Plano 64 (F4): ocorrências contra o condutor pela fonte da Avaliação — acidentes confirmados pelo TL
+  // (evaluation_accidents) desde ACCIDENTS_FROM_DAY; a tabela antiga `incidents` só antes desse dia.
+  // Cidade dos acidentes = a do parque da ocorrência (como os movimentos acima, pelo nome da cidade).
+  const { crossRefOccurrenceWindows, driverOccurrenceCounts } = await import("../shared/driverOccurrences");
+  const occWin = crossRefOccurrenceWindows(input.from, input.to);
+  const incRows = occWin.legacy ? rowsOf(await d.execute(sql`
     SELECT i.employeeId, COUNT(*) AS n FROM incidents i
     WHERE i.employeeId IS NOT NULL AND i.status NOT IN ('dismissed', 'converted')
-      AND COALESCE(i.sourceEmailDate, i.createdAt) >= ${start} AND COALESCE(i.sourceEmailDate, i.createdAt) < ${end}
+      AND COALESCE(i.sourceEmailDate, i.createdAt) >= ${occWin.legacy.start} AND COALESCE(i.sourceEmailDate, i.createdAt) < ${occWin.legacy.end}
       AND ${incScope}
-    GROUP BY i.employeeId`));
+    GROUP BY i.employeeId`)) : [];
+  let accRows: any[] = [];
+  if (occWin.accidents) {
+    const accScope = input.noProject
+      ? (scopedProjectIds() === undefined ? sql`(a.parkCity IS NULL OR TRIM(a.parkCity) = '')` : sql`1 = 0`)
+      : cityNameScope(sql`a.parkCity`);
+    try {
+      accRows = rowsOf(await d.execute(sql`
+        SELECT a.employeeId, a.day, a.voidedAt FROM evaluation_accidents a
+        WHERE a.day >= ${occWin.accidents.fromDay} AND a.day <= ${occWin.accidents.toDay} AND ${accScope}
+        LIMIT 20000`));
+    } catch { /* tabela ainda não criada (migração 0425) */ }
+  }
   const cRows = rowsOf(await d.execute(sql`
     SELECT cd.employeeId, COUNT(DISTINCT cd.complaintId) AS n
     FROM complaint_drivers_on_duty cd JOIN complaints c ON c.id = cd.complaintId
@@ -280,7 +297,11 @@ export async function getDriverCrossRef(input: CrossRefInput): Promise<{ rows: C
   const out = buildDriverCrossRef({
     links,
     movementTotals,
-    incidentsByEmployee: new Map(incRows.map((r) => [Number(r.employeeId), Number(r.n)])),
+    incidentsByEmployee: driverOccurrenceCounts(
+      new Map(incRows.map((r) => [Number(r.employeeId), Number(r.n)])),
+      accRows.map((r) => ({ employeeId: r.employeeId != null ? Number(r.employeeId) : null, day: String(r.day), voidedAt: r.voidedAt ?? null })),
+      occWin,
+    ),
     complaintsByEmployee: new Map(cRows.map((r) => [Number(r.employeeId), Number(r.n)])),
   });
   return { ...out, from: input.from, to: input.to, truncated: cut.truncated };

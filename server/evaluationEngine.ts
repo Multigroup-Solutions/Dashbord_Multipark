@@ -8,9 +8,11 @@
  *        movimentos de cada agente ("History", já agregados no Postgres com
  *        a regra de "levar ao parque"; a "entrega atrasada" saiu na tarefa 62) e as
  *        ocorrências que criou na app ("Occurrence");
- *      · a nossa BD: ponto, escala, ocorrências/reclamações nossas, alertas
- *        de velocidade (GPS Zello), penalizações e os acidentes confirmados
- *        pelo TL nas ocorrências da app (evaluation_accidents, D15).
+ *      · a nossa BD: ponto, escala, reclamações nossas, alertas de velocidade
+ *        (GPS Zello), penalizações, os acidentes confirmados pelo TL nas
+ *        ocorrências da app (evaluation_accidents, D15) e — só nos dias antes
+ *        de LEGACY_INCIDENTS_UNTIL_DAY (plano 64, F3) — as ocorrências antigas
+ *        do dashboard (`incidents`, informativas).
  *    Se a BD da Multipark não responder, os movimentos vêm da cópia local
  *    (multipark_booking_history) e o resultado diz `source: "copia"` com o
  *    motivo — nunca rebenta.
@@ -46,6 +48,7 @@ import {
 import { loadEvaluationIdentity } from "./evaluationIdentity";
 import {
   EVALUATION_RULES_VERSION,
+  LEGACY_INCIDENTS_UNTIL_DAY,
   METRIC_KEYS,
   RANKING_POSITIONS,
   RECOMPUTE_WINDOW_DAYS,
@@ -142,9 +145,13 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     db.execute(sql`SELECT assignmentDate, employeeId, personName, level, isTeamLeader, shift, city, startHour, endHour, sentHomeHour
                      FROM extras_dia_assignments
                     WHERE assignmentDate >= ${startDay} AND assignmentDate <= ${endDay}`),
-    db.execute(sql`SELECT COALESCE(sourceEmailDate, createdAt) AS at, incidentType, reportedBy, employeeId, status, driverConfirmed
+    // Plano 64 (F3): a tabela antiga só conta antes de LEGACY_INCIDENTS_UNTIL_DAY (o corte por dia está no
+    // evaluationCore); um intervalo todo depois do corte nem a lê.
+    startDay < LEGACY_INCIDENTS_UNTIL_DAY
+      ? db.execute(sql`SELECT COALESCE(sourceEmailDate, createdAt) AS at, incidentType, reportedBy, employeeId, status, driverConfirmed
                      FROM incidents
-                    WHERE COALESCE(sourceEmailDate, createdAt) >= ${range.start} AND COALESCE(sourceEmailDate, createdAt) < ${range.end}`),
+                    WHERE COALESCE(sourceEmailDate, createdAt) >= ${range.start} AND COALESCE(sourceEmailDate, createdAt) < ${range.end}`)
+      : Promise.resolve([] as any[]),
     db.execute(sql`SELECT id, employeeId, createdAt FROM speed_alerts
                     WHERE employeeId IS NOT NULL AND createdAt >= ${range.start} AND createdAt < ${range.end}`),
     db.execute(sql`SELECT employeeId, points, reason, relatedId, createdAt FROM employee_penalties

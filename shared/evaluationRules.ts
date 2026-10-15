@@ -68,6 +68,30 @@ export function withAccidentCutoff<M extends { accidents: number }>(day: string,
 }
 
 /**
+ * Um acidente confirmado pelo TL (linha de `evaluation_accidents`, D15) conta? Só se estiver ativo (não
+ * desfeito) e for do dia operacional ACCIDENTS_FROM_DAY ou depois. A MESMA regra na Avaliação (motor) e
+ * no Cruzamento de condutores dos Perdidos (plano 64, F4). PURA.
+ */
+export function accidentCounts(a: { day: string; voidedAt?: unknown }): boolean {
+  return a.voidedAt == null && a.day >= ACCIDENTS_FROM_DAY;
+}
+
+/**
+ * Plano 64 (F3, P8 [a confirmar]): a tabela antiga `incidents` (ocorrências do dashboard) só conta na
+ * Avaliação nos dias operacionais ANTES deste dia. A partir dele as ocorrências vêm só da app Multipark
+ * ao vivo (as que o agente criou) e os acidentes das confirmações do TL — ler também a antiga somava a
+ * mesma ocorrência duas vezes. É o dia em que as ações passaram a ler-se ao vivo (`LIVE_ACTIONS_SINCE`,
+ * server/multiparkDb/activityLive.ts — um teste garante que são o mesmo dia).
+ * Só mexe nas métricas informativas ("Ocorrências que registou" / "atribuídas"), nunca nos pontos.
+ */
+export const LEGACY_INCIDENTS_UNTIL_DAY = "2026-03-02";
+
+/** A ocorrência antiga (tabela `incidents`) do dia operacional `day` ainda conta na Avaliação? PURA. */
+export function legacyIncidentCounts(day: string): boolean {
+  return day < LEGACY_INCIDENTS_UNTIL_DAY;
+}
+
+/**
  * Atraso ao trabalho (tarefa 62, D4): conta a partir de 5 minutos INTEIROS
  * depois da hora da escala — floor((entrada − hora) / 60 s) ≥ 5: 03:04:59
  * numa escala das 03:00 não é atraso; 03:05:00 já é (−5); 03:10 também.

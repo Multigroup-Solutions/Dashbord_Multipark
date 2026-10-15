@@ -153,7 +153,7 @@ function CashSummary({ cash, loading, error, onRetry, busy }: { cash: any; loadi
         </CardContent>
       </Card>
       <p className="text-[11px] text-muted-foreground">
-        Dados que faltam na sincronização Multipark: {cash.missing.join(" · ")}. As taxas de cancelamento só entram como receita quando existirem na base de dados.
+        Dados que a BD da Multipark não tem: {cash.missing.join(" · ")}. As taxas de cancelamento só entram como receita quando existirem na base de dados.
       </p>
     </>
   );
