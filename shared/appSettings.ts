@@ -1334,6 +1334,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "google-ads-clicks", label: "Google Ads: cliques (gclid → campanha)", intervalMinutes: 60, workflow: "tick" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "tick" },
+  { name: "ops-anomaly-retries", label: "Anomalias: repetir as explicações que falharam", intervalMinutes: 1440, workflow: "tick" },
   { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 1440, workflow: "tick" },
   // Fora da agenda do tick: base de conhecimento — sincroniza SOZINHA quando há
   // alterações nas pastas do Drive (avisos da Google → fila de hora a hora, e a

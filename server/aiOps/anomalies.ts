@@ -299,6 +299,59 @@ export const ANOMALY_EXPLAIN_RETRY_MS = 12 * 3_600_000;
 export const ANOMALY_EXPLAIN_STATE_KEY = "aiOps.anomalyExplain._state";
 export type AnomalyExplainAttempts = Record<string, { n: number; at: number }>;
 
+/**
+ * Tamanho do lote conforme as tentativas já falhadas (MPV A1, seguimento):
+ * 1.ª tentativa em lote inteiro (`max`), 2.ª em lotes de metade, 3.ª (a
+ * última) em lotes de um quarto — e uma a uma só quando restam ≤ 2 nesse
+ * grupo. Assim um lote que falha sempre (uma anomalia "venenosa", resposta
+ * grande demais) não gasta as tentativas de todas as outras. PURA.
+ */
+export const ANOMALY_EXPLAIN_MAX_CALLS = 3;
+export function anomalyExplainBatchSize(n: number, max: number, groupSize = Infinity): number {
+  const m = Math.max(1, Math.floor(max));
+  if (n >= ANOMALY_EXPLAIN_MAX_ATTEMPTS - 1) return groupSize <= 2 ? 1 : Math.max(1, Math.ceil(m / 4));
+  return Math.max(1, Math.ceil(m / 2 ** Math.max(0, n)));
+}
+
+/**
+ * Que anomalias explicar nesta passagem (MPV A1, seguimento): `new` = só as
+ * nunca tentadas (corre antes dos briefings); `retries` = só as repetições
+ * (corre no FIM do cron, com o teto e o tempo que sobrarem); `all` = as duas.
+ */
+export type AnomalyExplainPhase = "new" | "retries" | "all";
+
+/**
+ * Lotes desta passagem: as anomalias em dia agrupadas pelo nº de tentativas
+ * — novas primeiro (num só lote; o que não couber fica para a próxima) e, nas
+ * repetições, prioridade às da última tentativa (n = 2) — cada grupo partido
+ * no tamanho de `anomalyExplainBatchSize`; no máximo `maxCalls` lotes (o
+ * resto fica para a corrida seguinte, ainda em dia). PURA.
+ */
+export function anomalyExplainBatches<T extends { id: number }>(due: T[], attempts: AnomalyExplainAttempts, max: number, maxCalls = ANOMALY_EXPLAIN_MAX_CALLS, phase: AnomalyExplainPhase = "all"): T[][] {
+  const byN = new Map<number, T[]>();
+  for (const r of due) {
+    const n = attempts[String(r.id)]?.n ?? 0;
+    if (phase === "new" && n > 0) continue;
+    if (phase === "retries" && n === 0) continue;
+    if (!byN.has(n)) byN.set(n, []);
+    byN.get(n)!.push(r);
+  }
+  const out: T[][] = [];
+  const order = [...byN.keys()].sort((a, b) => (a === 0 ? -1 : b === 0 ? 1 : b - a));
+  for (const n of order) {
+    const list = byN.get(n)!;
+    const size = anomalyExplainBatchSize(n, max, list.length);
+    const take = n === 0 ? list.slice(0, size) : list;
+    for (let i = 0; i < take.length; i += size) out.push(take.slice(i, i + size));
+  }
+  return out.slice(0, Math.max(1, maxCalls));
+}
+
+/** Teto de tempo de cada pedido nas repetições (as novas usam o normal, 20 s). */
+export const ANOMALY_EXPLAIN_RETRY_TIMEOUT_MS = 12_000;
+/** Margem antes do prazo para mandar mais um lote: o tempo de uma repetição + 3 s de folga. */
+export const ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS = ANOMALY_EXPLAIN_RETRY_TIMEOUT_MS + 3_000;
+
 /** Esta anomalia (ainda sem explicação) pode ir no pedido agora? PURA. */
 export function anomalyExplainDue(a: { n: number; at: number } | undefined, nowMs: number): boolean {
   if (!a) return true;
@@ -323,7 +376,8 @@ export function nextAnomalyExplainAttempts(prev: AnomalyExplainAttempts, o: { pe
   return out;
 }
 
-async function loadExplainAttempts(db: any): Promise<AnomalyExplainAttempts> {
+/** `null` = a leitura falhou (aí não se grava, para não apagar os contadores). */
+async function loadExplainAttempts(db: any): Promise<AnomalyExplainAttempts | null> {
   try {
     const { parseJsonValue } = await import("../appSettings");
     const r = rowsOf(await db.execute(sql`SELECT \`value\` FROM app_settings WHERE settingKey = ${ANOMALY_EXPLAIN_STATE_KEY} LIMIT 1`))[0];
@@ -334,7 +388,7 @@ async function loadExplainAttempts(db: any): Promise<AnomalyExplainAttempts> {
       if (a && Number.isFinite(Number(a.n)) && Number.isFinite(Number(a.at))) out[id] = { n: Number(a.n), at: Number(a.at) };
     }
     return out;
-  } catch { return {}; }
+  } catch { return null; }
 }
 
 async function saveExplainAttempts(db: any, s: AnomalyExplainAttempts): Promise<void> {
@@ -344,11 +398,24 @@ async function saveExplainAttempts(db: any, s: AnomalyExplainAttempts): Promise<
   } catch { /* best-effort: na pior das hipóteses tenta outra vez */ }
 }
 
-/** Explica (UMA chamada lite) as anomalias ainda sem explicação dos últimos dias. */
-export async function explainPendingAnomalies(day: string, cap: AiCallCap, max = 20, opts: { nowMs?: number } = {}): Promise<{ explained: number; skipped?: string }> {
+/**
+ * Explica as anomalias ainda sem explicação dos últimos dias: novas num lote
+ * (1 chamada lite), repetições em lotes mais pequenos (ver
+ * `anomalyExplainBatches`), no máximo `ANOMALY_EXPLAIN_MAX_CALLS` chamadas.
+ * Com prazo (`deadlineAt`): antes de cada lote — a partir do 2.º, ou logo no
+ * 1.º nas repetições — pára se faltar menos do que uma repetição + 3 s (não
+ * conta como tentativa; devolve `stoppedAtDeadline`). Disjuntor: 2 erros seguidos → pára. O estado das tentativas é
+ * gravado depois de CADA lote (um tick cortado a meio não as perde).
+ */
+export async function explainPendingAnomalies(
+  day: string, cap: AiCallCap, max = 20,
+  opts: { nowMs?: number; deadlineAt?: number; phase?: AnomalyExplainPhase; clock?: () => number } = {},
+): Promise<{ explained: number; skipped?: string; stoppedAtDeadline?: boolean; batchesLeft?: number }> {
+  const clock = opts.clock ?? Date.now;
   const db = await getDb();
   if (!db) return { explained: 0 };
   const nowMs = opts.nowMs ?? Date.now();
+  const phase = opts.phase ?? "all";
   // Lê mais do que `max`: as esgotadas ficam de fora sem tapar as outras.
   const rows = rowsOf(await db.execute(sql`
     SELECT id, domain, detail FROM ops_anomalies
@@ -356,33 +423,74 @@ export async function explainPendingAnomalies(day: string, cap: AiCallCap, max =
      ORDER BY FIELD(severity, 'critical', 'warning'), id DESC
      LIMIT ${max * 5}`));
   if (!rows.length) return { explained: 0 };
-  const attempts = await loadExplainAttempts(db);
-  const due = rows.filter((r) => anomalyExplainDue(attempts[String(Number(r.id))], nowMs)).slice(0, max);
+  // Leitura do estado falhou (BD a soluçar): segue como se fossem todas novas
+  // — no pior caso uma esgotada é pedida mais uma vez — mas NÃO grava no fim,
+  // senão um estado vazio apagava os contadores verdadeiros.
+  const loaded = await loadExplainAttempts(db);
+  let attempts = loaded ?? {};
+  const due = rows
+    .filter((r) => anomalyExplainDue(attempts[String(Number(r.id))], nowMs))
+    .map((r) => ({ id: Number(r.id), domain: String(r.domain), detail: String(r.detail) }));
   // Só esgotadas / à espera do intervalo: não é um aviso, é o comportamento normal.
   if (!due.length) return { explained: 0 };
-  const numbered = due.map((r, i) => ({ n: i + 1, id: Number(r.id), domain: String(r.domain), detail: String(r.detail) }));
-  const res = await tryAi({
-    feature: "anomaly_explain", system: ANOMALY_SYSTEM, input: anomalyPrompt(numbered), schema: anomalyExplainSchema,
-    maxTokens: anomalyExplainMaxTokens(numbered.length), cap, entity: "ops_anomalies",
-  });
   const pendingIds = rows.map((r) => Number(r.id));
-  // Desligada / orçamento / teto da corrida: nada foi enviado → não conta como tentativa.
-  if (!res.ok && res.skipped !== "error") return { explained: 0, skipped: res.skipped };
+  const batches = anomalyExplainBatches(due, attempts, max, phase === "new" ? 1 : ANOMALY_EXPLAIN_MAX_CALLS, phase);
   const explainedIds: number[] = [];
-  if (res.ok) {
-    for (const line of res.output.lines) {
-      const target = numbered.find((x) => x.n === line.n);
-      const text = oneLine(line.text, 400);
-      if (!target || !text || explainedIds.includes(target.id)) continue;
-      await db.execute(sql`UPDATE ops_anomalies SET explanation = ${text} WHERE id = ${target.id} AND explanation IS NULL`);
-      explainedIds.push(target.id);
+  let skipped: string | undefined;
+  let errorsInRow = 0;
+  let stoppedAtDeadline = false;
+  let sentBatches = 0;
+  for (const [i, batch] of batches.entries()) {
+    if (opts.deadlineAt != null && (i > 0 || phase === "retries") && clock() + ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS > opts.deadlineAt) {
+      stoppedAtDeadline = true;
+      break;
     }
+    const retry = batch.some((r) => (attempts[String(r.id)]?.n ?? 0) > 0);
+    const numbered = batch.map((r, k) => ({ n: k + 1, ...r }));
+    const res = await tryAi({
+      feature: "anomaly_explain", system: ANOMALY_SYSTEM, input: anomalyPrompt(numbered), schema: anomalyExplainSchema,
+      maxTokens: anomalyExplainMaxTokens(numbered.length), cap, entity: "ops_anomalies",
+      ...(retry ? { timeoutMs: ANOMALY_EXPLAIN_RETRY_TIMEOUT_MS } : {}),
+    });
+    // Desligada / orçamento / teto da corrida: este lote não foi enviado → não conta; pára.
+    if (!res.ok && res.skipped !== "error") { skipped = res.skipped; break; }
+    sentBatches++;
+    const batchExplained: number[] = [];
+    if (res.ok) {
+      errorsInRow = 0;
+      for (const line of res.output.lines) {
+        const target = numbered.find((x) => x.n === line.n);
+        const text = oneLine(line.text, 400);
+        if (!target || !text || batchExplained.includes(target.id)) continue;
+        await db.execute(sql`UPDATE ops_anomalies SET explanation = ${text} WHERE id = ${target.id} AND explanation IS NULL`);
+        batchExplained.push(target.id);
+      }
+      explainedIds.push(...batchExplained);
+    } else {
+      skipped = res.skipped;
+      errorsInRow++;
+    }
+    if (loaded) {
+      attempts = nextAnomalyExplainAttempts(attempts, { pendingIds, sentIds: numbered.map((x) => x.id), explainedIds: batchExplained, nowMs });
+      await saveExplainAttempts(db, attempts);
+    }
+    // Disjuntor: a IA está a falhar agora — não insistir nesta corrida.
+    if (errorsInRow >= 2) break;
   }
-  await saveExplainAttempts(db, nextAnomalyExplainAttempts(attempts, { pendingIds, sentIds: numbered.map((x) => x.id), explainedIds, nowMs }));
-  return res.ok ? { explained: explainedIds.length } : { explained: 0, skipped: res.skipped };
+  return {
+    explained: explainedIds.length,
+    ...(skipped ? { skipped } : {}),
+    ...(stoppedAtDeadline ? { stoppedAtDeadline: true, batchesLeft: batches.length - sentBatches } : {}),
+  };
 }
 
-export async function runAnomalyDetection(day: string, cap: AiCallCap): Promise<{ found: number; inserted: number; explained: number; aiSkipped?: string }> {
+/**
+ * Deteta e grava as anomalias do dia e explica só as NOVAS (1 chamada); as
+ * repetições têm trabalho próprio no agendador (`ops-anomaly-retries`, ver
+ * `runAnomalyRetriesCron`), para não tirarem chamadas nem tempo aos
+ * briefings/semanais.
+ */
+export async function runAnomalyDetection(day: string, cap: AiCallCap, opts: { deadlineAt?: number } = {}): Promise<{ found: number; inserted: number; explained: number; aiSkipped?: string }> {
   const trees = await loadCityTrees();
   const found = [
     ...(await detectBookingAnomalies(day, trees)),
@@ -390,8 +498,14 @@ export async function runAnomalyDetection(day: string, cap: AiCallCap): Promise<
     ...(await detectMarketingAnomalies(day)),
   ];
   const inserted = await saveAnomalies(found);
-  const ex = await explainPendingAnomalies(day, cap);
+  const ex = await explainPendingAnomalies(day, cap, 20, { phase: "new", deadlineAt: opts.deadlineAt });
   return { found: found.length, inserted, explained: ex.explained, ...(ex.skipped ? { aiSkipped: ex.skipped } : {}) };
+}
+
+/** Aviso do cron sobre a explicação: "saltada" só se nada foi explicado; senão "parcial". PURA. */
+export function anomalyExplainWarning(label: string, r: { explained: number; skipped?: string }): string | null {
+  if (!r.skipped) return null;
+  return r.explained > 0 ? `${label}: IA parcial (${r.skipped})` : `${label}: IA saltada (${r.skipped})`;
 }
 
 // ─── Leitura (páginas) ───────────────────────────────────────────────────────
