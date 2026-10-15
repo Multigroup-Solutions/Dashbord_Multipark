@@ -824,6 +824,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
   const setTerminal = trpc.rh.timeRecords.setTerminal.useMutation({
     onSuccess: (_d, v) => {
       utils.rh.timeRecords.list.invalidate();
+      utils.rh.timeRecords.monthlyHours.invalidate();
       toast.success(v.terminal ? "Troço marcado como terminal" : "Terminal desmarcado");
       setTerminalEdit(null); setTerminalNote("");
     },
@@ -840,8 +841,10 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
     const t = (y * 12 + (m - 1)) + delta;
     return { year: Math.floor(t / 12), month: (t % 12) + 1 };
   });
-  const { data: records = [] } = trpc.rh.timeRecords.list.useQuery({ employeeId });
-  const { data: monthly } = trpc.rh.timeRecords.monthlyHours.useQuery({ employeeId, year, month });
+  // só a última picagem (entrada aberta?): as do mês vêm com as horas
+  const { data: records = [] } = trpc.rh.timeRecords.list.useQuery({ employeeId, limit: 1 });
+  const monthlyQ = trpc.rh.timeRecords.monthlyHours.useQuery({ employeeId, year, month });
+  const monthly = monthlyQ.data;
   const monthRecords = (monthly?.records ?? []) as typeof records;
   const [cameraMode, setCameraMode] = useState<"check_in" | "check_out" | null>(null);
   const [expandedRecord, setExpandedRecord] = useState<number | null>(null);
@@ -1012,6 +1015,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
         </CardContent>
       </Card>
 
+      {monthlyQ.error && <QueryErrorNote error={monthlyQ.error} onRetry={() => monthlyQ.refetch()} retrying={monthlyQ.isFetching} what={`o ponto de ${MONTH_NAMES[month - 1]}`} />}
+
       {/* Plano 56 B2: os troços de terminal não carregaram → diz-se (erro ≠ "sem terminal") */}
       {terminalRh.error && <QueryErrorNote error={terminalRh.error} onRetry={() => terminalRh.refetch()} retrying={terminalRh.fetching} what="os troços de terminal" />}
 
@@ -1019,8 +1024,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
       <div className="space-y-2">
         {monthRecords.map((r, idx) => {
           const isExpanded = expandedRecord === r.id;
-          // Plano 56 B2: troços do terminal pelo perfil deste turno — na saída (entrada = a picagem seguinte da lista),
-          // ou na entrada ainda aberta (a última picagem de todas).
+          // Plano 56 B2: troços do terminal pelo perfil deste turno — na saída (entrada = a picagem seguinte da lista:
+          // a lista do mês traz os turnos inteiros), ou na entrada ainda aberta (a última picagem de todas).
           const shiftIn = r.type === "check_out" ? (monthRecords[idx + 1]?.type === "check_in" ? monthRecords[idx + 1].recordedAt : null) : records[0]?.id === r.id ? r.recordedAt : null;
           const shiftSessions = terminalRh.enabled && shiftIn ? sessionsInShift(terminalRh.sessions, shiftIn, r.type === "check_out" ? r.recordedAt : null) : [];
           const hasCoords = r.latitude && r.longitude;

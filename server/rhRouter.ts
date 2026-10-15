@@ -91,7 +91,7 @@ async function notesContext(user: { id: number; role: string }, employeeId: numb
   await assertEmployeeAccess(employeeId);
   return { viewer, ref };
 }
-import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
+import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, getLastTimeRecord, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 import { ROLE_HIERARCHY, requireRole, resolveDeactivationOrThrow } from "./routerGuards";
@@ -1256,8 +1256,8 @@ export const rhRouter = router({
     myStatus: protectedProcedure.query(async ({ ctx }) => {
       const me = await getEmployeeByUserId(ctx.user.id);
       if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null, terminal: false };
-      const records = await getTimeRecords(me.employee.id);
-      const last = records[0];
+      // só a última picagem (antes lia o histórico todo em cada página)
+      const last = await getLastTimeRecord(me.employee.id);
       // Terminal pelo perfil (plano 56 B1): sessão aberta — só com o interruptor ligado.
       let terminal = false;
       if (last?.type === "check_in") {
@@ -1285,14 +1285,20 @@ export const rhRouter = router({
     }),
 
     list: protectedProcedure
-      .input(z.object({ employeeId: z.number(), startDate: z.string().optional(), endDate: z.string().optional() }))
+      .input(z.object({ employeeId: z.number(), startDate: z.string().optional(), endDate: z.string().optional(), limit: z.number().int().min(1).max(500).optional() }))
       .query(async ({ ctx, input }) => {
         await assertCanViewTimeRecords(ctx.user, input.employeeId);
-        return getTimeRecords(
+        // ficha → Ponto só precisa da última picagem (entrada aberta?); o mês vem de monthlyHours
+        if (input.limit === 1 && !input.startDate && !input.endDate) {
+          const last = await getLastTimeRecord(input.employeeId);
+          return last ? [last] : [];
+        }
+        const rows = await getTimeRecords(
           input.employeeId,
           input.startDate ? new Date(input.startDate) : undefined,
           input.endDate ? new Date(input.endDate) : undefined,
         );
+        return input.limit ? rows.slice(0, input.limit) : rows;
       }),
 
     // Registos suspeitos (check-out esquecido/cortado, fora do raio): não pagam até revisão.
@@ -1392,9 +1398,8 @@ export const rhRouter = router({
         if (!empForPonto.employee.photoUrl) {
           throw new TRPCError({ code: "FORBIDDEN", message: "É preciso uma foto de perfil para picar o ponto. Adiciona a foto na ficha do colaborador." });
         }
-        // Bloqueia dois check-ins seguidos sem check-out
-        const recent = await getTimeRecords(input.employeeId);
-        const last = recent[0];
+        // Bloqueia dois check-ins seguidos sem check-out (a inserção atómica repete a verificação)
+        const last = await getLastTimeRecord(input.employeeId);
         if (last && last.type === "check_in") {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1515,9 +1520,8 @@ export const rhRouter = router({
             throw new TRPCError({ code: "FORBIDDEN", message: "Só podes picar o teu próprio ponto" });
           }
         }
-        // Exige check-in aberto
-        const records = await getTimeRecords(input.employeeId);
-        const last = records[0];
+        // Exige check-in aberto (a inserção atómica repete a verificação)
+        const last = await getLastTimeRecord(input.employeeId);
         if (!last || last.type !== "check_in") {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1571,27 +1575,11 @@ export const rhRouter = router({
         // No aeroporto (fim de um troço de terminal) não se marca.
         const geoNote = terminalOut.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         const finalNotes = [autoNote, geoNote, input.notes].filter(Boolean).join(" · ") || null;
-        // Snapshot Zello do turno (pedido Jorge): no check-out, vai buscar ao
-        // Zello o que o condutor fez entre a entrada e a saída — km,
-        // velocidades e tempo com o Zello desligado. Melhor esforço: nunca
-        // pode impedir o registo do ponto.
-        let zello: import("./zello").ZelloShiftSummary | null = null;
-        // Descobre o utilizador Zello DESTE turno: primeiro o PDA em que a
-        // pessoa fez check-in nesse dia (cada dia é um PDA diferente),
-        // depois a ligação fixa da ficha (telemóveis pessoais).
-        const { resolveZelloUsernameForShift } = await import("./db");
-        const empZello = await resolveZelloUsernameForShift(input.employeeId, inAt, outAt);
-        if (empZello) {
-          try {
-            const { summarizeZelloShift } = await import("./zello");
-            zello = await summarizeZelloShift(empZello, inAt, outAt);
-          } catch (err) {
-            console.warn("[checkOut] snapshot Zello falhou:", err);
-          }
-        }
         // Inserção ATÓMICA (linha do colaborador bloqueada) + estado de
         // revisão: um check-out cortado a 12h nasce "suspicious" e não paga
-        // até ser aprovado.
+        // até ser aprovado. A saída e as horas gravam-se PRIMEIRO; o Zello
+        // junta-se depois (antes lia-se o Zello antes de gravar e um corte de
+        // 60 s perdia a saída).
         const outAtDb = outAt.toISOString().slice(0, 19).replace("T", " ");
         let outRecordId = 0;
         try {
@@ -1607,17 +1595,17 @@ export const rhRouter = router({
             reviewStatus: autoNote ? "suspicious" : "ok",
             ...(terminalOut.atAirport != null ? { atAirport: terminalOut.atAirport } : {}),
             ...(terminalOut.terminalStatus ? { terminalStatus: terminalOut.terminalStatus } : {}),
-            ...(zello ? {
-              zelloKm: String(zello.km),
-              zelloAvgSpeed: String(zello.avgSpeed),
-              zelloMaxSpeed: String(zello.maxSpeed),
-              zelloOfflineMinutes: zello.offlineMinutes,
-              zelloOnlineMinutes: zello.onlineMinutes,
-            } : {}),
           }));
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
+        // Retrato do Zello do turno (pedido Jorge): km, velocidades e tempo com
+        // o Zello desligado entre a entrada e a saída. Começa já, em paralelo com
+        // o resto, e junta-se à saída JÁ GRAVADA numa atualização à parte (só se
+        // ainda não o tiver — repetir não muda nada). Falhar ou demorar nunca
+        // perde a saída (rhService.ts attachZelloToCheckOut).
+        const { attachZelloToCheckOut, withCap, CHECKOUT_ZELLO_CAP_MS } = await import("./rhService");
+        const zelloPending = attachZelloToCheckOut({ recordId: outRecordId, employeeId: input.employeeId, inAt, outAt });
         // Terminal fechado FORA do aeroporto (ou sem GPS / esquecido), Jorge 7 out
         // 2026: conta até à ÚLTIMA recolha/entrega dele na Multipark dentro do
         // troço ("partial"). O registo já está gravado como "pending": tenta-se
@@ -1667,7 +1655,9 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] sessão de PDA não terminada no check-out:", String((err as any)?.message ?? err).slice(0, 160));
         }
-        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalPartial ? ` · ${terminalPartial.label.toLowerCase()}` : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}${terminalReleased ? " · saiu do terminal" : ""}` });
+        // O registo de atividade não espera pelo Zello (o retrato fica na saída).
+        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${terminalPartial ? ` · ${terminalPartial.label.toLowerCase()}` : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}${terminalReleased ? " · saiu do terminal" : ""}` });
+        const zello = await withCap(zelloPending, CHECKOUT_ZELLO_CAP_MS, null);
         const terminalResult: "auto" | "pending" | "partial" | null = terminalPartial ? "partial" : terminalOut.terminal;
         return { success: true, hoursWorked, zello, terminal: terminalResult, terminalUntil: terminalPartial?.until ?? null, terminalLabel: terminalPartial?.label ?? null, terminalReleased, pdaSessionEnded };
       }),
@@ -1699,11 +1689,16 @@ export const rhRouter = router({
       }),
 
     monthlyHours: protectedProcedure
-      .input(z.object({ employeeId: z.number(), year: z.number(), month: z.number() }))
+      .input(z.object({ employeeId: z.number(), year: z.number().int().min(2000).max(2100), month: z.number().int().min(1).max(12) }))
       .query(async ({ ctx, input }) => {
-        // 41c: horas (sem valores) — o supervisor da cidade também vê
-        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "supervisor");
-        return getMonthlyHours(input.employeeId, input.year, input.month);
+        // As picagens (fotos e GPS) seguem a regra da lista do ponto (o próprio,
+        // o RH, o supervisor e o team leader de quem gere); as horas (sem valores)
+        // também as vê o supervisor da cidade (41c). Quem só vê as horas recebe-as
+        // sem as picagens.
+        const canSeeRecords = await assertCanViewTimeRecords(ctx.user, input.employeeId).then(() => true, () => false);
+        if (!canSeeRecords) await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "supervisor");
+        const res = await getMonthlyHours(input.employeeId, input.year, input.month);
+        return canSeeRecords ? res : { ...res, records: [] as typeof res.records };
       }),
   }),
 
