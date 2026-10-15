@@ -2,6 +2,7 @@
 import { and, eq, gte, lte, inArray, or, isNull, desc, sql } from "drizzle-orm";
 import { getDb, toMysqlDateTime } from "../server/db";
 import { employees, projects, extraRates, timeRecords, employeeSalaryHistory, employeeLeaves } from "../drizzle/schema";
+import { approvedLeaveSql } from "../server/leavesSql";
 
 export async function getPayrollData(year: number, month: number) {
   const db = await getDb();
@@ -77,6 +78,10 @@ export async function getPayrollData(year: number, month: number) {
       inArray(employeeLeaves.employeeId, empIds),
       lte(employeeLeaves.fromDate, monthEndStr),
       gte(employeeLeaves.toDate, monthFirstDay),
+      // Plano 63 (passo 11): para a comparação continuar justa, só o que o cálculo antigo conhecia —
+      // ausências aprovadas, de dia inteiro, sem a indisponibilidade dos extras (pedidas/canceladas não existiam).
+      approvedLeaveSql(),
+      isNull(employeeLeaves.hours),
     )) : [];
   const leavesByEmp = new Map<number, Set<string>>();
   for (const r of leavesAll) {

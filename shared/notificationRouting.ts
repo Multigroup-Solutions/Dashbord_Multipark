@@ -186,6 +186,11 @@ export const NOTIFICATION_KIND_DEFS = [
   // D49 (Jorge, 3 out 2026): os pedidos de IBAN vão para o back office e o supervisor da cidade (admin entra sozinho).
   K({ kind: "rh_bank_change", group: "pessoas", label: "IBAN por aprovar", description: "Alguém pediu para mudar o IBAN de uma ficha da tua cidade — confirma com o comprovativo e aprova ou recusa na ficha. Só chega com \"Aviso dos pedidos de IBAN\" ligado nas Definições.",
     module: "rh", action: "edit", roles: ["backoffice", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
+  // Plano 63 (passo 11): mapa de férias — só com o interruptor FERIAS_AVISOS (e o FERIAS_MAPA) ligado.
+  K({ kind: "leave_to_approve", group: "pessoas", label: "Férias por aprovar", description: "Alguém cuja aprovação é tua (Definições → \"Férias: quem aprova quem\") pediu férias: aprova ou recusa no Mapa de férias → Por aprovar. Só com \"RH: avisos das férias\" ligado.",
+    module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: IN_APP }),
+  K({ kind: "my_leave", group: "pessoas", label: "As tuas férias", description: "O teu pedido de férias foi aprovado, recusado (com o motivo) ou cancelado. Só com \"RH: avisos das férias\" ligado.",
+    module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: IN_APP }),
   K({ kind: "my_docs_missing", group: "pessoas", label: "Os teus documentos em falta", description: "Documentos obrigatórios que ainda tens de carregar na tua ficha.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   // Jorge (7 out 2026): o RH recusou um documento que a pessoa entregou — vai o motivo.

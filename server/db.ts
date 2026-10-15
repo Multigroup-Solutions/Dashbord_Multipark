@@ -96,6 +96,7 @@ import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
 import { ensureRecentSchema } from "./migrations/index";
+import { approvedLeaveSql } from "./leavesSql";
 import { CITY_LABELS, cityKeyFromPlace } from "../shared/city";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -1075,44 +1076,63 @@ export async function getEmployeeSalaryHistory(employeeId: number) {
 }
 
 // ─── RH: LEAVES (férias / baixas) ──────────────────────────────────────────
+/**
+ * Lança uma ausência. Sem `status` fica APROVADA (como sempre: o RH lança e
+ * conta). Plano 63 (passo 11): os pedidos do mapa de férias passam
+ * `status: "requested"` e a lista de quem os pode aprovar. Devolve o id.
+ */
 export async function createEmployeeLeave(data: {
   employeeId: number;
-  leaveType: "vacation" | "sick" | "unpaid" | "other";
+  leaveType: "vacation" | "sick" | "unpaid" | "other" | "unavailable";
   fromDate: string;
   toDate: string;
   notes?: string | null;
   createdById?: number | null;
-}) {
+  hours?: number | null;
+  status?: "requested" | "approved";
+  approverUserIds?: number[] | null;
+  /** aprovada sozinha (super admin) ou lançada pelo RH: quem decidiu */
+  decidedById?: number | null;
+}): Promise<number | null> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.insert(employeeLeaves).values({
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const status = data.status ?? "approved";
+  const res: any = await db.insert(employeeLeaves).values({
     employeeId: data.employeeId,
     leaveType: data.leaveType,
     fromDate: data.fromDate,
     toDate: data.toDate,
     notes: data.notes ?? null,
     createdById: data.createdById ?? null,
+    hours: data.hours != null ? data.hours.toFixed(2) : null,
+    status,
+    requestedById: data.createdById ?? null,
+    requestedAt: now,
+    approverUserIds: data.approverUserIds ?? null,
+    ...(status === "approved" && data.decidedById != null ? { decidedById: data.decidedById, decidedAt: now } : {}),
   });
+  const id = Number(res?.[0]?.insertId ?? res?.insertId);
+  return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-export async function getEmployeeLeaves(employeeId: number, year?: number) {
-  const db = await getDb();
-  if (!db) return [];
-  const conds: any[] = [eq(employeeLeaves.employeeId, employeeId)];
-  if (year) {
-    conds.push(gte(employeeLeaves.toDate, `${year}-01-01`));
-    conds.push(lte(employeeLeaves.fromDate, `${year}-12-31`));
-  }
-  return db.select().from(employeeLeaves).where(and(...conds)).orderBy(desc(employeeLeaves.fromDate));
-}
+// (Plano 63, passo 11: a lista das ausências de uma ficha passou para server/leaves.ts → leavesForEmployee, com o filtro de quem vê o quê.)
 
-export async function deleteEmployeeLeave(id: number) {
+/**
+ * Plano 63 (passo 11): "apagar" passa a CANCELAR — nada se apaga. Só muda se
+ * ainda estiver pedida ou aprovada (devolve false se já não estava).
+ */
+export async function cancelEmployeeLeave(id: number, cancelledById: number, note?: string | null): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.delete(employeeLeaves).where(eq(employeeLeaves.id, id));
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const res: any = await db.update(employeeLeaves)
+    .set({ status: "cancelled", cancelledById, cancelledAt: now, ...(note ? { decisionNote: note.slice(0, 255) } : {}) })
+    .where(and(eq(employeeLeaves.id, id), inArray(employeeLeaves.status, ["requested", "approved"])));
+  return Number(res?.[0]?.affectedRows ?? res?.affectedRows ?? 0) > 0;
 }
 
-/** Devolve um Set de dias (YYYY-MM-DD) em férias/baixa no intervalo do mês. */
+/** Devolve um Set de dias (YYYY-MM-DD) em férias/baixa APROVADAS (dia inteiro) no intervalo do mês. */
 export async function getLeaveDaysForMonth(employeeId: number, year: number, month: number): Promise<Set<string>> {
   const db = await getDb();
   const out = new Set<string>();
@@ -1127,6 +1147,9 @@ export async function getLeaveDaysForMonth(employeeId: number, year: number, mon
       eq(employeeLeaves.employeeId, employeeId),
       lte(employeeLeaves.fromDate, end),
       gte(employeeLeaves.toDate, start),
+      // Plano 63 (passo 11): só as aprovadas, de dia inteiro (sem a indisponibilidade dos extras)
+      approvedLeaveSql(),
+      isNull(employeeLeaves.hours),
     ));
   for (const r of rows) {
     const from = r.fromDate < start ? start : r.fromDate;

@@ -37,6 +37,10 @@ import {
   SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT,
 } from "./serviceTimes";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, isIsoDay } from "./evaluationClose";
+import {
+  DEFAULT_VACATION_APPROVALS, DEFAULT_VACATION_DAYS_PER_YEAR, FERIAS_AVISOS_FLAG, FERIAS_MAPA_FLAG, HR_PEOPLE_KEY, LEAVES_VIEW_ALL_KEY,
+  VACATION_APPROVALS_KEY, VACATION_DAYS_PER_YEAR_KEY, vacationApprovalsSchema,
+} from "./leaves";
 import { NO_SHOW_SKIP_SETTING_KEY, noShowSkipSchema } from "./scheduleReview";
 import { operationalDayOf } from "./lisbonDay";
 import { MANUAL_EDIT_AT_CONFIRM_DEFAULT, MANUAL_EDIT_AT_CONFIRM_MODES, type ManualEditAtConfirm } from "./extrasSchedule";
@@ -1088,6 +1092,43 @@ export const SETTINGS = {
     defaultValue: [],
     wiring: "live",
   }),
+  // Plano 63 (passo 11): mapa de férias. Sem nomes no código: as contas escolhem-se aqui.
+  [HR_PEOPLE_KEY]: def({
+    key: HR_PEOPLE_KEY,
+    group: "pessoas",
+    label: "Férias: quem é o RH",
+    description: "Contas do RH. Veem o mapa de férias inteiro (todas as cidades, com baixas e ausências), aprovam as férias quando a regra diz \"RH\" e lançam férias já aprovadas a qualquer pessoa. As férias de quem está aqui seguem a regra \"Quem está no RH\" (por omissão: o super admin). Só o super admin muda.",
+    schema: userIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  [LEAVES_VIEW_ALL_KEY]: def({
+    key: LEAVES_VIEW_ALL_KEY,
+    group: "pessoas",
+    label: "Férias: quem vê o mapa inteiro",
+    description: "Contas que veem o mapa de férias de todas as cidades, com o tipo (férias, baixa, ausência, indisponível) e as notas — além do super admin e das contas do RH. O supervisor vê a sua área e as baixas só como \"ausente\"; um administrador que não está aqui vê como o supervisor, de todas as cidades; os colegas só veem as férias. Só o super admin muda.",
+    schema: userIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  [VACATION_APPROVALS_KEY]: def({
+    key: VACATION_APPROVALS_KEY,
+    group: "pessoas",
+    label: "Férias: quem aprova quem",
+    description: "Para cada posto de quem pede (team leader, front office, back office, supervisor…), quem aprova: o RH, o supervisor da cidade de quem pede, qualquer supervisor, o super admin e/ou contas escolhidas. Basta um. Há ainda a regra de quem está no RH e exceções por pessoa (ex.: o supervisor de todas as cidades → super admin), que ganham a tudo. Ninguém aprova as suas; sem ninguém, aprova o super admin. Cada pedido guarda quem o podia aprovar quando foi feito. A mesma regra decide quem lança férias já aprovadas a cada pessoa (além do RH e do super admin). Só o super admin muda.",
+    schema: vacationApprovalsSchema,
+    defaultValue: DEFAULT_VACATION_APPROVALS,
+    wiring: "live",
+  }),
+  [VACATION_DAYS_PER_YEAR_KEY]: def({
+    key: VACATION_DAYS_PER_YEAR_KEY,
+    group: "pessoas",
+    label: "Férias: dias úteis por ano",
+    description: "Ao marcar férias, o mapa mostra os dias úteis do pedido e o total do ano contra este número (a lei dá 22). É só um aviso: nunca bloqueia. 0 = sem aviso.",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(0, "Mínimo 0.").max(60, "Máximo 60."),
+    defaultValue: DEFAULT_VACATION_DAYS_PER_YEAR,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -1121,6 +1162,10 @@ export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   // (quem está na lista fecha em Avaliação → Mês, pelo procedimento próprio)
   EVALUATION_CLOSED_UNTIL_KEY,
   EVALUATION_CLOSERS_KEY,
+  // Plano 63 (passo 11): quem vê as baixas e quem aprova as férias — só o super admin muda
+  HR_PEOPLE_KEY,
+  LEAVES_VIEW_ALL_KEY,
+  VACATION_APPROVALS_KEY,
 ]);
 export function settingSuperAdminOnly(key: string): boolean {
   return SUPER_ADMIN_SETTING_KEYS.has(key);
@@ -1226,7 +1271,10 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "REVIEW_AUTO_PUBLISH_5STAR", label: "Críticas 5★: publicar a resposta sozinho (6 h depois)", description: "Para as críticas de 5★ ligadas ao Google (API ou Windsor), recentes, sem reclamação, sem resposta e sem links, contactos, insultos ou instruções no texto: a IA barata escreve a resposta, que fica 6 h à vista na crítica (com \"Cancelar\") e só depois é publicada, com o utilizador do sistema — antes de publicar volta a ler a crítica no Google (tem de continuar com 5★, o mesmo texto e sem resposta). No máximo 20 por dia e por perfil; pára sozinho ao fim de 3 falhas seguidas e avisa. Desligar pára as que estão à espera (as já publicadas ficam). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   // Jorge (14 out 2026): "porque é que os 141 não dão aviso nenhum?" — avisa gente → desligado por omissão.
   // Tarefa 62 (Q8, Jorge: "não vem: marca-se falta"): as faltas de quem tem horário fixo, como as dos extras.
-  { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), só para ONTEM, quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar (com motivo: Férias, Baixa e Justificada criam a ausência desse dia). Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas, dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro), quem mexeu em carros na Multipark e quem está na lista \"Fora das faltas automáticas\". Com \"RH: fins de semana e exceções por data\" ligado, as exceções da ficha ganham ao horário nesse dia (\"trabalha\" num sábado ou feriado → conta; \"folga\" → fora). Antes de ligar, vê RH → Horários por rever. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), só para ONTEM, quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar (com motivo: Férias, Baixa e Justificada criam a ausência desse dia). Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas aprovadas (de dia inteiro; com o mapa de férias, as só pedidas não tiram a falta), dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro), quem mexeu em carros na Multipark e quem está na lista \"Fora das faltas automáticas\". Com \"RH: fins de semana e exceções por data\" ligado, as exceções da ficha ganham ao horário nesse dia (\"trabalha\" num sábado ou feriado → conta; \"folga\" → fora). Antes de ligar, vê RH → Horários por rever. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  // Plano 63 (passo 11, Jorge 15 out 2026: "para toda a gente"). Avisa gente e mexe nos pontos → desligado por omissão.
+  { name: FERIAS_MAPA_FLAG, label: "RH: mapa de férias e pedidos", description: "Perfil → As minhas férias e RH → Mapa de férias: cada funcionário (permanente ou a termo) marca as suas férias, que ficam por aprovar até alguém da cadeia (Definições → Parâmetros → Pessoas → \"Férias: quem aprova quem\") aprovar ou recusar; as do super admin ficam aprovadas sozinhas e ninguém aprova as suas. Os extras avisam \"não vou estar\" (sem aprovação nem pagamento): quem escala no Extras-Dia vê \"indisponível (avisou a DD/MM)\", a proposta automática deixa de os propor nesses dias e, se o aviso veio ANTES de a pessoa ser posta nesse dia, a falta fica sem pontos e não conta para a ordem da proposta (avisos depois de escalado não tiram a falta). Quem vê tudo: o super admin, o RH e \"Férias: quem vê o mapa inteiro\"; o supervisor vê a sua área e um administrador todas as cidades, com as baixas só como \"ausente\"; os colegas só veem as férias. Férias já aprovadas só as lança quem as aprova, o RH ou o super admin. Mapa em PDF (só férias). Cancelar nunca apaga e um mês fechado não muda. Desligado: não aparece a ninguém e nada muda (as férias e baixas já lançadas continuam a contar como até aqui). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  { name: FERIAS_AVISOS_FLAG, label: "RH: avisos das férias", description: "Com o mapa de férias ligado: sino a quem pode aprovar quando alguém pede férias, e a quem pediu quando o pedido é aprovado, recusado (com o motivo) ou cancelado. Só na aplicação. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   // Plano 63, passo 10b (Jorge, 15 out 2026: "o fim de semana é rotativo"): coisa nova → desligada por omissão.
   { name: "FINS_DE_SEMANA", label: "RH: fins de semana e exceções por data", description: "O ecrã RH → Fins de semana (quem está de serviço em cada sábado e domingo, por cidade, com \"Repetir a rotação\"), as \"Exceções por data\" na ficha (Horário) e \"O meu horário\" no Perfil. Ligado, as exceções (\"trabalha das HH:MM às HH:MM\" ou \"folga\" numa data) ganham ao horário fixo no atraso ao trabalho (−5) da Avaliação e nas possíveis faltas de quem tem horário fixo. Desligado, nada muda: só conta o horário fixo. Não avisa ninguém (isso é o \"Aviso dos fins de semana\"). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   { name: "FINS_DE_SEMANA_AVISO", label: "RH: aviso à pessoa quando é posta de serviço", description: "Com \"RH: fins de semana e exceções por data\" ligado: quando alguém é posto de serviço num fim de semana, ou uma exceção dele (trabalha/folga numa data de hoje para a frente) é marcada ou cancelada, a pessoa recebe o aviso no sino (e por email, se o ligar no Perfil). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },

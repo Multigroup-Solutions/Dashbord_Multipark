@@ -132,8 +132,8 @@ export default function ScheduleReviewPage({ onBack, onOpenEmployee }: { onBack:
           <section className="rounded-[14px] border bg-card p-3 text-sm">
             <p className="flex items-center gap-2 font-medium"><Plane className="h-4 w-4 text-[#0055D2]" /> Férias deste mês</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Ausências lançadas que tocam este mês: <b className="tabular-nums text-foreground">{d.leavesThisMonth.rows}</b> ({d.leavesThisMonth.people} pessoa{d.leavesThisMonth.people === 1 ? "" : "s"}).
-              Quem está de férias sem a ausência lançada leva uma possível falta por dia: dispensa-a com <b>Férias</b> (lança a ausência desse dia).
+              Ausências aprovadas (dias inteiros) que tocam este mês: <b className="tabular-nums text-foreground">{d.leavesThisMonth.rows}</b> ({d.leavesThisMonth.people} pessoa{d.leavesThisMonth.people === 1 ? "" : "s"}).
+              Quem está de férias sem a ausência aprovada leva uma possível falta por dia (um pedido por aprovar não a tira): dispensa-a com <b>Férias</b> (lança a ausência aprovada desse dia).
             </p>
           </section>
 

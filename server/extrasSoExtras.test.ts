@@ -61,7 +61,11 @@ describe("Escala: sem cidade não; funcionários só à mão", () => {
     expect(fnBody("server/extrasSchedule.ts", "export async function loadScheduleCandidates", 400)).toContain("await loadEligibleExtras(date, city)");
     expect(cands).toContain('if ((c.position ?? "").toLowerCase() !== "extra") return false;');
     expect(cands).toContain("return (cities.get(c.id)?.city ?? null) === cityKey;");
-    expect(fnBody("server/extrasSchedule.ts", "export async function noAnswerTargets", 1200)).toContain("return noAnswer.filter((c) => cities.get(c.id)?.city === cityKey).map((c) => c.id);");
+    const ask = fnBody("server/extrasSchedule.ts", "export async function noAnswerTargets", 1700);
+    expect(ask).toContain("const ids = noAnswer.filter((c) => cities.get(c.id)?.city === cityKey).map((c) => c.id);");
+    // plano 63 (11): quem avisou que não está nesse dia não é chamado (só com o mapa de férias; desligado → todos)
+    expect(ask).toContain("awayForAutoProposal(date, ids)");
+    expect(ask).toContain("return away.size ? ids.filter((id) => !away.has(id)) : ids;");
   });
   it("à mão: quem não tem cidade é recusado com o motivo", () => {
     expect(noCityScheduleMessage("Ana Sousa")).toBe("Ana Sousa não tem cidade na ficha: não pode ser escalado(a). Define a cidade primeiro (Recursos Humanos → ficha).");

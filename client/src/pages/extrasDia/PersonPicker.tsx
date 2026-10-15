@@ -23,6 +23,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { matchesContactQuery, sortByNameMatch } from "@shared/contactSearch";
 import type { LicenceStatus } from "@shared/drivingLicence";
 import { LicenceBadge } from "@/components/rh/RhBadges";
+import { AbsenceBadge } from "@/components/ferias/FeriasBits";
+import type { SchedulerAbsence } from "@shared/leaves";
 
 type CityId = "lisbon" | "porto" | "faro";
 const CITY_NAMES: Record<CityId, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
@@ -47,6 +49,8 @@ export interface PickerCandidate {
    * `morning`/`night` = cobre o turno, `summary` = o resumo todo (no title).
    */
   habitual?: { summary: string; text: string; marked?: boolean; morning: boolean; night: boolean } | null;
+  /** Plano 63 (passo 11, com o mapa de férias ligado): avisou que não está neste dia. */
+  absence?: SchedulerAbsence | null;
 }
 
 interface Section { key: string; label: string; rows: Array<{ c: PickerCandidate; other: boolean }>; disabled?: boolean }
@@ -110,6 +114,7 @@ export function CandidateLabel({ c, shift }: { c: PickerCandidate; shift?: "morn
         <span className="ml-1 shrink-0 rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-700" title="Não foi possível verificar a formação agora — ao guardar volta a ser verificada">Formação por verificar</span>
       )}
       {c.licence && c.licence !== "validated" && <LicenceBadge status={c.licence} className="ml-1 px-1 py-0 text-[11px]" />}
+      <AbsenceBadge absence={c.absence} className="ml-1" />
     </span>
   );
 }

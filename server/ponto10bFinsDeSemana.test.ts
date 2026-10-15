@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   /** a ficha de quem pede (Perfil → O meu horário) e o horário dela (todas as linhas, como a leitura do ecrã) */
   me: null as any,
   personSchedules: [] as any[],
+  /** exceções gravadas pelo router (plano 63, 10b + 11) */
+  savedOverrides: [] as any[],
 }));
 
 const national = vi.hoisted(() => ({ all: true, defaultCityId: null, cityName: null, cityIds: [] as number[], projectIds: [] as number[], missingCostCenter: false }));
@@ -29,14 +31,19 @@ vi.mock("./cityAccess", async (original) => ({
   loadCityAccessParts: async () => ({ access: national, base: national, all: national }),
 }));
 vi.mock("./db", async (original) => {
-  const { extrasDiaAssignments, timeRecords, employeePenalties } = await import("../drizzle/schema");
+  const { extrasDiaAssignments, timeRecords, employeePenalties, scheduleOverrides } = await import("../drizzle/schema");
   const dialect = new MySqlDialect();
   const db = {
     execute: async (q: any) => {
       const t = dialect.sqlToQuery(q).sql;
       if (t.includes("FROM schedules s JOIN employees e")) return [state.schedules];
       if (t.includes("FROM schedules WHERE employeeId IN")) return [state.personSchedules];
-      if (t.includes("FROM employee_leaves")) return [state.leaves];
+      if (t.includes("FROM employee_leaves")) {
+        // a BD a fazer o filtro que a consulta pede (plano 63, passo 11: approvedLeaveSql / fullDayLeaveSql)
+        const approvedOnly = t.includes("`status` = 'approved' AND `leaveType` <> 'unavailable'");
+        const fullDay = t.includes("`hours` IS NULL");
+        return [state.leaves.filter((l) => (!approvedOnly || ((l.status ?? "approved") === "approved" && l.leaveType !== "unavailable")) && (!fullDay || l.hours == null))];
+      }
       if (t.includes("FROM schedule_overrides o JOIN employees e")) { state.overrideQueries++; return [state.overrides]; }
       return [[]];
     },
@@ -54,10 +61,13 @@ vi.mock("./db", async (original) => {
     }),
     insert: (table: any) => ({
       values: async (v: any) => {
+        if (table === scheduleOverrides) { state.savedOverrides.push(v); return [{ insertId: 500 + state.savedOverrides.length }]; }
         if (table !== employeePenalties) throw new Error("tabela inesperada");
         state.inserted.push(v);
       },
     }),
+    update: () => ({ set: () => ({ where: async () => [{ affectedRows: 0 }] }) }),
+    transaction: async (fn: any) => fn(db),
   };
   const orig = await original<any>();
   return {
@@ -65,7 +75,7 @@ vi.mock("./db", async (original) => {
     getDb: async () => db,
     getUserPermissionOverrides: async () => ({}),
     getUserModuleOverrides: async () => ({}),
-    getEmployeeByUserId: async () => (state.me ? { employee: state.me } : null),
+    getEmployeeByUserId: async (userId: number) => (state.me && (state.me.userId == null || state.me.userId === userId) ? { employee: state.me } : null),
     getEmployeeById: async (id: number) => (state.me && state.me.id === id ? { employee: state.me } : orig.getEmployeeById(id)),
     logActivity: async () => undefined,
   };
@@ -89,7 +99,7 @@ import { kindDef } from "../shared/notificationRouting";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { expectedHoursFromSchedule } from "./payroll/compute";
 import { MIGRATION_0825_STATEMENTS, IDEMPOTENT_ERROR_CODES_0825 } from "./migrations/migration_0825";
-import { WEEKENDS_FLAG, WEEKENDS_NOTIFY_FLAG, canMarkScheduleOverride, loadActiveOverridesForReaders, overrideNoticeText } from "./scheduleOverrides";
+import { WEEKENDS_FLAG, WEEKENDS_NOTIFY_FLAG, canMarkScheduleOverride, loadActiveOverridesForReaders, loadSchedulesAndLeaves, overrideNoticeText, todayLisbon } from "./scheduleOverrides";
 import { appRouter } from "./routers";
 
 const src = (p: string) => readFileSync(resolve(import.meta.dirname, "..", p), "utf8");
@@ -104,7 +114,7 @@ const ov = (employeeId: number, day: string, kind: "work" | "off", o: Partial<Sc
 
 beforeEach(() => {
   state.schedules = []; state.leaves = []; state.overrides = []; state.overrideQueries = 0; state.escala = []; state.checkIns = new Set(); state.inserted = [];
-  state.me = null; state.personSchedules = [];
+  state.me = null; state.personSchedules = []; state.savedOverrides = [];
   process.env.FINS_DE_SEMANA = "on";
 });
 afterEach(() => { delete process.env.FINS_DE_SEMANA; delete process.env.FINS_DE_SEMANA_AVISO; });
@@ -720,5 +730,59 @@ describe("router rh.weekends", () => {
     await expect(caller("admin").rh.weekends.repeatRotation({ city: "lisbon", patternFrom: "2026-11-09", patternTo: "2026-11-14", weeks: 4 })).rejects.toThrow(/de um sábado a outro sábado/);
     const far = saturdayOnOrAfter("2090-01-01");
     await expect(caller("admin").rh.weekends.repeatRotation({ city: "lisbon", patternFrom: far, patternTo: far, weeks: 4 })).rejects.toThrow(/um ano para a frente/);
+  });
+});
+
+// ─── 10b + mapa de férias (11): só as ausências APROVADAS de dia inteiro ────
+describe("exceções por data e férias (11): só as ausências aprovadas de dia inteiro tiram o dia e bloqueiam \"pôr de serviço\"", () => {
+  const caller = (role: string, id = 1) => appRouter.createCaller({ user: { id, role, name: "Rita" }, req: { headers: {} }, res: {} } as any);
+  // um sábado daqui a uma semana ou mais, sem feriado no sábado nem no domingo (os feriados tiram o horário fixo)
+  const sat = saturdaysFrom(addDays(todayLisbon(), 7), 12).find((d) => !ptHolidayOf(d) && !ptHolidayOf(addDays(d, 1)))!;
+  const leave = (o: Record<string, unknown>) => ({ employeeId: 2, leaveType: "vacation", fromDate: sat, toDate: addDays(sat, 1), hours: null, ...o });
+  const rui = { id: 2, fullName: "Rui", position: "backoffice", contractType: "permanent", projectId: null, isActive: 1, contractStart: null, contractEnd: null, userId: 11 };
+  const ruiSchedules = () => [1, 2, 3, 4, 5, 6].map((weekday, i) => ({ id: i + 1, employeeId: 2, weekday, startTime: "09:00", endTime: "18:00", isWorkDay: 1 }));
+
+  it("loadSchedulesAndLeaves: aprovadas de dia inteiro sim; pedidas, recusadas, canceladas, de parte do dia e a indisponibilidade não", async () => {
+    state.leaves = [
+      leave({ status: "approved" }),
+      leave({ status: "requested", fromDate: addDays(sat, 7), toDate: addDays(sat, 7) }),
+      leave({ status: "rejected", fromDate: addDays(sat, 14), toDate: addDays(sat, 14) }),
+      leave({ status: "cancelled", fromDate: addDays(sat, 21), toDate: addDays(sat, 21) }),
+      leave({ status: "approved", leaveType: "other", hours: "2.00", fromDate: addDays(sat, 28), toDate: addDays(sat, 28) }),
+      leave({ status: "approved", leaveType: "unavailable", fromDate: addDays(sat, 35), toDate: addDays(sat, 35) }),
+    ];
+    const { leaves } = await loadSchedulesAndLeaves([2], sat, addDays(sat, 40));
+    expect(leaves).toEqual([{ employeeId: 2, fromDate: sat, toDate: addDays(sat, 1) }]);
+  });
+  it("Perfil → O meu horário: um pedido por aprovar não tira o sábado; as férias aprovadas tiram (dayPlan \"leave\")", async () => {
+    state.me = rui;
+    state.personSchedules = ruiSchedules();
+    state.leaves = [leave({ status: "requested" })];
+    const asked = await appRouter.createCaller({ user: { id: 11, role: "backoffice", name: "Rui" }, req: { headers: {} }, res: {} } as any).rh.weekends.mine();
+    expect((asked as any).weekends.find((w: any) => w.day === sat)).toMatchObject({ work: { startTime: "09:00", endTime: "18:00" }, reason: null });
+    state.leaves = [leave({ status: "approved" })];
+    const approved = await appRouter.createCaller({ user: { id: 11, role: "backoffice", name: "Rui" }, req: { headers: {} }, res: {} } as any).rh.weekends.mine();
+    expect((approved as any).weekends.find((w: any) => w.day === sat)).toMatchObject({ work: null, reason: "leave" });
+  });
+  it("pôr de serviço num dia de férias APROVADAS → recusado; com um pedido por aprovar (ou recusado) → marca", async () => {
+    state.me = rui;
+    state.personSchedules = ruiSchedules();
+    state.leaves = [leave({ status: "approved" })];
+    await expect(caller("admin").rh.weekends.set({ employeeId: 2, day: sat, kind: "work", startTime: "09:00", endTime: "18:00", reason: "weekend" }))
+      .rejects.toThrow(/está de férias ou de baixa/);
+    await expect(caller("admin").rh.weekends.markDuty({ employeeId: 2, days: [sat], startTime: "09:00", endTime: "18:00" })).rejects.toThrow(/está de férias ou de baixa/);
+    expect(state.savedOverrides).toEqual([]);
+    state.leaves = [leave({ status: "requested" }), leave({ status: "rejected", fromDate: addDays(sat, 1), toDate: addDays(sat, 1) })];
+    await caller("admin").rh.weekends.set({ employeeId: 2, day: sat, kind: "work", startTime: "09:00", endTime: "18:00", reason: "weekend" });
+    expect(state.savedOverrides).toEqual([expect.objectContaining({ employeeId: 2, day: sat, kind: "work", startTime: "09:00", endTime: "18:00" })]);
+  });
+  it("possíveis faltas: uma exceção \"trabalha\" num dia com um pedido de férias por aprovar → falta; com férias aprovadas → não", async () => {
+    state.schedules = [];
+    state.overrides = [{ id: 1, employeeId: 2, day: sat, kind: "work", startTime: "09:00", endTime: "18:00", reason: "weekend", contractStart: null, contractEnd: null }];
+    state.leaves = [leave({ status: "requested" })];
+    expect(await detectFixedScheduleNoShows(sat)).toMatchObject({ scanned: 1, created: 1 });
+    state.inserted = [];
+    state.leaves = [leave({ status: "approved" })];
+    expect(await detectFixedScheduleNoShows(sat)).toMatchObject({ scanned: 0, created: 0 });
   });
 });

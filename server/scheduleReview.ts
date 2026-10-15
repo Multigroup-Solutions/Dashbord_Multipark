@@ -7,6 +7,7 @@
 import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import { getDb, logActivity } from "./db";
+import { approvedLeaveSql, fullDayLeaveSql } from "./leavesSql";
 import {
   LOST_PUNCH_TAG, NO_CLOCK_IN_DAYS, NO_CLOCK_IN_LOOKBACK_DAYS, NO_SHOW_SKIP_SETTING_KEY, noShowSkipEntrySchema, scheduleReview,
   withNoShowSkip, withoutNoShowSkip, type NoShowSkipEntry,
@@ -89,11 +90,12 @@ export async function loadScheduleReview(now = Date.now()) {
   const [pending] = ids.length ? rowsOf(await db.execute(sql`
     SELECT COUNT(*) AS n FROM employee_penalties
      WHERE reason = 'other' AND status = 'pending' AND notes LIKE ${"[FALTA HORÁRIO]%"} AND employeeId IN (${idList(ids)})`)) : [];
-  // lembrete: as férias deste mês têm de estar lançadas (sem elas, cada dia de férias dá uma possível falta)
+  // lembrete: as férias deste mês têm de estar lançadas (sem elas, cada dia de férias dá uma possível falta).
+  // Plano 63 (11): só contam as APROVADAS de dia inteiro — as que tiram a possível falta (as pedidas não).
   const monthStart = `${today.slice(0, 7)}-01`, monthEnd = `${today.slice(0, 7)}-31`;
   const [leaves] = ids.length ? rowsOf(await db.execute(sql`
     SELECT COUNT(*) AS n, COUNT(DISTINCT employeeId) AS people FROM employee_leaves
-     WHERE fromDate <= ${monthEnd} AND toDate >= ${monthStart} AND employeeId IN (${idList(ids)})`)) : [];
+     WHERE fromDate <= ${monthEnd} AND toDate >= ${monthStart} AND employeeId IN (${idList(ids)}) AND ${approvedLeaveSql()} AND ${fullDayLeaveSql()}`)) : [];
   const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }, { FIXED_SCHEDULE_NO_SHOWS_FLAG }] = await Promise.all([
     import("./_core/featureFlags"), import("../shared/appSettings"), import("./rhService"),
   ]);

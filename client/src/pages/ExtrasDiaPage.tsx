@@ -55,6 +55,7 @@ import { ServiceTimesCoverageCard } from "./extrasDia/ServiceTimesCoverageCard";
 import { TimesVerificationCard } from "./extrasDia/TimesVerificationCard";
 import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
 import { LicenceWarning } from "./extrasDia/LicenceWarning";
+import { AbsenceBadge, AbsenceWarning } from "@/components/ferias/FeriasBits";
 import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
 import { StaffingBanner, StaffingGapList } from "./extrasDia/StaffingIndicator";
 import { NotifyShiftDialog } from "./extrasDia/NotifyShiftDialog";
@@ -1130,6 +1131,7 @@ function AssignmentForm({
             }}
           />
           <LicenceWarning status={candidates.find(x => x.id === employeeId)?.licence} name={personName} />
+          <AbsenceWarning absence={candidates.find(x => x.id === employeeId)?.absence} name={personName} />
           {asTeamLeader && (
             <p className="text-[11px] text-muted-foreground">{TL_HOW_TO}</p>
           )}
@@ -1342,6 +1344,7 @@ function AssignmentRow({
             {a.status === "proposed" && (
               <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-700" title="Proposta automática — ainda por confirmar">proposta</Badge>
             )}
+            <AbsenceBadge absence={(a as any).absence} />
           </span>
           {a.proposalReason && (
             <div className="text-[11px] text-muted-foreground mt-0.5 max-w-[16rem] sm:max-w-md leading-snug break-words" title="Porquê esta pessoa">

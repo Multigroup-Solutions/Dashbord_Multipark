@@ -37,7 +37,7 @@ type Position =
   | "director" | "supervisor" | "team_leader" | "backoffice"
   | "frontoffice" | "senior_driver" | "driver" | "extra";
 
-type ContractType = "permanent" | "fixed_term" | "extra";
+type ContractType = "permanent" | "fixed_term" | "extra" | "partner_company";
 
 const POSITION_LABELS: Record<Position, string> = {
   director: "Director",
@@ -54,6 +54,7 @@ const CONTRACT_LABELS: Record<ContractType, string> = {
   permanent: "Permanente",
   fixed_term: "Termo Certo",
   extra: "Extra",
+  partner_company: "Parceiro (empresa)",
 };
 
 const PIE_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#14b8a6"];

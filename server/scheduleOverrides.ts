@@ -15,6 +15,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { scheduleOverrides } from "../drizzle/schema";
 import { getDb, logActivity, toMysqlDateTime } from "./db";
+import { approvedLeaveSql, fullDayLeaveSql } from "./leavesSql";
 import { inScopeProject, isOwn, isProtectedTarget, rank, type EmployeeRef, type RhViewer } from "./rhAccess";
 import { ROLE_RANK } from "../shared/access";
 import { addDays, lisbonDayOf } from "../shared/lisbonDay";
@@ -286,15 +287,18 @@ export async function loadActiveStaff(): Promise<BoardPersonRow[]> {
   }));
 }
 
-/** Horário fixo (todas as linhas, por id) e férias/baixas destas fichas. */
+/** Horário fixo (todas as linhas, por id) e férias/baixas APROVADAS (dia inteiro) destas fichas. */
 export async function loadSchedulesAndLeaves(employeeIds: readonly number[], fromDay: string, toDay: string) {
   if (!employeeIds.length) return { schedules: [] as any[], leaves: [] as any[] };
   const db = await dbOrThrow();
   const ids = sql.join(employeeIds.map((id) => sql`${id}`), sql`, `);
   const schedules = rowsOf(await db.execute(sql`SELECT id, employeeId, weekday, startTime, endTime, isWorkDay FROM schedules WHERE employeeId IN (${ids}) ORDER BY id`))
     .map((r) => ({ id: Number(r.id), employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null, isWorkDay: Number(r.isWorkDay) === 1 }));
-  // Férias/baixas (employee_leaves). Plano 63, passo 11: quando houver estado, só as aprovadas.
-  const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves WHERE employeeId IN (${ids}) AND fromDate <= ${toDay} AND toDate >= ${fromDay}`))
+  // Férias/baixas (employee_leaves). Plano 63, passo 11: só as APROVADAS de dia inteiro — um pedido por aprovar
+  // (ou recusado, ou cancelado) não tira o dia nem impede pôr de serviço; a indisponibilidade dos extras é do
+  // Extras-Dia; a ausência de parte do dia (consulta) não tira o dia (a pessoa trabalha o resto).
+  const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves
+     WHERE employeeId IN (${ids}) AND fromDate <= ${toDay} AND toDate >= ${fromDay} AND ${approvedLeaveSql()} AND ${fullDayLeaveSql()}`))
     .map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }));
   return { schedules, leaves };
 }

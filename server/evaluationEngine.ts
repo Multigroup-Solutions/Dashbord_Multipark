@@ -25,6 +25,7 @@
  */
 import { and, desc, eq, gte, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { approvedLeaveSql } from "./leavesSql";
 import {
   employeeDayMetrics,
   employeeMetricAdjustments,
@@ -157,6 +158,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
   // Tarefa 62 (Q8): horários fixos do RH (fichas ativas, funcionários — os extras regem-se pela escala) e
   // férias/baixas — o atraso conta para quem tem horário. A cidade da ficha só serve para o feriado municipal.
   let fixedSchedules: any[] = [], leaveRows: any[] = [];
+  let leavesRead = false;
   try {
     fixedSchedules = rowsOf(await db.execute(sql`
       SELECT s.id, s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
@@ -165,12 +167,22 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
        WHERE e.isActive = 1 AND s.isWorkDay = 1
          AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'
        ORDER BY s.id`));
+    // Plano 63 (passo 11): só as ausências APROVADAS (as pedidas não tiram o atraso); a de parte do dia também conta (justificada).
     leaveRows = rowsOf(await db.execute(sql`
       SELECT employeeId, fromDate, toDate FROM employee_leaves
-       WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
-  } catch { /* sem horários: só a escala (como antes) */ }
+       WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)} AND ${approvedLeaveSql()}`));
+    leavesRead = true;
+  } catch (err: any) {
+    // Sem horários: só a escala (como antes). Plano 63 (auditoria): se os horários vieram mas as ausências
+    // falharam, larga-se também os horários — senão quem está de férias levava −5 de atraso.
+    fixedSchedules = []; leaveRows = [];
+    console.warn("[avaliação] horários fixos/ausências não lidos (conta só a escala):", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
   // Plano 63, passo 10b: exceções por data (fins de semana, folgas) — só com FINS_DE_SEMANA ligado; senão [].
-  const scheduleOverrides = await (await import("./scheduleOverrides")).loadActiveOverridesForReaders(db, addDays(startDay, -1), addDays(endDay, 1));
+  // Sem as ausências lidas também não (conta só a escala): uma exceção "trabalha" num dia de férias dava −5.
+  const scheduleOverrides = leavesRead
+    ? await (await import("./scheduleOverrides")).loadActiveOverridesForReaders(db, addDays(startDay, -1), addDays(endDay, 1))
+    : [];
   const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
     ? await (await import("./aiOps/cities")).projectCityResolver(db)
     : () => null;

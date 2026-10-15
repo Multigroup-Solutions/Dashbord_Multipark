@@ -4,7 +4,8 @@ import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { useState } from "react";
-import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail, Camera, MonitorX, Loader2, CalendarCheck } from "lucide-react";
+import { Clock, Shield, LogOut, ChevronRight, UserCheck, Smartphone, SlidersHorizontal, Bell, Lock, Mail, Camera, MonitorX, Loader2, CalendarCheck, Palmtree } from "lucide-react";
+import { useLeaveStatus } from "@/components/ferias/FeriasBits";
 import { noLinkedRecordMessage } from "@shared/ownAccess";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -44,6 +45,8 @@ export default function ProfilePage() {
   // Plano 56: palavra-passe e "Ativar avisos" só com "Entrar com email e código" ligado.
   const { codeLogin } = useCodeLoginOption();
   const { data: myPda } = trpc.operational.pdas.mine.useQuery(undefined, { staleTime: 60_000 });
+  // Plano 63 (passo 11): mapa de férias (só com FERIAS_MAPA ligado)
+  const leaveStatus = useLeaveStatus();
 
   const initials = (user?.name ?? "?")
     .split(/\s+/).filter(Boolean).map((p: string) => p[0]).slice(0, 2).join("").toUpperCase();
@@ -69,6 +72,11 @@ export default function ProfilePage() {
     { icon: UserCheck, label: "A minha ficha", note: "RH", action: () => openMyEmployee() },
     // Lote 46: a disponibilidade de cada um, à mão (os extras procuravam-na no Extras Dia).
     { icon: CalendarCheck, label: "A minha disponibilidade", note: "semana", action: () => navigate("/disponibilidade") },
+    // Plano 63 (passo 11): as minhas férias (os extras: "quando não vou estar"); quem aprova vê os pedidos por aprovar.
+    // Quem aprova sem ficha (contas escolhidas nas Definições) também chega aos pedidos por aqui.
+    ...(leaveStatus && ((leaveStatus.employeeId && !leaveStatus.isPartner) || leaveStatus.pendingCount > 0)
+      ? [{ icon: Palmtree, label: leaveStatus.employeeId && !leaveStatus.isPartner ? (leaveStatus.isExtra ? "Quando não vou estar" : "As minhas férias") : "Férias por aprovar", note: leaveStatus.pendingCount ? `${leaveStatus.pendingCount} por aprovar` : leaveStatus.isExtra ? "avisar" : "mapa", action: () => navigate(leaveStatus.pendingCount ? "/ferias?tab=aprovar" : "/ferias?tab=minhas") }]
+      : []),
     ...(can(user, "permissoes", "manage")
       ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
       : []),

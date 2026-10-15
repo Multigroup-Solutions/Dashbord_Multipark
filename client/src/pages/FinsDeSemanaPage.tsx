@@ -26,7 +26,7 @@ type City = "lisbon" | "porto" | "faro";
 const CITY_LABELS: Record<City, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
 const WEEK_OPTIONS = [4, 8, 12, 26];
 const STATUS_LABELS: Record<string, string> = {
-  create: "marca", existing: "já tem exceção nesse dia", leave: "de férias/baixa", past: "dia passado", forbidden: "não podes marcar", inactive: "já não está na cidade", contract: "fora do contrato",
+  create: "marca", existing: "já tem exceção nesse dia", leave: "de férias/baixa (aprovadas)", past: "dia passado", forbidden: "não podes marcar", inactive: "já não está na cidade", contract: "fora do contrato",
 };
 
 const weekendTitle = (sat: string) => {
@@ -310,7 +310,7 @@ function RotationDialog({ city, saturdays, weeks, onClose, onDone }: {
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Repetir a rotação</DialogTitle>
-          <DialogDescription>Os fins de semana do modelo repetem-se pela mesma ordem nas semanas seguintes. Nunca mexe num dia que já tem exceção, em férias/baixas nem no passado.</DialogDescription>
+          <DialogDescription>Os fins de semana do modelo repetem-se pela mesma ordem nas semanas seguintes. Nunca mexe num dia que já tem exceção, em férias/baixas aprovadas nem no passado.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

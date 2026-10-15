@@ -32,6 +32,15 @@ const state = vi.hoisted(() => ({
   manageDenied: false,
   skipReadFails: false,
   leaveInsertFails: false,
+  // plano 63 (11): meses fechados (ordenado aprovado ou pago), falha a lê-los, logins da ficha, a ficha e o que
+  // acontece entre fechar a possível falta e gravar a ausência
+  closedMonths: [] as string[],
+  closedReadFails: false,
+  logins: new Map<number, number[]>(),
+  employeeRow: null as null | { userId: number | null; contractType: string | null },
+  afterDismiss: null as null | (() => void),
+  /** exceções por data ativas (10b), lidas com FINS_DE_SEMANA ligado */
+  overrides: [] as any[],
 }));
 
 vi.mock("./db", async (original) => {
@@ -51,14 +60,20 @@ vi.mock("./db", async (original) => {
       const day = p.length >= 3 ? String(p[1]) : null;
       return state.leaves.filter((l) => l.employeeId === Number(p[0]) && (!day || (l.fromDate <= day && l.toDate >= day)));
     }
-    if (table === employees) return [];
+    if (table === employees) return cols && "contractType" in cols && state.employeeRow ? [state.employeeRow] : [];
     return [];
   };
   const db = {
     execute: async (q: any) => {
       const t = dialect.sqlToQuery(q).sql;
       if (t.includes("FROM schedules s JOIN employees e")) return [state.schedules];
-      if (t.includes("FROM employee_leaves")) return [state.leaves];
+      if (t.includes("FROM employee_leaves")) {
+        // a BD a fazer o filtro que a consulta pede (plano 63, passo 11: approvedLeaveSql / fullDayLeaveSql)
+        const approvedOnly = t.includes("`status` = 'approved' AND `leaveType` <> 'unavailable'");
+        const fullDay = t.includes("`hours` IS NULL");
+        return [state.leaves.filter((l) => (!approvedOnly || ((l.status ?? "approved") === "approved" && l.leaveType !== "unavailable")) && (!fullDay || l.hours == null))];
+      }
+      if (t.includes("FROM schedule_overrides o JOIN employees e")) return [state.overrides];
       if (t.includes("FROM `employee_penalties` WHERE id")) {
         const id = Number(dialect.sqlToQuery(q).params[0]);
         return [state.inserted.filter((x) => x.id === id).map((x) => ({ employeeId: x.employeeId }))];
@@ -97,6 +112,7 @@ vi.mock("./db", async (original) => {
           // gravação condicional (status = 'pending'): se já foi revista, não muda nada
           if (!row || (ps.includes("pending") && row.status !== "pending")) return [{ affectedRows: 0 }];
           Object.assign(row, patch);
+          if (patch.status === "dismissed" && state.afterDismiss) { const f = state.afterDismiss; state.afterDismiss = null; f(); }
           return [{ affectedRows: 1 }];
         },
       }),
@@ -113,7 +129,17 @@ vi.mock("./db", async (original) => {
     setScheduleDayOff: async (employeeId: number, weekday: number) => { state.dayOffs.push({ employeeId, weekday }); return { before: state.before }; },
   };
 });
-vi.mock("./personIdentity", () => ({ agentIdsOfEmployee: async () => ({ agentUserIds: [] }) }));
+vi.mock("./personIdentity", () => ({
+  agentIdsOfEmployee: async () => ({ agentUserIds: [] }),
+  listEmployeeLogins: async (employeeId: number) => (state.logins.get(employeeId) ?? []).map((userId) => ({ userId })),
+}));
+vi.mock("./terminalPay", async (original) => ({
+  ...(await original<object>()),
+  closedPayrollMonthKeys: async () => {
+    if (state.closedReadFails) throw new Error("ligação perdida");
+    return new Set(state.closedMonths);
+  },
+}));
 vi.mock("./multiparkDb/movements", () => ({ getAgentMovementSummaries: async () => ({ available: true, data: [] }) }));
 vi.mock("./appSettings", async (original) => {
   const orig = await original<typeof import("./appSettings")>();
@@ -152,7 +178,7 @@ import { fixedScheduledStarts, workRowOn } from "../shared/workSchedule";
 import { computeEmployeeMonth, expectedHoursFromSchedule } from "./payroll/compute";
 import { pairShifts } from "./payroll/shifts";
 import {
-  canonicalHhmm, fixedNoShowDay, fixedNoShowDismissPlan, isHhmm, LOST_PUNCH_TAG, noShowSkipFor, noShowSkipSchema, scheduleDayToSave,
+  canonicalHhmm, dismissDayLeaveCoverage, fixedNoShowDay, fixedNoShowDismissPlan, isHhmm, LOST_PUNCH_TAG, noShowSkipFor, noShowSkipSchema, scheduleDayToSave,
   scheduleReview, withNoShowSkip, withoutNoShowSkip,
 } from "../shared/scheduleReview";
 import { SETTINGS } from "../shared/appSettings";
@@ -166,7 +192,9 @@ beforeEach(() => {
   Object.assign(state, {
     schedules: [], leaves: [], escala: [], checkIns: new Set(), inserted: [], skips: [], skipUpdatedAt: null, saved: [], conflict: false,
     upserts: [], dayOffs: [], before: [], logs: [], manageDenied: false, skipReadFails: false, leaveInsertFails: false,
+    closedMonths: [], closedReadFails: false, logins: new Map(), employeeRow: null, afterDismiss: null, overrides: [],
   });
+  delete process.env.FINS_DE_SEMANA;
 });
 
 // ─── Lista "Horários por rever" (pura) ──────────────────────────────────────
@@ -517,6 +545,170 @@ describe("Possíveis faltas (horário fixo): dispensa com motivo", () => {
     const p = await pendingOn("2026-11-02");
     await expect(dismissFixedNoShow(p.id, "lost_punch", { id: 3, role: "team_leader" })).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(state.inserted[0].status).toBe("pending");
+  });
+});
+
+// ─── Dispensa com motivo + mapa de férias (plano 63, passo 11) ──────────────
+describe("dispensa com motivo: as guardas do mapa de férias (mês fechado, sobreposição, aprovada por quem dispensou)", () => {
+  const reviewer = { id: 9, role: "super_admin" };
+  const pendingOn = async (day: string) => {
+    state.schedules = allWeek(4);
+    await detectFixedScheduleNoShows(day);
+    return state.inserted[state.inserted.length - 1];
+  };
+  const untouched = (p: any) => {
+    expect(state.leaves.filter((l) => l.id != null)).toEqual([]);
+    const row = state.inserted.find((x) => x.id === p.id);
+    expect(row.status).toBe("pending");
+    expect(row.reviewedById ?? null).toBeNull();
+    expect(row.clearedAt ?? null).toBeNull();
+    expect(row.notes).not.toContain("Dispensada");
+  };
+
+  it("o que já está nesse dia (PURA): aprovada de dia inteiro justifica; outra ativa recusa; recusadas/canceladas não contam", () => {
+    const d = "2026-11-02";
+    const l = (o: Record<string, unknown>) => ({ fromDate: "2026-11-01", toDate: "2026-11-03", leaveType: "vacation", hours: null, ...o });
+    expect(dismissDayLeaveCoverage(d, [])).toEqual({ kind: "free" });
+    expect(dismissDayLeaveCoverage(d, [l({ status: "approved" })])).toEqual({ kind: "covered" });
+    // linhas antigas sem estado = aprovadas
+    expect(dismissDayLeaveCoverage(d, [l({ status: undefined })])).toEqual({ kind: "covered" });
+    expect(dismissDayLeaveCoverage(d, [l({ status: "requested" })])).toMatchObject({ kind: "clash" });
+    expect(dismissDayLeaveCoverage(d, [l({ status: "approved", leaveType: "other", hours: "2.00", fromDate: d, toDate: d })])).toMatchObject({ kind: "clash" });
+    expect(dismissDayLeaveCoverage(d, [l({ status: "approved", leaveType: "unavailable" })])).toMatchObject({ kind: "clash" });
+    expect(dismissDayLeaveCoverage(d, [l({ status: "rejected" }), l({ status: "cancelled" })])).toEqual({ kind: "free" });
+    // a aprovada de dia inteiro ganha a um pedido no mesmo dia
+    expect(dismissDayLeaveCoverage(d, [l({ status: "requested" }), l({ status: "approved", leaveType: "sick" })])).toEqual({ kind: "covered" });
+    expect(dismissDayLeaveCoverage(d, [l({ status: "approved", fromDate: "2026-11-03" })])).toEqual({ kind: "free" });
+    // o plano: recusa com CONFLICT (conflict: true) e a mensagem diz o que lá está
+    const plan = fixedNoShowDismissPlan({ id: 5, employeeId: 4, reason: "other", status: "pending", notes: `${FIXED_NO_SHOW_NOTE_PREFIX} Possível falta em ${d} (horário 09:00–18:00)` }, "vacation",
+      { notePrefix: FIXED_NO_SHOW_NOTE_PREFIX, existingLeaves: [l({ status: "requested" })] });
+    expect(plan).toMatchObject({ ok: false, conflict: true, error: expect.stringMatching(/Férias \(por aprovar\)/) });
+  });
+  it("a ausência entra APROVADA, com quem aprovou e quando (decidedById/decidedAt)", async () => {
+    const p = await pendingOn("2026-11-02");
+    await dismissFixedNoShow(p.id, "sick", reviewer);
+    expect(state.leaves[0]).toMatchObject({ leaveType: "sick", status: "approved", createdById: 9, requestedById: 9, decidedById: 9 });
+    expect(String(state.leaves[0].decidedAt)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  });
+  it("mês fechado (ordenado aprovado ou pago) → recusa e nada muda", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.closedMonths = ["2026-11"];
+    await expect(dismissFixedNoShow(p.id, "vacation", reviewer)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/novembro de 2026 já está fechado/) });
+    untouched(p);
+    // libertar sem motivo ou como picagem perdida continua a dar (não lança ausência)
+    await dismissFixedNoShow(p.id, "lost_punch", reviewer);
+    expect(state.inserted[0].status).toBe("dismissed");
+  });
+  it("não deu para ler os meses fechados → recusa (falha fechado) e nada muda", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.closedReadFails = true;
+    await expect(dismissFixedNoShow(p.id, "justified", reviewer)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/Não deu para confirmar se o mês está fechado/) });
+    untouched(p);
+  });
+  it("um pedido de férias POR APROVAR nesse dia → recusa (decide-se esse primeiro); nada muda", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.leaves.push({ employeeId: 4, leaveType: "vacation", status: "requested", fromDate: "2026-11-02", toDate: "2026-11-06", hours: null });
+    await expect(dismissFixedNoShow(p.id, "vacation", reviewer)).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/Férias \(por aprovar\).*continua por validar/) });
+    expect(state.leaves).toHaveLength(1);
+    expect(state.inserted[0].status).toBe("pending");
+    expect(state.inserted[0].reviewedById ?? null).toBeNull();
+  });
+  it("uma ausência aprovada de PARTE do dia (consulta) não justifica o dia inteiro: recusa", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.leaves.push({ employeeId: 4, leaveType: "other", status: "approved", fromDate: "2026-11-02", toDate: "2026-11-02", hours: "2.00" });
+    await expect(dismissFixedNoShow(p.id, "justified", reviewer)).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/Ausência justificada, 2 h \(aprovado\)/) });
+    expect(state.leaves).toHaveLength(1);
+    expect(state.inserted[0].status).toBe("pending");
+  });
+  it("recusadas e canceladas nesse dia não contam: cria a ausência aprovada", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.leaves.push(
+      { employeeId: 4, leaveType: "vacation", status: "rejected", fromDate: "2026-11-02", toDate: "2026-11-02", hours: null },
+      { employeeId: 4, leaveType: "vacation", status: "cancelled", fromDate: "2026-11-01", toDate: "2026-11-03", hours: null },
+    );
+    const r = await dismissFixedNoShow(p.id, "vacation", reviewer);
+    expect(r).toMatchObject({ leaveAlready: false, leaveType: "vacation" });
+    expect(state.leaves).toHaveLength(3);
+    expect(state.leaves[2]).toMatchObject({ status: "approved", decidedById: 9 });
+  });
+  it("as próprias férias não (ninguém aprova as suas) — salvo o super admin; a baixa sim", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.logins.set(4, [7]);
+    const self = { id: 7, role: "admin" };
+    await expect(dismissFixedNoShow(p.id, "vacation", self)).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/ninguém aprova as suas/) });
+    untouched(p);
+    state.employeeRow = { userId: 7, contractType: "permanent" };
+    state.logins = new Map();
+    await expect(dismissFixedNoShow(p.id, "vacation", self)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await dismissFixedNoShow(p.id, "sick", self);
+    expect(state.leaves[0]).toMatchObject({ leaveType: "sick", status: "approved", decidedById: 7 });
+  });
+  it("parceiros-empresa: sem ausência (ficam fora do mapa e da folha)", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.employeeRow = { userId: null, contractType: "partner_company" };
+    await expect(dismissFixedNoShow(p.id, "vacation", reviewer)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    untouched(p);
+  });
+  it("um pedido aparece entre fechar a possível falta e gravar a ausência → a falta volta a \"por validar\" e não se cria nada", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.afterDismiss = () => { state.leaves.push({ employeeId: 4, leaveType: "vacation", status: "requested", fromDate: "2026-11-02", toDate: "2026-11-02", hours: null }); };
+    await expect(dismissFixedNoShow(p.id, "sick", reviewer)).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/continua por validar/) });
+    expect(state.leaves).toHaveLength(1);
+    expect(state.inserted[0]).toMatchObject({ status: "pending", reviewedById: null, clearedAt: null });
+  });
+  it("o mês fecha entre fechar a possível falta e gravar a ausência → a falta volta a \"por validar\"", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.afterDismiss = () => { state.closedMonths = ["2026-11"]; };
+    await expect(dismissFixedNoShow(p.id, "sick", reviewer)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/continua por validar/) });
+    expect(state.leaves).toEqual([]);
+    expect(state.inserted[0]).toMatchObject({ status: "pending" });
+  });
+  it("as guardas correm antes de fechar a possível falta e outra vez antes de gravar (ordem anti-corrida do 10a mantida)", () => {
+    const s = src("server/rhService.ts");
+    const fn = s.slice(s.indexOf("export async function dismissFixedNoShow"), s.indexOf("async function assertDismissLeaveAllowed"));
+    const first = fn.indexOf("await assertDismissLeaveAllowed(");
+    const close = fn.indexOf("onlyIfPending: true");
+    const second = fn.indexOf("await assertDismissLeaveAllowed(", first + 1);
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(close);
+    expect(close).toBeLessThan(second);
+    expect(second).toBeLessThan(fn.indexOf("db.insert(employeeLeaves)"));
+    expect(fn).toContain('status: "approved", requestedById: reviewer.id, requestedAt: now, decidedById: reviewer.id, decidedAt: now,');
+    const guard = s.slice(s.indexOf("async function assertDismissLeaveAllowed"), s.indexOf("// ─── Ponto: revisão de registos suspeitos"));
+    expect(guard).toContain("await leaves.assertPeriodOpen(leave);");
+  });
+});
+
+// ─── As três regras juntas nas faltas do horário fixo (10a + 10b + 11) ──────
+describe("faltas do horário fixo: fora das faltas automáticas (10a) + exceções por data (10b) + férias aprovadas (11)", () => {
+  it("num sábado: lista de fora, exceção \"trabalha\"/\"folga\", férias aprovadas, pedido por aprovar, parte do dia e férias contra exceção", async () => {
+    process.env.FINS_DE_SEMANA = "on";
+    const sat = "2026-11-07";
+    const weekdaysOnly = (employeeId: number) => allWeek(employeeId).filter((r) => r.weekday >= 1 && r.weekday <= 5);
+    state.schedules = [...allWeek(4), ...weekdaysOnly(5), ...allWeek(6), ...allWeek(7), ...allWeek(8), ...allWeek(9), ...weekdaysOnly(10)];
+    // 10a: o 4 está fora das faltas automáticas até ao fim do mês
+    state.skips = [{ employeeId: 4, until: "2026-11-30", reason: "Ainda pica na impressão digital" }];
+    // 10b: o 5 (sem sábado no horário) está de serviço; o 6 tem folga (não é a vez); o 10 está de serviço mas de baixa
+    const o = (id: number, employeeId: number, kind: "work" | "off") => ({ id, employeeId, day: sat, kind, startTime: kind === "work" ? "09:00" : null, endTime: kind === "work" ? "18:00" : null, reason: "weekend", contractStart: null, contractEnd: null });
+    state.overrides = [o(1, 5, "work"), o(2, 6, "off"), o(3, 10, "work")];
+    // 11: o 7 de férias aprovadas, o 8 só pedidas, o 9 com 2 h de consulta (parte do dia), o 10 de baixa aprovada
+    state.leaves = [
+      { employeeId: 7, leaveType: "vacation", status: "approved", fromDate: "2026-11-06", toDate: "2026-11-09", hours: null },
+      { employeeId: 8, leaveType: "vacation", status: "requested", fromDate: "2026-11-06", toDate: "2026-11-09", hours: null },
+      { employeeId: 9, leaveType: "other", status: "approved", fromDate: sat, toDate: sat, hours: "2.00" },
+      { employeeId: 10, leaveType: "sick", status: "approved", fromDate: sat, toDate: sat, hours: null },
+    ];
+    const r = await detectFixedScheduleNoShows(sat);
+    expect(r).toMatchObject({ excluded: 1, created: 3 });
+    expect(state.inserted.map((x) => x.employeeId).sort()).toEqual([5, 8, 9]);
+    expect(state.inserted.find((x) => x.employeeId === 5).notes).toContain("exceção por data 09:00–18:00");
+    expect(state.inserted.find((x) => x.employeeId === 8).notes).toContain("horário 09:00–18:00");
+    // desligado o FINS_DE_SEMANA: as exceções deixam de contar (o 5 não tem sábado; o 6 volta a ter)
+    delete process.env.FINS_DE_SEMANA;
+    state.inserted = [];
+    const off = await detectFixedScheduleNoShows(sat);
+    expect(off).toMatchObject({ excluded: 1, created: 3 });
+    expect(state.inserted.map((x) => x.employeeId).sort()).toEqual([6, 8, 9]);
   });
 });
 

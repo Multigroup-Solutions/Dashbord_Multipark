@@ -15,6 +15,8 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzl
 import { getDb, getDocumentChecklistForEmployee, getPayrollData, toMysqlDateTime } from "./db";
 import { employeeLeaves, employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
 import { manualBlockReason } from "../shared/suspendSuggest";
+import { approvedLeaveSql, fullDayLeaveSql } from "./leavesSql";
+import { FERIAS_MAPA_FLAG, absenceForScheduler, noticeBeforeAssignment, noticeNoShowNote, scheduledSince } from "../shared/leaves";
 import { isTerminalExtra } from "../shared/terminalSession";
 
 const nowMysql = () => toMysqlDateTime(new Date());
@@ -162,6 +164,33 @@ export function noShowSkipReason(r: { status?: string | null; sentHomeHour?: num
 }
 
 /**
+ * Plano 63 (passo 11): ausências APROVADAS de dia inteiro que cobrem o dia
+ * (incluindo a indisponibilidade dos extras — de propósito, é o único leitor
+ * dela além do ecrã do Extras-Dia), por ficha. Só com FERIAS_MAPA ligado;
+ * desligado ou erro → nada (a falta fica como sempre).
+ */
+async function noticesForNoShows(db: any, dateStr: string, employeeIds: number[]): Promise<Map<number, any[]>> {
+  const out = new Map<number, any[]>();
+  const ids = Array.from(new Set(employeeIds.filter((x) => Number.isInteger(x) && x > 0)));
+  if (!ids.length) return out;
+  try {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    if (!isFeatureEnabled(FERIAS_MAPA_FLAG, { defaultEnabled: automationFlagDefault(FERIAS_MAPA_FLAG) })) return out;
+    const res = await db.execute(sql`SELECT employeeId, leaveType, status, fromDate, toDate, hours, requestedAt, createdAt FROM employee_leaves
+       WHERE employeeId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}) AND status = 'approved' AND fromDate <= ${dateStr} AND toDate >= ${dateStr}`);
+    const rows = (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
+    for (const r of rows) {
+      const id = Number(r.employeeId);
+      out.set(id, [...(out.get(id) ?? []), { ...r, fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }]);
+    }
+  } catch (err: any) {
+    console.warn("[no-shows] avisos de ausência não lidos:", String(err?.message ?? err).slice(0, 160));
+  }
+  return out;
+}
+
+/**
  * Plano 63, passo 2b (decidido: as faltas dos funcionários nunca bloqueiam):
  * os pontos de uma possível falta ao Extras-Dia. Extra (posto ou contrato
  * "extra", a mesma regra de isExtraEmployee) → 1 ponto (3 confirmados
@@ -187,7 +216,7 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
   const skipped: Record<NoShowSkip, number> = { proposed: 0, sent_home: 0, check_in: 0, multipark: 0 };
   const db = await getDb();
   if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false };
-  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city, status: extrasDiaAssignments.status, sentHomeHour: extrasDiaAssignments.sentHomeHour })
+  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city, status: extrasDiaAssignments.status, sentHomeHour: extrasDiaAssignments.sentHomeHour, createdAt: extrasDiaAssignments.createdAt, personAssignedAt: extrasDiaAssignments.personAssignedAt })
     .from(extrasDiaAssignments)
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), eq(extrasDiaAssignments.isTeamLeader, 0), isNotNull(extrasDiaAssignments.employeeId)));
   const candidates: typeof rows = [];
@@ -224,6 +253,9 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
       }
     } catch { /* sem identidade/Multipark: fica como antes */ }
   }
+  // Plano 63 (passo 11, com FERIAS_MAPA): quem AVISOU antes de ser escalado (ausência aprovada desse dia,
+  // também a indisponibilidade dos extras) fica com a falta sem pontos; avisos depois de escalado não contam.
+  const notices = candidates.length ? await noticesForNoShows(db, dateStr, candidates.map((c) => Number(c.employeeId))) : new Map<number, any[]>();
   // Plano 63 (2b): posto e contrato de cada um — o funcionário (não extra) fica com 0 pontos
   const kindOf = new Map<number, { position: string | null; contractType: string | null }>();
   const candIds = Array.from(new Set(candidates.map((c) => Number(c.employeeId)).filter((id) => Number.isFinite(id))));
@@ -236,11 +268,15 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
   for (const r of candidates) {
     if (r.employeeId == null) continue;
     if (noShowSkipReason({ status: r.status, sentHomeHour: r.sentHomeHour, hasCheckIn: false, multiparkMoves: movesByEmployee.get(r.employeeId) ?? 0 })) { skipped.multipark++; continue; }
-    const points = extraDiaNoShowPoints(kindOf.get(r.employeeId));
+    // "Antes de ser escalado" = antes de ESTA pessoa ser posta NESTE dia (personAssignedAt; as linhas antigas: a criação)
+    const notice = noticeBeforeAssignment(notices.get(r.employeeId) ?? [], dateStr, scheduledSince(r));
+    const noticeNote = notice ? noticeNoShowNote(absenceForScheduler(notice).noticeDay) : "";
+    // Plano 63 (2b + 11): avisou antes de ser escalado → 0 (com a nota); senão funcionário 0, extra 1.
+    const points = notice ? 0 : extraDiaNoShowPoints(kindOf.get(r.employeeId));
     try {
       await db.insert(employeePenalties).values({
         employeeId: r.employeeId, reason: "no_show_extra_dia", severity: "penalty", points, relatedId: r.id, status: "pending",
-        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}${points === 0 ? " · funcionário: sem pontos" : ""}; confirmar com a operação`.slice(0, 512),
+        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}${!notice && points === 0 ? " · funcionário: sem pontos" : ""}; confirmar com a operação${noticeNote}`.slice(0, 512),
       });
       created++;
     } catch (err: any) {
@@ -307,8 +343,9 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
     isWorkDay: true, contractStart: r.contractStart ?? null, contractEnd: r.contractEnd ?? null,
     city: cityOf(r.projectId != null ? Number(r.projectId) : null),
   }));
+  // Plano 63 (passo 11): só as ausências APROVADAS e de dia inteiro (a de parte do dia não tira o dia)
   const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves
-     WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)}`))
+     WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)} AND ${approvedLeaveSql()} AND ${fullDayLeaveSql()}`))
     .map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }));
   // Plano 63, passo 10b: exceções por data (fim de semana de serviço, folgas) — só com FINS_DE_SEMANA ligado; senão [].
   const overrides = await (await import("./scheduleOverrides")).loadActiveOverridesForReaders(db, addDays(dateStr, -1), addDays(dateStr, 1));
@@ -428,6 +465,16 @@ export async function reviewPenalty(id: number, decision: "confirmed" | "dismiss
  * com uma gravação condicional (só se ainda estiver por validar — duas pessoas
  * ao mesmo tempo não criam duas ausências) e só depois se lança a ausência,
  * se nenhuma cobrir já esse dia (relida nesse momento).
+ *
+ * Plano 63 (11, mapa de férias): a ausência passa pelas guardas de quem a
+ * lança (`launchLeave`): parceiros-empresa fora, as próprias férias não (salvo
+ * o super admin), mês fechado → recusa (e se não der para o confirmar, também:
+ * falha fechado), e nunca por cima de outra ausência ATIVA desse dia (pedida,
+ * de parte do dia, indisponível) — só uma aprovada de dia inteiro já o
+ * justifica. Entra APROVADA em nome de quem dispensou (`decidedById`). As
+ * guardas correm antes de fechar a possível falta (nada muda se recusarem) e
+ * outra vez antes de gravar a ausência (se mudou entretanto, a possível falta
+ * volta a "por validar").
  */
 export async function dismissFixedNoShow(id: number, reason: import("../shared/scheduleReview").FixedNoShowDismissReason, reviewer: { id: number; role: string }, note?: string | null): Promise<{ points: number; blocked: boolean; day: string | null; leaveId: number | null; leaveType: string | null; leaveAlready: boolean }> {
   const db = await getDb();
@@ -439,35 +486,66 @@ export async function dismissFixedNoShow(id: number, reason: import("../shared/s
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const { assertEmployeeAccess } = await import("./cityScope");
   await assertEmployeeAccess(p.employeeId);
-  const { FIXED_NO_SHOW_DISMISS_LEAVE, fixedNoShowDismissPlan } = await import("../shared/scheduleReview");
-  const existingLeaves = FIXED_NO_SHOW_DISMISS_LEAVE[reason]
-    ? await db.select({ fromDate: employeeLeaves.fromDate, toDate: employeeLeaves.toDate }).from(employeeLeaves).where(eq(employeeLeaves.employeeId, p.employeeId))
-    : [];
+  const { FIXED_NO_SHOW_DISMISS_LEAVE, dismissClashMessage, dismissDayLeaveCoverage, fixedNoShowDay, fixedNoShowDismissPlan } = await import("../shared/scheduleReview");
+  // Plano 63 (11): as ausências ATIVAS (pedidas ou aprovadas) que tocam esse dia — a aprovada de dia inteiro já o
+  // justifica, outra ativa recusa. É uma guarda (não conta dias), por isso lê as pedidas também.
+  const activeLeavesOn = async (day: string) => db.select({ fromDate: employeeLeaves.fromDate, toDate: employeeLeaves.toDate, status: employeeLeaves.status, leaveType: employeeLeaves.leaveType, hours: employeeLeaves.hours })
+    .from(employeeLeaves)
+    .where(and(eq(employeeLeaves.employeeId, p.employeeId), lte(employeeLeaves.fromDate, day), gte(employeeLeaves.toDate, day), inArray(employeeLeaves.status, ["requested", "approved"])));
+  const leaveDay = FIXED_NO_SHOW_DISMISS_LEAVE[reason] ? fixedNoShowDay(p as any) : null;
+  const existingLeaves = leaveDay ? await activeLeavesOn(leaveDay) : [];
   const plan = fixedNoShowDismissPlan(p as any, reason, { notePrefix: FIXED_NO_SHOW_NOTE_PREFIX, existingLeaves, extraNote: note });
-  if (!plan.ok) throw new TRPCError({ code: "BAD_REQUEST", message: plan.error });
+  if (!plan.ok) throw new TRPCError({ code: plan.conflict ? "CONFLICT" : "BAD_REQUEST", message: plan.error });
+  // as guardas de quem lança a ausência, ANTES de mexer na possível falta
+  if (plan.leave) await assertDismissLeaveAllowed(db, p.employeeId, plan.leave, reviewer);
   // 1.º a possível falta (condicional: se outra pessoa já a reviu, CONFLICT e nada se cria)
   const r = await reviewPenalty(id, "dismissed", reviewer, plan.reviewNote, { onlyIfPending: true });
+  // a possível falta volta a "por validar" como estava (nunca dispensada sem a ausência)
+  const restore = () => db.update(employeePenalties).set({ status: "pending", reviewedById: p.reviewedById ?? null, reviewedAt: p.reviewedAt ?? null, notes: p.notes, clearedAt: p.clearedAt ?? null, clearedById: p.clearedById ?? null })
+    .where(and(eq(employeePenalties.id, id), eq(employeePenalties.status, "dismissed")));
   // 2.º a ausência desse dia, se nenhuma o cobrir (relida agora)
   let leaveId: number | null = null;
   let leaveAlready = plan.leaveAlready;
   if (plan.leave) {
     const day = plan.leave.fromDate;
-    const [covering] = await db.select({ fromDate: employeeLeaves.fromDate }).from(employeeLeaves)
-      .where(and(eq(employeeLeaves.employeeId, p.employeeId), lte(employeeLeaves.fromDate, day), gte(employeeLeaves.toDate, day))).limit(1);
-    if (covering) leaveAlready = true;
-    else {
-      try {
-        const ins = await db.insert(employeeLeaves).values({ employeeId: p.employeeId, ...plan.leave, createdById: reviewer.id });
+    try {
+      const cover = dismissDayLeaveCoverage(day, await activeLeavesOn(day));
+      if (cover.kind === "clash") throw new TRPCError({ code: "CONFLICT", message: dismissClashMessage(cover.leave) });
+      if (cover.kind === "covered") leaveAlready = true;
+      else {
+        await assertDismissLeaveAllowed(db, p.employeeId, plan.leave, reviewer);
+        const now = nowMysql();
+        const ins = await db.insert(employeeLeaves).values({
+          employeeId: p.employeeId, ...plan.leave, createdById: reviewer.id,
+          // Plano 63 (11): aprovada, por quem dispensou (como quem lança na ficha)
+          status: "approved", requestedById: reviewer.id, requestedAt: now, decidedById: reviewer.id, decidedAt: now,
+        });
         leaveId = Number((ins as any)?.[0]?.insertId ?? 0) || null;
-      } catch (err) {
-        // a ausência não ficou: a possível falta volta a "por validar" como estava (nunca dispensada sem a ausência)
-        await db.update(employeePenalties).set({ status: "pending", reviewedById: p.reviewedById ?? null, reviewedAt: p.reviewedAt ?? null, notes: p.notes, clearedAt: p.clearedAt ?? null, clearedById: p.clearedById ?? null })
-          .where(and(eq(employeePenalties.id, id), eq(employeePenalties.status, "dismissed")));
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `A ausência não ficou gravada, por isso a possível falta continua por validar. Tenta de novo. (${String((err as Error)?.message ?? err).slice(0, 120)})` });
       }
+    } catch (err) {
+      await restore();
+      if (err instanceof TRPCError) throw new TRPCError({ code: err.code, message: /continua por validar/.test(err.message) ? err.message : `${err.message} A possível falta continua por validar.` });
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `A ausência não ficou gravada, por isso a possível falta continua por validar. Tenta de novo. (${String((err as Error)?.message ?? err).slice(0, 120)})` });
     }
   }
   return { ...r, day: plan.day, leaveId, leaveType: leaveId != null ? plan.leave?.leaveType ?? null : null, leaveAlready };
+}
+
+/**
+ * Plano 63 (11): as guardas de `launchLeave` (server/leaves.ts) para a
+ * ausência que a dispensa com motivo lança: parceiros-empresa fora; FÉRIAS só
+ * quem as aprova, o RH ou o super admin, e as próprias não (ninguém aprova as
+ * suas, salvo o super admin); mês fechado → recusa (falha fechado: sem
+ * confirmar, também recusa).
+ */
+async function assertDismissLeaveAllowed(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, employeeId: number, leave: { leaveType: string; fromDate: string; toDate: string }, reviewer: { id: number; role: string }): Promise<void> {
+  const [emp] = await db.select({ userId: employees.userId, contractType: employees.contractType }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+  const { PARTNER_COMPANY_CONTRACT } = await import("../shared/leaves");
+  if (emp?.contractType === PARTNER_COMPANY_CONTRACT) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Os parceiros-empresa ficam fora do mapa de férias e da folha: dispensa sem motivo." });
+  const leaves = await import("./leaves");
+  // Férias já aprovadas: só quem as aprova (regra de agora), o RH ou o super admin; as próprias não (Jorge, 15 out 2026)
+  if (leave.leaveType === "vacation") await leaves.assertCanLaunchApprovedVacation(reviewer, employeeId, emp?.userId ?? null);
+  await leaves.assertPeriodOpen(leave);
 }
 
 // ─── Ponto: revisão de registos suspeitos ───────────────────────────────────

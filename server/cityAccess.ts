@@ -26,6 +26,8 @@ export function isPersonalAccessPath(path: string): boolean {
     'terminal.answerStillHere', 'terminal.reopen',
     // Telemóveis pessoais (13 out 2026): o PRÓPRIO telemóvel (registar, quem está nele, sair, deixar de ser pessoal).
     'operational.personalDevices.register', 'operational.personalDevices.seen', 'operational.personalDevices.left', 'operational.personalDevices.unregisterMine',
+    // Plano 63 (passo 11): as minhas férias / "não vou estar" (a ficha vem da sessão; nada disto lê outras cidades).
+    'rh.leaves.status', 'rh.leaves.mine', 'rh.leaves.request', 'rh.leaves.myApprovers',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 

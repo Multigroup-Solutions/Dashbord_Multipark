@@ -212,12 +212,26 @@ export function contractEditError(v: RhViewer, e: EmployeeRef, sent: Record<stri
 }
 
 /**
+ * Plano 63 (passo 11): "Parceiro (empresa)" (`partner_company`) tira a pessoa da
+ * folha de ordenados — é dinheiro. O supervisor e o back office mudam o tipo de
+ * contrato (41c), mas pôr OU tirar este só um administrador. Reenviar o mesmo
+ * valor (formulário completo) não conta como mudança. PURA.
+ */
+export function partnerContractChangeError(v: RhViewer, e: EmployeeRef, current: string | null | undefined, next: unknown): string | null {
+  if (next === undefined || canEditContract(v, e)) return null;
+  if ((next === "partner_company") === (current === "partner_company")) return null;
+  return "Pôr ou tirar \"Parceiro (empresa)\" muda quem entra na folha de ordenados: só um administrador muda.";
+}
+
+/**
  * 41c: criar uma ficha — admin+ tudo; o supervisor cria na sua cidade, com
  * posto abaixo dele, sem salário/subsídio nem conta escolhida à mão. PURA.
  */
-export function createEmployeeError(v: RhViewer, input: { position: string; projectId: number | null; monthlySalary?: unknown; mealAllowancePerDay?: unknown; userId?: unknown }): string | null {
+export function createEmployeeError(v: RhViewer, input: { position: string; projectId: number | null; monthlySalary?: unknown; mealAllowancePerDay?: unknown; userId?: unknown; contractType?: unknown }): string | null {
   if (rank(v.role) >= RANK.admin) return null;
   if (!isRhManager(v.role)) return "Só um administrador, o back office ou o supervisor da cidade cria fichas.";
+  // Plano 63 (passo 11): parceiro-empresa fica fora da folha — só um administrador o marca.
+  if (input.contractType === "partner_company") return "Uma ficha de \"Parceiro (empresa)\" (fora da folha de ordenados) só um administrador cria.";
   if (!(SUPERVISOR_ASSIGNABLE_POSITIONS as readonly string[]).includes(input.position)) {
     return "Só se criam fichas abaixo do supervisor: team leader, condutor sénior, condutor ou extra.";
   }

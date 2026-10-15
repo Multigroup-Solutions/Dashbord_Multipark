@@ -72,7 +72,8 @@ describe("41c — supervisor faz tudo no RH da sua cidade", () => {
   });
 
   it("rotas: horário, ausências, ponto e desativar pedem gerir a ficha (cidade + abaixo); o que mexe em todas as cidades fica com quem gere todas", () => {
-    const r = src("server/rhRouter.ts");
+    // plano 63 (passo 11): as ausências passaram para server/leavesRouter.ts (as mesmas guardas)
+    const r = src("server/rhRouter.ts") + src("server/leavesRouter.ts");
     expect(r.match(/assertCanManageEmployee\(ctx\.user, /g)?.length).toBeGreaterThanOrEqual(5);
     expect(r).toContain("canManageEmployee(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.id))");
     expect(r).toContain("requireNationalRhManage(ctx.user);");

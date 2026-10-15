@@ -842,7 +842,7 @@ function DashboardLayoutContent({
               className="text-lg sm:text-xl lg:text-[22px] font-bold text-foreground truncate"
               title={activeMenuItem?.label ?? undefined}
             >
-              {activeMenuItem?.label ?? (location === "/modulos" ? "Menu" : location === "/perfil" ? "Perfil" : "Dashboard")}
+              {activeMenuItem?.label ?? (location === "/modulos" ? "Menu" : location === "/perfil" ? "Perfil" : location === "/ferias" ? "Férias e ausências" : "Dashboard")}
             </h1>
           </div>
 

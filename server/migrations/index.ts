@@ -205,6 +205,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0820", () => import("./migration_0820").then((m) => step(m.MIGRATION_0820_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0820))],
   // Plano 63 (passo 10b): schedule_overrides — exceções por data ao horário fixo (fins de semana, folgas).
   ["0825", () => import("./migration_0825").then((m) => step(m.MIGRATION_0825_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0825))],
+  // Plano 63 (passo 11): mapa de férias — estado e aprovação das ausências, `unavailable`, `partner_company`.
+  ["0830", () => import("./migration_0830").then((m) => step(m.MIGRATION_0830_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0830))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);

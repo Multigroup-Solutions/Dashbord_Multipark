@@ -40,6 +40,8 @@ import { GarageRolesEditor, ParkZonesEditor, parkZonesFromDraft, parkZonesToDraf
 import { AIRPORT_LABELS, type AirportCityId, type AirportFence } from "@shared/pontoTerminal";
 import { SPEED_RULE_SETTING_KEY, speedThresholdOf } from "@shared/speedRules";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY } from "@shared/evaluationClose";
+import { DEFAULT_VACATION_APPROVALS, HR_PEOPLE_KEY, LEAVES_VIEW_ALL_KEY, VACATION_APPROVALS_KEY, type VacationApprovals } from "@shared/leaves";
+import { VacationApprovalsEditor } from "@/components/ferias/VacationApprovalsEditor";
 import { addDays, lisbonDayOf, operationalDayOf } from "@shared/lisbonDay";
 import { NO_SHOW_SKIP_SETTING_KEY } from "@shared/scheduleReview";
 import { parksInsideZones } from "@shared/terminalWatch";
@@ -537,7 +539,7 @@ function IntegrationsCard() {
 
 // ─── Parâmetros ─────────────────────────────────────────────────────────────
 
-const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)", operacao: "Operação (GPS / Zello / parques)", pessoas: "Pessoas (desempenho)" };
+const GROUP_LABEL: Record<string, string> = { financeiro: "Financeiro", sla: "Prazos (SLA)", emails: "Email (destinatários e Comunicação)", disponibilidade: "Disponibilidades", ia: "Inteligência artificial", extras: "Extras-dia (escala automática)", operacao: "Operação (GPS / Zello / parques)", pessoas: "Pessoas (desempenho e férias)" };
 
 const CITY_FIELDS: { id: "lisbon" | "porto" | "faro"; label: string }[] = [
   { id: "lisbon", label: "Lisboa" },
@@ -710,8 +712,11 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
   const isTime = typeof item.defaultValue === "string" && /^\d{2}:\d{2}$/.test(item.defaultValue as string);
   // Tarefa 62 (P2d): o fecho mensal (uma data, vazio = nada fechado) e quem fecha (contas escolhidas na lista)
   const isDate = item.key === EVALUATION_CLOSED_UNTIL_KEY;
-  const isUserList = item.key === EVALUATION_CLOSERS_KEY;
-  const isJson = !isPhones && !isAirports && !isSpeedRule && !isParkZones && !isReminderRecipients && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
+  // + Plano 63 (passo 11): quem é o RH e quem vê o mapa de férias inteiro (contas escolhidas na lista)
+  const isUserList = item.key === EVALUATION_CLOSERS_KEY || item.key === HR_PEOPLE_KEY || item.key === LEAVES_VIEW_ALL_KEY;
+  // Plano 63 (passo 11): quem aprova quem (regras por posto, RH e exceções por pessoa)
+  const isVacationApprovals = item.key === VACATION_APPROVALS_KEY;
+  const isJson = !isPhones && !isAirports && !isSpeedRule && !isParkZones && !isReminderRecipients && !isVacationApprovals && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
@@ -731,6 +736,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
   const [userSel, setUserSel] = useState<number[]>([]);
+  const [approvalsDraft, setApprovalsDraft] = useState<VacationApprovals>(DEFAULT_VACATION_APPROVALS);
   const usersQ = trpc.users.list.useQuery(undefined, { enabled: isUserList || isReminderRecipients, staleTime: 5 * 60_000, retry: false });
   const [reminders, setReminders] = useState<ReminderRecipients>(DEFAULT_REMINDER_RECIPIENTS);
   // F7 (seguimento): "não confirma e avisa" com os avisos da escala desligados → ninguém seria avisado (o servidor confirma na mesma).
@@ -769,6 +775,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
     else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
     else if (isUserList) setUserSel([...((current as number[]) ?? [])].map(Number));
+    else if (isVacationApprovals) setApprovalsDraft((current as VacationApprovals | null) ?? DEFAULT_VACATION_APPROVALS);
     else if (isReminderRecipients) {
       const cur = (current ?? {}) as Partial<ReminderRecipients>;
       setReminders(Object.fromEntries(CITY_FIELDS.map((c) => {
@@ -802,6 +809,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
     if (isUserList) return userSel;
+    if (isVacationApprovals) return approvalsDraft;
     if (isReminderRecipients) return reminders;
     if (isDate) return text.trim() === "" ? null : text.trim();
     if (isSpeedRule) {
@@ -1049,6 +1057,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
           <Input type="date" className="w-44 rounded-[10px]" value={text} max={addDays(operationalDayOf(Date.now()), -1)} disabled={locked} aria-label={item.label} onChange={(e) => setText(e.target.value)} />
           {text && <Button size="sm" variant="ghost" disabled={locked} onClick={() => setText("")}>Limpar (nada fechado)</Button>}
         </div>
+      ) : isVacationApprovals ? (
+        <VacationApprovalsEditor value={approvalsDraft} onChange={setApprovalsDraft} disabled={locked} />
       ) : isUserList ? (
         <div className="space-y-2 max-w-xl">
           {userSel.length > 0 && (
