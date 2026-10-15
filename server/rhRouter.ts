@@ -11,7 +11,7 @@ import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
 import { DEACTIVATION_NOTES_MAX, DIALOG_DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
-import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
+import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, partnerContractChangeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
 import { noLinkedRecordMessage } from "../shared/ownAccess";
@@ -584,7 +584,7 @@ export const rhRouter = router({
       }
       // 41c: o supervisor cria fichas na sua cidade, de team leader para baixo, sem salário nem conta à mão.
       {
-        const createErr = createEmployeeError(await rhViewer(ctx.user), { position: input.position, projectId, monthlySalary: input.monthlySalary, mealAllowancePerDay: input.mealAllowancePerDay, userId: input.userId });
+        const createErr = createEmployeeError(await rhViewer(ctx.user), { position: input.position, projectId, monthlySalary: input.monthlySalary, mealAllowancePerDay: input.mealAllowancePerDay, userId: input.userId, contractType: input.contractType });
         if (createErr) throw new TRPCError({ code: "FORBIDDEN", message: createErr });
         assertProjectAccess(projectId);
       }
@@ -700,6 +700,11 @@ export const rhRouter = router({
       // leader), centro (da cidade), contrato e ativo — sem dinheiro nem conta.
       const contractErr = sent(CONTRACT_FIELDS) ? contractEditError(viewer, ref, input as Record<string, unknown>) : null;
       if (contractErr) throw new TRPCError({ code: "FORBIDDEN", message: contractErr });
+      // Plano 63 (passo 11): pôr/tirar "Parceiro (empresa)" muda quem entra na folha — só admin+.
+      if (input.contractType !== undefined && !canEditContract(viewer, ref)) {
+        const partnerErr = partnerContractChangeError(viewer, ref, (await getEmployeeById(input.id))?.employee.contractType ?? null, input.contractType);
+        if (partnerErr) throw new TRPCError({ code: "FORBIDDEN", message: partnerErr });
+      }
       if (sent(PERSONAL_FIELDS) && !canEditPersonal(viewer, ref)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar os dados desta ficha." });
       }
