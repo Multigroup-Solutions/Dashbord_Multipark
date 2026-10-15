@@ -67,8 +67,15 @@ export interface ChatTurnInput<Ctx> {
   /** Auditoria de cada chamada de ferramenta (nome + parâmetros). */
   onToolCall?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void> | void;
   maxTurns?: number;
+  /**
+   * Teto de saída BASE (omissão 700): sobe ao mínimo do nível de raciocínio
+   * (maxTokensFor — com "low" no lite fica 900), porque o raciocínio gasta do
+   * mesmo teto que a resposta.
+   */
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /** Versão do chamador (registo + resposta guardada), ex.: "v1". */
+  variant?: string;
 }
 
 export type ChatFailure = "empty" | "too_long" | "disabled" | "not_configured" | "budget" | "rate_limited" | "error";
@@ -179,7 +186,9 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
       history,
       input: blocks.join("\n\n"),
       maxTokens: input.maxOutputTokens ?? 700,
+      scaleMaxTokensForThinking: true,
       timeoutMs: input.timeoutMs ?? 40_000,
+      variant: input.variant ?? null,
       temperature: 0.2,
       userId: input.userId ?? null,
       entity: "ai_chat_conversation",
@@ -205,7 +214,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
     const helpFiles = help.map((d) => d.file);
     let messageId: number | null = null;
     if (conversationId) {
-      const saved = await appendExchange(conversationId, question, answer, { tools: used, helpFiles, path: input.path }).catch(() => null);
+      const saved = await appendExchange(conversationId, question, answer, { tools: used, helpFiles, path: input.path, variant: input.variant ?? null, tier: r.tier }).catch(() => null);
       messageId = saved?.answerId ?? null;
     }
     return { ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, ...(cited ? { citations: cited.used } : {}) };

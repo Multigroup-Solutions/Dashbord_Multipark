@@ -11,7 +11,7 @@
  *    (shared/notificationRouting.ts — quem recebe o quê).
  */
 import { z } from "zod";
-import { AI_FEATURE_IDS, AI_TIERS } from "./aiFeatures";
+import { AI_FEATURE_IDS, AI_THINKING_LEVELS, AI_TIERS } from "./aiFeatures";
 import { DEFAULT_HOME_CITY_ONLY, NOTIFICATION_KIND_DEFS, NOTIFICATION_ROUTING_SETTING_KEY, notificationRoutingSchema } from "./notificationRouting";
 import { DEFAULT_BRAND_DOMAINS, DEFAULT_MAIL_ALIAS_DOMAINS, DEFAULT_MAILBOX_SOURCE, MAIL_WORKSPACE_PRIMARY_DOMAIN, MAIL_BRAND_IDS, MAIL_DEFAULT_BACKFILL_DAYS, MAIL_DEFAULT_RETENTION_YEARS, MAIL_DEFAULT_SLA_HOURS } from "./mail";
 import { DEFAULT_SHARED_CALENDARS_CONFIG, sharedCalendarsConfigSchema } from "./googleSync";
@@ -105,6 +105,16 @@ export type AiPriceOverrides = z.infer<typeof aiPriceOverridesSchema>;
 export const aiFeatureTiersSchema = z.record(
   z.string().refine((k) => (AI_FEATURE_IDS as readonly string[]).includes(k), "Funcionalidade de IA desconhecida."),
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
+);
+
+/**
+ * Raciocínio por funcionalidade de IA (plano MPV, F0a). Só ids conhecidos e
+ * níveis do Gemini 3.x; "default" = o do próprio modelo. Vazio = a env
+ * AI_THINKING_LEVEL (omissão "low") para todas, como até aqui.
+ */
+export const aiThinkingLevelsSchema = z.record(
+  z.string().refine((k) => (AI_FEATURE_IDS as readonly string[]).includes(k), "Funcionalidade de IA desconhecida."),
+  z.enum(AI_THINKING_LEVELS as unknown as ["minimal", "low", "medium", "high", "default"], { error: "Nível inválido (minimal, low, medium, high ou default)." }),
 );
 
 export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos" | "pessoas";
@@ -654,6 +664,15 @@ export const SETTINGS = {
     label: "Nível de modelo por funcionalidade de IA",
     description: "Sobrepõe o nível (lite = o mais barato, fast, smart) de cada funcionalidade. JSON: {\"expense_ocr\": \"fast\"}. Funcionalidades: " + AI_FEATURE_IDS.join(", ") + ". Vazio = omissão do código (quase tudo lite).",
     schema: aiFeatureTiersSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
+  "ai.thinkingLevels": def({
+    key: "ai.thinkingLevels",
+    group: "ia",
+    label: "Raciocínio da IA por funcionalidade",
+    description: "Quanto o modelo \"pensa\" antes de responder (só os Gemini 3.x): minimal (quase nada, o mais barato), low, medium, high, ou default (o do próprio modelo). O raciocínio paga-se como saída. JSON: {\"mail_routing\": \"minimal\", \"assistant\": \"low\"}. Funcionalidades fora da lista seguem AI_THINKING_LEVEL (omissão low). Vazio = como até aqui.",
+    schema: aiThinkingLevelsSchema,
     defaultValue: {},
     wiring: "live",
   }),

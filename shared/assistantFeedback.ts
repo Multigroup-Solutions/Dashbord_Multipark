@@ -52,6 +52,8 @@ const UNANSWERED: ReadonlyArray<{ re: RegExp; why: string }> = [
   { re: /\b(a ajuda|os manuais|o manual|a base de conhecimento) nao (cobre|cobrem|fala|falam|explica|explicam|diz|dizem|refere|referem|menciona|mencionam)\b/, why: "diz que a ajuda/os manuais não cobrem" },
   { re: /\bnao (esta|vem|aparece) (na ajuda|nos manuais|no manual)\b/, why: "diz que não está na ajuda/manuais" },
   { re: /\berro temporario\b/, why: "fala de erro temporário" },
+  // O texto de recurso do runAi (TOOLS_FALLBACK_TEXT): nem a chamada final deu resposta.
+  { re: /\bnao consegui juntar tudo\b/, why: "não conseguiu juntar os dados a tempo (chamada final sem resposta)" },
 ];
 
 /**
