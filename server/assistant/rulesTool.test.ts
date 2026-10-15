@@ -320,7 +320,8 @@ describe("regras_em_vigor só no modo MPV (piloto)", () => {
   it("o conjunto de ferramentas: v1 sem, MPV com (o resto igual)", () => {
     expect(staffToolsFor({ pilot: false })).toBe(STAFF_TOOLS);
     expect(STAFF_TOOLS.map((t) => t.name)).not.toContain(RULES_TOOL_NAME);
-    expect(staffToolsFor({ pilot: true }).map((t) => t.name)).toEqual([...STAFF_TOOLS.map((t) => t.name), RULES_TOOL_NAME]);
+    // F3: no MPV, ajuda_abrir/ajuda_procurar no lugar do abrir_ajuda (o resto igual).
+    expect(staffToolsFor({ pilot: true }).map((t) => t.name)).toEqual(["ajuda_abrir", "ajuda_procurar", ...STAFF_TOOLS.map((t) => t.name).filter((n) => n !== "abrir_ajuda"), RULES_TOOL_NAME]);
     expect(MPV_STAFF_TOOLS).toContain(RULES_IN_FORCE_TOOL);
   });
 

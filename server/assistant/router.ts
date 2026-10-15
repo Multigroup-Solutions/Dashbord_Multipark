@@ -24,6 +24,8 @@ import { deleteConversation, listConversations, loadMessages, resolveConversatio
 import type { StaffToolCtx } from "./tools";
 import { AI_FEATURES } from "../../shared/aiFeatures";
 import { ASSISTANT_CHANNEL, economyNote, askAssistant, assistantLimits, assistantModeFor, lisbonDay, ownerKeyFor, staffHelpDocs } from "./service";
+import { mpvSuggestions } from "./mpv";
+import { sanitizeMultisPage } from "../../shared/multisPage";
 
 /**
  * Contexto da página (plano MPV §3.1): o widget manda o separador e o registo
@@ -77,7 +79,10 @@ export const assistantRouter = router({
       const mode = await assistantModeFor(ctx.user.id);
       const feature = mode.feature;
       const limits = await assistantLimits(feature);
-      const suggestions = assistantSuggestions(input?.path, withOverrides(ctx.user));
+      // MPV (F3): no piloto, as perguntas do perfil da página/separador; sem perfil próprio, as do v1.
+      const viewer = withOverrides(ctx.user);
+      const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, viewer) : null;
+      const suggestions = mpvAsks ?? assistantSuggestions(input?.path, viewer);
       // Multis 2: mostrar a Memória? e o link "Perguntas que falharam" (admins).
       const { assistantMemoryEnabled } = await import("./memory");
       const extra = {

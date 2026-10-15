@@ -71,7 +71,21 @@ export interface ChatTurnInput<Ctx> {
    */
   memory?: string;
   path?: string | null;
+  /**
+   * Plano MPV (F3): o bloco POR PERGUNTA já pronto (perfil da página + as
+   * secções da ajuda) e os ids das secções (`refs`, guardados como os
+   * ficheiros da ajuda). Vai fora da cache, na MESMA redação que a pergunta,
+   * e substitui o <ajuda> das palavras-chave (`helpDocs` fica sem efeito).
+   */
+  pageKnowledge?: { block: string; refs: string[] };
   tools?: ChatTool<Ctx>[];
+  /**
+   * Plano MPV §3.7/§5.4: declara TODAS as ferramentas (a mesma lista para toda
+   * a gente → uma cache por modelo); o acesso é verificado ao executar (a
+   * chamada recusada devolve "indisponível"). Omisso: só as que a pessoa pode
+   * usar (como sempre).
+   */
+  declareAllTools?: boolean;
   toolCtx?: Ctx;
   /** Auditoria de cada chamada de ferramenta (nome + parâmetros). */
   onToolCall?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void> | void;
@@ -170,8 +184,10 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   }
   const helpHits = kb?.helpHits ?? [];
   if (kb && !kb.block.trim()) kb = null;
-  const keywordHelp = input.helpDocs?.length ? pickHelpDocs(input.helpDocs, question, { path: input.path }) : [];
-  const help = input.helpDocs?.length ? combineHelpDocs(input.helpDocs, keywordHelp, helpHits, { question }) : [];
+  const pageKnowledge = input.pageKnowledge?.block.trim() ? input.pageKnowledge : null;
+  const useHelpDocs = !pageKnowledge && !!input.helpDocs?.length;
+  const keywordHelp = useHelpDocs ? pickHelpDocs(input.helpDocs!, question, { path: input.path }) : [];
+  const help = useHelpDocs ? combineHelpDocs(input.helpDocs!, keywordHelp, helpHits, { question }) : [];
 
   // Dados pessoais escritos à mão (emails, telefones, matrículas…) não vão para
   // o fornecedor; a resposta é privada, por isso os marcadores são repostos.
@@ -182,6 +198,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   const kbAt = kb ? parts.push(kb.block) - 1 : -1;
   const memAt = memory ? parts.push(memory) - 1 : -1;
   const sumAt = summary ? parts.push(summary) - 1 : -1;
+  const pageAt = pageKnowledge ? parts.push(pageKnowledge.block.trim()) - 1 : -1;
   parts.push(question);
   const redParts = red.text(parts.join(SEP)).split(SEP);
   const history = turns.map((t, i) => ({ role: t.role, text: redParts[i] ?? t.text }));
@@ -189,16 +206,18 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   const safeKnowledge = kbAt >= 0 ? redParts[kbAt] ?? "" : "";
   const safeMemory = memAt >= 0 ? redParts[memAt] ?? "" : "";
   const safeSummary = sumAt >= 0 ? redParts[sumAt] ?? "" : "";
+  const safePage = pageAt >= 0 ? redParts[pageAt] ?? "" : "";
 
   const blocks: string[] = [];
   if (input.context?.trim()) blocks.push(`<contexto>\n${input.context.trim()}\n</contexto>`);
   if (safeMemory) blocks.push(safeMemory);
   if (safeSummary) blocks.push(`<resumo>\n${safeSummary}\n</resumo>`);
+  if (safePage) blocks.push(safePage);
   if (help.length) blocks.push(helpContext(help, undefined, { question, hints: helpHints(helpHits) }));
   if (safeKnowledge) blocks.push(safeKnowledge);
   blocks.push(`<pergunta>\n${safeQuestion}\n</pergunta>`);
 
-  const tools = input.tools && input.toolCtx !== undefined ? availableTools(input.tools, input.toolCtx) : [];
+  const tools = input.tools && input.toolCtx !== undefined ? (input.declareAllTools ? input.tools : availableTools(input.tools, input.toolCtx)) : [];
   const used: string[] = [];
   const toolErrors: ToolErrorNote[] = [];
 
@@ -240,7 +259,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
     // Para o histórico: a mesma resposta com os colegas ainda como [NOME_n] (+ o mapa).
     const forStorage = red.maskForStorage(r.output);
     const maskedContent = (kb ? appendCitations(forStorage.content, kb.citations).text : forStorage.content).trim();
-    const helpFiles = help.map((d) => d.file);
+    const helpFiles = pageKnowledge ? [...pageKnowledge.refs] : help.map((d) => d.file);
     let messageId: number | null = null;
     if (conversationId) {
       const saved = await appendExchange(conversationId, question, answer, { tools: used, helpFiles, path: input.path, variant: input.variant ?? null, tier: r.tier, masked: { content: maskedContent, names: forStorage.names } }).catch(() => null);

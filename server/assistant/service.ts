@@ -18,6 +18,12 @@
  *    atingido → `assistant` com a nota "modo económico" (não bloqueia nada);
  *  - contexto da página: o separador aberto e o registo aberto (validados
  *    contra as listas do código, shared/multisPage.ts) vão no <contexto>.
+ *
+ * Plano MPV (F3) — o CONTEÚDO do MPV, só para quem está no piloto (o v1 fica
+ * exatamente igual): sistema com o índice da árvore (igual para todos),
+ * ferramentas declaradas iguais para todos (+ a lista das permitidas no
+ * <contexto>), `ajuda_abrir`/`ajuda_procurar` em vez do `abrir_ajuda`, e por
+ * pergunta o perfil da página + as secções da ajuda (mpv.ts).
  */
 import {
   AI_ASSISTANT_DEFAULT_LIMITS, AI_ASSISTANT_SMART_DEFAULT_LIMITS, automationFlagDefault, type AiAssistantLimits,
@@ -34,6 +40,7 @@ import { userKey } from "../_core/ai/rateLimit";
 import { assistantSystemPrompt } from "../_core/ai/prompts/assistant";
 import { HELP_FILES } from "./helpDocs.generated";
 import { staffToolsFor, type StaffToolCtx } from "./tools";
+import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnKnowledge } from "./mpv";
 import type { CityAccess } from "../cityAccess";
 
 /** Quantos trechos da ajuda a base devolve por pergunta (dão até 3 ficheiros). */
@@ -53,11 +60,15 @@ export function helpFileOfRef(ref: string | null | undefined): string | null {
  * Nunca lança; desligado nas definições → nada (a ajuda fica só por
  * palavras-chave, como antes).
  */
-export async function assistantKnowledge(question: string, role: string, access: CityAccess | undefined): Promise<ChatKnowledge | null> {
+export async function assistantKnowledge(
+  question: string, role: string, access: CityAccess | undefined,
+  /** MPV: a ajuda vem da árvore (mpv.ts) → sem trechos da ajuda da base (helpTopK 0). */
+  opts: { helpTopK?: number } = {},
+): Promise<ChatKnowledge | null> {
   const { loadKnowledgeConfig } = await import("../knowledge/sync");
   if (!(await loadKnowledgeConfig()).useInAssistant) return null;
   const { retrieveKnowledge, knowledgeBlock, kbViewerFrom } = await import("../knowledge/retrieve");
-  const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, access), topK: 4, excludeSources: ["help"], helpTopK: HELP_KB_TOP_K });
+  const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, access), topK: 4, excludeSources: ["help"], helpTopK: opts.helpTopK ?? HELP_KB_TOP_K });
   // 18d: a consulta falhou → o assistente diz que não conseguiu consultar (não
   // que os manuais não falam disso).
   if (r.failed) return { block: KB_UNAVAILABLE_BLOCK, citations: [] };
@@ -187,6 +198,8 @@ const WEEKDAYS = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "q
 export function turnContext(p: {
   today: string; path?: string | null; role: string; cities: string[] | "todas"; memoryOff?: boolean;
   tab?: string | null; entity?: MultisEntity | null;
+  /** MPV: as ferramentas que esta pessoa pode usar (todas vão declaradas; §3.7). */
+  tools?: readonly string[];
 }): string {
   const wd = WEEKDAYS[new Date(`${p.today}T12:00:00Z`).getUTCDay()];
   return [
@@ -197,6 +210,7 @@ export function turnContext(p: {
     `Papel da pessoa: ${ROLE_LABELS[p.role as Role] ?? p.role}.`,
     `Cidades a que tem acesso: ${p.cities === "todas" ? "todas" : p.cities.join(", ") || "nenhuma"}.`,
     p.memoryOff ? "A memória do Multis está desligada: não consegues guardar notas (se pedirem, diz que um administrador a liga em Definições → Automações)." : null,
+    p.tools ? `Ferramentas que podes usar: ${p.tools.length ? p.tools.join(", ") : "nenhuma"}.` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -276,7 +290,16 @@ export async function askAssistant(
   const mode = hooks.mode ?? (await assistantModeFor(user.id));
   const cities = toolCtx.access?.all ? "todas" : (toolCtx.access?.cityNames ?? (toolCtx.access?.cityName ? [toolCtx.access.cityName] : []));
   const page = sanitizeMultisPage({ path: input.path, tab: input.tab, entity: input.entity });
-  const context = turnContext({ today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn, tab: page.tab, entity: page.entity });
+  // Plano MPV (F3): quem está no piloto recebe o conteúdo do MPV (também no
+  // modo económico — é o "MPV-lite"); os outros, o v1 tal e qual.
+  const mpv = mode.pilot;
+  const tools = staffToolsFor(mode);
+  const context = turnContext({
+    today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn, tab: page.tab, entity: page.entity,
+    ...(mpv ? { tools: mpvAllowedToolNames(toolCtx, tools) } : {}),
+  });
+  const pageKnowledge = mpv ? mpvTurnKnowledge({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx }) : null;
+  const knowledgeFor = (q: string) => assistantKnowledge(q, user.role, toolCtx.access, mpv ? { helpTopK: 0 } : {});
   const turn = async (feature: AssistantFeature, conversationId: number | null, newConversation: boolean | undefined) => runChatTurn<StaffToolCtx>({
     feature,
     channel: ASSISTANT_CHANNEL,
@@ -288,19 +311,21 @@ export async function askAssistant(
     limits: await assistantLimits(feature),
     // O lite fica com a chave de sempre; o piloto tem a sua (limites próprios).
     rateKey: `${feature}:${userKey(user.id)}`,
-    system: staffSystemPrompt(),
+    system: mpv ? mpvSystemPrompt() : staffSystemPrompt(),
     cacheSystem: true,
-    // Plano MPV: o conteúdo de hoje é o "v1" (o do MPV chega no F1+); o nível fica no registo.
-    variant: "v1",
+    // A versão do conteúdo (v1 | mpv) fica no registo e na resposta guardada; o nível também.
+    variant: mpv ? MPV_VARIANT : "v1",
     ...(feature === ASSISTANT_SMART_FEATURE ? { maxOutputTokens: ASSISTANT_SMART_MAX_OUTPUT_TOKENS } : {}),
     context,
     memory,
-    helpDocs: toolCtx.helpDocs,
+    ...(pageKnowledge ? { pageKnowledge: { block: pageKnowledge.block, refs: pageKnowledge.refs } } : { helpDocs: toolCtx.helpDocs }),
     path: input.path,
-    // Plano MPV (F2): no piloto também regras_em_vigor; fora dele, o de sempre.
-    tools: staffToolsFor(mode),
+    // Plano MPV (F2/F3): no piloto as ferramentas do MPV (ajuda_abrir/ajuda_procurar, regras_em_vigor, sem abrir_ajuda); fora dele, o de sempre.
+    tools,
+    // MPV: as mesmas ferramentas declaradas a toda a gente (uma cache por modelo, §5.4).
+    ...(mpv ? { declareAllTools: true } : {}),
     toolCtx,
-    knowledge: hooks.knowledge === null ? undefined : (hooks.knowledge ?? ((q) => assistantKnowledge(q, user.role, toolCtx.access))),
+    knowledge: hooks.knowledge === null ? undefined : (hooks.knowledge ?? knowledgeFor),
     onToolCall: async (name, args, cid) => {
       await hooks.logToolCall?.(name, args, cid);
     },

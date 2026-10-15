@@ -27,7 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { can, ROLE_LABELS, ROLES } from "@shared/access";
 import {
-  KB_CITIES, KB_MAX_DIRECT_UPLOAD_BYTES, KB_MAX_DIRECT_UPLOAD_MB, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCE_LABELS, kbReadableBlocks, KB_STATUS_LABELS, KB_UPLOAD_ACCEPT, KB_VISIBILITY_ALL, visibilityLabel,
+  KB_CITIES, isHelpSource, KB_MAX_DIRECT_UPLOAD_BYTES, KB_MAX_DIRECT_UPLOAD_MB, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCE_LABELS, kbReadableBlocks, KB_STATUS_LABELS, KB_UPLOAD_ACCEPT, KB_VISIBILITY_ALL, visibilityLabel,
   type KbFolder, type KbSource, type KbStatus, type KbVisibility, type KnowledgeConfig,
 } from "@shared/knowledge";
 
@@ -463,7 +463,7 @@ export default function KnowledgeBasePage() {
                   <div className="flex flex-wrap items-center gap-1">
                     <Badge variant="outline" className={STATUS_STYLE[d.status]}>{KB_STATUS_LABELS[d.status]}</Badge>
                     <Button variant="ghost" size="icon" title="Pré-visualizar o texto" onClick={() => setPreview(d.id)}><Eye className="h-4 w-4" /></Button>
-                    {d.source !== "help" && (
+                    {!isHelpSource(d.source) && (
                       <>
                         <Button variant="ghost" size="icon" title="Visibilidade" onClick={() => setVisDoc(d)}><Shield className="h-4 w-4" /></Button>
                         {d.status === "skipped" ? (
@@ -480,7 +480,7 @@ export default function KnowledgeBasePage() {
                         ><Trash2 className="h-4 w-4 text-red-600" /></Button>}
                       </>
                     )}
-                    {d.source === "help" && <span title="A ajuda da app atualiza-se sozinha com cada versão"><HelpCircle className="h-4 w-4 text-muted-foreground" /></span>}
+                    {isHelpSource(d.source) && <span title="A ajuda da app atualiza-se sozinha com cada versão"><HelpCircle className="h-4 w-4 text-muted-foreground" /></span>}
                   </div>
                 </li>
               ))}
