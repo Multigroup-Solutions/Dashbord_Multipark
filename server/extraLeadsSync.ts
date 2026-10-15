@@ -481,12 +481,17 @@ export async function markLeadConvertedForApplication(
         sql`(${extraLeads.status} <> 'converted' OR ${extraLeads.employeeId} IS NULL OR ${extraLeads.convertedAt} IS NULL OR ${extraLeads.projectId} IS NULL OR ${extraLeads.sourceRef} IS NULL)`,
       ));
     if (extractAffectedRows(upd) === 0) return null;
+    // Já estava convertido (pelo «Converter») e só faltava ligar a candidatura:
+    // fica registado como ligação, não como uma segunda conversão.
+    const alreadyConverted = lead.status === "converted" && lead.employeeId === employeeId;
     await logActivity({
       userId: userId ?? 0,
-      action: "extra_lead_convert",
+      action: alreadyConverted ? "extra_lead_link_application" : "extra_lead_convert",
       entity: "extra_leads",
       entityId: lead.id,
-      details: `Lead ${lead.fullName} convertido pela aprovação da candidatura #${applicationId} → employee ${employeeId}`,
+      details: alreadyConverted
+        ? `Lead ${lead.fullName} (já convertido) ligado à candidatura #${applicationId} → employee ${employeeId}`
+        : `Lead ${lead.fullName} convertido pela aprovação da candidatura #${applicationId} → employee ${employeeId}`,
     });
     return lead.id;
   } catch (err) {

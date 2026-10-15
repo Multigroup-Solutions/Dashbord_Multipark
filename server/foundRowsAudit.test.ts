@@ -295,3 +295,25 @@ describe("Candidatura aprovada → lead convertido: uma conversão regista-se um
     expect(leadConversionPending({ ...convertedLead(), status: "declined" })).toBe(true);
   });
 });
+
+describe("auditoria do #346 (15 out 2026)", () => {
+  it("o WHERE do UPDATE tem as mesmas cinco condições que leadConversionPending", () => {
+    const src = readFileSync(new URL("./extraLeadsSync.ts", import.meta.url), "utf8");
+    const pure = src.slice(src.indexOf("export function leadConversionPending"), src.indexOf("export async function markLeadConvertedForApplication"));
+    const where = src.slice(src.indexOf("export async function markLeadConvertedForApplication"));
+    for (const [js, sqlCond] of [
+      ['lead.status !== "converted"', "${extraLeads.status} <> 'converted'"],
+      ["lead.employeeId == null", "${extraLeads.employeeId} IS NULL"],
+      ["lead.convertedAt == null", "${extraLeads.convertedAt} IS NULL"],
+      ["lead.projectId == null", "${extraLeads.projectId} IS NULL"],
+      ["lead.sourceRef == null", "${extraLeads.sourceRef} IS NULL"],
+    ]) {
+      expect(pure).toContain(js);
+      expect(where).toContain(sqlCond);
+    }
+  });
+  it("ligar a candidatura a um lead já convertido regista-se como ligação, não como outra conversão", () => {
+    const src = readFileSync(new URL("./extraLeadsSync.ts", import.meta.url), "utf8");
+    expect(src).toContain('action: alreadyConverted ? "extra_lead_link_application" : "extra_lead_convert"');
+  });
+});
