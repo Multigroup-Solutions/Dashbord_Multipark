@@ -937,12 +937,12 @@ export const employees = mysqlTable("employees", {
 	deactivatedById: int(),
 	// 0585 (49c): a pessoa INATIVA carregou em "Voltei, quero trabalhar" (o RH vê "Quer voltar").
 	comebackRequestedAt: datetime({ mode: 'string' }),
-	// 0690 (plano 63): cópia do modo do ponto de HOJE (NULL = sem modo; fixed | exempt | always_on).
+	// 0720 (plano 63): cópia do modo do ponto de HOJE (NULL = sem modo; fixed | exempt | always_on).
 	// Só para mostrar — o ordenado e a Avaliação leem o histórico (employee_ponto_modes).
 	pontoMode: varchar({ length: 12 }),
 });
 
-// 0690 (plano 63, passo 1): histórico do modo do ponto — "a partir de" (dia
+// 0720 (plano 63, passo 1): histórico do modo do ponto — "a partir de" (dia
 // operacional). Uma mudança posterior com data igual ou anterior substitui as
 // seguintes (shared/pontoMode.ts). Nada se apaga.
 export const employeePontoModes = mysqlTable("employee_ponto_modes", {
@@ -958,7 +958,7 @@ export const employeePontoModes = mysqlTable("employee_ponto_modes", {
 	index("idx_employee_ponto_modes_emp").on(table.employeeId, table.effectiveFrom),
 ]);
 
-// 0690: alertas do ponto (zona, caras, turnos longos, fim de semana da isenção…).
+// 0720: alertas do ponto (zona, caras, turnos longos, fim de semana da isenção…).
 // Um por (ficha, dedupeKey); a chave não leva o id da ficha (juntar fichas).
 export const pontoAlerts = mysqlTable("ponto_alerts", {
 	id: int().autoincrement().primaryKey(),
@@ -984,7 +984,7 @@ export const pontoAlerts = mysqlTable("ponto_alerts", {
 	index("idx_ponto_alerts_emp_day").on(table.employeeId, table.day),
 ]);
 
-// 0690: avisos escritos lidos ("Li" na app ou em papel, registado pelo RH).
+// 0720: avisos escritos lidos ("Li" na app ou em papel, registado pelo RH).
 // As colunas da ativação do modo 3 (foto, GPS, Zello) só se preenchem no passo 8.
 export const pontoModeAcks = mysqlTable("ponto_mode_acks", {
 	id: int().autoincrement().primaryKey(),
@@ -2643,7 +2643,7 @@ export const timeRecords = mysqlTable("time_records", {
 	reviewedAt: timestamp({ mode: 'string' }),
 	reviewNote: varchar({ length: 255 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
-	// 0690 (plano 63) — rasto da picagem, só informação (nenhuma conta de horas o lê):
+	// 0720 (plano 63) — rasto da picagem, só informação (nenhuma conta de horas o lê):
 	// o modo do ponto nesse dia, de onde veio a selfie (camera | file), a idade do
 	// ficheiro (s), a imprecisão do GPS (m) e a conta que picou.
 	pontoMode: varchar({ length: 12 }),

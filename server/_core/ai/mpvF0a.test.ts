@@ -381,8 +381,11 @@ describe("uso da IA por dia e leituras repetidas (só leitura)", () => {
 // ─── Migração 0690 ──────────────────────────────────────────────────────────
 
 describe("migração 0690 (observabilidade da IA)", () => {
-  it("registada no fim, só acrescenta, idempotente, espelhada no drizzle", () => {
-    expect(SCHEMA_MIGRATION_IDS.at(-1)).toBe("0690");
+  it("registada por ordem, só acrescenta, idempotente, espelhada no drizzle", () => {
+    // Por ordem e não "no fim": há migrações posteriores (0720 em diante, plano 63).
+    const i = SCHEMA_MIGRATION_IDS.indexOf("0690");
+    expect(i).toBeGreaterThan(0);
+    expect(SCHEMA_MIGRATION_IDS[i - 1] < "0690").toBe(true);
     const all = MIGRATION_0690_STATEMENTS.join("\n");
     expect(all).not.toMatch(/DROP|DELETE|UPDATE|MODIFY|CHANGE/i);
     for (const st of MIGRATION_0690_STATEMENTS) expect(st).toMatch(/^ALTER TABLE `ai_(usage_log|chat_messages)` ADD (COLUMN|INDEX) /);
