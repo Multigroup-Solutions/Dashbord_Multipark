@@ -311,6 +311,9 @@ describe("respostas que não responderam (marca automática)", () => {
     // A resposta guardada leva a página e a ajuda usada (para o 👍/👎 depois).
     const msg = inserts("ai_chat_messages").find((q) => q.sql.includes("'assistant'"))!;
     expect(msg.sql).toContain("helpFiles, path");
+    // 0690: a versão e o nível da resposta (para o 👍/👎 saber de onde veio).
+    expect(msg.sql).toContain("variant, tier");
+    expect(msg.params).toEqual(expect.arrayContaining(["v1", "lite"]));
 
     queries.length = 0;
     setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse("Amanhã há **42** reservas.")]) });

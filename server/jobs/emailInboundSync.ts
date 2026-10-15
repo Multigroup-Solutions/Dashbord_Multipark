@@ -26,7 +26,6 @@ import {
 import { matchBookingForComplaint, autoLinkComplaintBooking, autoLinkLostFoundBooking } from "../complaintDossier";
 import {
   createGoogleReview,
-  updateGoogleReview,
   createComplaint,
   createLostFoundItem,
   claimInboundEmail,
@@ -56,6 +55,7 @@ import {
   COMPLAINT_DEFAULT_SLA_HOURS,
 } from "../complaintEmail";
 import { aiMergeConflict, aiMergeSameClient, lostFoundMergeRecent, partnerSafeClientEmail } from "../../shared/complaintIntake";
+import { sqlUtcOrNull } from "../../shared/reviewRules";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
@@ -71,6 +71,8 @@ async function routeToModule(
     messageId: string;
     gmThreadId?: string | null;
     refs?: string[];
+    /** Data do email (para a regra dos 14 dias do rascunho automático das críticas). */
+    receivedAt?: string | null;
     /** Lote 57: email de OUTRA caixa que a IA viu como reclamação (ver InboundEmailInput.aiIntake). */
     aiIntake?: AiComplaintIntake | null;
   },
@@ -124,6 +126,7 @@ async function routeToModule(
     // correspondência exata fica "Sem parque" (nunca adivinha).
     const { projectIdForReviewPark } = await import("../reviewOps");
     const projectId = await projectIdForReviewPark(g.parkName);
+    const sourceEmailDate = sqlUtcOrNull(ctx.receivedAt);
     const id = await createGoogleReview({
       reviewerName: reviewer,
       reviewerEmail: parsed.clientEmail,
@@ -133,18 +136,16 @@ async function routeToModule(
       projectId,
       status: "pending_response",
       sourceEmailId: ctx.messageId,
+      sourceEmailDate,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
     } as any);
     // rascunho de resposta por IA (prompt central + sentimento/contexto),
     // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
+    // MPV R1: só para críticas recentes (14 dias, pela data do email; sem ela, agora).
     if (id) {
       try {
-        const { autoDraftReview } = await import("../reviewAutoDraft");
-        const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
-        if (await aiFeatureAvailableFresh("review_auto_draft")) {
-          await updateGoogleReview(id, { aiDraftAttemptedAt: new Date().toISOString().slice(0, 19).replace("T", " ") } as any);
-          await autoDraftReview(id, { timeoutMs: 15_000 });
-        }
+        const { autoDraftEmailReview } = await import("../reviewAutoDraft");
+        await autoDraftEmailReview(id, sourceEmailDate, { timeoutMs: 15_000 });
       } catch { /* IA opcional */ }
     }
     return { targetModule: "review", targetId: id };
@@ -681,7 +682,7 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
     const attachmentsJson = attachments.length ? JSON.stringify(attachments) : null;
 
     const routed = await routeToModule(alias, parsed, {
-      subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
+      subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs, receivedAt,
       aiIntake: alias === "reclamacoes" || alias === "perdidos" ? input.aiIntake ?? null : null,
     });
     routedOk = true;
@@ -728,4 +729,3 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 function now(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
-
