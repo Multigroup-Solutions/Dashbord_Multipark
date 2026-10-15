@@ -43,6 +43,9 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
    - Com confiança alta, marca a disponibilidade e responde por WhatsApp.
    - Abaixo disso, cria uma tarefa para uma pessoa.
 10. **Relatórios de segunda-feira:** por email (direção, marketing, operações e RH).
+   - O de **operações** usa as contas dos dashboards. As **entradas e saídas** são de **todos os parques** (nossos e todo o Marketplace, com as compras por pagar, sem as canceladas), como Operações → Recolhas e Entregas.
+   - As **reclamações** não contam as arquivadas nem as convertidas, e "fora do prazo" segue a regra do cartão Reclamações. As **ocorrências** são as da página Ocorrências (sem os parques que a operação não faz).
+   - Se a BD da Multipark não responder, o número vem **"—"** com uma nota (nunca 0).
 11. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.
 12. **FAQs da formação** (se ligares o interruptor semanal): à segunda-feira, até 3 FAQs novas a partir da base de conhecimento, publicadas e marcadas "IA". Arquivar uma é dizer "esta não": não volta.
 

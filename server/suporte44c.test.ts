@@ -97,7 +97,9 @@ describe("44c — Ocorrências: médias fecham sozinhas ao fim de 3 dias", () =>
 
   it("rota: corte de agora, `resolved:false` = abertas a sério e cada linha diz se fechou sozinha", () => {
     const r = src("server/routers.ts");
-    expect(r).toContain(`autoCloseBefore: occurrenceAutoCloseCutoff(now)`);
+    // plano 64 (H1): o corte vem do ajudante partilhado com o relatório semanal, com o `now` da rota
+    expect(src("server/multiparkDb/occurrenceScope.ts")).toContain(`autoCloseBefore: occurrenceAutoCloseCutoff(now)`);
+    expect(r).toContain(`...(await occurrenceFiltersFor(now, scopedCityNames()))`);
     expect(r).toContain(`resolved === false ? "open" as const`);
     expect(r).toContain(`autoClosed: isOccurrenceAutoClosed(o, now)`);
     expect(r).toContain(`autoClosed: isOccurrenceAutoClosed(r.data, Date.now())`);

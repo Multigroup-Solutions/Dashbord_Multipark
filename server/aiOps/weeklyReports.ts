@@ -2,7 +2,8 @@
  * Relatórios semanais (segunda de manhã): direção, marketing, operações e RH.
  * Cada relatório = métricas da semana anterior (seg–dom) vs. a de antes,
  * tiradas dos agregados que já existem (motor financeiro, marketingWeekly,
- * reservas/casos/passagens, avaliação e leads). A IA (`weekly_report`, lite)
+ * reservas/casos/passagens, avaliação e leads); as de operações pelas mesmas
+ * contas dos dashboards (plano 64, PR H). A IA (`weekly_report`, lite)
  * escreve só a narrativa; sem IA fica um texto fixo com as maiores variações.
  * Destinatários: quem tem o módulo com alcance nacional (recipients.ts).
  */
@@ -13,6 +14,7 @@ import { lisbonDayRangeUtc } from "../../shared/lisbonDay";
 import { lateArrivalsOf } from "../../shared/evaluationRules";
 import type { ModuleId } from "../../shared/access";
 import { WEEKLY_REPORT_SYSTEM } from "../_core/ai/prompts/ops";
+import type { OccurrenceScopeFilters } from "../multiparkDb/occurrenceScope";
 import { AiCallCap, tryAi } from "./aiCall";
 
 const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
@@ -143,39 +145,95 @@ async function marketing(monday: string): Promise<Pick<WeeklyReportData, "metric
   };
 }
 
+/** Uma leitura ao vivo da BD da Multipark: o número, ou o motivo da falha (nunca 0 por engano). */
+type LiveRead<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+/** Erro de uma leitura ao vivo → motivo curto em PT-PT (o detalhe técnico, sem segredos, só no log). */
+async function liveReadFailure(label: string, err: unknown): Promise<{ ok: false; reason: string }> {
+  const [{ describeReadFailure }, { redactSecrets }] = await Promise.all([import("../multiparkDb/read"), import("../multiparkDb/client")]);
+  console.warn(`[weekly-report] ${label}:`, redactSecrets(err).slice(0, 200));
+  const incomplete = /^Leitura incompleta/.test(String((err as any)?.message ?? ""));
+  return { ok: false, reason: incomplete ? "A leitura veio incompleta (demasiadas linhas)." : describeReadFailure(err).reason };
+}
+
+/**
+ * Entradas e saídas da semana pela função ÚNICA das contagens dos dashboards
+ * (liveOpsBookingStats, plano 64 B1/B2): todos os parques (nossos e todo o
+ * Marketplace), as compras por pagar contam, as canceladas não — os totais de
+ * Operações → Recolhas / Entregas. Sem utilizador (o cron), âmbito nacional.
+ */
+async function weekMovements(r: Range): Promise<LiveRead<{ ins: number; outs: number }>> {
+  try {
+    const { liveOpsBookingStats } = await import("../opsStatsLive");
+    const s = await liveOpsBookingStats({ from: r.from, to: r.to });
+    return { ok: true, value: { ins: s.checkinPeriodo, outs: s.checkoutPeriodo } };
+  } catch (err) {
+    return liveReadFailure("entradas/saídas", err);
+  }
+}
+
+/** Ocorrências criadas na semana: as da página Ocorrências, com os MESMOS filtros (occurrenceFiltersFor). */
+async function weekOccurrences(r: Range, scope: OccurrenceScopeFilters): Promise<LiveRead<number>> {
+  const { getMultiparkOccurrenceStats } = await import("../multiparkDb/read");
+  const s = await getMultiparkOccurrenceStats({ ...scope, dateFrom: r.from, dateTo: r.to });
+  return s.available ? { ok: true, value: s.data.total } : { ok: false, reason: s.reason };
+}
+
+/** Nota de uma métrica que ficou por contar ("—"), com os motivos sem repetir. PURA. */
+export function unreadNote(what: string, reads: ReadonlyArray<LiveRead<unknown>>): string[] {
+  const reasons = [...new Set(reads.flatMap((x) => (x.ok ? [] : [x.reason])))];
+  return reasons.length ? [`${what} por contar ("—", não é 0): ${reasons.join(" ")}`] : [];
+}
+
+/**
+ * Operações (plano 64, PR H): as MESMAS contas dos dashboards.
+ *  - Entradas / saídas: weekMovements (todos os parques, como as listas de Operações);
+ *  - Reclamações novas: a condição única `countableComplaintSql` (Suporte, Resumo do dia);
+ *  - Fora do prazo no fim da semana: `complaintSlaLateSql` (a regra do cartão Reclamações e do briefing);
+ *  - Ocorrências novas: as da página Ocorrências (a tabela antiga `incidents` já não é lida).
+ * Se a BD da Multipark falhar, a métrica vai como "—" com uma nota (nunca 0).
+ */
 async function operacoes(cur: Range, prev: Range): Promise<Pick<WeeklyReportData, "metrics" | "notes">> {
   const db = await getDb();
   if (!db) return { metrics: [], notes: [] };
+  const [{ countableComplaintSql, complaintSlaLateSql }, { occurrenceFiltersFor }, { scopedCityNamesLive }] = await Promise.all([
+    import("../departedComplaints"), import("../multiparkDb/occurrenceScope"), import("../cityScope"),
+  ]);
+  const occScope = await occurrenceFiltersFor(Date.now(), scopedCityNamesLive());
   const counts = async (r: Range) => {
     const u = lisbonDayRangeUtc(r.from, r.to);
-    // Entradas e saídas previstas (sem canceladas) AO VIVO da BD da Multipark.
-    const { loadLiveBookingAgg } = await import("../finance/liveBookings");
-    const [inRows, outRows] = await Promise.all([loadLiveBookingAgg("checkin_any", u), loadLiveBookingAgg("checkout_any", u)]);
-    const notCancelled = (rows: typeof inRows) => rows.filter((x) => x.status !== "CANCELLED").reduce((t, x) => t + x.count, 0);
-    const b = { ins: notCancelled(inRows), outs: notCancelled(outRows) };
-    const c = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM complaints WHERE createdAt >= ${u.start} AND createdAt < ${u.end}`))[0] ?? {};
-    const i = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM incidents WHERE createdAt >= ${u.start} AND createdAt < ${u.end}`))[0] ?? {};
-    const late = rowsOf(await db.execute(sql`
-      SELECT COUNT(*) AS n FROM complaints
-       WHERE complaint_status NOT IN ('resolved', 'closed', 'converted') AND archivedAt IS NULL AND COALESCE(slaDeadline, dueDate) < ${u.end}`))[0] ?? {};
+    // As duas leituras da Multipark em paralelo (as duas ligações da pool).
+    const [moves, occurrences] = await Promise.all([weekMovements(r), weekOccurrences(r, occScope)]);
+    const c = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM complaints
+      WHERE createdAt >= ${u.start} AND createdAt < ${u.end} AND ${countableComplaintSql("complaints")}`))[0] ?? {};
+    const late = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM complaints
+      WHERE ${countableComplaintSql("complaints")} AND ${complaintSlaLateSql("complaints", u.end)}`))[0] ?? {};
     const h = rowsOf(await db.execute(sql`SELECT COUNT(*) AS n FROM shift_handovers WHERE handoverDate >= ${r.from} AND handoverDate <= ${r.to}`))[0] ?? {};
     const s = rowsOf(await db.execute(sql`
       SELECT COUNT(*) AS n FROM (SELECT DISTINCT assignmentDate, shift, city FROM extras_dia_assignments
         WHERE assignmentDate >= ${r.from} AND assignmentDate <= ${r.to}) t`))[0] ?? {};
     const shifts = Number(s.n ?? 0);
-    return { ins: Number(b.ins ?? 0), outs: Number(b.outs ?? 0), complaints: Number(c.n ?? 0), incidents: Number(i.n ?? 0), late: Number(late.n ?? 0), handoverPct: shifts ? Math.min(1, Number(h.n ?? 0) / shifts) : null };
+    return {
+      moves, occurrences,
+      ins: moves.ok ? moves.value.ins : null, outs: moves.ok ? moves.value.outs : null,
+      incidents: occurrences.ok ? occurrences.value : null,
+      complaints: Number(c.n ?? 0), late: Number(late.n ?? 0), handoverPct: shifts ? Math.min(1, Number(h.n ?? 0) / shifts) : null,
+    };
   };
   const [a, b] = [await counts(cur), await counts(prev)];
   return {
     metrics: [
-      { label: "Entradas (check-in)", value: a.ins, prev: b.ins, unit: "n" },
-      { label: "Saídas (check-out)", value: a.outs, prev: b.outs, unit: "n" },
+      { label: "Entradas (check-in) · todos os parques", value: a.ins, prev: b.ins, unit: "n" },
+      { label: "Saídas (check-out) · todos os parques", value: a.outs, prev: b.outs, unit: "n" },
       { label: "Reclamações novas", value: a.complaints, prev: b.complaints, unit: "n", higherIsBetter: false },
       { label: "Ocorrências novas", value: a.incidents, prev: b.incidents, unit: "n", higherIsBetter: false },
       { label: "Reclamações abertas fora do prazo (fim da semana)", value: a.late, prev: b.late, unit: "n", higherIsBetter: false },
       { label: "Passagens de turno preenchidas", value: a.handoverPct, prev: b.handoverPct, unit: "pct", higherIsBetter: true },
     ],
-    notes: [],
+    notes: [
+      ...unreadNote("Entradas e saídas", [a.moves, b.moves]),
+      ...unreadNote("Ocorrências", [a.occurrences, b.occurrences]),
+    ],
   };
 }
 

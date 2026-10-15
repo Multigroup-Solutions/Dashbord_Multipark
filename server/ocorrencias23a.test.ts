@@ -29,10 +29,13 @@ describe("D16 parques que a operação não faz", () => {
   it("a rota lê a definição; a lista dos parques tratados separa os de fora", () => {
     const routes = src("server/routers.ts");
     const list = routes.split("multipark: protectedProcedure.input(z.object({\n      projectId")[1].split("multiparkById:")[0];
-    expect(list).toContain('getSetting("operations.excludedParks")');
-    expect(list).toContain("excludedParkIds };");
+    // plano 64 (H1): os filtros vivem num ajudante, o mesmo do relatório semanal
+    expect(list).toContain("...(await occurrenceFiltersFor(now, scopedCityNames()))");
+    const scope = src("server/multiparkDb/occurrenceScope.ts");
+    expect(scope).toContain('getSetting("operations.excludedParks")');
+    expect(scope).toContain("cities, excludedParkIds };");
     // 28a: mais os que não operamos pelo nome (o SQL só aceita ids)
-    expect(list).toContain("...(await getNotOperatedParkIds())");
+    expect(scope).toContain("...(await getNotOperatedParkIds())");
     const parks = routes.split("parksHandled: protectedProcedure")[1].split("multiparkById:")[0];
     expect(parks).toContain('requireAccess(ctx.user, "ocorrencias", "view")');
     expect(parks).toContain("handled: r.data.filter((p) => !isParkExcluded(p, excluded))");

@@ -5746,7 +5746,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Passagem de turno: resumo para o turno seguinte quando entregas a passagem (a 1.ª vez que a guardas); à segunda-feira, o resumo da semana.",
        "children": [],
        "container": false,
-       "chars": 2945
+       "chars": 3465
       },
       {
        "id": "ia-no-dashboard.md#comecam-desligadas-so-um-administrador-as-liga",

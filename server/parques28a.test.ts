@@ -66,7 +66,9 @@ describe("28a — lista dos parques que não operamos", () => {
 
   it("ligações: Ocorrências (lista e parques tratados), Definições e descrição", () => {
     const routes = src("server/routers.ts");
-    expect(routes).toContain("const excludedParkIds = [...new Set([...settingIds, ...(await getNotOperatedParkIds())])];");
+    // plano 64 (H1): o filtro das Ocorrências passou para o ajudante partilhado com o relatório semanal
+    expect(src("server/multiparkDb/occurrenceScope.ts")).toContain("const excludedParkIds = [...new Set([...settingIds, ...(await getNotOperatedParkIds())])];");
+    expect(routes).toContain("...(await occurrenceFiltersFor(now, scopedCityNames()))");
     expect(routes).toContain("excluded: r.data.filter((p) => isParkExcluded(p, excluded)).map(row)");
     const settings = src("server/settingsRouter.ts");
     expect(settings).toContain("notOperated: isNotOperatedByName(p.name)");

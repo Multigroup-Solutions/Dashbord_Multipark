@@ -3367,18 +3367,16 @@ export const appRouter = router({
     }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "ocorrencias", "view");
       const { listMultiparkOccurrences, getMultiparkOccurrenceStats } = await import("./multiparkDb/read");
-      const { isOccurrenceAutoClosed, occurrenceAutoCloseCutoff } = await import("../shared/occurrenceAutoClose");
+      const { isOccurrenceAutoClosed } = await import("../shared/occurrenceAutoClose");
       const { projectId: _p, limit, offset, resolved, status: statusIn, ...filters } = input ?? {};
       // `resolved:false` (o assistente, ligações antigas) = abertas a sério.
       const status = statusIn ?? (resolved === true ? "resolved" as const : resolved === false ? "open" as const : undefined);
       const now = Date.now();
-      // 23a (D16): sem os "Parques que a operação não faz" (Definições) e, 28a,
-      // sem os que não operamos pelo nome (lista do Jorge; o SQL só aceita ids).
-      const { getSetting } = await import("./appSettings");
-      const { getNotOperatedParkIds } = await import("./multiparkDb/dayBookings");
-      const settingIds = (await getSetting("operations.excludedParks").catch(() => null)) ?? [];
-      const excludedParkIds = [...new Set([...settingIds, ...(await getNotOperatedParkIds())])];
-      const f = { ...filters, status, autoCloseBefore: occurrenceAutoCloseCutoff(now), cities: scopedCityNames(), excludedParkIds };
+      // 23a/28a/44c: sem os parques que a operação não faz (Definições e lista
+      // por nome), o fecho automático e as cidades de quem pede — o MESMO
+      // ajudante do relatório semanal de operações (plano 64, H1).
+      const { occurrenceFiltersFor } = await import("./multiparkDb/occurrenceScope");
+      const f = { ...filters, status, ...(await occurrenceFiltersFor(now, scopedCityNames())) };
       const list = await listMultiparkOccurrences({ ...f, limit, offset });
       if (!list.available) return { available: false as const, reason: list.reason, code: list.code };
       const stats = await getMultiparkOccurrenceStats(f);
