@@ -180,7 +180,7 @@ describe("pedir", () => {
     const r = await requestLeave(await viewer(U.ze), { fromDate: "2026-11-20", toDate: "2026-11-22" });
     expect(r).toMatchObject({ status: "approved", alreadyScheduled: ["2026-11-21"] });
     expect(state.created[0]).toMatchObject({ leaveType: "unavailable", status: "approved" });
-    expect(alreadyScheduledWarning(r.alreadyScheduled)).toBe("Já estavas na escala a 21/11: este aviso não tira a falta desse dia. Fala com quem escala para te tirar.");
+    expect(alreadyScheduledWarning(r.alreadyScheduled)).toBe("Já estavas na escala (ou na proposta) a 21/11: este aviso não tira a falta desse dia. Fala com quem escala para te tirar.");
     // a escala por ler não impede o aviso (fica gravado; só não há a dica)
     state.scheduleFails = true;
     const r2 = await requestLeave(await viewer(U.ze), { fromDate: "2026-11-27", toDate: "2026-11-27" });
@@ -192,9 +192,9 @@ describe("pedir", () => {
   it("(auditoria final) o texto do aviso: um dia, vários, mais de cinco; nenhum → nada", () => {
     expect(alreadyScheduledWarning([])).toBeNull();
     expect(alreadyScheduledWarning(null)).toBeNull();
-    expect(alreadyScheduledWarning(["2026-11-03", "2026-11-01", "2026-11-03"])).toBe("Já estavas na escala a 01/11 e 03/11: este aviso não tira a falta desses dias. Fala com quem escala para te tirar.");
+    expect(alreadyScheduledWarning(["2026-11-03", "2026-11-01", "2026-11-03"])).toBe("Já estavas na escala (ou na proposta) a 01/11 e 03/11: este aviso não tira a falta desses dias. Fala com quem escala para te tirar.");
     expect(alreadyScheduledWarning(["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07"]))
-      .toBe("Já estavas na escala a 01/11, 02/11, 03/11, 04/11 e 05/11 (e mais 2): este aviso não tira a falta desses dias. Fala com quem escala para te tirar.");
+      .toBe("Já estavas na escala (ou na proposta) a 01/11, 02/11, 03/11, 04/11 e 05/11 (e mais 2): este aviso não tira a falta desses dias. Fala com quem escala para te tirar.");
   });
   it("as do super admin ficam aprovadas sozinhas", async () => {
     const r = await requestLeave(await viewer(U.jorge), { fromDate: "2026-11-16", toDate: "2026-11-17" });
