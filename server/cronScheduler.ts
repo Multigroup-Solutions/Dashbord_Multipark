@@ -87,6 +87,7 @@ export const JOB_RUNNERS: Record<string, JobRunner> = {
   "kb-faq-weekly": async (o) => (await import("./cronJobs")).kbFaqWeeklyCron(o),
   "daily-ops": async (o) => (await import("./cronJobs")).dailyOpsCron({ deadlineAt: o.deadlineAt, cursor: o.cursor, deferStepErrors: true }),
   "ops-briefing": async (o) => (await import("./cronJobs")).opsBriefingCron(o),
+  "ops-anomaly-retries": async (o) => (await import("./cronJobs")).opsAnomalyRetriesCron(o),
   "evaluation-recompute": async (o) => (await import("./cronJobs")).evaluationRecomputeCron({ deadlineAt: o.deadlineAt, offsetDays: offset(o.cursor) }),
   "service-times": async (o) => (await import("./cronJobs")).serviceTimesCron({ deadlineAt: o.deadlineAt }),
   "google-ads": async (o) => (await import("./cronJobs")).googleAdsCron({ deadlineAt: o.deadlineAt, kind: "daily" }),

@@ -15,7 +15,7 @@
  * Juntar sozinho (21c): as regras do dono (identityVerdict) e, nas dúvidas,
  * a IA (AI_CRM_IDENTITY, desligada por omissão) — o resto fica em Rever fichas.
  */
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { identityVerdict, scoreSuggestion, type IdentitySide, type IdentityVerdict } from "../../shared/crmIdentity";
 import { recomputeMetrics } from "./sync";
 
@@ -351,6 +351,22 @@ type SharedCounts = Map<string, number>;
 const fichasWithFrom = (counts: SharedCounts, fallback = 2) => (kind: "email" | "phone" | "plate", value: string) => counts.get(`${kind}|${value}`) ?? fallback;
 
 /**
+ * Grava/atualiza as sugestões de uma corrida. O parecer da IA só vale para os
+ * mesmos motivos e avisos: se `reasons`/`signals` mudaram, `aiAt` (e o
+ * parecer) é limpo e o par volta a ir à IA — inclusive os "não sei" de pares
+ * que a IA omitiu (MPV K1). A ordem conta: `aiAt` compara com os valores
+ * ANTIGOS, por isso vem antes de `reasons = VALUES(reasons)`.
+ */
+export function suggestionUpsertSql(values: SQL[]): SQL {
+  return sql`INSERT INTO crm_merge_suggestions (clientA, clientB, score, reasons, verdict, signals, seenAt) VALUES ${sql.join(values, sql`, `)}
+        ON DUPLICATE KEY UPDATE
+          aiAt = IF(reasons <=> VALUES(reasons) AND signals <=> VALUES(signals), aiAt, NULL),
+          aiVerdict = IF(aiAt IS NULL, NULL, aiVerdict), aiConfidence = IF(aiAt IS NULL, NULL, aiConfidence), aiReason = IF(aiAt IS NULL, NULL, aiReason),
+          score = VALUES(score), reasons = VALUES(reasons), verdict = VALUES(verdict), signals = VALUES(signals), seenAt = VALUES(seenAt),
+          status = IF(status = 'obsolete', 'pending', status)`;
+}
+
+/**
  * Sugestões da madrugada. Cada par fica com a pontuação, o veredicto das
  * regras do dono e os avisos (21c). Numa corrida COMPLETA, as pendentes que
  * deixaram de aparecer (já não partilham nada, ou alguém retirou o dado
@@ -401,13 +417,7 @@ export async function refreshSuggestions(db: any, o: { deadlineAt: number }): Pr
       values.push(sql`(${a}, ${b}, ${r.score}, ${r.reasons.join(",")}, ${v.verdict}, ${v.signals.join(",").slice(0, 255)}, UTC_TIMESTAMP())`);
     }
     if (values.length) {
-      // o parecer da IA só vale para os mesmos motivos e avisos: se mudaram, volta a perguntar-se
-      await db.execute(sql`INSERT INTO crm_merge_suggestions (clientA, clientB, score, reasons, verdict, signals, seenAt) VALUES ${sql.join(values, sql`, `)}
-        ON DUPLICATE KEY UPDATE
-          aiAt = IF(reasons <=> VALUES(reasons) AND signals <=> VALUES(signals), aiAt, NULL),
-          aiVerdict = IF(aiAt IS NULL, NULL, aiVerdict), aiConfidence = IF(aiAt IS NULL, NULL, aiConfidence), aiReason = IF(aiAt IS NULL, NULL, aiReason),
-          score = VALUES(score), reasons = VALUES(reasons), verdict = VALUES(verdict), signals = VALUES(signals), seenAt = VALUES(seenAt),
-          status = IF(status = 'obsolete', 'pending', status)`);
+      await db.execute(suggestionUpsertSql(values));
       saved += values.length;
     }
   }
@@ -470,11 +480,21 @@ async function loadSharedCounts(db: any, pairs: [IdentitySide, IdentitySide][]):
 export const AI_MERGE_MIN_CONFIDENCE = 85;
 /** Teto de pares que vão à IA por corrida (custo) e por pedido. */
 export const AI_PAIRS_PER_RUN = 60;
-const AI_PAIRS_PER_CALL = 15;
+/**
+ * Pares por chamada (MPV K1): 10 (era 15). Cada resposta leva ~80–90 tokens
+ * (id, veredicto, certeza, razão de até 15 palavras); 15 pares encostavam ao
+ * teto de 1200 e o fim da lista perdia-se. Com 10 fica ~900, com folga, sem
+ * subir o teto (e uma falha perde menos pares).
+ */
+export const AI_PAIRS_PER_CALL = 10;
+/** Razão gravada nos pares que a IA omitiu (ficam "não sei"). */
+export const AI_OMITTED_REASON = "A IA não respondeu a este par.";
 
 export interface AutoMergeResult {
   checked: number; merged: number; mergedByAi: number; aiChecked: number; skipped: number; errors: number;
   stoppedAtDeadline: boolean; aiError?: string;
+  /** MPV K1: pares enviados que a IA não devolveu (gravados como "não sei"). */
+  aiOmitted?: number;
 }
 
 /**
@@ -580,6 +600,15 @@ export async function autoMergeConfident(db: any, o: { deadlineAt: number; userI
       if (verdict === "same" && conf >= AI_MERGE_MIN_CONFIDENCE && !gone.has(d.a.id) && !gone.has(d.b.id)) {
         if (await doMerge(d.id, d.a, d.b, "ai", `IA (${conf} %): ${reason || "a mesma pessoa"}`)) { out.mergedByAi++; out.skipped--; }
       }
+    }
+    // MPV K1: os pares que a IA deixou sem resposta ficam "não sei" (com aiAt),
+    // senão voltavam a ser pedidos em todas as corridas. Ficam em Rever fichas
+    // como qualquer dúvida; se a ficha mudar (reasons/signals), o aiAt é
+    // limpo pelo upsert e o par volta a ir à IA.
+    for (const d of byId.values()) {
+      out.aiOmitted = (out.aiOmitted ?? 0) + 1;
+      await db.execute(sql`UPDATE crm_merge_suggestions SET aiVerdict = ${"unsure"}, aiConfidence = ${null}, aiReason = ${AI_OMITTED_REASON}, aiAt = UTC_TIMESTAMP()
+        WHERE id = ${d.id} AND status = 'pending'`);
     }
   }
   return out;

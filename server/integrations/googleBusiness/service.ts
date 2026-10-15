@@ -4,6 +4,7 @@ import { BusinessClient, REPLY_MAX_LENGTH, type GoogleLocation } from './client'
 import { accountPattern, locationPattern, normalizeReview, reviewPattern, safeError, shouldOpenComplaint, shouldStopPaging, type GoogleReview } from './domain';
 import { accessToken, connection, database, saveConnection } from './oauth';
 import { PROVIDER } from './config';
+import { reviewAutoDraftEligible } from '../../../shared/reviewRules';
 
 export interface Location {
   id: number; locationName: string; accountName: string; title: string; address: string | null;
@@ -141,7 +142,14 @@ export async function importReview(locationId: number, payload: GoogleReview, us
       }).where(eq(googleReviews.id, id));
     } else {
       const result = await tx.insert(googleReviews).values({ ...data, createdById: userId,
-        importedAt: now(), respondedAt: review.replyAt, status: review.reply ? 'manually_responded' : 'pending_response' });
+        importedAt: now(), respondedAt: review.replyAt, status: review.reply ? 'manually_responded' : 'pending_response',
+        // MPV R1: na 1.ª importação de um perfil (histórico todo de uma vez) as
+        // críticas ANTIGAS (fora dos 14 dias) ficam marcadas como já tentadas —
+        // nunca rascunho automático. As recentes ficam por marcar: se a 1.ª
+        // importação nunca chegar ao fim, não perdem o rascunho. "Gerar" à mão
+        // continua a funcionar.
+        ...(opts.firstImport && !reviewAutoDraftEligible({ reviewDate: review.reviewDate }, opts.nowMs ?? Date.now())
+          ? { aiDraftAttemptedAt: now() } : {}) });
       id = result[0].insertId;
     }
     if (shouldOpenComplaint({ rating: review.rating, hasComplaint: !!existing?.complaintId, dismissed: existing?.status === 'dismissed',
