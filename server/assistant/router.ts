@@ -56,7 +56,7 @@ async function toolCtxFor(ctx: Ctx): Promise<StaffToolCtx> {
   return { user, access, call, today: lisbonDay(), financeAllowed, helpDocs: staffHelpDocs() };
 }
 
-async function logToolCall(userId: number, name: string, args: Record<string, unknown>, conversationId: number | null) {
+async function logToolCall(userId: number, name: string, args: Record<string, unknown>, conversationId: number | null, status?: "recusada") {
   try {
     const { logActivity } = await import("../db");
     await logActivity({
@@ -64,7 +64,7 @@ async function logToolCall(userId: number, name: string, args: Record<string, un
       action: "assistant_tool",
       entity: "assistant",
       entityId: conversationId != null && conversationId <= 2_147_483_647 ? conversationId : null,
-      details: JSON.stringify({ tool: name, params: args }).slice(0, 1000),
+      details: JSON.stringify({ tool: name, params: args, ...(status ? { estado: status } : {}) }).slice(0, 1000),
     });
   } catch { /* o registo nunca parte o chat */ }
 }
@@ -81,7 +81,7 @@ export const assistantRouter = router({
       const limits = await assistantLimits(feature);
       // MPV (F3): no piloto, as perguntas do perfil da página/separador; sem perfil próprio, as do v1.
       const viewer = withOverrides(ctx.user);
-      const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, viewer) : null;
+      const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, await toolCtxFor(ctx as Ctx)) : null;
       const suggestions = mpvAsks ?? assistantSuggestions(input?.path, viewer);
       // Multis 2: mostrar a Memória? e o link "Perguntas que falharam" (admins).
       const { assistantMemoryEnabled } = await import("./memory");
@@ -146,6 +146,8 @@ export const assistantRouter = router({
       const toolCtx = await toolCtxFor(ctx as Ctx);
       return askAssistant(input, toolCtx, {
         logToolCall: (name, args, conversationId) => logToolCall(ctx.user.id, name, args, conversationId),
+        // MPV: a chamada recusada (sem acesso) fica registada à parte, como "recusada".
+        logToolRefused: (name, args, conversationId) => logToolCall(ctx.user.id, name, args, conversationId, "recusada"),
       });
     }),
 

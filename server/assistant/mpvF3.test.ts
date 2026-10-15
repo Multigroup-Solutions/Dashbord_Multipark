@@ -30,7 +30,7 @@ vi.mock("../../shared/helpIdAliases", () => ({
 import { can } from "../../shared/access";
 import { estimateTokens, HELP_INDEX_MAX_TOKENS, treePages } from "../../shared/helpTree";
 import {
-  DEFAULT_MULTIS_PROFILE, MULTIS_PROFILE_RULES, PLANNED_TOOLS, allMultisProfiles, multisProfileFor, profileQuestions,
+  DEFAULT_MULTIS_PROFILE, MULTIS_PROFILE_RULES, PLANNED_TOOLS, allMultisProfiles, multisProfileFor, profileQuestions, questionVisible,
 } from "../../shared/multisProfiles";
 import { KB_SOURCES, isHelpSource } from "../../shared/knowledge";
 import { setAiProvidersForTests } from "../_core/ai/client";
@@ -39,21 +39,21 @@ import { resetFinalCallModeForTests } from "../_core/ai/run";
 import { resetRateLimitMemoryForTests } from "../_core/ai/rateLimit";
 import { resetAiUsageCachesForTests } from "../_core/ai/usage";
 import { helpIndex } from "../_core/ai/chat/retrieval";
-import { availableTools, makeToolExecutor, toolDeclarations } from "../_core/ai/chat/tools";
+import { TOOL_REFUSED_ERROR, availableTools, makeToolExecutor, toolDeclarations } from "../_core/ai/chat/tools";
 import { runChatTurn } from "../_core/ai/chat/engine";
-import { resetMaskedColumnsForTests } from "../_core/ai/chat/store";
+import { joinNames, resetMaskedColumnsForTests } from "../_core/ai/chat/store";
 import { assistantMpvSystemPrompt, assistantSystemPrompt } from "../_core/ai/prompts/assistant";
 import { createFakeDb, createFakeProvider, okResponse, type FakeQuery } from "../_core/ai/testUtils";
 import { invalidateSettingsCache } from "../appSettings";
 import type { CityAccess } from "../cityAccess";
 import { candidateChunks, retrieveKnowledge } from "../knowledge/retrieve";
-import { listDocs } from "../knowledge/store";
+import { listDocs, unembeddedDocIds } from "../knowledge/store";
 import { runKnowledgeSync, syncHelpSections } from "../knowledge/sync";
 import { HELP_FILES } from "./helpDocs.generated";
 import { HELP_NAV_TOOLS, canSeeHelpPage, excerptSection, searchHelpSections } from "./helpTools";
 import { KNOWLEDGE_INDEX, knowledgeTree } from "./knowledgeTree";
 import { MPV_HELP_MAX_CHARS, mpvSuggestions, mpvSystemPrompt, mpvTools, mpvTurnBudget, mpvTurnKnowledge } from "./mpv";
-import { askAssistant, helpFileOfRef, staffHelpDocs, staffSystemPrompt, turnContext } from "./service";
+import { ASSISTANT_REQUEST_MAX_MS, askAssistant, helpFileOfRef, staffHelpDocs, staffSystemPrompt, turnContext, type AssistantMode } from "./service";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS, staffToolsFor, type StaffToolCtx } from "./tools";
 
 const KEYS = ["GEMINI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY", "AI_ENABLED", "AI_ASSISTANT", "AI_ASSISTANT_SMART", "MPV", "AI_MODEL_SMART",
@@ -226,11 +226,36 @@ describe("sistema do MPV (bloco estável)", () => {
     expect(out.usage).not.toContain("mpv");
   });
 
-  it("uma ferramenta declarada que a pessoa não pode usar → \"indisponível\", sem a correr", async () => {
+  it("MPV: a ferramenta declarada sem acesso é RECUSADA à parte (\"Sem acesso\", como diz a regra do sistema); o v1 fica como era", async () => {
     const call = vi.fn(async () => ({ receitaPeriodo: 1 }));
-    const exec = makeToolExecutor(mpvTools(), ctxFor("extra", 7, call));
-    expect(await exec({ name: "financeiro_totais", args: {} } as any)).toEqual({ error: "Ferramenta indisponível para esta pessoa." });
+    const hooks = { onCall: vi.fn(), onError: vi.fn(), onRefused: vi.fn() };
+    const exec = makeToolExecutor(mpvTools(), ctxFor("extra", 7, call), hooks, { refuseUnavailable: true });
+    expect(await exec({ name: "financeiro_totais", args: { de: "2026-10-01" } } as any)).toEqual({ error: TOOL_REFUSED_ERROR });
+    expect(TOOL_REFUSED_ERROR).toMatch(/^Sem acesso/);
+    expect(mpvSystemPrompt()).toContain("respondem \"sem acesso\"");
+    expect(hooks.onRefused).toHaveBeenCalledWith("financeiro_totais", { de: "2026-10-01" });
+    expect(hooks.onCall).not.toHaveBeenCalled();
+    expect(hooks.onError).not.toHaveBeenCalled();
     expect(call).not.toHaveBeenCalled();
+    // Sem a opção (v1): o de sempre.
+    const v1 = makeToolExecutor(STAFF_TOOLS, ctxFor("extra", 7, call));
+    expect(await v1({ name: "financeiro_totais", args: {} } as any)).toEqual({ error: "Ferramenta indisponível para esta pessoa." });
+  });
+
+  it("no turno: a recusada não entra nas usadas nem nos erros (nem marca falha); fica registada como \"recusada\"", async () => {
+    pilotOn([7]);
+    const p = createFakeProvider("gemini", [async (req: any) => (req.toolRounds?.length
+      ? okResponse("Não tens acesso aos totais financeiros.", "gemini-4-argon")
+      : { ...okResponse("", "gemini-4-argon"), toolCalls: [{ name: "financeiro_totais", args: {} }], raw: { parts: [] } })]);
+    setAiProvidersForTests({ gemini: p });
+    const logToolCall = vi.fn(async () => {});
+    const logToolRefused = vi.fn(async () => {});
+    const r = await askAssistant({ question: "Quanto faturámos?" }, ctxFor("extra", 7), { ...NO_HOOKS, logToolCall, logToolRefused });
+    expect(r).toMatchObject({ ok: true, toolsUsed: [], toolErrors: [], toolsRefused: ["financeiro_totais"] });
+    expect(logToolRefused).toHaveBeenCalledTimes(1);
+    expect((logToolRefused.mock.calls[0] as unknown[]).slice(0, 2)).toEqual(["financeiro_totais", {}]);
+    expect(logToolCall).not.toHaveBeenCalled();
+    expect(src("server/assistant/router.ts")).toContain('logToolRefused: (name, args, conversationId) => logToolCall(ctx.user.id, name, args, conversationId, "recusada"),');
   });
 
   it("ferramentas do MPV: ajuda_abrir + ajuda_procurar no lugar do abrir_ajuda (o v1 mantém o abrir_ajuda)", () => {
@@ -299,6 +324,37 @@ describe("orçamentos do turno por versão (§3.6)", () => {
     expect(v.first.timeoutMs).toBeGreaterThan(31_000);
     expect(v.first.timeoutMs).toBeLessThanOrEqual(32_000);
     expect(v.first.tools?.map((t: any) => t.name)).toContain("abrir_ajuda");
+  });
+
+  it("descida smart → lite: a base consulta-se UMA vez e o prazo conta desde o início do pedido (≤ 50 s no total)", async () => {
+    expect(ASSISTANT_REQUEST_MAX_MS).toBeLessThanOrEqual(50_000);
+    h.db = createFakeDb((q) => {
+      if (q.sql.startsWith("INSERT INTO ai_rate_limits")) return [{ insertId: 1, affectedRows: 1 }];
+      if (q.sql.includes("FROM app_settings") && !q.sql.includes("LIKE")) return [[{ settingKey: "ai.assistantPilot", value: JSON.stringify({ userIds: [7] }) }]];
+      if (q.sql.includes("AS dayEur")) return [[{ dayEur: "20", monthEur: "20" }]]; // teto do smart já passado
+      if (q.sql.includes("userId = ?") && q.sql.includes("FROM ai_usage_log")) return [[{ spent: "0" }]];
+      return [[]];
+    });
+    invalidateSettingsCache();
+    process.env.MPV = "on";
+    process.env.AI_ASSISTANT_SMART = "on";
+    let now = Date.now();
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const p = createFakeProvider("gemini", [okResponse("Lite.")]);
+      setAiProvidersForTests({ gemini: p });
+      // A base demora 30 s (só da 1.ª vez — a 2.ª tentativa reaproveita-a).
+      const knowledge = vi.fn(async () => { now += 30_000; return null; });
+      const stale: AssistantMode = { feature: "assistant_smart", pilot: true, economy: false, economyReason: null };
+      const r = await askAssistant({ question: "Como fecho a caixa?" }, ctxFor("supervisor", 7), { knowledge, memoryEnabled: false, mode: stale });
+      expect(r).toMatchObject({ ok: true, feature: "assistant", economy: true });
+      expect(knowledge).toHaveBeenCalledTimes(1);
+      expect(p.calls).toHaveLength(1);
+      // Sobram 20 s dos 50: as voltas param 8 s antes (a reserva da chamada final).
+      expect(p.calls[0].timeoutMs).toBeLessThanOrEqual(12_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("voltas lentas (9 s cada): param aos 27 s e a chamada final ainda cabe nos 8 s guardados — e responde", async () => {
@@ -463,15 +519,19 @@ describe("perfis por página (shared/multisProfiles.ts)", () => {
   const sentences = (s: string) => s.split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÀÇ"])/).filter(Boolean).length;
   const existing = new Set([...STAFF_TOOLS, ...MPV_STAFF_TOOLS].map((t) => t.name));
 
-  it("cada perfil: papel de 2–4 frases, 3–4 perguntas (o por omissão usa as do v1), ferramentas que existem OU planeadas (F4)", () => {
+  it("cada perfil: papel de 2–4 frases, 3–4 perguntas que podem aparecer (o por omissão usa as do v1), ferramentas que existem OU planeadas (F4)", () => {
     for (const p of allMultisProfiles()) {
       const n = sentences(p.role);
       expect(n, p.key).toBeGreaterThanOrEqual(p === DEFAULT_MULTIS_PROFILE ? 1 : 2);
       expect(n, p.key).toBeLessThanOrEqual(4);
       if (p !== DEFAULT_MULTIS_PROFILE) {
-        expect(p.questions.length, p.key).toBeGreaterThanOrEqual(3);
-        expect(p.questions.length, p.key).toBeLessThanOrEqual(4);
+        const showable = p.questions.filter((q) => !q.needs || !PLANNED_TOOLS.includes(q.needs));
+        expect(showable.length, p.key).toBeGreaterThanOrEqual(3);
+        expect(showable.length, p.key).toBeLessThanOrEqual(4);
       }
+      for (const q of p.questions) if (q.needs) expect(existing.has(q.needs) || PLANNED_TOOLS.includes(q.needs), `${p.key}: ${q.needs}`).toBe(true);
+      // Nenhum papel promete dados de uma ferramenta que ainda não existe.
+      if (p.tools.every((t) => PLANNED_TOOLS.includes(t) || t.startsWith("ajuda_") || t === "regras_em_vigor")) expect(p.role, p.key).not.toMatch(/dados reais/);
       expect(p.tools.length, p.key).toBeGreaterThan(0);
       for (const t of p.tools) expect(existing.has(t) || PLANNED_TOOLS.includes(t), `${p.key}: ${t}`).toBe(true);
     }
@@ -503,20 +563,53 @@ describe("perfis por página (shared/multisProfiles.ts)", () => {
     expect(multisProfileFor({})).toBe(DEFAULT_MULTIS_PROFILE);
   });
 
-  it("perguntas sugeridas: do perfil da página/separador, filtradas pelo módulo; sem perfil próprio → as do v1", () => {
-    const sup = { id: 1, role: "supervisor" };
-    expect(mpvSuggestions("/extras-dia", "pressao", sup)).toEqual(profileQuestions(multisProfileFor({ page: "extras-dia", tab: "pressao" }), sup));
+  it("perguntas sugeridas: do perfil da página/separador; sem perfil próprio → as do v1", () => {
+    const sup = ctxFor("supervisor");
     expect(mpvSuggestions("/extras-dia", "pressao", sup)?.[0]).toMatch(/p75/);
     expect(mpvSuggestions("/tarefas", null, sup)).toBeNull();
-    const noOps = profileQuestions(multisProfileFor({ page: "operacional" }), { id: 1, role: "extra" } as any);
-    for (const s of multisProfileFor({ page: "operacional" }).questions) {
-      if (s.module && !can({ role: "extra" } as any, s.module, "view")) expect(noOps).not.toContain(s.text);
+  });
+
+  it("coerência: nenhuma pergunta visível depende de uma ferramenta planeada ou que a pessoa não pode usar (a MESMA verificação da ferramenta)", () => {
+    const tree = knowledgeTree();
+    const pages = treePages(tree);
+    const ctxs = ["extra", "driver", "team_leader", "supervisor", "backoffice", "admin", "super_admin"].flatMap((role) => [false, true].map((fin) => ({ ...ctxFor(role), financeAllowed: fin }) as StaffToolCtx));
+    let checked = 0;
+    for (const ctx of ctxs) {
+      const allowed = new Set(availableTools(mpvTools(), ctx).map((t) => t.name));
+      for (const page of pages) {
+        for (const tab of [null, ...page.tabs.map((t) => t.tab)]) {
+          const path = page.routes[0];
+          if (!path) continue;
+          const shown = mpvSuggestions(path, tab, ctx) ?? [];
+          const profile = multisProfileFor({ page: page.id, tab, group: page.group });
+          for (const text of shown) {
+            const q = profile.questions.find((x) => x.text === text);
+            if (!q) continue; // as do v1 (página sem perfil próprio)
+            checked++;
+            if (q.needs) {
+              expect(PLANNED_TOOLS.includes(q.needs), `${page.id}/${tab}: ${text}`).toBe(false);
+              expect(allowed.has(q.needs), `${ctx.user.role}: ${text}`).toBe(true);
+            }
+          }
+        }
+      }
     }
+    expect(checked).toBeGreaterThan(50);
+    // Os casos da auditoria.
+    const adm = ctxFor("super_admin");
+    expect(mpvSuggestions("/criticas", null, adm)).not.toContain("Quantas críticas estão por responder?");
+    expect(mpvSuggestions("/formacao", null, adm)).not.toContain("O que me falta para acabar a formação?");
+    const money = "Qual foi o valor das reservas este mês?";
+    expect(mpvSuggestions("/faturacao", null, { ...adm, financeAllowed: false } as StaffToolCtx)).not.toContain(money);
+    expect(mpvSuggestions("/faturacao", null, { ...adm, financeAllowed: true } as StaffToolCtx)).toContain(money);
+    // Sem saber as ferramentas da pessoa → só as que não precisam de nenhuma.
+    expect(questionVisible({ text: "x", needs: "extras_escala" }, { role: "admin" } as any)).toBe(false);
+    expect(profileQuestions(multisProfileFor({ page: "formacao" }), { role: "admin" } as any, () => true)).not.toContain("O que me falta para acabar a formação?");
   });
 
   it("assistant.status: só no piloto as perguntas vêm do perfil (com o separador validado); o widget mostra-as como sempre", () => {
     const r = src("server/assistant/router.ts");
-    expect(r).toContain("const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, viewer) : null;");
+    expect(r).toContain("const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, await toolCtxFor(ctx as Ctx)) : null;");
     expect(r).toContain("const suggestions = mpvAsks ?? assistantSuggestions(input?.path, viewer);");
     expect(src("client/src/components/assistant/AssistantWidget.tsx")).toContain("const suggestions = status.data?.suggestions ?? [];");
   });
@@ -538,7 +631,7 @@ describe("Base de conhecimento: secções com help:<ficheiro>.md#<secção>", ()
       }
       return [[]];
     });
-    const r = await syncHelpSections(d as any, HELP_FILES);
+    const r = await syncHelpSections(d as any, HELP_FILES, { maxPerRun: 10_000 });
     expect(r).toMatchObject({ updated: withText.length, retired: 1, done: true });
     const inserts = d.queries.filter((q) => q.sql.startsWith("INSERT INTO kb_documents"));
     expect(inserts).toHaveLength(withText.length);
@@ -549,6 +642,31 @@ describe("Base de conhecimento: secções com help:<ficheiro>.md#<secção>", ()
     expect(d.queries.some((q) => /^DELETE FROM kb_documents/.test(q.sql))).toBe(false);
   });
 
+  it("1.ª sincronização em partes: no máx. N secções por corrida (o resto na seguinte); sem vetores para as secções", async () => {
+    let id = 1;
+    const d = createFakeDb((q) => (q.sql.startsWith("INSERT INTO kb_documents") ? [{ insertId: id++ }] : [[]]));
+    const r = await syncHelpSections(d as any, HELP_FILES, { maxPerRun: 5 });
+    expect(r).toMatchObject({ updated: 5, retired: 0, done: false });
+    expect(d.queries.filter((q) => q.sql.startsWith("INSERT INTO kb_documents"))).toHaveLength(5);
+    const e = createFakeDb(() => [[]]);
+    await unembeddedDocIds(e as any, 3);
+    expect(e.queries[0].sql).toContain("d.source <> 'help_sec'");
+  });
+
+  it("título ou ligação mudaram (texto igual) → atualiza só isso", async () => {
+    const page = treePages(knowledgeTree()).find((p) => p.id === "caixa")!;
+    const s = page.sections.find((x) => x.text.trim())!;
+    const { textChecksum } = await import("../knowledge/chunker");
+    const title = s.level === 1 ? page.title : `${page.title} → ${s.title}`;
+    const sum = textChecksum(`${title}\n\n${s.text}`);
+    const d = createFakeDb((q) => (q.sql.includes("FROM kb_documents WHERE source = 'help_sec'")
+      ? [[{ id: 5, driveFileId: `help:${s.id}`, checksum: sum, deletedAt: null, title: "Ajuda: título antigo", webViewLink: "/antiga" }]] : [[]]));
+    await syncHelpSections(d as any, HELP_FILES.filter((f) => f.file === "caixa.md"));
+    const upd = d.queries.find((q) => q.sql.startsWith("UPDATE kb_documents SET title"))!;
+    expect(upd.params).toEqual([`Ajuda: ${title}`, page.routes[0], 5]);
+    expect(d.queries.some((q) => q.sql.includes("SET textContent") && q.params.includes(5))).toBe(false);
+  });
+
   it("checksum igual → nada a fazer", async () => {
     const page = treePages(knowledgeTree()).find((p) => p.id === "caixa")!;
     const s = page.sections.find((x) => x.text.trim())!;
@@ -556,9 +674,9 @@ describe("Base de conhecimento: secções com help:<ficheiro>.md#<secção>", ()
     const title = s.level === 1 ? page.title : `${page.title} → ${s.title}`;
     const sum = textChecksum(`${title}\n\n${s.text}`);
     const d = createFakeDb((q) => (q.sql.includes("FROM kb_documents WHERE source = 'help_sec'")
-      ? [[{ id: 5, driveFileId: `help:${s.id}`, checksum: sum, deletedAt: null }]] : q.sql.startsWith("INSERT") ? [{ insertId: 9 }] : [[]]));
+      ? [[{ id: 5, driveFileId: `help:${s.id}`, checksum: sum, deletedAt: null, title: `Ajuda: ${title}`, webViewLink: page.routes[0] }]] : q.sql.startsWith("INSERT") ? [{ insertId: 9 }] : [[]]));
     await syncHelpSections(d as any, HELP_FILES.filter((f) => f.file === "caixa.md"));
-    expect(d.queries.some((q) => q.sql.startsWith("UPDATE kb_chunks") || (q.sql.includes("kb_documents SET textContent") && q.params.includes(5)))).toBe(false);
+    expect(d.queries.some((q) => (q.sql.includes("kb_documents SET textContent") || q.sql.startsWith("UPDATE kb_documents SET title")) && q.params.includes(5))).toBe(false);
   });
 
   it("as help:<ficheiro>.md de sempre ficam: o v1 continua a encontrá-las e ignora as das secções", async () => {
@@ -592,6 +710,9 @@ describe("Base de conhecimento: secções com help:<ficheiro>.md#<secção>", ()
     expect(src("server/knowledge/store.ts")).toContain("WHERE deletedAt IS NULL AND source <> 'help_sec' GROUP BY status");
     expect(src("server/globalSearch.ts")).toContain("AND d.source <> 'help' AND d.source <> 'help_sec' AND");
     expect(KB_SOURCES).toContain("help_sec");
+    // O filtro da página só mostra "Ajuda da app (secções)" com o MPV ligado.
+    expect(src("server/knowledge/router.ts")).toContain("helpSections: await helpSectionsWanted(),");
+    expect(src("client/src/pages/KnowledgeBasePage.tsx")).toContain('.filter((k) => k !== "help_sec" || st.data?.helpSections)');
     expect(isHelpSource("help_sec") && isHelpSource("help") && !isHelpSource("drive")).toBe(true);
     // Sem o interruptor (omissão): nenhuma consulta às secções.
     const off = createFakeDb(() => [[]]);
@@ -600,5 +721,16 @@ describe("Base de conhecimento: secções com help:<ficheiro>.md#<secção>", ()
     const on = createFakeDb((q) => (q.sql.startsWith("INSERT") ? [{ insertId: 1 }] : [[]]));
     const rep = await runKnowledgeSync({ deadlineAt: Date.now() + 60_000, d: on as any, drive: null, embed: null, helpFiles: HELP_FILES.filter((f) => f.file === "caixa.md"), helpSections: true });
     expect(rep.help.sections).toBeGreaterThan(0);
+  });
+});
+
+describe("joinNames (ajuda usada / ferramentas guardadas)", () => {
+  it("corta por id inteiro, nunca a meio", () => {
+    const ids = Array.from({ length: 10 }, (_, i) => `agendador.md#secao-com-um-nome-bem-comprido-${i}`);
+    const out = joinNames(ids)!;
+    expect(out.length).toBeLessThanOrEqual(255);
+    for (const part of out.split(",")) expect(ids).toContain(part);
+    expect(joinNames(["a.md", "b.md", "a.md"])).toBe("a.md,b.md");
+    expect(joinNames([])).toBeNull();
   });
 });

@@ -91,6 +91,8 @@ export type AssistantFeature = typeof ASSISTANT_FEATURE | typeof ASSISTANT_SMART
 /** Teto de saída BASE no smart (plano MPV §3.6: Argon low 2 048; medium sobe a 4 096 pelo maxTokensFor). */
 export const ASSISTANT_SMART_MAX_OUTPUT_TOKENS = 2048;
 export const ASSISTANT_CHANNEL = "staff" as const;
+/** Teto de um pedido ao Multis, contado desde o início (a função da Vercel tem 60 s). */
+export const ASSISTANT_REQUEST_MAX_MS = 50_000;
 
 let docsMemo: HelpDoc[] | null = null;
 export function staffHelpDocs(): HelpDoc[] {
@@ -269,6 +271,8 @@ export async function askAssistant(
   toolCtx: StaffToolCtx,
   hooks: {
     logToolCall?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void>;
+    /** MPV: chamada recusada (ferramenta declarada a que a pessoa não tem acesso) — registo à parte. */
+    logToolRefused?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void>;
     /** Base de conhecimento (omisso = a real; null = sem). */
     knowledge?: ((question: string) => Promise<ChatKnowledge | null>) | null;
     /** Memória ligada? (omisso = o interruptor AI_ASSISTANT_MEMORY). */
@@ -277,6 +281,7 @@ export async function askAssistant(
     mode?: AssistantMode;
   } = {},
 ): Promise<AssistantTurnResult> {
+  const startedAt = Date.now();
   const user = toolCtx.user;
   const { assistantMemoryEnabled, activeNotesForTurn } = await import("./memory");
   const memoryOn = hooks.memoryEnabled ?? (await assistantMemoryEnabled());
@@ -300,7 +305,11 @@ export async function askAssistant(
   });
   const pageKnowledge = mpv ? mpvTurnKnowledge({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx }) : null;
   const knowledgeFor = (q: string) => assistantKnowledge(q, user.role, toolCtx.access, mpv ? { helpTopK: 0 } : {});
-  const turn = async (feature: AssistantFeature, conversationId: number | null, newConversation: boolean | undefined) => runChatTurn<StaffToolCtx>({
+  const kbSource = hooks.knowledge === null ? undefined : (hooks.knowledge ?? knowledgeFor);
+  // A base de conhecimento consulta-se UMA vez por pedido (a descida smart → lite reaproveita-a).
+  let kbOnce: Promise<ChatKnowledge | null> | null = null;
+  const knowledge = kbSource ? (q: string) => (kbOnce ??= kbSource(q)) : undefined;
+  const turn = async (feature: AssistantFeature, conversationId: number | null, newConversation: boolean | undefined, deadlineMs?: number) => runChatTurn<StaffToolCtx>({
     feature,
     channel: ASSISTANT_CHANNEL,
     ownerKey: ownerKeyFor(user.id),
@@ -318,6 +327,7 @@ export async function askAssistant(
     ...(feature === ASSISTANT_SMART_FEATURE ? { maxOutputTokens: ASSISTANT_SMART_MAX_OUTPUT_TOKENS } : {}),
     // MPV §3.6: prazo 35 s (8 s para a chamada final), 4 voltas no Argon e 3 no lite; o v1 fica como está.
     ...(mpv ? mpvTurnBudget(feature) : {}),
+    ...(deadlineMs != null ? { deadlineMs } : {}),
     context,
     memory,
     ...(pageKnowledge ? { pageKnowledge: { block: pageKnowledge.block, refs: pageKnowledge.refs } } : { helpDocs: toolCtx.helpDocs }),
@@ -327,9 +337,12 @@ export async function askAssistant(
     // MPV: as mesmas ferramentas declaradas a toda a gente (uma cache por modelo, §5.4).
     ...(mpv ? { declareAllTools: true } : {}),
     toolCtx,
-    knowledge: hooks.knowledge === null ? undefined : (hooks.knowledge ?? knowledgeFor),
+    knowledge,
     onToolCall: async (name, args, cid) => {
       await hooks.logToolCall?.(name, args, cid);
+    },
+    onToolRefused: async (name, args, cid) => {
+      await hooks.logToolRefused?.(name, args, cid);
     },
   });
   let feature: AssistantFeature = mode.feature;
@@ -342,7 +355,8 @@ export async function askAssistant(
     economy = r.budgetScope === "own";
     economyWhy = r.budgetReason ?? null;
     const cid = r.conversationId ?? input.conversationId ?? null;
-    r = await turn(feature, cid, cid ? false : input.newConversation);
+    // O total (as duas tentativas) cabe nos 60 s da Vercel com margem: prazo contado desde o início.
+    r = await turn(feature, cid, cid ? false : input.newConversation, startedAt + ASSISTANT_REQUEST_MAX_MS);
   }
   // Respostas que não responderam → "Perguntas que falharam" (marca automática).
   if (r.ok && r.messageId) {

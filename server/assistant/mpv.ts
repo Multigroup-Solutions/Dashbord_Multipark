@@ -20,7 +20,7 @@ import { DEFAULT_MULTIS_PROFILE, multisProfileFor, profileQuestions, type Multis
 import type { HelpTreePage, HelpTreeSection } from "../../shared/helpTree";
 import { canSeeHelpPage, excerptSection, searchHelpSections, sectionFullText, sectionSubtreeIds } from "./helpTools";
 import { KNOWLEDGE_INDEX, knowledgeForPage, knowledgeTree } from "./knowledgeTree";
-import { MPV_STAFF_TOOLS, type StaffToolCtx, type StaffUser } from "./tools";
+import { MPV_STAFF_TOOLS, type StaffToolCtx } from "./tools";
 
 export const MPV_VARIANT = "mpv" as const;
 
@@ -68,13 +68,17 @@ export function mpvPageProfile(path: string | null | undefined, tab: string | nu
 }
 
 /**
- * Perguntas sugeridas do MPV para a página/separador (filtradas pelo módulo).
- * null = a página não tem perfil próprio → ficam as do v1.
+ * Perguntas sugeridas do MPV para a página/separador. Uma pergunta que
+ * precisa de uma ferramenta (`needs`) só aparece se a ferramenta existir e a
+ * pessoa a puder usar — a MESMA verificação (`available`) que a ferramenta
+ * faz ao correr (ex.: financeiro_totais → financeAllowed). null = a página
+ * não tem perfil próprio → ficam as do v1.
  */
-export function mpvSuggestions(path: string | null | undefined, tab: string | null | undefined, user: StaffUser): string[] | null {
+export function mpvSuggestions(path: string | null | undefined, tab: string | null | undefined, ctx: StaffToolCtx): string[] | null {
   const { profile } = mpvPageProfile(path, tab);
   if (profile === DEFAULT_MULTIS_PROFILE) return null;
-  const out = profileQuestions(profile, user);
+  const allowed = new Set(mpvAllowedToolNames(ctx));
+  const out = profileQuestions(profile, ctx.user, (t) => allowed.has(t));
   return out.length ? out : null;
 }
 

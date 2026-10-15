@@ -90,7 +90,7 @@ export const knowledgeRouter = router({
   status: protectedProcedure.query(async ({ ctx }) => {
     manage(ctx.user);
     const d = await store.kbDb();
-    const { loadKnowledgeConfig, embeddingsWanted } = await import("./sync");
+    const { loadKnowledgeConfig, embeddingsWanted, helpSectionsWanted } = await import("./sync");
     const cfg = await loadKnowledgeConfig();
     const { loadDriveConfig } = await import("../google/driveService");
     const { dwdConfigured } = await import("../google/workspace");
@@ -103,6 +103,8 @@ export const knowledgeRouter = router({
       // 18d: sem o `.catch(() => ({}))` — uma falha diz-se, não aparece "0 documentos".
       counts: await store.statusCounts(d),
       embeddingsActive: await embeddingsWanted(cfg),
+      // MPV: as secções da ajuda ("help_sec") só existem com o interruptor ligado (o filtro só as mostra aí).
+      helpSections: await helpSectionsWanted(),
       lastRun,
     };
   }),

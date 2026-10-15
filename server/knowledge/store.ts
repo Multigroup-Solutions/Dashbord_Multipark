@@ -175,8 +175,9 @@ export async function pendingDocIds(d: Db, limit: number, _now: Date = new Date(
 
 /** Sincronizados sem vetores (para completar quando os embeddings ficam disponíveis). */
 export async function unembeddedDocIds(d: Db, limit: number): Promise<number[]> {
+  // As secções da ajuda (MPV, "help_sec") ficam sem vetores enquanto ninguém as ler (F5).
   const rows = rowsOf(await d.execute(sql`SELECT d.id FROM kb_documents d WHERE d.deletedAt IS NULL AND d.status = 'synced'
-    AND d.embedded = 0 AND d.chunkCount > 0 ORDER BY d.updatedAt LIMIT ${limit}`));
+    AND d.embedded = 0 AND d.chunkCount > 0 AND d.source <> 'help_sec' ORDER BY d.updatedAt LIMIT ${limit}`));
   return rows.map((r) => Number(r.id));
 }
 

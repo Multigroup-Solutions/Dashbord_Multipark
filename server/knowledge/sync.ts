@@ -83,14 +83,18 @@ export async function syncHelpDocs(d: store.Db, files: ReadonlyArray<{ file: str
  * Devolve quantas mudaram e quantas saíram.
  */
 export async function syncHelpSections(
-  d: store.Db, files: ReadonlyArray<{ file: string; raw: string }>, opts: { deadlineAt?: number } = {},
+  d: store.Db, files: ReadonlyArray<{ file: string; raw: string }>, opts: { deadlineAt?: number; maxPerRun?: number } = {},
 ): Promise<{ updated: number; retired: number; done: boolean }> {
   const { sql } = await import("drizzle-orm");
   const { buildHelpTree, treePages } = await import("../../shared/helpTree");
   const pages = treePages(buildHelpTree(files));
-  const existing = new Map<string, { id: number; checksum: string; deleted: boolean }>();
-  for (const r of store.rowsOf(await d.execute(sql`SELECT id, driveFileId, checksum, deletedAt FROM kb_documents WHERE source = 'help_sec'`))) {
-    existing.set(String(r.driveFileId), { id: Number(r.id), checksum: String(r.checksum ?? ""), deleted: r.deletedAt != null });
+  const max = Math.max(1, opts.maxPerRun ?? HELP_SECTIONS_PER_RUN);
+  const existing = new Map<string, { id: number; checksum: string; deleted: boolean; title: string; link: string | null }>();
+  for (const r of store.rowsOf(await d.execute(sql`SELECT id, driveFileId, checksum, deletedAt, title, webViewLink FROM kb_documents WHERE source = 'help_sec'`))) {
+    existing.set(String(r.driveFileId), {
+      id: Number(r.id), checksum: String(r.checksum ?? ""), deleted: r.deletedAt != null,
+      title: String(r.title ?? ""), link: r.webViewLink != null ? String(r.webViewLink) : null,
+    });
   }
   const live = new Set<string>();
   let updated = 0;
@@ -101,15 +105,20 @@ export async function syncHelpSections(
       const key = `help:${s.id}`;
       if (key.length > 128) continue;
       live.add(key);
-      if (opts.deadlineAt != null && Date.now() > opts.deadlineAt - 15_000) { done = false; continue; }
-      const title = s.level === 1 ? `Ajuda: ${page.title}` : `Ajuda: ${page.title} → ${s.title}`;
+      const title = (s.level === 1 ? `Ajuda: ${page.title}` : `Ajuda: ${page.title} → ${s.title}`).slice(0, 300);
+      const link = page.routes[0] ?? null;
       const text = `${title.replace(/^Ajuda: /, "")}\n\n${s.text}`;
       const checksum = textChecksum(text);
       const had = existing.get(key);
+      // Título ou ligação mudaram (a página mudou de rota, por exemplo) → atualiza, mesmo com o texto igual.
+      if (had && (had.title !== title || had.link !== link)) {
+        await d.execute(sql`UPDATE kb_documents SET title = ${title}, webViewLink = ${link} WHERE id = ${had.id}`);
+      }
       if (had && !had.deleted && had.checksum === checksum) continue;
+      // Por corrida, no máx. `max` secções (a 1.ª sincronização são centenas: não come o prazo do Drive).
+      if (updated >= max || (opts.deadlineAt != null && Date.now() > opts.deadlineAt - 15_000)) { done = false; continue; }
       const id = had ? had.id : await store.insertDoc(d, {
-        source: "help_sec", title: title.slice(0, 300), driveFileId: key, mimeType: "text/markdown",
-        webViewLink: page.routes[0] ?? null, visibility: KB_VISIBILITY_ALL,
+        source: "help_sec", title, driveFileId: key, mimeType: "text/markdown", webViewLink: link, visibility: KB_VISIBILITY_ALL,
       });
       if (had?.deleted) await d.execute(sql`UPDATE kb_documents SET deletedAt = NULL WHERE id = ${had.id}`);
       await store.saveExtraction(d, id, { text, checksum, chunks: chunkText(text) });
@@ -126,8 +135,11 @@ export async function syncHelpSections(
   return { updated, retired, done };
 }
 
+/** Secções da ajuda sincronizadas por corrida, no máximo (o resto fica para as seguintes). */
+export const HELP_SECTIONS_PER_RUN = 80;
+
 /** As secções da ajuda vão para a base? (interruptor MPV — só o piloto as usa). Nunca lança. */
-async function helpSectionsWanted(): Promise<boolean> {
+export async function helpSectionsWanted(): Promise<boolean> {
   try {
     const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("../_core/featureFlags");
     const { automationFlagDefault } = await import("../../shared/appSettings");

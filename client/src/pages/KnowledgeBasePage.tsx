@@ -435,7 +435,7 @@ export default function KnowledgeBasePage() {
               <SelectTrigger className="h-9 sm:w-44"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas as origens</SelectItem>
-                {(Object.keys(KB_SOURCE_LABELS) as KbSource[]).map((k) => <SelectItem key={k} value={k}>{KB_SOURCE_LABELS[k]}</SelectItem>)}
+                {(Object.keys(KB_SOURCE_LABELS) as KbSource[]).filter((k) => k !== "help_sec" || st.data?.helpSections).map((k) => <SelectItem key={k} value={k}>{KB_SOURCE_LABELS[k]}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

@@ -87,6 +87,13 @@ export interface ChatTurnInput<Ctx> {
    */
   declareAllTools?: boolean;
   toolCtx?: Ctx;
+  /** MPV: uma chamada recusada (ferramenta declarada sem acesso) — registo à parte. */
+  onToolRefused?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void> | void;
+  /**
+   * Prazo ABSOLUTO do turno (instante em ms) — p. ex. na descida smart → lite,
+   * contado desde o início do pedido. Vale o mais cedo entre este e `timeoutMs`.
+   */
+  deadlineMs?: number;
   /** Auditoria de cada chamada de ferramenta (nome + parâmetros). */
   onToolCall?: (name: string, args: Record<string, unknown>, conversationId: number | null) => Promise<void> | void;
   maxTurns?: number;
@@ -127,6 +134,8 @@ export type ChatTurnResult =
       helpFiles: string[];
       /** Ferramentas que devolveram `{ error }` neste turno. */
       toolErrors: ToolErrorNote[];
+      /** MPV: chamadas recusadas (sem acesso) — à parte das usadas e dos erros. */
+      toolsRefused?: string[];
       citations?: KbCitation[];
       /** Turno do "Lembra-te" (sem IA): o que aconteceu à nota. */
       memory?: "saved" | "exists" | "rejected";
@@ -227,6 +236,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   const tools = input.tools && input.toolCtx !== undefined ? (input.declareAllTools ? input.tools : availableTools(input.tools, input.toolCtx)) : [];
   const used: string[] = [];
   const toolErrors: ToolErrorNote[] = [];
+  const refused: string[] = [];
 
   try {
     const r = await runAi({
@@ -239,6 +249,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
       scaleMaxTokensForThinking: true,
       timeoutMs: input.timeoutMs ?? 40_000,
       ...(input.finalReserveMs != null ? { finalReserveMs: input.finalReserveMs } : {}),
+      ...(input.deadlineMs != null ? { deadlineMs: input.deadlineMs } : {}),
       variant: input.variant ?? null,
       temperature: 0.2,
       userId: input.userId ?? null,
@@ -255,7 +266,11 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
                   await input.onToolCall?.(name, args, conversationId);
                 },
                 onError: (name, error) => { toolErrors.push({ tool: name, error: error.slice(0, 200) }); },
-              }, { redact: red, maskPeople }),
+                onRefused: async (name, args) => {
+                  refused.push(name);
+                  await input.onToolRefused?.(name, args, conversationId);
+                },
+              }, { redact: red, maskPeople, ...(input.declareAllTools ? { refuseUnavailable: true } : {}) }),
             },
           }
         : {}),
@@ -273,7 +288,10 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
       const saved = await appendExchange(conversationId, question, answer, { tools: used, helpFiles, path: input.path, variant: input.variant ?? null, tier: r.tier, masked: { content: maskedContent, names: forStorage.names } }).catch(() => null);
       messageId = saved?.answerId ?? null;
     }
-    return { ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, tier: r.tier, ...(cited ? { citations: cited.used } : {}) };
+    return {
+      ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, tier: r.tier,
+      ...(cited ? { citations: cited.used } : {}), ...(refused.length ? { toolsRefused: [...new Set(refused)] } : {}),
+    };
   } catch (err) {
     if (isAiError(err)) {
       if (err.code === "budget") {
