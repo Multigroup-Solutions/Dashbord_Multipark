@@ -5,8 +5,8 @@
  *  - a lista só de leitura (RH → Horários por rever): funcionários sem
  *    horário, dias duplicados, horas que não se leem, quem não pica há 14
  *    dias (quase de certeza ainda na impressão digital) e quem tem sábado ou
- *    domingo no horário fixo (o fim de semana roda: até haver exceções por
- *    data, passo 10b, dá faltas falsas);
+ *    domingo no horário fixo (o fim de semana roda: sem a exceção "folga"
+ *    por data do passo 10b — RH → Fins de semana — dá faltas falsas);
  *  - `rh.noShowSkip`: pessoas fora das faltas automáticas até uma data (com
  *    motivo). Uma por pessoa; o "até" conta (inclusive);
  *  - as horas do horário só "HH:MM" e a regra de quem conta nos dias
@@ -189,7 +189,7 @@ export function scheduleReview(input: {
     if (last == null || last < addDays(input.today, -limitDays)) {
       out.noClockIn.push({ ...who, lastCheckInDay: last, daysSince: last ? daysBetween(last, input.today) : null, skipUntil: skip?.until ?? null, skipReason: skip?.reason ?? null });
     }
-    // sábado ou domingo no horário fixo (o fim de semana roda; até ao passo 10b dá faltas falsas)
+    // sábado ou domingo no horário fixo (o fim de semana roda; sem a exceção "folga" do passo 10b dá faltas falsas)
     const weekend = Array.from(new Set(work.map((r) => r.weekday).filter((wd) => wd === 0 || wd === 6))).sort((a, b) => b - a);
     if (weekend.length) out.weekendFixed.push({ ...who, weekdays: weekend, skipUntil: skip?.until ?? null });
   }

@@ -191,6 +191,9 @@ export const NOTIFICATION_KIND_DEFS = [
   // Jorge (7 out 2026): o RH recusou um documento que a pessoa entregou — vai o motivo.
   K({ kind: "my_doc_rejected", group: "pessoas", label: "Documento recusado", description: "O RH recusou um documento que entregaste (com o motivo) — carrega-o de novo na tua ficha.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
+  // Plano 63 (passo 10b): só com os interruptores FINS_DE_SEMANA e FINS_DE_SEMANA_AVISO ligados (desligados por omissão).
+  K({ kind: "my_schedule_override", group: "pessoas", label: "O teu horário numa data", description: "Puseram-te de serviço num fim de semana, ou marcaram (ou cancelaram) uma folga ou um dia de trabalho fora do teu horário fixo. Vês tudo no Perfil → O meu horário.",
+    module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: false }),
   K({ kind: "driver_application", group: "pessoas", label: "Candidaturas", description: "Candidaturas novas \"Be a Driver\" da tua cidade.",
     module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
   // 49c (Jorge, 8 out 2026): quem entra com outra conta Google e diz quem é; quem estava inativo e quer voltar.

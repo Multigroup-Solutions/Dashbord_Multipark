@@ -310,7 +310,9 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
   const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves
      WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)}`))
     .map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }));
-  const starts = fixedScheduledStarts(dateStr, dateStr, schedules, leaves);
+  // Plano 63, passo 10b: exceções por data (fim de semana de serviço, folgas) — só com FINS_DE_SEMANA ligado; senão [].
+  const overrides = await (await import("./scheduleOverrides")).loadActiveOverridesForReaders(db, addDays(dateStr, -1), addDays(dateStr, 1));
+  const starts = fixedScheduledStarts(dateStr, dateStr, schedules, leaves, overrides);
   const escala = new Set((await db.select({ employeeId: extrasDiaAssignments.employeeId }).from(extrasDiaAssignments)
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), isNotNull(extrasDiaAssignments.employeeId)))).map((r) => Number(r.employeeId)));
   const candidates: typeof starts = [];
@@ -353,7 +355,7 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
         // points 0: marca a falta (Q8: "não vem: marca-se falta") sem somar pontos de penalização — nos extras, 3 pontos
         // confirmados bloqueiam a entrada na app; para quem tem horário fixo isso fica para o Jorge decidir
         employeeId: f.employeeId, reason: "other", severity: "penalty", points: 0, relatedId: fixedNoShowRelatedId(dateStr), status: "pending",
-        notes: `${FIXED_NO_SHOW_NOTE_PREFIX} Possível falta em ${f.calendarDay} (horário ${hhmm(f.startMs)}${f.endMs ? `–${hhmm(f.endMs)}` : ""}) — sem entrada no ponto${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
+        notes: `${FIXED_NO_SHOW_NOTE_PREFIX} Possível falta em ${f.calendarDay} (${f.source === "override" ? "exceção por data" : "horário"} ${hhmm(f.startMs)}${f.endMs ? `–${hhmm(f.endMs)}` : ""}) — sem entrada no ponto${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
       });
       created++;
     } catch (err: any) {
