@@ -123,6 +123,8 @@ Gasto 1,99 €. Medição por dia/entidade não existe → F6 começa com `setti
 | E2 | `info@` sincronizado por 2 contas, `jorgetabuada@` por 3 (só armazenamento) | D10 | — |
 | T1 | Raciocínio "low" em tudo (`client.ts:199-204`); nas classificações a saída é 53–76 % do custo | nível de raciocínio **por funcionalidade**; "minimal" só onde houver eval: email (`eval-mail-triage`), WhatsApp e reclamações (evals novos pequenos) | `ai.thinkingLevels` (definição) |
 
+> **TODO (F6b, antes de ligar o `REVIEWS_DEDUP`)**: o texto das críticas de email tira-se pela positiva (entre o nome/estrelas e o "Responder", `shared/reviewDedup.ts`); os testes usam emails reconstruídos a partir desta tabela. Conferir com amostras reais dos dois formatos de email da Google (o Jorge manda) — sem ler emails da BD de produção.
+
 ### 4.2 Erros factuais da ajuda atual (F1)
 1. `caixa.md:83` "todas as manhãs (06:15)" → o `cash-confirm-recheck` corre **de hora a hora** (`cronSchedule.ts:96`); falta no `agendador.md`.
 2. Pressão: o mapa "Tempo por carro" usa o percentil da cidade (p60 Porto/Faro, `PressureTab.tsx:132,153,241`), mas `extras-dia.md:31,46,52` falam em p75 (a linha 61 já está certa); a Semana é **sempre p75** (`shared/weekActivity.ts:175-178`) → não bate com a Pressão no Porto/Faro; o botão "O que é o p75 (e o p{pct})?" (`PressureTab.tsx:385`) só explica o p75.

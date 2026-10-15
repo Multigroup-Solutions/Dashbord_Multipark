@@ -2570,6 +2570,35 @@ export const appRouter = router({
       await logActivity({ userId: ctx.user.id, action: "update", entity: "google_review", entityId: input.id, details: `Parque: ${(project as any).name ?? input.projectId}${review.projectId ? ` (antes #${review.projectId})` : " (estava sem parque)"}` });
       return { success: true };
     }),
+    // Plano MPV F6b (R2/R3) — Críticas → Limpeza (admin): as que não são críticas e as
+    // repetidas. Só pré-visualizar → aplicar → desfazer; nunca corre sozinha (D9). Nada se apaga.
+    cleanupPreview: protectedProcedure.input(z.object({ kind: z.enum(["not_review", "duplicate"]) })).query(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const { previewReviewCleanup } = await import("./reviewCleanup");
+      return previewReviewCleanup(input.kind);
+    }),
+    cleanupApply: protectedProcedure.input(z.object({
+      kind: z.enum(["not_review", "duplicate"]),
+      ids: z.array(z.number().int().positive()).min(1).max(2000),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const { applyReviewCleanup } = await import("./reviewCleanup");
+      const r = await applyReviewCleanup(input.kind, input.ids, ctx.user.id);
+      if (r.marked) await logActivity({ userId: ctx.user.id, action: "review_cleanup", entity: "google_review", details: `${r.marked} crítica(s) marcada(s) como ${input.kind === "not_review" ? "não é crítica (rascunho guardado)" : "repetida"}${r.skipped ? ` · ${r.skipped} já não batiam na regra` : ""}` });
+      return r;
+    }),
+    cleanupUndo: protectedProcedure.input(z.object({
+      kind: z.enum(["not_review", "duplicate"]),
+      // Vazio = desfaz todas as deste tipo.
+      ids: z.array(z.number().int().positive()).max(5000).default([]),
+    })).mutation(async ({ ctx, input }) => {
+      requireRole(ctx.user.role, "admin");
+      const { undoReviewCleanup } = await import("./reviewCleanup");
+      const r = await undoReviewCleanup(input.kind, input.ids);
+      // Quem desfez fica no registo (userId), com as críticas.
+      if (r.undone) await logActivity({ userId: ctx.user.id, action: "review_cleanup_undo", entity: "google_review", ...(r.ids.length === 1 ? { entityId: r.ids[0] } : {}), details: `Desfeita a marca "${input.kind === "not_review" ? "não é crítica" : "repetida"}" em ${r.undone} crítica(s): #${r.ids.slice(0, 30).join(", #")}${r.ids.length > 30 ? "…" : ""}` });
+      return { undone: r.undone };
+    }),
     generateResponse: protectedProcedure.input(z.object({
       id: z.number(),
     })).mutation(async ({ ctx, input }) => {

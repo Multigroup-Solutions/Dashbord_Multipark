@@ -195,6 +195,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0690", () => import("./migration_0690").then((m) => step(m.MIGRATION_0690_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0690))],
   // Plano MPV (F0b, auditoria A1): resposta do Multis com os marcadores dos colegas (o histórico não leva os nomes completos).
   ["0695", () => import("./migration_0695").then((m) => step(m.MIGRATION_0695_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0695))],
+  // Plano MPV (F6b, R2/R3): críticas que não o são e críticas repetidas — marcas reversíveis (nada se apaga).
+  ["0700", () => import("./migration_0700").then((m) => step(m.MIGRATION_0700_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0700))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);

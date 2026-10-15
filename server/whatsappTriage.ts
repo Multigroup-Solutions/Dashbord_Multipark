@@ -24,6 +24,20 @@ import {
   whatsappTriagePlan,
 } from "../shared/commsAi";
 import { isStopAiError } from "./complaintTriage";
+import { isStaffWhatsappConversation, whatsappTriageGate, whatsappUrgentByWords } from "../shared/commsAi";
+import type { AiThinkingLevel } from "../shared/aiFeatures";
+
+/** WA_TRIAGE_SKIP_STAFF (Definições → Automações), lido fresco. Nunca lança (falha → desligado = como até aqui). */
+async function skipStaffOn(): Promise<boolean> {
+  try {
+    const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("./_core/featureFlags");
+    const { automationFlagDefault } = await import("../shared/appSettings");
+    await ensureFeatureFlagOverrides().catch(() => {});
+    return isFeatureEnabled("WA_TRIAGE_SKIP_STAFF", { defaultEnabled: automationFlagDefault("WA_TRIAGE_SKIP_STAFF") });
+  } catch {
+    return false;
+  }
+}
 
 const nowStr = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
@@ -33,16 +47,40 @@ const nowStr = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 19).repl
  * deve correr `triageConversation` (em segundo plano); `false` = agendada ou
  * IA desligada. Nunca lança.
  */
-export async function noteInboundForTriage(conversationId: number, nowMs: number = Date.now()): Promise<boolean> {
+export async function noteInboundForTriage(
+  conversationId: number,
+  nowMs: number = Date.now(),
+  opts: { body?: string | null; availabilityAiRead?: boolean } = {},
+): Promise<boolean> {
   try {
     const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
     if (!(await aiFeatureAvailableFresh("whatsapp_triage"))) return false;
     const db = await getDb();
     if (!db) return false;
     const [c] = await db
-      .select({ aiTriagedAt: whatsappConversations.aiTriagedAt, aiTriageDueAt: whatsappConversations.aiTriageDueAt, aiTriageFails: whatsappConversations.aiTriageFails })
+      .select({
+        aiTriagedAt: whatsappConversations.aiTriagedAt, aiTriageDueAt: whatsappConversations.aiTriageDueAt, aiTriageFails: whatsappConversations.aiTriageFails,
+        aiIntent: whatsappConversations.aiIntent, aiUrgency: whatsappConversations.aiUrgency, employeeId: whatsappConversations.employeeId,
+        boxKey: whatsappConversations.boxKey, boxSource: whatsappConversations.boxSource,
+      })
       .from(whatsappConversations).where(eq(whatsappConversations.id, conversationId)).limit(1);
     if (!c) return false;
+    // Plano MPV F6b (W1, WA_TRIAGE_SKIP_STAFF): conversas de colaboradores já
+    // lidas não voltam à IA — salvo palavra de urgência, sem intenção ou > 24 h.
+    // Clientes: como até aqui (o debounce decide).
+    const urgentWords = whatsappUrgentByWords(opts.body);
+    const gate = whatsappTriageGate({
+      skipStaff: await skipStaffOn(), isStaff: isStaffWhatsappConversation(c), urgentWords,
+      intent: c.aiIntent, lastTriagedAt: c.aiTriagedAt, nowMs, availabilityAiRead: opts.availabilityAiRead,
+    });
+    if (!gate.triage) {
+      // A resposta de disponibilidade já foi lida pela IA dela: a urgência por palavras marca-se sem 2.ª leitura.
+      if (urgentWords && c.aiUrgency !== "urgente") {
+        await db.update(whatsappConversations).set({ aiUrgency: "urgente" }).where(eq(whatsappConversations.id, conversationId))
+          .catch((e: any) => console.warn("[WhatsApp triagem] urgência por regra:", String(e?.message ?? e).slice(0, 120)));
+      }
+      return false;
+    }
     // mensagem nova do cliente: as falhas anteriores deixam de contar (só escreve se havia falhas)
     if (Number(c.aiTriageFails ?? 0) > 0) {
       await db.update(whatsappConversations).set({ aiTriageFails: 0 }).where(eq(whatsappConversations.id, conversationId))
@@ -105,13 +143,59 @@ export function triageTranscript(msgs: { direction: "in" | "out"; body: string |
  * Triagem de UMA conversa (já reservada por `noteInboundForTriage` ou pelo
  * varrimento). Nunca lança. Erro não "de paragem" → reagenda.
  */
+/** O que a IA leu de uma conversa (intenção, urgência, certeza). */
+export interface WhatsappTriageReading {
+  intent: WhatsappIntent;
+  urgency: "urgente" | "normal";
+  confidence: number | null;
+  reason: string | null;
+  model?: string;
+}
+
+/**
+ * A leitura da IA de UMA conversa (o texto já cortado por `triageTranscript`):
+ * o MESMO pedido para a produção e para a avaliação
+ * (server/whatsappTriageEval.ts). `thinkingLevel` + `thinkingFromCaller` só na
+ * avaliação (compara os níveis). Lança se a IA falhar.
+ */
+export async function classifyWhatsappTranscript(
+  transcript: string,
+  opts: { conversationId?: number | null; thinkingLevel?: AiThinkingLevel; thinkingFromCaller?: boolean } = {},
+): Promise<WhatsappTriageReading> {
+  const { runAi } = await import("./_core/ai/run");
+  const { redactPii } = await import("./_core/ai/pii");
+  const { WHATSAPP_TRIAGE_SYSTEM, whatsappTriageSchema } = await import("./_core/ai/prompts/comms");
+  const red = redactPii(transcript);
+  const r = await runAi({
+    feature: "whatsapp_triage",
+    system: WHATSAPP_TRIAGE_SYSTEM,
+    input: red.text,
+    schema: whatsappTriageSchema,
+    // o Gemini 3 "pensa" e o raciocínio conta como saída: com 120 ficava sem
+    // espaço para o JSON (resposta vazia → invalid_output em repetição)
+    maxTokens: 600,
+    timeoutMs: 20_000,
+    retries: 1,
+    entity: "whatsapp_conversation",
+    entityId: opts.conversationId ?? null,
+    ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+    ...(opts.thinkingFromCaller ? { thinkingFromCaller: true } : {}),
+  });
+  const { normalizeConfidence } = await import("../shared/commsRouting");
+  return {
+    intent: mapWhatsappIntent(r.output.intent),
+    urgency: mapWhatsappUrgency(r.output.urgency),
+    confidence: normalizeConfidence(r.output.confidence),
+    reason: r.output.reason ?? null,
+    model: r.model,
+  };
+}
+
 export async function triageConversation(conversationId: number): Promise<{ ok: boolean; error?: string }> {
   const db = await getDb();
   if (!db) return { ok: false, error: "db" };
-  const { runAi } = await import("./_core/ai/run");
-  const { redactPii } = await import("./_core/ai/pii");
   const { aiErrorCode } = await import("./_core/ai/errors");
-  const { WHATSAPP_TRIAGE_SYSTEM, WHATSAPP_INPUT_MAX, whatsappTriageSchema } = await import("./_core/ai/prompts/comms");
+  const { WHATSAPP_INPUT_MAX } = await import("./_core/ai/prompts/comms");
   const msgs = await db
     .select({ direction: whatsappMessages.direction, body: whatsappMessages.body })
     .from(whatsappMessages)
@@ -120,30 +204,16 @@ export async function triageConversation(conversationId: number): Promise<{ ok: 
     .limit(8);
   const transcript = triageTranscript(msgs.reverse() as any, WHATSAPP_INPUT_MAX);
   if (!transcript || !msgs.some((m) => m.direction === "in")) return { ok: false, error: "empty" };
-  const red = redactPii(transcript);
   try {
-    const r = await runAi({
-      feature: "whatsapp_triage",
-      system: WHATSAPP_TRIAGE_SYSTEM,
-      input: red.text,
-      schema: whatsappTriageSchema,
-      // o Gemini 3 "pensa" e o raciocínio conta como saída: com 120 ficava sem
-      // espaço para o JSON (resposta vazia → invalid_output em repetição)
-      maxTokens: 600,
-      timeoutMs: 20_000,
-      retries: 1,
-      entity: "whatsapp_conversation",
-      entityId: conversationId,
-    });
-    const intent = mapWhatsappIntent(r.output.intent);
+    const r = await classifyWhatsappTranscript(transcript, { conversationId });
+    const intent = r.intent;
     await db.update(whatsappConversations).set({
       aiIntent: intent,
-      aiUrgency: mapWhatsappUrgency(r.output.urgency),
+      aiUrgency: r.urgency,
       aiTriagedAt: nowStr(),
       aiTriageFails: 0,
     }).where(eq(whatsappConversations.id, conversationId));
-    const { normalizeConfidence } = await import("../shared/commsRouting");
-    await routeAfterTriage(conversationId, { intent, confidence: normalizeConfidence(r.output.confidence), reason: r.output.reason ?? null });
+    await routeAfterTriage(conversationId, { intent, confidence: r.confidence, reason: r.reason });
     return { ok: true };
   } catch (err) {
     if (!isStopAiError(err)) {

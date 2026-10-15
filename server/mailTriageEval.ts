@@ -174,11 +174,15 @@ export async function productionThresholds(): Promise<TriageThresholds> {
 
 /** Um lote do corpus (`offset`, `limit`), `concurrency` pedidos de cada vez. */
 export async function evalTriageSlice(
-  opts: { offset: number; limit: number; concurrency?: number; corpus?: TriageCorpusKey },
+  opts: { offset: number; limit: number; concurrency?: number; corpus?: TriageCorpusKey; thinkingLevel?: import("../shared/aiFeatures").AiThinkingLevel | "env" },
   deps: { classify?: Classify; thresholds?: TriageThresholds; corpus?: readonly TriageCorpusItem[] } = {},
 ): Promise<{ total: number; items: EvalItemResult[]; model: string | null }> {
   const corpus = deps.corpus ?? corpusOf(opts.corpus);
-  const classify = deps.classify ?? (async (m: EmailRoutingMessage, l: string) => (await import("./commsRouting")).classifyEmailWithAi(m, l));
+  // Plano MPV F6b (T1): `thinkingLevel` compara os níveis ("env" = o de hoje, sem as Definições); omisso = como a produção.
+  const thinking = opts.thinkingLevel
+    ? { thinkingFromCaller: true, ...(opts.thinkingLevel !== "env" ? { thinkingLevel: opts.thinkingLevel } : {}) }
+    : {};
+  const classify = deps.classify ?? (async (m: EmailRoutingMessage, l: string) => (await import("./commsRouting")).classifyEmailWithAi(m, l, thinking));
   const t = deps.thresholds ?? (await productionThresholds());
   const slice = corpus.slice(Math.max(0, opts.offset), Math.max(0, opts.offset) + Math.max(1, Math.min(30, opts.limit)));
   const out: Array<EvalItemResult & { model?: string }> = new Array(slice.length);

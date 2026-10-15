@@ -132,6 +132,11 @@ export interface RunAiBase {
   /** Raciocínio pedido aqui (Definições `ai.thinkingLevels` ganham). */
   thinkingLevel?: AiThinkingLevel;
   /**
+   * Avaliações (plano MPV F6b, T1): o nível pedido aqui — ou nenhum, a env —
+   * ganha às Definições, para comparar os níveis com o mesmo pedido.
+   */
+  thinkingFromCaller?: boolean;
+  /**
    * Sobe `maxTokens` ao mínimo do nível de raciocínio (maxTokensFor) — o
    * raciocínio gasta do mesmo teto. Só quem pede (o resto fica igual).
    */
@@ -271,7 +276,9 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
   }
   const provider = getProvider(providerId, env);
   let model = opts.model || resolveModel(tier, providerId, env);
-  const thinkingRequested = resolveThinkingLevel(opts.feature, { requested: opts.thinkingLevel, settings: await loadThinkingLevelSettings() });
+  const thinkingRequested = opts.thinkingFromCaller
+    ? opts.thinkingLevel
+    : resolveThinkingLevel(opts.feature, { requested: opts.thinkingLevel, settings: await loadThinkingLevelSettings() });
   // Os modelos Pro/smart podem recusar "minimal": no nível smart ignora-se (fica a env / low).
   const thinkingFor = (): AiThinkingLevel | undefined => (tier === "smart" && thinkingRequested === "minimal" ? undefined : thinkingRequested);
 
