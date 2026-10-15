@@ -1,5 +1,7 @@
 ---
 modulo: central
+grupo: Comunicação
+pagina: central
 titulo: Central (as minhas chamadas)
 rotas: /central
 palavras: central, chamadas, as minhas chamadas, vodafone, consola, one net, recebidas, feitas, duração, telefone, quem ligou, ficha do colega, parar o toque, silenciar, toque, sem som

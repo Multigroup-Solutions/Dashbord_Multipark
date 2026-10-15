@@ -17,6 +17,7 @@ import {
   actionPoints,
   emptyDayMetrics,
   round2,
+  speedingWithGpsDay,
   type DayMetrics,
 } from "../shared/evaluationRules";
 import { addDays, lisbonDayOf, lisbonHourOf, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
@@ -595,11 +596,13 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
   // 03h: o dia GPS D não conta se houver um alerta/penalização de velocidade a qualquer hora do dia de
   // calendário D (do dia operacional D, ou das 00h–03h que ainda são do dia operacional D−1), nem se o
   // dia operacional D já tiver excessos.
+  // A regra (1 por dia, sem contar a dobrar) é a de shared/evaluationRules.ts (speedingWithGpsDay).
   for (const key of gpsOver) {
-    if (speedCalendarDays.has(key)) continue;
+    const blocked = speedCalendarDays.has(key);
+    if (blocked) continue; // não cria o dia só por isto
     const [emp, day] = key.split("|");
     const m = row(Number(emp), day).metrics;
-    if (m.speedingEvents === 0) m.speedingEvents = 1;
+    m.speedingEvents = speedingWithGpsDay(m.speedingEvents, blocked);
   }
 
   // ── Derivadas: pontos das ações, origem das horas, custo

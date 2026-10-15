@@ -1,5 +1,7 @@
 ---
 modulo: reservas_operacoes
+grupo: Operações
+pagina: reserva
 titulo: Ficha da reserva
 rotas: /reserva
 palavras: tempos, tempos da entrega, tempos da recolha, fila, trânsito, no terminal, no p2, fonte do tempo, motivo sem medição, telefonar ao cliente, escrever email ao cliente, ficha da reserva, detalhe da reserva, estado da reserva, fases, check-in, check-out, voo, ETA, vídeo, assinatura, anexos, histórico, linha do tempo, GPS, lugar, garagem, alocação, caixa, pagamentos, fatura, cancelamento, reembolso, serviços extra, chat, emails, ocorrências, avaliação, marketplace, parceiro, direto, canal, agência, agregador, parque nosso, conferência, era, é, webhook, preço mudou, correção de caixa

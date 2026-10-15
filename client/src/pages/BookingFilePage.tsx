@@ -22,6 +22,7 @@ import {
   MapPin, MessageSquare, PenLine, Search, Sparkles, Star, Timer, User, Video,
 } from "lucide-react";
 import { CalibrationBadge, fmtDur, flagLabel, sourceLabel, statusLabel } from "@/components/serviceTimes/TimesBits";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 /**
  * Ficha da reserva (/reserva/:id) — tudo sobre uma reserva num só sítio, lido
@@ -206,6 +207,8 @@ function FoundFile({ data, scope }: { data: MainFound; scope: { projectId?: numb
   const b = data.core;
   const id = data.id;
   const input = { id, ...scope };
+  // Plano MPV §3.1: o Multis sabe que reserva está aberta (id da Multipark).
+  useMultisPage({ entity: { type: "booking", id: Number(id) } });
   const accounts = trpc.bookingFile.accounts.useQuery(input, { staleTime: 60_000, retry: false });
   const cur = b.price.currency || "EUR";
   const paid = useMemo(() => {

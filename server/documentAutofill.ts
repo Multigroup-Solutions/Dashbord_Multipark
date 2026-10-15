@@ -10,7 +10,7 @@
  * shared/aiLimits.ts): desligado, sem IA ou fora da UE, não faz nada.
  * Best-effort: nunca parte o upload.
  */
-import { aiFeatureAvailableFresh } from "./_core/ai/status";
+import { aiFeatureAvailableLogged } from "./_core/ai/status";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 
@@ -108,9 +108,13 @@ export function planAutofill(
 
 // ─── I/O ────────────────────────────────────────────────────────────────────
 
-/** IA do RH disponível? (configurada + AI_ENABLED + AI_HR_AUTOFILL + Vertex AI na UE). */
-export async function llmConfigured(): Promise<boolean> {
-  return aiFeatureAvailableFresh("hr_autofill");
+/**
+ * IA do RH disponível? (configurada + AI_ENABLED + AI_HR_AUTOFILL + Vertex AI
+ * na UE). Ligada mas travada pelo portão "só UE" → fica a linha
+ * "blocked / eu_only" no registo (sem conteúdo), como no runAi.
+ */
+export async function llmConfigured(meta: { userId?: number | null; employeeId?: number | null } = {}): Promise<boolean> {
+  return aiFeatureAvailableLogged("hr_autofill", { userId: meta.userId ?? null, entity: meta.employeeId != null ? "employee" : null, entityId: meta.employeeId ?? null });
 }
 
 export async function extractDocument(mimeType: string, base64: string, ctx: { userId?: number | null; employeeId?: number | null } = {}): Promise<ExtractedDoc | null> {
@@ -142,7 +146,7 @@ export async function extractDocument(mimeType: string, base64: string, ctx: { u
  */
 export async function autofillFromDocument(opts: { employeeId: number; docType: string; mimeType: string; base64: string; userId: number; ibanDirect?: boolean }): Promise<{ filled: string[]; extracted: ExtractedDoc | null; skipped?: string; ibanRequested?: boolean }> {
   if (!(AUTOFILL_DOC_TYPES as readonly string[]).includes(opts.docType)) return { filled: [], extracted: null, skipped: "tipo de documento" };
-  if (!(await llmConfigured())) return { filled: [], extracted: null, skipped: "IA desligada ou não configurada" };
+  if (!(await llmConfigured({ userId: opts.userId, employeeId: opts.employeeId }))) return { filled: [], extracted: null, skipped: "IA desligada ou não configurada" };
   if (!/^image\/(jpeg|png|webp|gif)$/.test(opts.mimeType) && opts.mimeType !== "application/pdf") return { filled: [], extracted: null, skipped: "formato" };
   if (opts.base64.length * 0.75 > MAX_BYTES) return { filled: [], extracted: null, skipped: "ficheiro grande" };
   const db = await getDb();

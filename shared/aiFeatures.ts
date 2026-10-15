@@ -28,6 +28,8 @@ export type AiFlag =
   | "AI_LOST_FOUND_MATCH"
   | "AI_CRM_IDENTITY"
   | "AI_ASSISTANT"
+  // Plano MPV (F0b): o Multis do piloto no modelo smart (Argon), com teto € próprio.
+  | "AI_ASSISTANT_SMART"
   // Automações internas (set 2026) — cada uma com o seu interruptor.
   | "AI_OPS_BRIEFING"
   | "AI_WEEKLY_REPORTS"
@@ -55,6 +57,13 @@ export interface AiFeatureDef {
   flag: AiFlag | null;
   tier: AiTier;
   essential: boolean;
+  /**
+   * Tem teto € próprio (plano MPV §5.3): NÃO entra na conta do orçamento
+   * mensal global que bloqueia as não essenciais (o cartão do custo mostra-a
+   * na mesma). Ao atingir o teto próprio, quem chama desce para outra
+   * funcionalidade (assistant_smart → assistant, "modo económico").
+   */
+  ownBudget?: boolean;
 }
 
 export const AI_FEATURES = {
@@ -87,6 +96,8 @@ export const AI_FEATURES = {
   // enviado sem aprovação humana; tudo `lite` (regra do dono).
   complaint_triage: { label: "Reclamações: triagem e rascunho", flag: "AI_COMPLAINT_TRIAGE", tier: "lite", essential: false },
   review_auto_draft: { label: "Críticas: rascunho automático", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
+  // Plano MPV F7 (§6.2): resposta às 5★ publicada sozinha (interruptor REVIEW_AUTO_PUBLISH_5STAR); lite (regra do dono).
+  review_auto_publish: { label: "Críticas 5★: resposta publicada sozinha", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
   whatsapp_triage: { label: "WhatsApp: intenção e urgência", flag: "AI_WHATSAPP_TRIAGE", tier: "lite", essential: false },
   // 17f: separar os emails novos pela caixa do tema. Jorge (8 out 2026): todas as caixas
   // partilhadas; o WhatsApp usa a intenção da triagem (sem 2.ª chamada) com o mesmo interruptor.
@@ -97,6 +108,10 @@ export const AI_FEATURES = {
   // Assistente da app (chat da equipa): "como se usa" + perguntas aos dados
   // por ferramentas só de leitura. Lite (regra do dono; muitas mensagens curtas).
   assistant: { label: "Assistente (chat)", flag: "AI_ASSISTANT", tier: "lite", essential: false },
+  // Plano MPV §5.2 (F0b): o Multis das pessoas do piloto (interruptor MPV + ai.assistantPilot)
+  // no nível smart (AI_MODEL_SMART=gemini-4-argon). Teto € próprio (ai.assistantSmartBudget);
+  // ao atingi-lo desce para `assistant` (lite) — "modo económico".
+  assistant_smart: { label: "Multis do piloto (smart)", flag: "AI_ASSISTANT_SMART", tier: "smart", essential: false, ownBudget: true },
   // ── Automações internas (nenhuma é para clientes). Os NÚMEROS vêm sempre do
   // SQL/código; a IA só escreve o texto. Todas `lite` (regra do dono).
   ops_briefing: { label: "Briefing diário por cidade", flag: "AI_OPS_BRIEFING", tier: "lite", essential: false },
@@ -128,6 +143,14 @@ export const AI_FEATURES = {
 
 export type AiFeature = keyof typeof AI_FEATURES;
 export const AI_FEATURE_IDS = Object.keys(AI_FEATURES) as AiFeature[];
+
+/** Funcionalidades com teto € próprio (fora da conta do orçamento global). */
+export const AI_OWN_BUDGET_FEATURES: readonly AiFeature[] = AI_FEATURE_IDS.filter((f) => (AI_FEATURES[f] as AiFeatureDef).ownBudget === true);
+
+/** Esta funcionalidade tem teto próprio? PURA. */
+export function hasOwnBudget(feature: string): boolean {
+  return (AI_OWN_BUDGET_FEATURES as readonly string[]).includes(feature);
+}
 
 export function isAiFeature(v: string): v is AiFeature {
   return Object.prototype.hasOwnProperty.call(AI_FEATURES, v);

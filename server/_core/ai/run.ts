@@ -14,7 +14,19 @@
  * tens"). Se o fornecedor recusar o histórico com functionCall/functionResponse
  * sem ferramentas declaradas (400), os resultados vão resumidos em texto. Se
  * mesmo assim vier um functionCall (ou nada), a resposta é um texto de recurso
- * — nunca um erro "tool_rounds" depois de pagas as voltas.
+ * (registado como erro "final_fallback" — a pessoa recebe o texto na mesma)
+ * — nunca um erro "tool_rounds" depois de pagas as voltas. Qualquer erro DEPOIS
+ * de pelo menos uma volta (sem texto por MAX_TOKENS, 503 que já não cabe no
+ * prazo, 404/429 a meio) também leva à chamada final, em vez de deitar fora as
+ * voltas pagas.
+ *
+ * Modelo smart (plano MPV §5.2, F0b): antes da 1.ª volta de ferramentas, um 404
+ * ou um 429/quota fazem cair para o fast (gemini-3.8-flash por omissão); o 429
+ * tem antes 2 novas tentativas com espera (1 s, 3 s). Depois da 1.ª volta não
+ * se troca de modelo (o histórico já leva o conteúdo do smart).
+ *
+ * Teto próprio (§5.3): uma funcionalidade com `ownBudget` (assistant_smart) é
+ * travada pelo seu teto ANTES do orçamento global; quem chama desce para outra.
  *
  * Erros: sempre AiError (errors.ts); a UI só recebe `err.userMessage`.
  * Nunca escreve no log o prompt, a resposta ou dados pessoais.
@@ -25,9 +37,10 @@ import {
   thinkingLevelFor,
   type AiPart, type AiProvider, type AiProviderId, type AiToolCall, type AiToolDeclaration, type AiToolRound, type AiTurn, type ProviderResponse,
 } from "./client";
-import type { AiThinkingLevel } from "../../../shared/aiFeatures";
+import { hasOwnBudget, type AiThinkingLevel } from "../../../shared/aiFeatures";
 import { getOrCreateContextCache, forgetContextCache } from "./contextCache";
 import {
+  AiBudgetExceededError,
   AiDisabledError,
   AiError,
   AiEuOnlyError,
@@ -42,8 +55,8 @@ import {
 } from "./features";
 import { toProviderJsonSchema } from "./jsonSchema";
 import { fallbackTier, maxTokensFor, resolveModel, supportsThinkingLevel, type AiTier } from "./models";
-import { costEur, type TokenUsage } from "./pricing";
-import { enforceBudget, getPriceOverrides, logAiUsage } from "./usage";
+import { costEur, priceFor, type TokenUsage } from "./pricing";
+import { enforceBudget, getPriceOverrides, logAiUsage, ownBudgetCheck, ownBudgetTurnEstimateEur, reserveOwnBudget } from "./usage";
 import { euVertexOk, requiresEuVertex } from "../../../shared/aiLimits";
 
 /** Prazo por omissão (a função do Vercel morre aos 60 s). */
@@ -63,6 +76,10 @@ export const FINAL_ANSWER_INSTRUCTION =
 /** Texto de recurso quando nem a chamada final dá uma resposta em texto. */
 export const TOOLS_FALLBACK_TEXT =
   "Não consegui juntar tudo a tempo. Tenta perguntar só uma coisa de cada vez (por exemplo, uma cidade ou um dia).";
+/** Smart (antes da 1.ª volta): esperas antes de repetir um 429 (depois cai para o fast). */
+export const SMART_RATE_LIMIT_WAITS_MS: readonly number[] = [1_000, 3_000];
+/** Por quanto tempo uma instância lembra que o modelo recusou o histórico das ferramentas sem as declarar. */
+export const NATIVE_FINAL_REJECTED_TTL_MS = 60 * 60_000;
 
 /**
  * Function calling: o runAi declara as ferramentas, executa as que o modelo
@@ -115,6 +132,11 @@ export interface RunAiBase {
   /** Raciocínio pedido aqui (Definições `ai.thinkingLevels` ganham). */
   thinkingLevel?: AiThinkingLevel;
   /**
+   * Avaliações (plano MPV F6b, T1): o nível pedido aqui — ou nenhum, a env —
+   * ganha às Definições, para comparar os níveis com o mesmo pedido.
+   */
+  thinkingFromCaller?: boolean;
+  /**
    * Sobe `maxTokens` ao mínimo do nível de raciocínio (maxTokensFor) — o
    * raciocínio gasta do mesmo teto. Só quem pede (o resto fica igual).
    */
@@ -154,12 +176,32 @@ export function backoffMs(attempt: number, rand: () => number = Math.random): nu
   return Math.round(Math.min(4000, base) * (0.75 + rand() * 0.5));
 }
 
-/** Por processo: o fornecedor recusou (400) o histórico com ferramentas sem as declarar → resumo em texto. */
-let nativeFinalRejected = false;
+/**
+ * Por instância e POR MODELO: o fornecedor recusou (400, a falar de
+ * function/tool) o histórico com ferramentas sem as declarar E o resumo em
+ * texto resultou → as próximas chamadas finais desse modelo vão logo pelo
+ * resumo, durante 1 h (depois volta a experimentar o "native").
+ */
+const nativeFinalRejectedUntil = new Map<string, number>();
+let smartRateLimitWaits: readonly number[] = SMART_RATE_LIMIT_WAITS_MS;
 
 /** Só testes. */
 export function resetFinalCallModeForTests(): void {
-  nativeFinalRejected = false;
+  nativeFinalRejectedUntil.clear();
+  smartRateLimitWaits = SMART_RATE_LIMIT_WAITS_MS;
+}
+
+/** Só testes: esperas curtas no 429 do smart. */
+export function setSmartRateLimitWaitsForTests(waits: readonly number[] | null): void {
+  smartRateLimitWaits = waits ?? SMART_RATE_LIMIT_WAITS_MS;
+}
+
+/** A chamada final deste modelo vai logo pelo resumo? (expira ao fim de 1 h). */
+export function nativeFinalRejectedFor(model: string, now: number = Date.now()): boolean {
+  const until = nativeFinalRejectedUntil.get(model);
+  if (until == null) return false;
+  if (until <= now) { nativeFinalRejectedUntil.delete(model); return false; }
+  return true;
 }
 
 const clip = (v: string, n: number) => (v.length > n ? `${v.slice(0, n - 1)}…` : v);
@@ -167,18 +209,21 @@ const clip = (v: string, n: number) => (v.length > n ? `${v.slice(0, n - 1)}…`
 /**
  * Resultados das ferramentas em texto, para a chamada final quando o
  * fornecedor não aceita functionCall/functionResponse sem ferramentas
- * declaradas. Cada resultado até 3 000 car.; o bloco até `maxChars`. PURA.
+ * declaradas. Cada resultado até 3 000 car.; o bloco até `maxChars`. O "<"
+ * dos resultados vai como < (JSON igual), para um texto vindo dos dados
+ * não fechar o bloco nem abrir outro. PURA.
  */
 export function summarizeToolRounds(rounds: AiToolRound[], maxChars = 12_000): string {
   const lines: string[] = [];
   let n = 0;
+  const safe = (v: unknown) => JSON.stringify(v ?? {}).replace(/</g, "\\u003c");
   for (const r of rounds) {
     for (const x of r.results) {
       n++;
       let args = "{}";
       let res = "{}";
-      try { args = JSON.stringify(x.call.args ?? {}); } catch { /* fica {} */ }
-      try { res = JSON.stringify(x.response ?? {}); } catch { /* fica {} */ }
+      try { args = safe(x.call.args); } catch { /* fica {} */ }
+      try { res = safe(x.response); } catch { /* fica {} */ }
       lines.push(`${n}. ${x.call.name}(${clip(args, 300)}) → ${clip(res, 3000)}`);
     }
   }
@@ -201,6 +246,28 @@ export function parseStructured<S extends z.ZodType>(text: string, schema: S): z
   const r = schema.safeParse(raw);
   if (!r.success) throw new AiInvalidOutputError("schema");
   return r.data;
+}
+
+/**
+ * Fornecedor, modelo e nível de raciocínio JÁ resolvidos que o `runAi` vai usar
+ * nesta funcionalidade (mesma ordem: Definições `ai.featureTiers` e
+ * `ai.thinkingLevels`, env). Para chaves de cache (plano MPV F6b, seguimento):
+ * mudar o modelo ou o raciocínio muda a chave. null = sem fornecedor.
+ */
+export async function resolvedAiCall(
+  feature: AiFeature,
+  opts: Pick<RunAiBase, "tier" | "model" | "thinkingLevel" | "thinkingFromCaller" | "env"> = {},
+): Promise<{ provider: AiProviderId; model: string; thinking: string | null } | null> {
+  const env = opts.env ?? process.env;
+  const tier: AiTier = resolveFeatureTier(feature, { requested: opts.tier, settings: await loadFeatureTierSettings(), env });
+  const providerId = selectProvider(env, feature);
+  if (!providerId) return null;
+  const model = opts.model || resolveModel(tier, providerId, env);
+  const requested = opts.thinkingFromCaller
+    ? opts.thinkingLevel
+    : resolveThinkingLevel(feature, { requested: opts.thinkingLevel, settings: await loadThinkingLevelSettings() });
+  const forTier = tier === "smart" && requested === "minimal" ? undefined : requested;
+  return { provider: providerId, model, thinking: thinkingLevelFor(model, env, forTier) };
 }
 
 export function runAi<S extends z.ZodType>(opts: RunAiBase & { schema: S }): Promise<RunAiResult<z.output<S>>>;
@@ -231,9 +298,24 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
   }
   const provider = getProvider(providerId, env);
   let model = opts.model || resolveModel(tier, providerId, env);
-  const thinkingLevel = resolveThinkingLevel(opts.feature, { requested: opts.thinkingLevel, settings: await loadThinkingLevelSettings() });
+  const thinkingRequested = opts.thinkingFromCaller
+    ? opts.thinkingLevel
+    : resolveThinkingLevel(opts.feature, { requested: opts.thinkingLevel, settings: await loadThinkingLevelSettings() });
+  // Os modelos Pro/smart podem recusar "minimal": no nível smart ignora-se (fica a env / low).
+  const thinkingFor = (): AiThinkingLevel | undefined => (tier === "smart" && thinkingRequested === "minimal" ? undefined : thinkingRequested);
 
   const started = Date.now();
+
+  // Teto próprio (plano MPV §5.3) ANTES do orçamento global: quem chama desce para outra funcionalidade.
+  if (hasOwnBudget(opts.feature)) {
+    const own = await ownBudgetCheck(opts.feature, opts.userId ?? null);
+    if (!own.ok) {
+      await logAiUsage({ ...meta, tier, provider: providerId, model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, costEur: 0, latencyMs: 0, status: "blocked", errorCode: `own_budget_${own.reason}` });
+      throw new AiBudgetExceededError("own", own.reason);
+    }
+  }
+  // A reserva do teto próprio só se faz mesmo antes do pedido (ver abaixo), com try/finally.
+  let releaseOwn: () => void = () => undefined;
 
   try {
     await enforceBudget(def.essential);
@@ -261,23 +343,36 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
   let switchedModel = false;
   let useCache = !!(opts.cacheSystem && opts.system);
   let invalidOutputs = 0;
+  let smartRateLimitRetries = 0;
   let lastFinishReason: string | null = null;
   const rounds: AiToolRound[] = [];
   let forcedFinal = false;
+  /** A chamada final foi pelo resumo em texto (registo "final_summary"). */
+  let usedSummary = false;
 
-  /** Teto de saída deste modelo (com o mínimo do raciocínio, se pedido). */
+  /**
+   * Teto de saída deste modelo (com o mínimo do raciocínio, se pedido). Com o
+   * nível "default"/off (o do modelo, nível efetivo null) o teto é o maior
+   * (8 192): nos Gemini 3 o raciocínio do modelo costuma ser alto.
+   */
   const maxOutFor = (m: string) =>
-    opts.scaleMaxTokensForThinking ? maxTokensFor(maxTokens, thinkingLevelFor(m, env, thinkingLevel), { noThinking: !supportsThinkingLevel(m) }) : maxTokens;
+    opts.scaleMaxTokensForThinking ? maxTokensFor(maxTokens, thinkingLevelFor(m, env, thinkingFor()), { noThinking: !supportsThinkingLevel(m) }) : maxTokens;
 
+  // A reserva só sai depois de o custo real estar gravado: durante o INSERT a pergunta conta a dobrar
+  // (lado prudente), em vez de uma leitura fresca de outra pergunta não a ver de todo.
   const finish = async (status: "ok" | "error", errorCode: string | null) => {
-    await logAiUsage({
-      ...meta, tier, provider: providerId, model,
-      inputTokens: usageTotal.inputTokens, outputTokens: usageTotal.outputTokens, cachedTokens: usageTotal.cachedTokens,
-      costEur: cost, latencyMs: Date.now() - started, status, errorCode,
-      finishReason: lastFinishReason,
-      rounds: tools ? rounds.length : null,
-      forcedFinal: tools ? forcedFinal : null,
-    });
+    try {
+      await logAiUsage({
+        ...meta, tier, provider: providerId, model,
+        inputTokens: usageTotal.inputTokens, outputTokens: usageTotal.outputTokens, cachedTokens: usageTotal.cachedTokens,
+        costEur: cost, latencyMs: Date.now() - started, status, errorCode,
+        finishReason: lastFinishReason,
+        rounds: tools ? rounds.length : null,
+        forcedFinal: tools ? forcedFinal : null,
+      });
+    } finally {
+      releaseOwn();
+    }
   };
 
   type Step =
@@ -307,8 +402,13 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
         // API não aceita system/tools ao lado de cachedContent.
         if (useCache && opts.system && !final) {
           const ttl = typeof opts.cacheSystem === "object" ? opts.cacheSystem.ttlSeconds : undefined;
-          cachedContent = (await getOrCreateContextCache(provider, model, opts.system, { ttlSeconds: ttl, signal: controller.signal, tools: tools?.declarations })) ?? undefined;
+          cachedContent = (await getOrCreateContextCache(provider, model, opts.system, {
+            ttlSeconds: ttl, signal: controller.signal, tools: tools?.declarations,
+            // Armazenamento da cache registado na funcionalidade dona (entra no teto dela).
+            owner: { feature: opts.feature, tier, variant: opts.variant ?? null },
+          })) ?? undefined;
         }
+        const thinkingLevel = thinkingFor();
         const res = await callProvider(provider, {
           model, system: opts.system, history: opts.history,
           parts: final === "summary" ? [...parts, { type: "text", text: summarizeToolRounds(rounds) }] : parts,
@@ -337,18 +437,28 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
           attempts--;
           continue;
         }
-        // Modelo inexistente (404) no nível smart → cai para o fast, uma vez — só
-        // antes da 1.ª volta de ferramentas (depois o histórico já leva o conteúdo do modelo).
-        if (e.status === 404 && !switchedModel && rounds.length === 0 && !final) {
-          const fb = fallbackTier(tier);
-          if (fb && !opts.model) {
-            switchedModel = true;
-            tier = fb;
-            model = resolveModel(fb, providerId, env);
-            tries--; // a troca de modelo não gasta uma tentativa
-            attempts--;
+        // Smart: modelo inexistente (404) ou limite/quota (429) → cai para o fast,
+        // uma vez — só antes da 1.ª volta de ferramentas (depois o histórico já
+        // leva o conteúdo do modelo, com a thoughtSignature dele). O 429 tem antes
+        // 2 novas tentativas com espera (1 s, 3 s), se couberem no prazo.
+        const fb = !switchedModel && rounds.length === 0 && !final && !opts.model ? fallbackTier(tier) : null;
+        if (fb && e.status === 429) {
+          const wait = smartRateLimitWaits[smartRateLimitRetries];
+          if (wait != null && Date.now() + wait + 500 < spec.until) {
+            smartRateLimitRetries++;
+            await sleep(wait);
+            tries--; // estas esperas são à parte das novas tentativas normais
             continue;
           }
+        }
+        if (fb && (e.status === 404 || e.status === 429)) {
+          console.warn(`[ai] ${opts.feature}: ${model} respondeu ${e.status} — cai para ${resolveModel(fb, providerId, env)}`);
+          switchedModel = true;
+          tier = fb;
+          model = resolveModel(fb, providerId, env);
+          tries--; // a troca de modelo não gasta uma tentativa
+          if (e.status === 404) attempts--;
+          continue;
         }
         // Histórico com ferramentas recusado sem as declarar → quem chamou tenta o resumo.
         if (final === "native" && e.status === 400) break;
@@ -372,15 +482,23 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
   const finalCall = async (): Promise<{ output: unknown; text: string } | null> => {
     forcedFinal = true;
     // Sem voltas feitas não há partes de ferramentas: basta o "native" (com a instrução).
-    const modes: FinalMode[] = rounds.length === 0 ? ["native"] : nativeFinalRejected ? ["summary"] : ["native", "summary"];
+    const modes: FinalMode[] = rounds.length === 0 ? ["native"] : nativeFinalRejectedFor(model) ? ["summary"] : ["native", "summary"];
+    /** O "native" foi recusado com um 400 que fala de function/tool. */
+    let nativeToolsRejected = false;
     for (const mode of modes) {
       try {
         const step = await attempt({ until: deadline, final: mode });
-        return step.kind === "final" ? { output: step.output, text: step.text } : null;
+        if (step.kind !== "final") return null;
+        if (mode === "summary") {
+          usedSummary = true;
+          // Só fica lembrado (1 h, por modelo) se o resumo resultou E o 400 era mesmo das ferramentas.
+          if (nativeToolsRejected) nativeFinalRejectedUntil.set(model, Date.now() + NATIVE_FINAL_REJECTED_TTL_MS);
+        }
+        return { output: step.output, text: step.text };
       } catch (err) {
         const e = toAiError(err);
         if (mode === "native" && e.status === 400 && rounds.length > 0) {
-          nativeFinalRejected = true;
+          nativeToolsRejected = e.toolsHint;
           console.warn(`[ai] ${opts.feature}: chamada final com o histórico das ferramentas recusada (400) — passa ao resumo em texto`);
           continue;
         }
@@ -397,14 +515,37 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
     finishReason: lastFinishReason, rounds: rounds.length, forcedFinal, fallback,
   });
 
+  // Reserva à cabeça o custo MÁXIMO estimado do turno (pedidos ao mesmo tempo
+  // contam com ela): teto de saída × preço de saída + entrada estimada × preço
+  // de entrada, × as chamadas possíveis; mínimo 0,20 €. Feita aqui, colada ao
+  // try/finally — nada entre as duas pode lançar —, liberta-se ao registar o
+  // custo real (finish) e, se a função morrer pelo limite da Vercel, expira
+  // sozinha ao fim de 2× o prazo do pedido.
+  if (hasOwnBudget(opts.feature)) {
+    const textChars = (opts.system?.length ?? 0)
+      + (opts.history ?? []).reduce((a, t) => a + (t.text?.length ?? 0), 0)
+      + parts.reduce((a, p) => a + (p.type === "text" ? p.text.length : 4_000), 0)
+      + (tools ? JSON.stringify(tools.declarations).length : 0);
+    const estimate = ownBudgetTurnEstimateEur({
+      price: priceFor(model, overrides),
+      maxOutputTokens: maxOutFor(model),
+      inputTokens: Math.ceil(textChars / 4),
+      calls: tools ? maxRounds + 1 : 1,
+    });
+    releaseOwn = reserveOwnBudget(opts.feature, opts.userId ?? null, estimate, { ttlMs: 2 * Math.max(1_000, deadline - started) });
+  }
+
   try {
     for (;;) {
       let step: Step;
       try {
         step = await attempt({ until: tools ? toolsDeadline : deadline });
       } catch (err) {
-        // Com ferramentas, o fim do tempo das voltas leva à chamada final (que tem a sua reserva).
-        if (!tools || !(toAiError(err) instanceof AiTimeoutError)) throw err;
+        // Com ferramentas: o fim do tempo das voltas leva à chamada final (que tem a
+        // sua reserva); e depois de ≥ 1 volta paga, QUALQUER erro também (sem texto
+        // por MAX_TOKENS, 503 que já não cabe no prazo, 404/429 a meio do turno).
+        if (!tools) throw err;
+        if (!(toAiError(err) instanceof AiTimeoutError) && rounds.length === 0) throw err;
         break;
       }
       if (step.kind === "final") {
@@ -426,17 +567,21 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
     // Chamada final sem ferramentas; se nem essa der texto, o texto de recurso.
     const fin = await finalCall();
     if (fin) {
-      await finish("ok", null);
+      await finish("ok", usedSummary ? "final_summary" : null);
       return result(fin.output, fin.text, false);
     }
+    // Com `schema` (não se combina com ferramentas hoje) não há texto de recurso: erro tool_rounds.
     if (opts.schema) throw new AiInvalidOutputError("tool_rounds");
-    await finish("ok", "final_fallback");
+    // A pessoa recebe o texto de recurso, mas no registo conta como erro (não respondeu).
+    await finish("error", "final_fallback");
     return result(TOOLS_FALLBACK_TEXT, TOOLS_FALLBACK_TEXT, true);
   } catch (err) {
     const final = toAiError(err);
     console.warn(`[ai] ${opts.feature} falhou: ${aiErrorCode(final)} (tentativas: ${attempts}, ${providerId}/${model})`);
     await finish("error", aiErrorCode(final));
     throw final;
+  } finally {
+    releaseOwn(); // já libertada no finish; isto cobre qualquer saída inesperada
   }
 }
 

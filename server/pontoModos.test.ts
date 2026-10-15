@@ -5,7 +5,7 @@
  *    2/3 só a partir de hoje, "sempre em serviço" sem entrada aberta, motivo;
  *  - NULL = igual a hoje; o rasto das picagens não muda nada nas contas;
  *  - avisos lidos ("Li" e papel), alertas (quem vê), juntar fichas com modos;
- *  - interruptor PONTO_MODOS desligado por omissão (só o super admin), migração 0720.
+ *  - interruptor PONTO_MODOS desligado por omissão (só o super admin), migração 0820.
  */
 import { globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -23,7 +23,7 @@ import {
   PontoModeError, pontoModeView, pontoTrailForRecord, recordPontoNoticeAck, reviewPontoAlert, setPontoMode,
   type PontoAlertRow, type PontoModeStore,
 } from "./pontoModes";
-import { MIGRATION_0720_STATEMENTS, IDEMPOTENT_ERROR_CODES_0720 } from "./migrations/migration_0720";
+import { MIGRATION_0820_STATEMENTS, IDEMPOTENT_ERROR_CODES_0820 } from "./migrations/migration_0820";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
 import { ownRecordEmployeeId } from "./cityAccess";
 
@@ -278,7 +278,7 @@ describe("o rasto das picagens não muda nada nas contas", () => {
     const root = resolve(import.meta.dirname, "..");
     const allowed = new Set([
       "shared/pontoMode.ts", "server/pontoModes.ts", "server/pontoModesRouter.ts", "server/employeeMerge.ts",
-      "server/migrations/migration_0720.ts", "drizzle/schema.ts",
+      "server/migrations/migration_0820.ts", "drizzle/schema.ts",
     ]);
     const files = globSync("{server,shared,drizzle}/**/*.ts", { cwd: root }).map((f) => f.replaceAll("\\", "/"))
       .filter((f) => !f.endsWith(".test.ts") && !allowed.has(f));
@@ -571,16 +571,16 @@ describe("interruptor e migração", () => {
     expect(automationFlagSuperAdminOnly(PONTO_MODOS_FLAG)).toBe(true);
   });
 
-  it("0720 só acrescenta, é idempotente e está registada por ordem", () => {
-    expect(SCHEMA_MIGRATION_IDS).toContain("0720");
-    expect(SCHEMA_MIGRATION_IDS[SCHEMA_MIGRATION_IDS.indexOf("0720") - 1] < "0720").toBe(true);
-    for (const s of MIGRATION_0720_STATEMENTS) {
+  it("0820 só acrescenta, é idempotente e está registada por ordem", () => {
+    expect(SCHEMA_MIGRATION_IDS).toContain("0820");
+    expect(SCHEMA_MIGRATION_IDS[SCHEMA_MIGRATION_IDS.indexOf("0820") - 1] < "0820").toBe(true);
+    for (const s of MIGRATION_0820_STATEMENTS) {
       expect(s).not.toMatch(/\b(DELETE|DROP|UPDATE|TRUNCATE|MODIFY)\b/i);
       if (/^CREATE TABLE/.test(s)) expect(s).toMatch(/IF NOT EXISTS/);
       else expect(s).toMatch(/^ALTER TABLE `[a-z_]+` ADD COLUMN `\w+` [A-Z]+(\(\d+\))? NULL$/);
     }
-    for (const c of ["ER_DUP_FIELDNAME", "ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME"]) expect(IDEMPOTENT_ERROR_CODES_0720.has(c)).toBe(true);
-    const all = MIGRATION_0720_STATEMENTS.join("\n");
+    for (const c of ["ER_DUP_FIELDNAME", "ER_TABLE_EXISTS_ERROR", "ER_DUP_KEYNAME"]) expect(IDEMPOTENT_ERROR_CODES_0820.has(c)).toBe(true);
+    const all = MIGRATION_0820_STATEMENTS.join("\n");
     for (const t of ["employee_ponto_modes", "ponto_alerts", "ponto_mode_acks"]) expect(all).toContain(`CREATE TABLE IF NOT EXISTS \`${t}\``);
     for (const c of ["pontoMode", "photoSource", "photoFileAgeS", "gpsAccuracyM", "createdByUserId"]) expect(all).toContain(`ALTER TABLE \`time_records\` ADD COLUMN \`${c}\``);
     expect(all).toContain("ALTER TABLE `employees` ADD COLUMN `pontoMode` VARCHAR(12) NULL");

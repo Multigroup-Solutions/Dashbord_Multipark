@@ -1,5 +1,7 @@
 ---
 modulo: reclamacoes
+grupo: Suporte
+pagina: reclamacoes
 titulo: Reclamações
 rotas: /reclamacoes
 palavras: reclamação, reclamações, por confirmar, por confirmar ia, é reclamação, não é reclamação, criada pela ia, reclamação escondida, reencaminhamento, livro de reclamações, cliente, 90 dias, ver todas, cliente respondeu, aviso ao responsável, queixa, dano, sujidade, atraso, cobrança, sla, prazo, email ao cliente, condutores envolvidos, quem mexeu no carro, em serviço, reserva, converter em perdido, em análise, aguarda cliente, arquivar, arquivadas, tirar do arquivo, eliminar, fotos, pontos, csv, anexar email, sincronizar emails, aviso de receção, sugestões da ia, emails do cliente, histórico de emails, todas as caixas, parece uma reclamação, criar reclamação, não é reclamação, origem, filtros, responsável, sem cidade, datas, telemóvel
