@@ -73,6 +73,8 @@ Caixas de email, **Envio de email (Gmail)** — o remetente só o super admin mu
   - **Hora apertada pela Fila (por cidade)**: ver acima.
   - **Hora da proposta automática de escala** (por omissão **{{regra:extras.autoProposeAt}}**) e **Dias propostos com antecedência** (por omissão {{regra:extras.autoProposeDaysAhead}} = só amanhã): só a primeira proposta de cada dia e cidade; não substitui uma escala já proposta ou confirmada e num dia mexido à mão já não mexe.
   - **Confirmar e avisar automaticamente** ({{regra:extras.autoConfirm}} por omissão) e **Hora da confirmação automática** (por omissão **{{regra:extras.autoConfirmAt}}**): a proposta de amanhã que ninguém confirmou nem suspendeu é confirmada a essa hora e os extras são avisados por WhatsApp e email.
+  - **Dia mexido à mão na hora da confirmação** (por omissão {{regra:extras.manualEditAtConfirm}}): confirmar na mesma, não confirmar e avisar o TL, o supervisor e o back office, ou só confirmar quando a última mudança à mão tiver mais de {{regra:extras.manualEditSettleMin}} min.
+  - **Lembretes da escala: a quem e em que dias (por cidade)**: papéis, dias da semana e contas a juntar para os lembretes {{regra:extras.reminderLeadMin}} min antes da proposta e da confirmação (por omissão TL e supervisor, todos os dias; só com o interruptor dos lembretes ligado).
   - **Ponto de encontro (aviso de escala)**: texto curto por cidade que vai no WhatsApp e no email da escala (vazio = não se indica).
 
 ## Notificações
