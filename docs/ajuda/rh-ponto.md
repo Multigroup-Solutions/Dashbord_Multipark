@@ -240,13 +240,14 @@ Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Defini
 - Pessoa, tipo (férias, baixa, não remunerada, ausência justificada; nos extras também "indisponível"), datas e nota. Entra **aprovada**, como sempre.
 - **Só parte do dia**: na ausência justificada (consulta, funeral…), um dia, de 0,25 h a 12 h. Nesse dia o atraso não conta; se a pessoa não vier de todo, continua a dar possível falta.
 - As tuas próprias férias não se lançam aqui: pedem-se (ninguém aprova as suas).
+- Não se lança por cima de outra ausência da mesma pessoa (pedida ou aprovada): cancela essa primeiro (fica no histórico) e lança a nova. Ex.: baixa a meio das férias → cancela as férias, lança a baixa e a pessoa volta a pedir os dias que faltam.
 
 **Regras que valem sempre**
 - **Nada se apaga.** Cancelar deixa a ausência no histórico, como "Cancelado".
 - Um **mês fechado** (ordenado aprovado ou pago) não muda: não se pede, aprova, cancela nem lança nada nesse mês.
 - Só as ausências **aprovadas** contam na folha, na Avaliação (atraso) e nas possíveis faltas. As pedidas, as recusadas e as canceladas não contam. O "indisponível" dos extras só conta no Extras-Dia.
 - As datas são validadas (AAAA-MM-DD, início antes do fim, no máximo um ano).
-- **Parceiro (empresa)**: tipo de contrato para os parceiros-empresa. Ficam fora do mapa de férias e da folha de ordenados; o salário fica só como referência para os custos.
+- **Parceiro (empresa)**: tipo de contrato para os parceiros-empresa. Ficam fora do mapa de férias e da folha de ordenados; o salário fica só como referência para os custos. Como tira a pessoa da folha, **só um administrador** põe ou tira este tipo (o supervisor e o back office mudam os outros).
 
 ## Dashboard RH: possíveis faltas e detalhe por colaborador
 
