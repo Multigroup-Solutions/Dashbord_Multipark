@@ -159,7 +159,7 @@ describe("regras geradas do código (rulesDocs.generated.ts)", () => {
     expect(RULES_DOCS.extras_dia.block).toMatch(/Hora apertada pela Fila» ligado na cidade \(desligado em todas as cidades por omissão\), o p75 da Fila/);
     const cr = RULES_DOCS.criticas.block;
     expect(cr).toMatch(/IA: rascunho automático para cada crítica nova», ligado por omissão/);
-    expect(cr).toMatch(/sem nenhuma, a da entrada cá/);
+    expect(cr).toMatch(/sem nenhuma, a data em que foi registada cá/);
     expect(cr).toMatch(/«não é crítica» ou como repetidas nunca levam rascunho automático/);
   });
 
