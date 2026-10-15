@@ -389,6 +389,11 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
               Ordena-se todos os casos dessa hora do mais rápido ao mais lento. O p75 é o valor a 75 % do caminho: em 3 de cada 4 vezes demorou isso ou menos, e só 1 em 4 demorou mais.
               Usa-se em vez da média para os dias maus contarem sem que um caso raro (um carro que ficou preso duas horas) estrague tudo. A mediana (p50) é o caso do meio.
             </p>
+            {pct !== 75 && (
+              <p className="mt-1">
+                O <b>Tempo por carro</b> nesta cidade usa o p{pct} (Definições → Parâmetros → Percentil do tempo por carro): o valor a {pct} % do caminho — em {pct} de cada 100 vezes demorou isso ou menos. {pct < 75 ? "É menos prudente do que o p75." : "É mais prudente do que o p75."} Os outros mapas usam sempre o p75, e a Semana da Atividade diária também.
+              </p>
+            )}
           </details>
         </CardContent>
       </Card>

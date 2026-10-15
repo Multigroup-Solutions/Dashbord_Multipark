@@ -306,7 +306,7 @@ export function knowledgeSource(viewerOf: (v: SearchViewer) => KbViewer): Search
       const { canSeeKbDoc, parseVisibility } = await import("../shared/knowledge");
       const kv = viewerOf(viewer);
       const rows = rowsOf(await d.execute(sql`SELECT d.id, d.title, d.folderPath, d.source, d.webViewLink, d.visibilityRoles, d.visibilityCities FROM kb_documents d
-        WHERE d.deletedAt IS NULL AND d.status = 'synced' AND d.source <> 'help' AND ${kbVisibilitySql(kv)}
+        WHERE d.deletedAt IS NULL AND d.status = 'synced' AND d.source <> 'help' AND d.source <> 'help_sec' AND ${kbVisibilitySql(kv)}
           AND (LOWER(d.title) LIKE ${q.like} OR LOWER(COALESCE(d.folderPath, '')) LIKE ${q.like})
         ORDER BY d.title LIMIT ${LIMIT}`));
       return rows

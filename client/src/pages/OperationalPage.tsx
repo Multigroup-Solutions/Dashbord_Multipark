@@ -48,6 +48,7 @@ import MonthEvaluationTab from "@/components/evaluation/MonthEvaluationTab";
 import { OPERATIONAL_TABS as TABS, operationalAccess, type OperationalTab as TabKey } from "@shared/operationalTabs";
 import { retryTransient } from "@/lib/queryRetry";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 /** Pode fazer `action` no módulo para além do que é seu? (a mesma regra do servidor) */
 function useCan(module: ModuleId, action: "view" | "edit" | "manage" = "view"): boolean {
@@ -66,6 +67,8 @@ export default function OperationalPage() {
   const { tabs: allowed, ownSpeedOnly } = operationalAccess(user as any);
   const [rawTab, setTab] = usePersistedState<string>("operacional.tab", "dia");
   const tab: TabKey = (allowed as string[]).includes(rawTab) ? (rawTab as TabKey) : (allowed[0] ?? "dia");
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab: ownSpeedOnly ? "history" : tab });
   // Links das notificações: /operacional?tab=pdas abre esse separador.
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");

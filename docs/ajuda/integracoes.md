@@ -1,5 +1,7 @@
 ---
 modulo: integracoes
+grupo: Sistema
+pagina: integracoes
 titulo: Integrações (estado das ligações externas)
 rotas: /integracoes
 palavras: central vodafone, tocar no dashboard, quem está a ligar, +351, click to call, one net, attendant console, consola, sugar crm, telefonemas, chamadas da central, windsor, aviso ao desligar, integração desligada, integrações, integracoes, ligações, testar ligação, estado desconhecido, sem problemas conhecidos, reautorização, religar, chave de cifra, google business, google ads, meta, whatsapp, gmail, zello, ia, gemini, drive, armazenamento, s3, base de dados, bd multipark, quem pode testar, limite de testes
@@ -29,7 +31,7 @@ Página **Integrações** (menu Sistema): um cartão por ligação externa — G
 
 **Avisos aos administradores**: quando uma ligação passa a precisar de religar ou dá erro, ou um cron para, os administradores recebem um aviso (uma vez por mudança). O detalhe vai sem segredos.
 
-**Central Vodafone (consola One Net)** (só o super admin)
+## Central Vodafone (consola One Net) (só o super admin)
 - A consola da Vodafone (One Net Attendant Console) só regista chamadas num CRM conhecido. A dashboard faz de **Sugar CRM**: cada chamada que a consola regista fica na dashboard em nome de quem atendeu ou fez, e conta no **Desempenho** (Pessoas → Condutores e agentes).
 - **Ligar**:
   1. Liga o interruptor **Central Vodafone: receber as chamadas da consola** (Definições → Automações; vem desligado). Desligado, a dashboard responde "desligada" e só regista que a consola tentou.

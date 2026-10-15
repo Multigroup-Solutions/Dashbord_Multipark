@@ -1,5 +1,7 @@
 ---
 modulo: ocorrencias
+grupo: Suporte
+pagina: ocorrencias
 titulo: Ocorrências
 rotas: /ocorrencias
 palavras: ocorrência, ocorrências, email de ocorrência, aviso da app, ocorrência por email, fechada sozinha, fecha sozinha, 3 dias, três dias, média, fechadas sozinhas, parques tratados, parques que a operação não faz, incidente, vidro aberto, carro aberto, acidente, foi um acidente, confirmar acidente, quem conduzia, desfazer acidente, menos 6000, atraso, prioridade, multipark, app multipark, resolver, resolvida, parque, matrícula, reserva, ocorrência antiga, csv, indisponível, tentar de novo

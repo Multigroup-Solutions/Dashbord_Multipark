@@ -30,7 +30,7 @@ import {
 } from "../shared/appSettings";
 
 const CACHE_TTL_MS = 30_000;
-let cache: { at: number; values: Map<string, unknown> } | null = null;
+let cache: { at: number; values: Map<string, unknown>; ok: boolean } | null = null;
 
 function rowsOf(res: unknown): any[] {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -57,12 +57,26 @@ async function loadAll(): Promise<Map<string, unknown>> {
     const res = await db.execute(sql`SELECT settingKey, \`value\` FROM app_settings`);
     for (const r of rowsOf(res)) values.set(String(r.settingKey), parseJsonValue(r.value));
   }
-  cache = { at: Date.now(), values };
+  cache = { at: Date.now(), values, ok: !!db };
   return values;
 }
 
 export function invalidateSettingsCache(): void {
   cache = null;
+}
+
+/**
+ * As definições deram para ler (há BD e a consulta correu)? Usa a mesma cache
+ * do getSetting, por isso é barato. Serve para distinguir "nada gravado → a
+ * omissão" de "sem BD → a omissão por recurso" (plano MPV F2). Nunca lança.
+ */
+export async function settingsReadable(): Promise<boolean> {
+  try {
+    await loadAll();
+    return cache?.ok === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

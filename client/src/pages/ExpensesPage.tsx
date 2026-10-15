@@ -92,6 +92,7 @@ import { utcMs } from "@shared/lisbonDay";
 import { canMarkPaidOnCreate, defaultCreatePaymentMethod, isFuturePaidAt, paymentOnCreate } from "@shared/expenseCreatePayment";
 import { orderExpenseCategories } from "@shared/expenseCategories";
 import { SearchPicker, CostCentrePicker } from "@/components/expenses/ExpensePickers";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 const PAID_BY_LABELS: Record<string, string> = { company: "Empresa", employee: "Colaborador" };
 
@@ -299,6 +300,8 @@ export default function ExpensesPage() {
   // escondia a lista e não havia separador para voltar.
   const canResumo = canManage && showTotals;
   const shownTab = canResumo ? tab : "lista";
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab: shownTab });
   const { data: categories } = trpc.categories.list.useQuery();
   const { data: projectsList } = trpc.projects.list.useQuery();
   // Quem comprou: só team leader e acima, das cidades de quem lança (id + nome) — expenses.buyers

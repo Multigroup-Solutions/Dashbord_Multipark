@@ -22,7 +22,18 @@ import { selectProvider } from "../_core/ai/client";
 import { CHAT_MESSAGES } from "../_core/ai/chat/engine";
 import { deleteConversation, listConversations, loadMessages, resolveConversation } from "../_core/ai/chat/store";
 import type { StaffToolCtx } from "./tools";
-import { ASSISTANT_CHANNEL, ASSISTANT_FEATURE, askAssistant, assistantLimits, lisbonDay, ownerKeyFor, staffHelpDocs } from "./service";
+import { AI_FEATURES } from "../../shared/aiFeatures";
+import { ASSISTANT_CHANNEL, economyNote, askAssistant, assistantLimits, assistantModeFor, lisbonDay, ownerKeyFor, staffHelpDocs } from "./service";
+import { mpvSuggestions } from "./mpv";
+import { sanitizeMultisPage } from "../../shared/multisPage";
+
+/**
+ * Contexto da página (plano MPV §3.1): o widget manda o separador e o registo
+ * abertos; o servidor valida-os contra as listas do código (sanitizeMultisPage)
+ * e ignora o resto. Só informação para o <contexto> — não dá acesso a nada.
+ */
+const pageEntityInput = z.object({ type: z.string().max(20), id: z.number() }).partial().nullable().optional().catch(undefined);
+const pageTabInput = z.string().max(40).optional().catch(undefined);
 
 type Ctx = { req: any; res: any; user: any; accessDenied?: boolean };
 
@@ -45,7 +56,7 @@ async function toolCtxFor(ctx: Ctx): Promise<StaffToolCtx> {
   return { user, access, call, today: lisbonDay(), financeAllowed, helpDocs: staffHelpDocs() };
 }
 
-async function logToolCall(userId: number, name: string, args: Record<string, unknown>, conversationId: number | null) {
+async function logToolCall(userId: number, name: string, args: Record<string, unknown>, conversationId: number | null, status?: "recusada") {
   try {
     const { logActivity } = await import("../db");
     await logActivity({
@@ -53,7 +64,7 @@ async function logToolCall(userId: number, name: string, args: Record<string, un
       action: "assistant_tool",
       entity: "assistant",
       entityId: conversationId != null && conversationId <= 2_147_483_647 ? conversationId : null,
-      details: JSON.stringify({ tool: name, params: args }).slice(0, 1000),
+      details: JSON.stringify({ tool: name, params: args, ...(status ? { estado: status } : {}) }).slice(0, 1000),
     });
   } catch { /* o registo nunca parte o chat */ }
 }
@@ -61,16 +72,26 @@ async function logToolCall(userId: number, name: string, args: Record<string, un
 export const assistantRouter = router({
   /** Pode usar? (para esconder/mostrar e dar a mensagem certa) + sugestões da página. */
   status: protectedProcedure
-    .input(z.object({ path: z.string().max(200).optional() }).optional())
+    .input(z.object({ path: z.string().max(200).optional(), tab: pageTabInput, entity: pageEntityInput }).optional())
     .query(async ({ ctx, input }) => {
       const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
-      const limits = await assistantLimits();
-      const suggestions = assistantSuggestions(input?.path, withOverrides(ctx.user));
+      // Plano MPV §5.2/§5.3: a funcionalidade EFETIVA desta pessoa (piloto smart, modo económico ou a de sempre).
+      const mode = await assistantModeFor(ctx.user.id);
+      const feature = mode.feature;
+      const limits = await assistantLimits(feature);
+      // MPV (F3): no piloto, as perguntas do perfil da página/separador; sem perfil próprio, as do v1.
+      const viewer = withOverrides(ctx.user);
+      const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, await toolCtxFor(ctx as Ctx)) : null;
+      const suggestions = mpvAsks ?? assistantSuggestions(input?.path, viewer);
       // Multis 2: mostrar a Memória? e o link "Perguntas que falharam" (admins).
       const { assistantMemoryEnabled } = await import("./memory");
-      const extra = { memoryEnabled: await assistantMemoryEnabled(), canReview: isMultisAdmin(ctx.user.role) };
-      if (!(await aiFeatureAvailableFresh(ASSISTANT_FEATURE))) {
-        const reason = selectProvider(process.env, ASSISTANT_FEATURE) ? "disabled" : "not_configured";
+      const extra = {
+        memoryEnabled: await assistantMemoryEnabled(), canReview: isMultisAdmin(ctx.user.role),
+        feature, tier: AI_FEATURES[feature].tier, pilot: mode.pilot, economy: mode.economy,
+        economyNote: mode.economy ? economyNote(mode.economyReason) : null,
+      };
+      if (!(await aiFeatureAvailableFresh(feature))) {
+        const reason = selectProvider(process.env, feature) ? "disabled" : "not_configured";
         return { available: false, reason, message: CHAT_MESSAGES[reason], maxInputChars: limits.maxInputChars, suggestions, ...extra };
       }
       try {
@@ -118,11 +139,15 @@ export const assistantRouter = router({
       conversationId: z.number().int().positive().nullable().optional(),
       newConversation: z.boolean().optional(),
       path: z.string().max(200).optional(),
+      tab: pageTabInput,
+      entity: pageEntityInput,
     }))
     .mutation(async ({ ctx, input }) => {
       const toolCtx = await toolCtxFor(ctx as Ctx);
       return askAssistant(input, toolCtx, {
         logToolCall: (name, args, conversationId) => logToolCall(ctx.user.id, name, args, conversationId),
+        // MPV: a chamada recusada (sem acesso) fica registada à parte, como "recusada".
+        logToolRefused: (name, args, conversationId) => logToolCall(ctx.user.id, name, args, conversationId, "recusada"),
       });
     }),
 

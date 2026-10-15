@@ -1,5 +1,7 @@
 ---
 modulo: definicoes
+grupo: Sistema
+pagina: definicoes.google-tempo-real
 titulo: Google em tempo real (Calendário, Drive, Tarefas e Contactos)
 rotas: /definicoes, /perfil
 palavras: google, tempo real, sincronização, sincronizar, calendário, google calendar, drive, tarefas, google tasks, contactos, notificações da google, push, webhook, canal, canais, renovar, 4 horas, rede de segurança, heartbeat, online, sincronizar agora, atrasado, não aparece

@@ -1,5 +1,7 @@
 ---
 modulo: perdidos
+grupo: Suporte
+pagina: perdidos
 titulo: Perdidos e Achados
 rotas: /perdidos-achados
 palavras: perdidos, achados, por confirmar, criado pela ia, perdido por email, é um perdido, não é um perdido, marcar como devolvido, como foi devolvido, data da devolução, parado há, perdido, objeto, item, esquecido, encontrado, devolução, devolver, entregar ao cliente, cruzamento de condutores, documentos, eletrónica, acessórios, correspondências, sem cidade, prazo, lembretes, arquivar, arquivados, tirar do arquivo, eliminar, pontos, avisar cliente, quem mexeu no carro
@@ -37,7 +39,7 @@ Objetos esquecidos pelos clientes nos carros.
 - No cartão "Dados da Reserva", **Abrir ficha da reserva** mostra tudo sobre a reserva, lido em tempo real da Multipark.
 - Se afinal é uma reclamação, **Converter em Reclamação** (admin).
 
-**Condutores do caso** (team leader e acima)
+## Condutores do caso (team leader e acima)
 - **Quem mexeu no carro**: agentes da Multipark com ações na matrícula, ligados à ficha pela conta do agente (nunca pelo nome); ações de sistema/API não contam.
 - **Anexar** leva a ficha da pessoa; **Tirar** pede confirmação, anula os pontos por confirmar e fica registado.
 - **Pontos a um condutor**: quem gere o caso propõe (só a uma ficha anexada); **só um supervisor (ou acima) confirma**, e nunca quem os propôs. Aos 3 pontos confirmados o login da pessoa fica bloqueado. Só dá para anexar e propor pontos a pessoas das tuas cidades.

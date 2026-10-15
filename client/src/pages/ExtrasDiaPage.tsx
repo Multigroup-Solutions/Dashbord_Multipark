@@ -57,8 +57,10 @@ import { LicenceWarning } from "./extrasDia/LicenceWarning";
 import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
 import { StaffingBanner, StaffingGapList } from "./extrasDia/StaffingIndicator";
 import { NotifyShiftDialog } from "./extrasDia/NotifyShiftDialog";
+import type { ExtrasDiaTab } from "@shared/multisPage";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
 import { assignmentWhoLine, describeGap, describePickupPairing, manualTouchLabel, removedOutText } from "@shared/extrasSchedule";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 // Valores por defeito — as taxas vivas vêm de `extra_rates` (a mesma fonte do
 // servidor: server/extraRates.ts). A escala é a ESTIMATIVA do custo do dia;
@@ -157,7 +159,9 @@ export default function ExtrasDiaPage() {
   // baseDate + 1 (previsão do dia seguinte), por isso baseDate = dia − 1.
   const [baseDate, setBaseDate] = useState(() => baseDateFromUrl() ?? todayISO());
 
-  const [tab, setTab] = usePersistedState<"dia" | "pressao">("extrasdia.tab", "dia");
+  const [tab, setTab] = usePersistedState<ExtrasDiaTab>("extrasdia.tab", "dia");
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab });
   const { user } = useAuth();
   const costQ = trpc.extrasDia.costAccess.useQuery(undefined, { staleTime: 5 * 60_000 });
   const access: ExtrasAccess = {
@@ -666,6 +670,16 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
                 Proposta automática às {d.settings.autoProposeAt}
                 {d.settings.autoConfirm ? ` · confirmação e avisos (WhatsApp + email) automáticos às ${d.settings.autoConfirmAt}` : " · confirmação automática desligada"}
                 {" "}(hora de Lisboa, no dia anterior).
+              </p>
+            )}
+            {/* Plano MPV F7 (D4b): o que a confirmação automática faz a este dia, mexido à mão. */}
+            {d?.state?.manual && d.settings.autoConfirm && d.state.status === "proposed" && (
+              <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5">
+                {d.settings.manualEditAtConfirm === "confirm"
+                  ? `Mexido à mão: às ${d.settings.autoConfirmAt} é confirmado na mesma, como está.`
+                  : d.settings.manualEditAtConfirm === "if_older_30m"
+                    ? `Mexido à mão: só é confirmado sozinho 30 min depois da última mudança.`
+                    : `Mexido à mão: às ${d.settings.autoConfirmAt} não é confirmado sozinho${d.settings.alertsOn ? " (o TL, o supervisor e o back office são avisados)" : ""} — confirma tu.`}
               </p>
             )}
           </div>

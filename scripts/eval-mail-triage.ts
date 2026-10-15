@@ -15,6 +15,8 @@
 //   pnpm tsx scripts/eval-mail-triage.ts --corpus controlo     (o de controlo; "cego" = o da auditoria; "todos" = os três)
 //   pnpm tsx scripts/eval-mail-triage.ts --limit 20            (os primeiros 20)
 //   pnpm tsx scripts/eval-mail-triage.ts --json                (resultado em JSON)
+//   pnpm tsx scripts/eval-mail-triage.ts --thinking minimal    (plano MPV F6b, T1: com raciocínio "minimal";
+//                                                               "env" = o de hoje; as Definições não contam)
 //
 // Avaliação SEM chave de IA (substituto offline, para quem audita):
 //   --dump DIR      grava em DIR o pedido EXATO de cada email que a IA leria
@@ -50,6 +52,11 @@ if (!keys.length) {
   process.exit(2);
 }
 const limitArg = opt("--limit");
+const thinkingArg = opt("--thinking");
+if (thinkingArg && !["minimal", "low", "medium", "high", "default", "env"].includes(thinkingArg)) {
+  console.error("--thinking tem de ser minimal, low, medium, high, default ou env.");
+  process.exit(2);
+}
 const corpusFor = (k: TriageCorpusKey): readonly TriageCorpusItem[] => {
   const all = TRIAGE_CORPORA[k];
   return limitArg ? all.slice(0, Math.max(1, Number(limitArg) || all.length)) : all;
@@ -109,7 +116,7 @@ async function runCorpus(k: TriageCorpusKey, classifyFor: ((item: TriageCorpusIt
     model = "substituto (respostas gravadas)";
   } else {
     for (let offset = 0; offset < corpus.length; offset += 12) {
-      const r = await evalTriageSlice({ offset, limit: 12, concurrency: 4 }, { corpus });
+      const r = await evalTriageSlice({ offset, limit: 12, concurrency: 4, ...(thinkingArg ? { thinkingLevel: thinkingArg as any } : {}) }, { corpus });
       items.push(...r.items);
       model = model ?? r.model;
       if (!json) process.stdout.write(`\r${items.length} de ${corpus.length}…`);

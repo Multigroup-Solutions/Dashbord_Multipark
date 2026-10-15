@@ -332,9 +332,9 @@ describe("deduplicação dos avisos", () => {
     expect(pendingScheduleNotifications(rows, l, "whatsapp").map((r) => r.id)).toEqual([2]); // v2 ainda não
     expect(pendingScheduleNotifications(rows, l, "email").map((r) => r.id)).toEqual([1, 2]); // canal diferente
   });
-  it("falhado repete até 3 tentativas", () => {
-    expect(notificationDone({ id: 1, version: 1 }, [log({ status: "failed", attempts: 2 })], "scheduled", "whatsapp")).toBe(false);
-    expect(notificationDone({ id: 1, version: 1 }, [log({ status: "failed", attempts: 3 })], "scheduled", "whatsapp")).toBe(true);
+  it("falhado repete até 4 tentativas (plano MPV F7; a espera entre elas é da reserva no servidor)", () => {
+    expect(notificationDone({ id: 1, version: 1 }, [log({ status: "failed", attempts: 3 })], "scheduled", "whatsapp")).toBe(false);
+    expect(notificationDone({ id: 1, version: 1 }, [log({ status: "failed", attempts: 4 })], "scheduled", "whatsapp")).toBe(true);
   });
   it("avisos antigos (antes da 0115) contam como enviados na versão 1", () => {
     expect(pendingScheduleNotifications(rows, [], "whatsapp", new Set([1])).map((r) => r.id)).toEqual([2]);
@@ -391,10 +391,9 @@ describe("idempotência de propor e confirmar (BD simulada)", () => {
     const a = { id: 1, version: 1, employeeId: 11, assignmentDate: "2026-09-25", city: "lisbon" };
     dbState.affected = [1];
     expect(await claimNotification(a, "scheduled", "whatsapp")).toBe(true);
-    dbState.affected = [0, 0]; // já existe e não está falhada
+    dbState.affected = [0]; // já existe; a leitura do estado não traz uma falha por repetir
     expect(await claimNotification(a, "scheduled", "whatsapp")).toBe(false);
-    dbState.affected = [0, 1]; // existia falhada (< 3 tentativas) → retoma
-    expect(await claimNotification(a, "scheduled", "whatsapp")).toBe(true);
+    // A espera crescente (30 × tentativas min) e o compare-and-set estão nos testes do F7 (mpvF7Extras.test.ts).
   });
 });
 

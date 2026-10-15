@@ -97,6 +97,11 @@ export class BusinessClient {
     return this.get<{ reviews?: GoogleReview[]; nextPageToken?: string; totalReviewCount?: number }>('mybusiness.googleapis.com',
       `/v4/${account}/${location}/reviews`, { pageSize: '50', orderBy: 'updateTime desc', ...(pageToken ? { pageToken } : {}) });
   }
+  /** Uma crítica (v4 reviews.get) — plano MPV F7: ler na fonte antes de publicar sozinho. */
+  review(reviewName: string) {
+    if (!reviewPattern.test(reviewName)) throw new Error('Crítica Google inválida.');
+    return this.get<GoogleReview>('mybusiness.googleapis.com', `/v4/${reviewName}`);
+  }
   /** Publicações (v4 localPosts). */
   listPosts(account: string, location: string, pageSize = 20) {
     if (!accountPattern.test(account) || !locationPattern.test(location)) throw new Error('Estabelecimento Google inválido.');

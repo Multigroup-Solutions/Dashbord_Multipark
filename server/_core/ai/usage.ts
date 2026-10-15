@@ -8,13 +8,20 @@
  *  - Orçamento (`ai.monthlyBudgetEur` → AI_MONTHLY_BUDGET_EUR → 30 €), por mês
  *    civil UTC: ≥100% bloqueia as funcionalidades não essenciais, ≥150% todas;
  *    na primeira vez de cada mês avisa os admins (ai_budget_alerts).
+ *  - Funcionalidades com TETO PRÓPRIO (plano MPV §5.3, `ownBudget` no catálogo:
+ *    hoje só o `assistant_smart`) NÃO entram na soma que bloqueia as outras
+ *    (`monthSpendEur`/`spendCache`); têm o seu teto por dia, por mês e por
+ *    pessoa por dia (`ownBudgetCheck`). O cartão do custo mostra-as na mesma.
  */
 import { sql } from "drizzle-orm";
-import type { AiPriceOverrides } from "../../../shared/appSettings";
+import { AI_ASSISTANT_SMART_DEFAULT_BUDGET, type AiAssistantSmartBudget, type AiPriceOverrides } from "../../../shared/appSettings";
 import { AiBudgetExceededError } from "./errors";
-import { AI_FEATURES, isAiFeature } from "../../../shared/aiFeatures";
+import { AI_FEATURES, AI_OWN_BUDGET_FEATURES, hasOwnBudget, isAiFeature } from "../../../shared/aiFeatures";
 
 export type AiUsageStatus = "ok" | "error" | "blocked";
+
+/** Linhas do armazenamento da cache de contexto (contextCache.ts) — à parte no cartão. */
+const CONTEXT_CACHE_STORAGE = "context_cache_storage";
 
 export interface AiUsageRow {
   feature: string;
@@ -86,21 +93,248 @@ export function budgetDecision(spentEur: number, budgetEur: number, essential: b
 // ─── Gasto do mês (cache curta por processo) ────────────────────────────────
 
 let spendCache: { month: string; at: number; value: number } | null = null;
+/** Teto próprio: gasto da funcionalidade (dia e mês) e de cada pessoa no dia — 60 s por instância. */
+const ownSpendCache = new Map<string, { day: string; month: string; at: number; dayEur: number; monthEur: number }>();
+const ownUserDayCache = new Map<string, { day: string; at: number; value: number }>();
 
 /** Só testes. */
 export function resetAiUsageCachesForTests(): void {
   spendCache = null;
+  ownSpendCache.clear();
+  ownUserDayCache.clear();
+  reservations.clear();
 }
 
+/** `AND feature NOT IN (…)` das funcionalidades com teto próprio (vazio se não houver). */
+function excludeOwnBudgetSql() {
+  if (!AI_OWN_BUDGET_FEATURES.length) return sql``;
+  return sql` AND feature NOT IN (${sql.join(AI_OWN_BUDGET_FEATURES.map((f) => sql`${f}`), sql`, `)})`;
+}
+
+/**
+ * Gasto do mês que conta para o orçamento GLOBAL — sem as funcionalidades com
+ * teto próprio (plano MPV §5.3: o assistant_smart nunca faz bloquear as outras).
+ */
 export async function monthSpendEur(now: number = Date.now(), opts: { fresh?: boolean } = {}): Promise<number> {
   const b = monthBounds(now);
   if (!opts.fresh && spendCache && spendCache.month === b.month && now - spendCache.at < SPEND_CACHE_MS) return spendCache.value;
   const d = await db();
   if (!d) return spendCache?.month === b.month ? spendCache.value : 0;
-  const res = await d.execute(sql`SELECT COALESCE(SUM(costEur), 0) AS spent FROM ai_usage_log WHERE createdAt >= ${b.start} AND createdAt < ${b.end}`);
+  const res = await d.execute(sql`SELECT COALESCE(SUM(costEur), 0) AS spent FROM ai_usage_log WHERE createdAt >= ${b.start} AND createdAt < ${b.end}${excludeOwnBudgetSql()}`);
   const value = Number(rowsOf(res)[0]?.spent ?? 0) || 0;
   spendCache = { month: b.month, at: now, value };
   return value;
+}
+
+// ─── Teto próprio (plano MPV §5.3) ──────────────────────────────────────────
+
+const LISBON_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+});
+
+/** Diferença (ms) entre a hora de Lisboa e a UTC num instante. PURA. */
+function lisbonOffsetMs(at: number): number {
+  const p = Object.fromEntries(LISBON_PARTS.formatToParts(new Date(at)).map((x) => [x.type, x.value]));
+  const wall = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second));
+  return wall - Math.floor(at / 1000) * 1000;
+}
+
+/**
+ * Dia civil de LISBOA (como o resto da aplicação): rótulo e limites [início,
+ * fim) em UTC, para o teto diário. A hora muda à 01:00 UTC, por isso a
+ * diferença à meia-noite UTC é a da meia-noite de Lisboa. PURA.
+ */
+export function dayBounds(now: number | Date = Date.now()): { day: string; start: string; end: string } {
+  const t = new Date(now).getTime();
+  const p = Object.fromEntries(LISBON_PARTS.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  const y = Number(p.year), m = Number(p.month) - 1, d = Number(p.day);
+  const midnight = (yy: number, mm: number, dd: number) => { const u = Date.UTC(yy, mm, dd); return u - lisbonOffsetMs(u); };
+  const start = new Date(midnight(y, m, d));
+  const end = new Date(midnight(y, m, d + 1));
+  return { day: `${p.year}-${p.month}-${p.day}`, start: mysqlUtc(start).slice(0, 19), end: mysqlUtc(end).slice(0, 19) };
+}
+
+/** "unknown" = não se conseguiu medir o gasto (erro): por prudência, não corre (modo económico). */
+export type OwnBudgetReason = "day" | "month" | "user_day" | "unknown";
+
+export interface OwnBudgetSpend {
+  dayEur: number;
+  monthEur: number;
+  /** Da pessoa, hoje (0 sem pessoa). */
+  userDayEur: number;
+}
+
+/** Reserva à cabeça por turno em curso (≈ o máximo estimado de uma pergunta no smart, plano §5.3). */
+export const OWN_BUDGET_TURN_RESERVE_EUR = 0.2;
+/** A partir desta fração de um teto, o gasto lê-se sempre da BD (sem a cache de 60 s). */
+export const OWN_BUDGET_FRESH_RATIO = 0.8;
+
+/** Teto próprio atingido? null = pode correr. Ordem: pessoa, dia, mês. PURA. */
+export function ownBudgetDecision(spend: OwnBudgetSpend, budget: AiAssistantSmartBudget, hasUser: boolean): Exclude<OwnBudgetReason, "unknown"> | null {
+  if (hasUser && budget.eurPerUserPerDay > 0 && spend.userDayEur >= budget.eurPerUserPerDay) return "user_day";
+  if (budget.eurPerDay > 0 && spend.dayEur >= budget.eurPerDay) return "day";
+  if (budget.eurPerMonth > 0 && spend.monthEur >= budget.eurPerMonth) return "month";
+  return null;
+}
+
+/** Algum dos gastos já passou de OWN_BUDGET_FRESH_RATIO do seu teto? PURA. */
+export function ownBudgetNearCap(spend: OwnBudgetSpend, budget: AiAssistantSmartBudget, hasUser: boolean): boolean {
+  const near = (v: number, cap: number) => cap > 0 && v >= cap * OWN_BUDGET_FRESH_RATIO;
+  return (hasUser && near(spend.userDayEur, budget.eurPerUserPerDay)) || near(spend.dayEur, budget.eurPerDay) || near(spend.monthEur, budget.eurPerMonth);
+}
+
+/** Teto em vigor de uma funcionalidade com teto próprio (Definições → omissão). Nunca lança. */
+export async function getOwnBudget(feature: string): Promise<AiAssistantSmartBudget> {
+  // Hoje só o assistant_smart tem teto próprio (ai.assistantSmartBudget).
+  void feature;
+  try {
+    const { getSetting } = await import("../../appSettings");
+    const v = await getSetting("ai.assistantSmartBudget");
+    if (v && typeof v === "object") return { ...AI_ASSISTANT_SMART_DEFAULT_BUDGET, ...v };
+  } catch { /* sem BD: omissão */ }
+  return { ...AI_ASSISTANT_SMART_DEFAULT_BUDGET };
+}
+
+/**
+ * Gasto de uma funcionalidade com teto próprio: hoje (dia de Lisboa) e este
+ * mês (UTC, como o orçamento global) e, com `userId`, o da pessoa hoje — pelo
+ * índice (feature, userId, createdAt). Cache de 60 s por instância (o registo
+ * de cada chamada soma à cache). Sem BD → 0. Lança se a BD falhar.
+ */
+export async function ownBudgetSpend(feature: string, userId: number | null | undefined, now: number = Date.now(), opts: { fresh?: boolean } = {}): Promise<OwnBudgetSpend> {
+  const m = monthBounds(now);
+  const dd = dayBounds(now);
+  const d = await db();
+  let dayEur = 0;
+  let monthEur = 0;
+  const hit = ownSpendCache.get(feature);
+  if (!opts.fresh && hit && hit.day === dd.day && hit.month === m.month && now - hit.at < SPEND_CACHE_MS) {
+    dayEur = hit.dayEur;
+    monthEur = hit.monthEur;
+  } else if (d) {
+    // O dia de Lisboa pode começar antes do mês UTC (verão): lê desde o mais cedo dos dois.
+    const from = dd.start < m.start ? dd.start : m.start;
+    const res = await d.execute(sql`
+      SELECT COALESCE(SUM(CASE WHEN createdAt >= ${dd.start} AND createdAt < ${dd.end} THEN costEur ELSE 0 END), 0) AS dayEur,
+             COALESCE(SUM(CASE WHEN createdAt >= ${m.start} THEN costEur ELSE 0 END), 0) AS monthEur
+        FROM ai_usage_log
+       WHERE feature = ${feature} AND createdAt >= ${from} AND createdAt < ${m.end}`);
+    const r = rowsOf(res)[0] ?? {};
+    dayEur = Number(r.dayEur ?? 0) || 0;
+    monthEur = Number(r.monthEur ?? 0) || 0;
+    ownSpendCache.set(feature, { day: dd.day, month: m.month, at: now, dayEur, monthEur });
+  } else if (hit && hit.day === dd.day && hit.month === m.month) {
+    dayEur = hit.dayEur;
+    monthEur = hit.monthEur;
+  }
+  let userDayEur = 0;
+  if (userId != null) {
+    const key = `${feature}|${userId}`;
+    const u = ownUserDayCache.get(key);
+    if (!opts.fresh && u && u.day === dd.day && now - u.at < SPEND_CACHE_MS) userDayEur = u.value;
+    else if (d) {
+      const res = await d.execute(sql`
+        SELECT COALESCE(SUM(costEur), 0) AS spent
+          FROM ai_usage_log
+         WHERE feature = ${feature} AND userId = ${userId} AND createdAt >= ${dd.start} AND createdAt < ${dd.end}`);
+      userDayEur = Number(rowsOf(res)[0]?.spent ?? 0) || 0;
+      ownUserDayCache.set(key, { day: dd.day, at: now, value: userDayEur });
+    } else if (u && u.day === dd.day) userDayEur = u.value;
+  }
+  return { dayEur, monthEur, userDayEur };
+}
+
+// Reservas à cabeça dos turnos em curso nesta instância. Cada uma tem validade:
+// se a função morrer a meio (limite da Vercel) sem a libertar, deixa de contar sozinha.
+interface OwnReservation { feature: string; userKey: string | null; eur: number; expiresAt: number }
+const reservations = new Map<number, OwnReservation>();
+let reservationSeq = 0;
+/** Validade por omissão de uma reserva (sem prazo do chamador). */
+export const OWN_BUDGET_RESERVATION_TTL_MS = 120_000;
+
+/** Soma das reservas válidas (e esquece as expiradas). */
+function reservedSum(feature: string, userKey: string | null, now: number): { feature: number; user: number } {
+  let f = 0;
+  let u = 0;
+  for (const [id, r] of reservations) {
+    if (r.expiresAt <= now) { reservations.delete(id); continue; }
+    if (r.feature !== feature) continue;
+    f += r.eur;
+    if (userKey && r.userKey === userKey) u += r.eur;
+  }
+  return { feature: f, user: u };
+}
+
+/**
+ * Reserva à cabeça `eur` (omissão OWN_BUDGET_TURN_RESERVE_EUR; o runAi passa
+ * a estimativa do turno, ownBudgetTurnEstimateEur) para um turno em curso: os
+ * pedidos que chegam ao mesmo tempo contam com ela. Devolve a função que a
+ * liberta (uma vez; o runAi chama-a antes de registar o custo real). Expira ao
+ * fim de `ttlMs` (o runAi passa 2× o prazo do pedido). Funcionalidade sem teto
+ * próprio → nada.
+ */
+export function reserveOwnBudget(
+  feature: string, userId: number | null | undefined, eur: number = OWN_BUDGET_TURN_RESERVE_EUR,
+  opts: { ttlMs?: number; now?: number } = {},
+): () => void {
+  if (!hasOwnBudget(feature) || !(eur > 0)) return () => undefined;
+  const id = ++reservationSeq;
+  const now = opts.now ?? Date.now();
+  const ttl = Math.max(1_000, opts.ttlMs ?? OWN_BUDGET_RESERVATION_TTL_MS);
+  reservations.set(id, { feature, userKey: userId != null ? `${feature}|${userId}` : null, eur, expiresAt: now + ttl });
+  return () => { reservations.delete(id); };
+}
+
+/** Só testes. */
+export function ownBudgetReservedForTests(feature: string, userId?: number | null, now: number = Date.now()): { feature: number; user: number } {
+  return reservedSum(feature, userId != null ? `${feature}|${userId}` : null, now);
+}
+
+/**
+ * Estimativa do custo MÁXIMO de um turno, para a reserva (auditoria do F0b):
+ * por chamada, o teto de saída × preço de saída + a entrada estimada × preço
+ * de entrada; × as chamadas possíveis (as voltas de ferramentas + a final, ou
+ * 1 sem ferramentas). Nunca abaixo de OWN_BUDGET_TURN_RESERVE_EUR. PURA.
+ */
+export function ownBudgetTurnEstimateEur(p: {
+  price: { input: number; output: number }; maxOutputTokens: number; inputTokens: number; calls: number;
+}): number {
+  const perCall = (Math.max(0, p.maxOutputTokens) * p.price.output + Math.max(0, p.inputTokens) * p.price.input) / 1_000_000;
+  const est = perCall * Math.max(1, Math.floor(p.calls));
+  return Math.max(OWN_BUDGET_TURN_RESERVE_EUR, Math.round(est * 1_000_000) / 1_000_000);
+}
+
+/**
+ * Pode esta funcionalidade (com teto próprio) correr agora para esta pessoa?
+ * Conta o gasto registado + as reservas dos turnos em curso nesta instância;
+ * acima de 80 % de um teto lê sempre da BD (sem a cache). Funcionalidade sem
+ * teto próprio → ok. Erro a medir → NÃO (reason "unknown": quem chama desce
+ * para o lite). Sem BD → ok (não há registo a ler). Nunca lança.
+ *
+ * Limite do excesso: cada instância só vê as suas reservas; o gasto das
+ * outras chega pela BD (≤ 60 s de atraso abaixo dos 80 %, nenhum acima). O
+ * teto pode passar, no máximo, ≈ (turnos em curso nas outras instâncias × a
+ * estimativa de cada um, ≥ 0,20 €) + o que um turno gastar acima da estimativa.
+ */
+export async function ownBudgetCheck(feature: string, userId: number | null | undefined, now: number = Date.now()): Promise<{ ok: boolean; reason: OwnBudgetReason | null; spend: OwnBudgetSpend; budget: AiAssistantSmartBudget }> {
+  const budget = await getOwnBudget(feature);
+  const zero: OwnBudgetSpend = { dayEur: 0, monthEur: 0, userDayEur: 0 };
+  if (!hasOwnBudget(feature)) return { ok: true, reason: null, spend: zero, budget };
+  const hasUser = userId != null;
+  const withReserved = (s: OwnBudgetSpend): OwnBudgetSpend => {
+    const r = reservedSum(feature, hasUser ? `${feature}|${userId}` : null, now);
+    const rf = r.feature;
+    const ru = r.user;
+    return { dayEur: s.dayEur + rf, monthEur: s.monthEur + rf, userDayEur: s.userDayEur + ru };
+  };
+  try {
+    let spend = withReserved(await ownBudgetSpend(feature, userId, now));
+    if (ownBudgetNearCap(spend, budget, hasUser)) spend = withReserved(await ownBudgetSpend(feature, userId, now, { fresh: true }));
+    const reason = ownBudgetDecision(spend, budget, hasUser);
+    return { ok: reason == null, reason, spend, budget };
+  } catch {
+    return { ok: false, reason: "unknown", spend: zero, budget };
+  }
 }
 
 export async function getMonthlyBudgetEur(env: Record<string, string | undefined> = process.env): Promise<number> {
@@ -167,7 +401,17 @@ const int = (v: unknown) => Math.max(0, Math.min(2_000_000_000, Math.round(Numbe
 export async function logAiUsage(row: AiUsageRow, now: Date = new Date()): Promise<void> {
   const cost = Math.max(0, Number(row.costEur) || 0);
   const month = monthBounds(now.getTime()).month;
-  if (spendCache && spendCache.month === month) spendCache = { ...spendCache, value: spendCache.value + cost };
+  if (hasOwnBudget(row.feature)) {
+    // Teto próprio: soma às caches da funcionalidade (nunca à do orçamento global).
+    const day = dayBounds(now.getTime()).day;
+    const f = ownSpendCache.get(row.feature);
+    if (f && f.month === month && f.day === day) ownSpendCache.set(row.feature, { ...f, dayEur: f.dayEur + cost, monthEur: f.monthEur + cost });
+    if (row.userId != null) {
+      const key = `${row.feature}|${row.userId}`;
+      const u = ownUserDayCache.get(key);
+      if (u && u.day === day) ownUserDayCache.set(key, { ...u, value: u.value + cost });
+    }
+  } else if (spendCache && spendCache.month === month) spendCache = { ...spendCache, value: spendCache.value + cost };
   try {
     const d = await db();
     if (!d) return;
@@ -215,6 +459,14 @@ export interface AiUsageFeatureSummary {
   outputTokens: number;
   costEur: number;
   avgLatencyMs: number;
+  /** Teto próprio (fora do orçamento global, plano MPV §5.3). */
+  ownBudget: boolean;
+  /**
+   * Armazenamento da cache de contexto (linhas entity = context_cache_storage):
+   * à parte — não conta nas chamadas, na latência nem no custo por pergunta
+   * (`costEur`), mas conta no gasto do mês.
+   */
+  storageEur: number;
 }
 
 export async function aiUsageSummary(now: number = Date.now()) {
@@ -225,13 +477,14 @@ export async function aiUsageSummary(now: number = Date.now()) {
   if (d) {
     const res = await d.execute(sql`
       SELECT feature,
-             COUNT(*) AS calls,
+             SUM(CASE WHEN entity = ${CONTEXT_CACHE_STORAGE} THEN 0 ELSE 1 END) AS calls,
              SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
              SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
              COALESCE(SUM(inputTokens), 0) AS inTok,
              COALESCE(SUM(outputTokens), 0) AS outTok,
              COALESCE(SUM(costEur), 0) AS totalCost,
-             COALESCE(ROUND(AVG(latencyMs)), 0) AS avgLatency
+             COALESCE(SUM(CASE WHEN entity = ${CONTEXT_CACHE_STORAGE} THEN costEur ELSE 0 END), 0) AS storageCost,
+             COALESCE(ROUND(AVG(CASE WHEN entity = ${CONTEXT_CACHE_STORAGE} THEN NULL ELSE latencyMs END)), 0) AS avgLatency
         FROM ai_usage_log
        WHERE createdAt >= ${b.start} AND createdAt < ${b.end}
        GROUP BY feature
@@ -246,18 +499,28 @@ export async function aiUsageSummary(now: number = Date.now()) {
         blocked: Number(r.blocked) || 0,
         inputTokens: Number(r.inTok) || 0,
         outputTokens: Number(r.outTok) || 0,
-        costEur: Math.round((Number(r.totalCost) || 0) * 10_000) / 10_000,
+        costEur: Math.round(((Number(r.totalCost) || 0) - (Number(r.storageCost) || 0)) * 10_000) / 10_000,
         avgLatencyMs: Number(r.avgLatency) || 0,
+        ownBudget: hasOwnBudget(f),
+        storageEur: Math.round((Number(r.storageCost) || 0) * 10_000) / 10_000,
       });
     }
   }
-  const spentEur = Math.round(features.reduce((a, f) => a + f.costEur, 0) * 10_000) / 10_000;
+  const round4 = (v: number) => Math.round(v * 10_000) / 10_000;
+  // O cartão mostra tudo; o orçamento global (barra e bloqueio) só conta as sem teto próprio.
+  const spentEur = round4(features.reduce((a, f) => a + f.costEur + f.storageEur, 0));
+  const ownBudgetSpentEur = round4(features.filter((f) => f.ownBudget).reduce((a, f) => a + f.costEur + f.storageEur, 0));
+  const storageEur = round4(features.reduce((a, f) => a + f.storageEur, 0));
+  const gateSpentEur = round4(spentEur - ownBudgetSpentEur);
   return {
     month: b.month,
     budgetEur,
     spentEur,
-    pct: budgetEur > 0 ? Math.round((spentEur / budgetEur) * 1000) / 10 : null,
-    blocked: budgetDecision(spentEur, budgetEur, false) === "blocked",
+    gateSpentEur,
+    ownBudgetSpentEur,
+    storageEur,
+    pct: budgetEur > 0 ? Math.round((gateSpentEur / budgetEur) * 1000) / 10 : null,
+    blocked: budgetDecision(gateSpentEur, budgetEur, false) === "blocked",
     features,
   };
 }
@@ -292,6 +555,14 @@ export interface AiUsageDailyRow {
   blocked: number;
   /** Bloqueadas pelo portão "só Vertex AI na UE" (RGPD). */
   euOnly: number;
+  /** Respostas com o texto de recurso (errorCode final_fallback). */
+  fallbacks: number;
+  /** Com chamada final sem ferramentas (forcedFinal = 1). */
+  forcedFinal: number;
+  /** Cortadas pelo teto de saída (finishReason = MAX_TOKENS). */
+  maxTokens: number;
+  /** Armazenamento da cache de contexto (à parte; incluído em costEur). */
+  storageEur: number;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
@@ -315,10 +586,14 @@ export async function aiUsageDaily(days: number, feature?: string | null, now: n
     const res = await d.execute(sql`
       SELECT DATE_FORMAT(createdAt, '%Y-%m-%d') AS day,
              feature,
-             COUNT(*) AS calls,
+             SUM(CASE WHEN entity = ${CONTEXT_CACHE_STORAGE} THEN 0 ELSE 1 END) AS calls,
+             COALESCE(SUM(CASE WHEN entity = ${CONTEXT_CACHE_STORAGE} THEN costEur ELSE 0 END), 0) AS storageCost,
              SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
              SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
              SUM(CASE WHEN status = 'blocked' AND errorCode = 'eu_only' THEN 1 ELSE 0 END) AS euOnly,
+             SUM(CASE WHEN errorCode = 'final_fallback' THEN 1 ELSE 0 END) AS fallbacks,
+             SUM(CASE WHEN forcedFinal = 1 THEN 1 ELSE 0 END) AS forcedFinals,
+             SUM(CASE WHEN finishReason = 'MAX_TOKENS' THEN 1 ELSE 0 END) AS maxTokens,
              COALESCE(SUM(inputTokens), 0) AS inTok,
              COALESCE(SUM(outputTokens), 0) AS outTok,
              COALESCE(SUM(cachedTokens), 0) AS cachedTok,
@@ -340,6 +615,10 @@ export async function aiUsageDaily(days: number, feature?: string | null, now: n
         errors: num(r.errors),
         blocked: num(r.blocked),
         euOnly: num(r.euOnly),
+        fallbacks: num(r.fallbacks),
+        forcedFinal: num(r.forcedFinals),
+        maxTokens: num(r.maxTokens),
+        storageEur: eur4(r.storageCost),
         inputTokens: num(r.inTok),
         outputTokens: num(r.outTok),
         cachedTokens: num(r.cachedTok),
