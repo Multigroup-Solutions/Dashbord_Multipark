@@ -85,7 +85,8 @@ const objAt = (root: any, at: readonly string[]): any => at.reduce((o, k) => (o 
 export function fitToolResult(
   result: Record<string, unknown>, max = MPV_TOOL_RESULT_MAX_CHARS,
   /** `protect`: listas (pelo nome) que só se cortam quando já não há mais nada para cortar (o essencial da resposta). */
-  opts: { shown?: readonly ShownSpec[]; protect?: readonly string[] } = {},
+  /** `noteReserve`: o espaço guardado para a nota e os contadores (omissão: NOTE_RESERVE; os testes forçam o 2.º corte com 0). */
+  opts: { shown?: readonly ShownSpec[]; protect?: readonly string[]; noteReserve?: number } = {},
 ): Record<string, unknown> {
   const protect = new Set(opts.protect ?? []);
   const out = JSON.parse(JSON.stringify(result ?? {})) as { [k: string]: Json };
@@ -127,17 +128,24 @@ export function fitToolResult(
     }
     return size() <= target;
   };
-  shrink(max - NOTE_RESERVE);
-  const lists = [...cutLists].slice(0, 6).join(", ").slice(0, 100);
-  out.cortado = lists ? `${CUT_NOTE} Listas encurtadas: ${lists}.` : CUT_NOTE;
-  (opts.shown ?? []).forEach((s, i) => {
-    const o = objAt(out, s.at);
-    if (!o || !Array.isArray(o[s.list]) || originals[i] == null || o[s.list].length === originals[i]) return;
-    o[s.count] = o[s.list].length;
-    if (s.total && o[s.total] == null) o[s.total] = originals[i];
-  });
-  // Se ainda passar (raro: objetos enormes só com números), corta o que houver.
-  if (size() > max) shrink(max);
+  /** A nota (com as listas encurtadas) e os contadores, outra vez a cada corte (nunca ficam desacertados). */
+  const settle = () => {
+    const lists = [...cutLists].slice(0, 6).join(", ").slice(0, 100);
+    out.cortado = lists ? `${CUT_NOTE} Listas encurtadas: ${lists}.` : CUT_NOTE;
+    (opts.shown ?? []).forEach((s, i) => {
+      const o = objAt(out, s.at);
+      if (!o || !Array.isArray(o[s.list]) || originals[i] == null || o[s.list].length === originals[i]) return;
+      o[s.count] = o[s.list].length;
+      if (s.total && o[s.total] == null) o[s.total] = originals[i];
+    });
+  };
+  shrink(max - (opts.noteReserve ?? NOTE_RESERVE));
+  settle();
+  // Se ainda passar (a nota e os contadores não couberam na reserva), corta o que houver e volta a acertar.
+  for (let i = 0; i < 5 && size() > max; i++) {
+    if (!shrink(max) && size() > max) break;
+    settle();
+  }
   return size() <= max ? out : { cortado: CUT_NOTE };
 }
 
@@ -178,17 +186,75 @@ function dataTool(def: Omit<ChatTool<StaffToolCtx>, "run" | "selfRedacts" | "pii
 
 export const SLOW_CALL_MS = 12_000;
 export const SLOW_CALL_MESSAGE = "Demorou demasiado a ler estes dados: tenta um período mais curto (ou uma só cidade).";
-let slowMs = SLOW_CALL_MS;
-/** Só para os testes. */
-export function setSlowCallMsForTests(ms: number | null): void { slowMs = ms ?? SLOW_CALL_MS; }
+/** Um resultado que chegou DEPOIS do prazo fica guardado este tempo para a pergunta seguinte o aproveitar. */
+export const SLOW_CALL_LATE_CACHE_MS = 5 * 60_000;
+/** Uma leitura em curso há mais do que isto já não se reaproveita (nunca fica presa para sempre). */
+export const SLOW_CALL_INFLIGHT_MAX_MS = 90_000;
+const LATE_CACHE_MAX = 50;
 
-/** Um procedimento lento com prazo: passado ele → ToolUserError (o modelo explica; não gasta voltas). */
+/**
+ * Os procedimentos tRPC chamados pelo createCaller não aceitam AbortSignal
+ * (as leituras por baixo — BD da Multipark, a nossa BD — não se cancelam a
+ * meio). Por isso, em vez de parar a leitura:
+ *  - single-flight: uma 2.ª leitura IGUAL (mesma pessoa, cidades, procedimento
+ *    e parâmetros) enquanto a 1.ª corre espera pela 1.ª, nunca lança outra;
+ *  - o resultado que chega depois do prazo vai para uma cache curta e a
+ *    pergunta seguinte usa-o logo.
+ */
+const inflight = new Map<string, { at: number; promise: Promise<unknown> }>();
+const lateCache = new Map<string, { at: number; value: unknown }>();
+/** Só para os testes (o estado é do processo). */
+export function resetSlowCallsForTests(): void { inflight.clear(); lateCache.clear(); }
+
+function slowCallKey(ctx: StaffToolCtx, path: string, input: unknown): string {
+  const a = ctx.access;
+  const cities = !a ? "-" : a.all ? "*" : JSON.stringify([a.cityIds ?? [], a.projectIds ?? [], a.cityNames ?? a.cityName ?? null]);
+  return [ctx.user.id, ctx.user.role, JSON.stringify(ctx.user.accessOverrides ?? null), cities, path, JSON.stringify(input ?? null)].join("|");
+}
+
+/**
+ * Um procedimento lento com prazo (`ctx.slowCallMs`, injetável; omissão
+ * SLOW_CALL_MS): passado ele → ToolUserError (o modelo explica; não gasta
+ * voltas). Ver acima: single-flight e cache dos resultados atrasados.
+ */
 async function slowCall(ctx: StaffToolCtx, path: string, input?: unknown): Promise<any> {
+  const key = slowCallKey(ctx, path, input);
+  const now = Date.now();
+  const late = lateCache.get(key);
+  if (late) {
+    lateCache.delete(key);
+    if (now - late.at <= SLOW_CALL_LATE_CACHE_MS) return late.value;
+  }
+  let flight = inflight.get(key);
+  if (!flight || now - flight.at > SLOW_CALL_INFLIGHT_MAX_MS) {
+    const promise = Promise.resolve().then(() => ctx.call(path, input));
+    const entry = { at: now, promise };
+    flight = entry;
+    inflight.set(key, entry);
+    promise.then(
+      (value) => {
+        if (inflight.get(key) !== entry) return;
+        inflight.delete(key);
+        // Chegou depois do prazo de alguém? Guarda-se para a próxima pergunta.
+        if ((entry as { timedOut?: boolean }).timedOut) {
+          if (lateCache.size >= LATE_CACHE_MAX) lateCache.delete(lateCache.keys().next().value as string);
+          lateCache.set(key, { at: Date.now(), value });
+        }
+      },
+      () => { if (inflight.get(key) === entry) inflight.delete(key); },
+    );
+  }
+  const current = flight;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      ctx.call(path, input),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new ToolUserError(SLOW_CALL_MESSAGE)), slowMs); }),
+      current.promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          (current as { timedOut?: boolean }).timedOut = true;
+          reject(new ToolUserError(SLOW_CALL_MESSAGE));
+        }, ctx.slowCallMs ?? SLOW_CALL_MS);
+      }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
@@ -289,7 +355,8 @@ async function parceriasResumo(args: Record<string, unknown>, ctx: StaffToolCtx)
         }
       }
       return {
-        nome: String(p.name ?? "").slice(0, 80),
+        // Inteiro: a redação faz-se primeiro e só depois se corta (textMax).
+        nome: String(p.name ?? ""),
         tipoMultipark: LIVE_TYPE_LABEL[p.type] ?? p.type ?? null,
         tipo: t ? t.label : null,
         modeloDeCobranca: t ? CHARGE_MODEL_LABEL[t.chargeModel] ?? t.chargeModel : null,
@@ -546,7 +613,8 @@ async function avaliacaoMinha(args: Record<string, unknown>, ctx: StaffToolCtx):
     .slice(0, 5)
     .map((d) => ({
       dia: d.day, pontos: num(d.score.totalPoints), negativos: num(d.score.negativePoints),
-      regras: ((d.score.lines ?? []) as any[]).filter((l) => num(l.subtotal) < 0).map((l) => `${String(l.label ?? "").slice(0, 60)} ×${num(l.count)}`).slice(0, 4),
+      // "regra ×n" inteiros: a redação (texto livre) faz-se primeiro e o corte depois (textMax.regrasDoDia).
+      regrasDoDia: ((d.score.lines ?? []) as any[]).filter((l) => num(l.subtotal) < 0).map((l) => `${String(l.label ?? "")} ×${num(l.count)}`).slice(0, 4),
     }));
   // As regras em vigor com as MESMAS permissões da regras_em_vigor (nunca IA).
   let valores: unknown = null;
@@ -585,7 +653,7 @@ async function criticasPorResponder(args: Record<string, unknown>, ctx: StaffToo
   const filter = city ? { projectId: city.projectId } : {};
   const [stats, rows, projects] = await Promise.all([
     ctx.call("reviews.stats", filter).catch(() => null),
-    ctx.call("reviews.list", { ...filter, ...(rating ? { rating } : {}) }),
+    slowCall(ctx, "reviews.list", { ...filter, ...(rating ? { rating } : {}) }),
     // Os parques/marcas (o ecrã usa-os para pôr de lado o "lixo": críticas sem parque nem marca).
     ctx.call("projects.list").catch(() => null),
   ]);
@@ -608,7 +676,7 @@ async function criticasPorResponder(args: Record<string, unknown>, ctx: StaffToo
     ultimas: last.map((x) => ({
       id: x.id, estrelas: num(x.rating) || null, data: when(x).slice(0, 10),
       avaliador: String(x.reviewerName ?? ""),
-      perfil: x.locationTitle ? String(x.locationTitle).slice(0, 60) : null,
+      perfil: x.locationTitle ? String(x.locationTitle) : null,
       // Texto inteiro: a redação faz-se primeiro e só depois se corta (textMax).
       texto: String(x.reviewText ?? "").replace(/\s+/g, " ").trim(),
       temRascunho: !!x.aiResponse,
@@ -640,14 +708,14 @@ async function formacaoProgresso(args: Record<string, unknown>, ctx: StaffToolCt
     const certs = (mine.certificates ?? []) as any[];
     out.minha = {
       percursos: as.slice(0, 6).map((a) => ({
-        percurso: String(a.pathName ?? "").slice(0, 80),
+        percurso: String(a.pathName ?? ""),
         estado: ASSIGN_STATUS_LABEL[a.status] ?? a.status,
         progressoPct: num(a.progress?.pct),
         obrigatorios: { feitos: num(a.progress?.requiredDone), total: num(a.progress?.requiredTotal) },
         prazo: a.dueAt ? String(a.dueAt).slice(0, 10) : null,
         diasDeAtraso: num(a.daysLate) || 0,
         bloqueiaEscala: !!a.blocksEscala,
-        emFalta: ((a.items ?? []) as any[]).filter((i) => i.required && !i.completedAt).slice(0, 5).map((i) => String(i.title ?? "").slice(0, 80)),
+        emFalta: ((a.items ?? []) as any[]).filter((i) => i.required && !i.completedAt).slice(0, 5).map((i) => String(i.title ?? "")),
       })),
       certificados: { validos: certs.filter((c) => c.state === "valid").length, aExpirar: certs.filter((c) => c.state === "expiring").length, expirados: certs.filter((c) => c.state === "expired").length },
     };
@@ -657,8 +725,8 @@ async function formacaoProgresso(args: Record<string, unknown>, ctx: StaffToolCt
     out.equipa = {
       ambito: scopeFor(ctx.user, "formacao") === "below_city" ? "a tua equipa" : city?.name ?? "todas as tuas cidades",
       totais: { atribuidas: num(dash.totals?.assigned), concluidas: num(dash.totals?.completed), emAtraso: num(dash.totals?.overdue), pct: num(dash.totals?.pct) },
-      porPercurso: ((dash.summary ?? []) as any[]).slice(0, 8).map((g) => ({ cidade: g.city ?? null, percurso: String(g.pathName ?? "").slice(0, 80), atribuidas: num(g.assigned), concluidas: num(g.completed), emAtraso: num(g.overdue), pct: num(g.pct) })),
-      maisAtrasados: ((dash.overdue ?? []) as any[]).slice(0, 8).map((o) => ({ nome: String(o.fullName ?? ""), percurso: String(o.pathName ?? "").slice(0, 80), diasDeAtraso: num(o.daysLate), cidade: o.city ?? null })),
+      porPercurso: ((dash.summary ?? []) as any[]).slice(0, 8).map((g) => ({ cidade: g.city ?? null, percurso: String(g.pathName ?? ""), atribuidas: num(g.assigned), concluidas: num(g.completed), emAtraso: num(g.overdue), pct: num(g.pct) })),
+      maisAtrasados: ((dash.overdue ?? []) as any[]).slice(0, 8).map((o) => ({ nome: String(o.fullName ?? ""), percurso: String(o.pathName ?? ""), diasDeAtraso: num(o.daysLate), cidade: o.city ?? null })),
       promocoesPendentes: ((dash.promotions ?? []) as any[]).length,
       certificadosExpirados: certs.filter((c) => c.state === "expired").length,
       certificadosAExpirar: certs.filter((c) => c.state === "expiring").length,
@@ -679,7 +747,7 @@ async function extrasDiaSituacao(args: Record<string, unknown>, ctx: StaffToolCt
   // Os números do ecrã: o indicador de pessoal (staffing: os disponíveis são os que a proposta pode escolher —
   // extras desta cidade, sem quem já está escalado noutra), a escala do dia e os pedidos sem resposta.
   const [staffing, assignments, schedule, pressure] = await Promise.all([
-    ctx.call("extrasDia.staffing", q),
+    slowCall(ctx, "extrasDia.staffing", q),
     ctx.call("extrasDia.assignments", q),
     ctx.call("extrasDia.schedule", q).catch(() => null),
     slowCall(ctx, "extrasDia.pressure").catch(() => null),
@@ -701,7 +769,7 @@ async function extrasDiaSituacao(args: Record<string, unknown>, ctx: StaffToolCt
   const people = ((staffing?.people ?? []) as any[]);
   return {
     data: date, cidade: city.name,
-    ...(staffing?.incomplete ? { previsaoIncompleta: String(staffing.incomplete).slice(0, 200) } : {}),
+    ...(staffing?.incomplete ? { previsaoIncompleta: String(staffing.incomplete) } : {}),
     cobertura: { horasComPrevisao: withNeed.length, horasCobertas: covered, pct: withNeed.length ? Math.round((covered * 100) / withNeed.length) : null, picoNecessario: Math.max(0, ...hours.map((h) => h.needed)) },
     faltas: ((staffing?.gaps ?? []) as any[]).slice(0, 8).map((g) => ({
       de: hourLabel(num(g.fromHour)), ate: hourLabel(num(g.toHour)), faltam: num(g.missing),
@@ -724,7 +792,7 @@ async function extrasDiaSituacao(args: Record<string, unknown>, ctx: StaffToolCt
     respostas: {
       // Quem respondeu "disponível" e ainda não está escalado (em nenhuma cidade) — o mesmo do indicador do ecrã.
       disponiveisPorEscalar: people.length,
-      pessoas: people.slice(0, 10).map((p) => ({ nome: String(p.name ?? ""), horas: String(p.hours ?? "").slice(0, 40) })),
+      pessoas: people.slice(0, 10).map((p) => ({ nome: String(p.name ?? ""), horas: String(p.hours ?? "") })),
       ...(people.length > 10 ? { mostradas: 10 } : {}),
       ...(schedule ? { semResposta: num(schedule.noAnswerCount) } : {}),
     },
@@ -748,6 +816,7 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     available: (ctx) => can(ctx.user, "parcerias", "view"),
     // Empresas (não pessoas); o nome passa pela redação do texto livre por segurança.
     pii: { text: ["nome"] },
+    textMax: { nome: 80 },
     shown: [{ at: [], list: "lista", count: "mostrados", total: "parceiros" }],
     protect: ["lista"],
     impl: parceriasResumo,
@@ -812,8 +881,9 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
       },
     },
     available: (ctx) => roleRank(ctx.user.role) >= ROLE_RANK.extra,
-    // Só os dados da própria pessoa (sem nomes).
-    pii: {},
+    // Só os dados da própria pessoa (sem nomes); os nomes das regras de cada dia passam pela redação antes do corte.
+    pii: { text: ["regrasDoDia"] },
+    textMax: { regrasDoDia: 70 },
     // Os dias e os pontos por regra são o que responde a "porque tenho estes pontos": cortam-se por último.
     protect: ["diasComMaisNegativos", "porRegra"],
     impl: avaliacaoMinha,
@@ -824,7 +894,7 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     parameters: { type: "object", properties: { cidade: cityParam, estrelas: { type: "integer", description: "Só as de N estrelas (1–5, opcional)." } } },
     available: (ctx) => can(ctx.user, "criticas", "view"),
     pii: { clients: ["avaliador"], text: ["texto", "perfil"] },
-    textMax: { texto: REVIEW_TEXT_MAX },
+    textMax: { texto: REVIEW_TEXT_MAX, perfil: 60 },
     protect: ["ultimas"],
     impl: criticasPorResponder,
   }),
@@ -835,6 +905,7 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     available: (ctx) => can(ctx.user, "formacao", "view"),
     // Colegas atrasados: [NOME_n] (repostos); títulos de percursos e conteúdos são texto livre.
     pii: { people: ["nome"], text: ["percurso", "emFalta"] },
+    textMax: { percurso: 80, emFalta: 80 },
     impl: formacaoProgresso,
   }),
   dataTool({
@@ -846,7 +917,8 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     },
     available: (ctx) => can(ctx.user, "extras_dia", "view"),
     // Colaboradores: o fornecedor vê [NOME_n]; a pessoa vê o nome completo (dois "João" não se confundem).
-    pii: { people: ["nome", "nomes"] },
+    pii: { people: ["nome", "nomes"], text: ["previsaoIncompleta", "horas"] },
+    textMax: { previsaoIncompleta: 200, horas: 40 },
     shown: [{ at: ["escala"], list: "pessoas", count: "mostradas", total: "total" }, { at: ["respostas"], list: "pessoas", count: "mostradas", total: "disponiveisPorEscalar" }],
     protect: ["faltas"],
     impl: extrasDiaSituacao,
