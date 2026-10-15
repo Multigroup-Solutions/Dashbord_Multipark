@@ -323,14 +323,25 @@ export function findHelpNode(
   id: string,
   aliases: Readonly<Record<string, string>> = {},
 ): { page: HelpTreePage; section: HelpTreeSection | null } | null {
+  const live = (key: string) => {
+    for (const page of treePages(tree)) {
+      if (page.id === key || page.file === key) return { page, section: null };
+      const section = page.sections.find((s) => s.id === key);
+      if (section) return { page, section };
+    }
+    return null;
+  };
+  // 1.º o id vivo (um alias nunca tapa um id que existe); só depois o alias.
   let key = id.trim();
-  for (let hops = 0; aliases[key] && hops < 10; hops++) key = aliases[key];
-  for (const page of treePages(tree)) {
-    if (page.id === key || page.file === key) return { page, section: null };
-    const section = page.sections.find((s) => s.id === key);
-    if (section) return { page, section };
+  const seen = new Set<string>();
+  for (;;) {
+    const hit = live(key);
+    if (hit) return hit;
+    const next = Object.prototype.hasOwnProperty.call(aliases, key) ? aliases[key] : undefined;
+    if (!next || seen.has(key)) return null;
+    seen.add(key);
+    key = next;
   }
-  return null;
 }
 
 /**

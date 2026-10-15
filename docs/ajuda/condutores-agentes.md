@@ -113,7 +113,7 @@ Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demor
 - **Horas trabalhadas**: o ponto (sem os registos suspeitos); sem ponto, a escala. **Dias com trabalho**: dias com horas ou com ações.
 - **Pontos da avaliação**: a soma dos pontos de cada dia da Avaliação (com os ajustes).
 - **Recolhas, entregas, movimentos, levar ao parque, mudanças de lugar, pôs em recolha/entrega, alterações de reserva**: a Multipark, pela avaliação diária.
-- **Atrasos ao trabalho** ({{regra:evaluation.points.delay}} cada): a 1.ª picagem **{{regra:evaluation.lateArrivalFromMinutes}} minutos ou mais** depois da hora da escala ou, sem escala nesse dia, do horário fixo da ficha do RH (03:04:59 não conta; 03:05 já conta), no máximo 1 por dia. Nos dias antigos o número já vem sem as entregas atrasadas.
+- **Atrasos ao trabalho** ({{regra:evaluation.points.delay}} cada): a 1.ª picagem **{{regra:evaluation.lateArrivalFromMinutes}} minutos ou mais** depois da hora da escala ou, sem escala nesse dia, do horário fixo da ficha do RH (03:04:59 não conta; 03:05 já conta), no máximo {{regra:evaluation.maxLateArrivalsPerDay}} por dia. Nos dias antigos o número já vem sem as entregas atrasadas.
 - **Entregas atrasadas: saíram**. A coluna saiu das abas e já não tira pontos. Os tempos de cada condutor (Fila, Trânsito, Cliente, terminal, P2, ao lado dos colegas) aparecem mais abaixo neste detalhe, só como informação (ver **Tempos de um condutor**).
 - Por cima dos números, o detalhe explica em texto de onde vêm os atrasos ao trabalho, os excessos de velocidade e os dias sem GPS.
 - **Km (GPS)**, **velocidade máxima**: o GPS do Zello das partes de PDA da pessoa (e do Zello fixo da ficha). A máxima já não tem os picos falsos do GPS.

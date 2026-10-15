@@ -25,7 +25,10 @@ import { renderRuleMarkers } from "../shared/helpRuleValues";
 export const AJUDA_DIR = resolve(import.meta.dirname ?? __dirname, "..", "docs", "ajuda");
 export const GENERATED_FILE = resolve(import.meta.dirname ?? __dirname, "..", "server", "assistant", "helpDocs.generated.ts");
 export const TREE_FILE = resolve(import.meta.dirname ?? __dirname, "..", "server", "assistant", "knowledgeTree.generated.ts");
-/** Todos os ids que já existiram (só cresce): um id que desaparece tem de ter alias em shared/helpIdAliases.ts. */
+/**
+ * Todos os ids que já existiram (só cresce): um id que desaparece tem de ter alias em shared/helpIdAliases.ts.
+ * Num conflito de merge neste ficheiro (ou nos gerados), não juntes à mão: fica com um dos lados e corre outra vez `pnpm tsx scripts/gen-ajuda.ts` (volta a pôr os ids da árvore juntada).
+ */
 export const IDS_FILE = resolve(import.meta.dirname ?? __dirname, "..", "server", "assistant", "knowledgeTreeIds.json");
 
 /** Os .md tal como estão no disco (com os marcadores). */

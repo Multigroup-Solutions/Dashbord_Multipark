@@ -15,7 +15,7 @@
 import { DEFAULT_TIMES_PERCENTILE, SETTINGS } from "./appSettings";
 import { EVALUATION_POINTS, LATE_ARRIVAL_FROM_MINUTES, MAX_LATE_ARRIVALS_PER_DAY, RECOMPUTE_WINDOW_DAYS } from "./evaluationRules";
 import { MIN_SAMPLE } from "./extrasPressure";
-import { DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES, DRIVER_STATS_MIN_N } from "./serviceTimes";
+import { DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES, DRIVER_STATS_MIN_N, SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT } from "./serviceTimes";
 
 export interface HelpRuleValue {
   value: string | number;
@@ -31,6 +31,12 @@ export interface HelpRuleValue {
 
 /** Números negativos com o sinal menos tipográfico (−5), como no resto da ajuda. */
 const v = (value: string | number, source: string): HelpRuleValue => ({ value: typeof value === "number" && value < 0 ? `−${-value}` : value, source });
+const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+/** "2026-04-03" → "3 abr 2026". PURA. */
+export function ptDay(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : iso;
+}
 /** Valor por omissão de uma definição (ver `setting`). */
 const d = (value: string | number, source: string): HelpRuleValue => ({ ...v(value, source), setting: true });
 
@@ -47,6 +53,8 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   "extras.pressureMinSample": v(MIN_SAMPLE, "shared/extrasPressure.ts:MIN_SAMPLE"),
   // Tempos de serviço
   "serviceTimes.targetMinutes": d(DEFAULT_SERVICE_TARGET_MINUTES, "shared/serviceTimes.ts:DEFAULT_SERVICE_TARGET_MINUTES"),
+  "serviceTimes.since": d(ptDay(SERVICE_TIMES_SINCE_DEFAULT), "shared/serviceTimes.ts:SERVICE_TIMES_SINCE_DEFAULT"),
+  "serviceTimes.gpsSince": d(ptDay(SERVICE_TIMES_GPS_SINCE_DEFAULT), "shared/serviceTimes.ts:SERVICE_TIMES_GPS_SINCE_DEFAULT"),
   "serviceTimes.pickupT2TargetMinutes": d(DEFAULT_PICKUP_T2_TARGET_MINUTES, "shared/serviceTimes.ts:DEFAULT_PICKUP_T2_TARGET_MINUTES"),
   "serviceTimes.gpsGate.minCoveragePct": d(DEFAULT_GPS_GATE.minCoveragePct, "shared/serviceTimes.ts:DEFAULT_GPS_GATE"),
   "serviceTimes.gpsGate.minN": d(DEFAULT_GPS_GATE.minN, "shared/serviceTimes.ts:DEFAULT_GPS_GATE"),

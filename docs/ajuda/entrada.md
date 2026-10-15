@@ -51,11 +51,11 @@ palavras: entrar no pda, sessão do pda, a sessão termina em 10 s, sessão term
 
 **O que abre para quem**
 - O **Perfil** e o **Menu** abrem para todos, incluindo extras e condutores.
-- Um ecrã do menu que não é para ti mostra **"Sem acesso a esta página"** com **Ir para o início** e **Sair** (antes saltava em silêncio para outra página).
+- Um ecrã do menu que não é para ti mostra **"Sem acesso a esta página"** com **Ir para o início** e **Sair** (antes saltava em silêncio para outra página). A exceção são os endereços de entrada **/**, **/dashboard** e **/dashboards**: sem os Dashboards, levam sem aviso ao 1.º ecrã do teu menu; com eles, **/dashboard** vai dar a **/dashboards**.
 - **Sem centro de custos**: aparece o aviso, mas abrem o teu perfil, a tua ficha, a disponibilidade e a avaliação. Se a leitura do acesso falhar, aparece o erro com "Tentar de novo" (não é o mesmo que não ter centro de custos).
 - **Acesso bloqueado** (documentos/penalizações) e **Sem acesso** têm o botão **Sair** — num PDA partilhado, a pessoa seguinte consegue entrar.
 
-**Dashboard**: cada cartão que não carrega diz **"Não carregou · tentar de novo"** (antes mostrava 0); sem permissão diz **"Sem acesso"**. Os atalhos só mostram os dashboards que podes abrir.
+**Dashboard**: cada cartão que não carrega diz **"Não carregou · tentar de novo"** (antes mostrava 0); sem permissão diz **"Sem acesso"** — exceto as despesas (Despesas Mês e Pendente), que só se pedem para admin e super admin e nos outros papéis mostram 0 €. Os atalhos só mostram os dashboards que podes abrir. O que cada cartão conta está na ajuda "Dashboards".
 
 **Notificações** (sino): se não carregarem aparece o erro, não "Sem notificações". Carregar numa notificação para a página onde já estás abre mesmo o registo certo.
 

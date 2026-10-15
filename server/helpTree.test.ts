@@ -19,6 +19,8 @@ import { EVALUATION_POINTS } from "../shared/evaluationRules";
 import { MULTIS_PAGE_TABS } from "../shared/multisPage";
 import { IDS_FILE, missingIds, readAjudaFiles, readAjudaSources, readKnownIds, renderGenerated, renderKnowledgeTree, renderKnownIds } from "../scripts/gen-ajuda";
 import { HELP_FILES } from "./assistant/helpDocs.generated";
+import { docForPath, pickHelpDocs } from "./_core/ai/chat/retrieval";
+import { staffHelpDocs } from "./assistant/service";
 import { KNOWLEDGE_INDEX, KNOWLEDGE_INDEX_LEVEL, KNOWLEDGE_OUTLINE, knowledgeForPage, knowledgeTree, openKnowledge } from "./assistant/knowledgeTree";
 
 const ROOT = resolve(__dirname, "..");
@@ -221,6 +223,31 @@ describe("árvore gerada (docs/ajuda → knowledgeTree.generated.ts) e a árvore
     for (const [from, to] of Object.entries(HELP_ID_ALIASES)) expect(findHelpNode(tree, to), `${from} → ${to}`).not.toBeNull();
   });
 
+  it("aliases: o id vivo ganha sempre; nenhuma chave é um id vivo e cada alvo existe", () => {
+    const live = new Set(treeIds(tree));
+    for (const [from, to] of Object.entries(HELP_ID_ALIASES)) {
+      expect(live.has(from), `alias ${from} tapa um id que existe`).toBe(false);
+      expect(findHelpNode(tree, to), `${from} → ${to}`).not.toBeNull();
+    }
+    // um alias para um id que existe é ignorado: o vivo responde primeiro
+    expect(findHelpNode(tree, "caixa.md#resumo", { "caixa.md#resumo": "caixa.md#por-dia-abre-aqui-por-omissao-a-ultima-caixa-ja-fechada" })?.section?.id).toBe("caixa.md#resumo");
+    // ciclos não prendem
+    expect(findHelpNode(tree, "x#a", { "x#a": "x#b", "x#b": "x#a" })).toBeNull();
+  });
+
+  it("secções grandes fora dos separadores: só as 7 conhecidas passam dos 5 000 car. (não aparecem mais)", () => {
+    const big = treePages(tree).flatMap((p) => p.sections.filter((s) => s.text.length > 5000).map((s) => s.id)).sort();
+    expect(big).toEqual([
+      "agendador.md#o-que-corre-e-quando-hora-de-lisboa",
+      "comunicacao.md#caixas-por-tema",
+      "disponibilidade.md#gestao-backoffice-e-acima",
+      "extras-dia.md#escalar-a-equipa-team-leader-supervisor-e-acima",
+      "ficha-reserva.md#o-que-mostra",
+      "marketing.md#orcamentos",
+      "rh-ponto.md#gestao-team-leader-e-acima-na-sua-cidade",
+    ]);
+  });
+
   it("índice dentro do teto; secções de uma página para o ajuda_abrir", () => {
     expect(estimateTokens(KNOWLEDGE_INDEX)).toBeLessThanOrEqual(HELP_INDEX_MAX_TOKENS);
     expect(estimateTokens(renderHelpIndex(tree, "pages"))).toBeLessThanOrEqual(HELP_INDEX_MAX_TOKENS);
@@ -312,6 +339,25 @@ describe("cada rota do menu tem página na árvore", () => {
     expect(pagesForPath(t2, "/x/web").map((p) => p.file)).toEqual(["b.md", "a.md", "c.md"]);
     // a redireção existe mesmo no código
     expect(src("client/src/App.tsx")).toMatch(/path="\/marketing-dashboard">\s*\{\(\) => <Redirect to="\/marketing"/);
+  });
+
+  it("Multis v1: a ajuda da página aberta é a da árvore (a mais específica), não a 1.ª por ordem alfabética", () => {
+    const docs = staffHelpDocs();
+    const cases: Array<[string, string]> = [
+      ["/formacao/conhecimento", "pesquisa-e-conhecimento.md"],
+      ["/definicoes", "definicoes.md"],
+      ["/perfil", "perfil.md"],
+      ["/whatsapp", "whatsapp.md"],
+      ["/marketing/web", "web-analytics.md"],
+    ];
+    for (const [path, file] of cases) {
+      expect(docForPath(docs, path)?.file, path).toBe(file);
+      expect(pickHelpDocs(docs, "Como funciona isto?", { path }).map((d) => d.file), path).toEqual([file]);
+    }
+    // ajuda fora da árvore (testes): continua o 1.º que serve a rota
+    const fake = [{ file: "x.md", module: "x", title: "X", routes: ["/x"], keywords: [], summary: "", body: "" }];
+    expect(docForPath(fake, "/x/y")?.file).toBe("x.md");
+    expect(docForPath(docs, null)).toBeUndefined();
   });
 
   it("a entrada na app é um tópico próprio (o recorte do v1 não começa pelos dashboards)", () => {

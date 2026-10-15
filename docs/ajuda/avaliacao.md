@@ -109,13 +109,17 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - Se a barra disser **"Não deu para ler o fecho do mês: por agora nada se recalcula nem se ajusta."**, a leitura da data do fecho falhou (não quer dizer que nada esteja fechado): enquanto não se souber até onde está fechado, o ecrã não deixa recalcular nem ajustar, para não mexer em dias já pagos. Recarrega a página daqui a pouco.
 
 **A minha avaliação**
-- Separador **A minha avaliação** (cada pessoa com ficha, mesmo sem centro de custos): os teus pontos no período, a explicação das regras e o detalhe dia a dia. Só vês os teus dados.
-- Se algo estiver errado num dia, abre o dia e carrega em **Contestar**. A contestação fica **Em análise** até quem gere a avaliação a aceitar (às vezes com um ajuste dos pontos desse dia) ou recusar. Ninguém decide a sua própria. Os dias **fechados** (fecho do mês) já não se contestam.
+- Separador **A minha avaliação** (extras, condutores e os papéis com a Avaliação; o papel **utilizador** não tem este módulo): os teus pontos no período, uma **explicação** curta e o detalhe dia a dia. Só vês os teus dados.
+- **Sem centro de custos** só funcionam os teus pontos e o **Contestar** (a explicação não aparece).
+- A **explicação** é um texto curto a partir das linhas das regras (a pontuação é sempre a da tabela); quando foi escrita pela IA leva a etiqueta **IA**, e um team leader (ou acima) pode **escondê-la** ao colaborador.
+- Se algo estiver errado num dia, abre o dia e carrega em **Contestar** e explica o que aconteceu (pelo menos 5 caracteres). A contestação fica **Em análise** até quem gere a avaliação a aceitar (às vezes com um ajuste dos pontos desse dia) ou recusar. Ninguém decide a sua própria.
+- Os dias **fechados** (fecho do mês) já não se contestam. Se a leitura do fecho falhar, o ecrã pode mostrar **Contestar** num dia fechado, mas o servidor recusa.
 - Sem ficha ligada à conta aparece "A tua conta não está ligada a uma ficha de colaborador — fala com o RH."
 
 **Contestações**
-- Separador **Contestações** (só quem gere a avaliação: supervisores, front e backoffice e a administração): as contestações por estado — **Em análise**, **Aceites** e **Recusadas** — com **Procurar pessoa…**, que filtra pelo nome.
-- Abre uma para ver o dia, o que a pessoa escreveu e **aceitar** (com ou sem ajuste dos pontos) ou **recusar**. Fica no histórico do dia, com quem decidiu e quando.
+- Separador **Contestações** (só quem gere a avaliação: supervisores, front e backoffice e a administração): as contestações por estado — **Em análise**, **Aceites** e **Recusadas**. Quando há contestações nesse estado aparece **Procurar pessoa…**, que filtra pelo nome.
+- Nas **Em análise** aparece **Decidir**: vês o que a pessoa escreveu, escreves a **resposta** (pelo menos 3 caracteres, para aceitar e para recusar) e carregas em **Aceitar** (com ou sem ajuste dos pontos) ou **Recusar**.
+- Um ajuste aceite entra nos **Ajustes manuais** desse dia, com quem o fez e a data.
 
 **Quem vê o quê**
 São as permissões de Definições → Permissões, iguais no ecrã e no servidor, com as permissões por utilizador.

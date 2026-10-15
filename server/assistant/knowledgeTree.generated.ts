@@ -81,7 +81,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "A página Dashboards (permissão Dashboards) é de admin e super admin (ou de quem tenha essa permissão dada por pessoa, em Permissões).",
        "children": [],
        "container": false,
-       "chars": 1254
+       "chars": 1520
       },
       {
        "id": "dashboards.md#geral-o-resumo-de-hoje",
@@ -92,7 +92,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Os números de hoje, de relance, e atalhos para os outros dashboards.",
        "children": [],
        "container": false,
-       "chars": 2419
+       "chars": 2566
       },
       {
        "id": "dashboards.md#financeiro-financeiro",
@@ -103,7 +103,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Receita, custos e margem com a mesma base da Faturação: carros entregues (saída feita, CHECKED_OUT), sem IVA, no período escolhido.",
        "children": [],
        "container": false,
-       "chars": 2267
+       "chars": 2398
       },
       {
        "id": "dashboards.md#operacoes-operacoes-dashboard",
@@ -114,7 +114,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Visão geral operacional.",
        "children": [],
        "container": false,
-       "chars": 1303
+       "chars": 1366
       },
       {
        "id": "dashboards.md#pessoas-pessoas-dashboard",
@@ -125,7 +125,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "RH, desempenho e formação.",
        "children": [],
        "container": false,
-       "chars": 1276
+       "chars": 1441
       },
       {
        "id": "dashboards.md#suporte-suporte-dashboard",
@@ -136,7 +136,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Reclamações, críticas Google, ocorrências e perdidos e achados.",
        "children": [],
        "container": false,
-       "chars": 1186
+       "chars": 1376
       },
       {
        "id": "dashboards.md#marketing-dashboards-marketing",
@@ -219,7 +219,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "O Perfil e o Menu abrem para todos, incluindo extras e condutores.",
        "children": [],
        "container": false,
-       "chars": 1492
+       "chars": 1856
       }
      ]
     }
@@ -1424,10 +1424,10 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "slug": "a-minha-avaliacao",
        "title": "A minha avaliação",
        "level": 4,
-       "summary": "Separador A minha avaliação (cada pessoa com ficha, mesmo sem centro de custos): os teus pontos no período, a explicação das regras e o detalhe dia a dia.",
+       "summary": "Separador A minha avaliação (extras, condutores e os papéis com a Avaliação; o papel utilizador não tem este módulo): os teus pontos no período, uma…",
        "children": [],
        "container": false,
-       "chars": 579
+       "chars": 1098
       },
       {
        "id": "avaliacao.md#contestacoes",
@@ -1438,7 +1438,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Separador Contestações (só quem gere a avaliação: supervisores, front e backoffice e a administração): as contestações por estado — Em análise, Aceites e…",
        "children": [],
        "container": false,
-       "chars": 396
+       "chars": 578
       },
       {
        "id": "avaliacao.md#quem-ve-o-que",
@@ -1883,10 +1883,10 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "slug": "videos",
        "title": "Vídeos",
        "level": 4,
-       "summary": "Separador Vídeos: os vídeos de formação que podes ver, arrumados por área e subsecção.",
+       "summary": "Separador Vídeos: filtra-se pela Categoria (em cima; Todas mostra tudo); a área aparece só como etiqueta no cartão.",
        "children": [],
        "container": false,
-       "chars": 178
+       "chars": 462
       },
       {
        "id": "formacao.md#manuais",
@@ -1905,10 +1905,10 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "slug": "percursos",
        "title": "Percursos",
        "level": 4,
-       "summary": "Percursos (team leader e acima): define que itens cada função tem de fazer e atribui.",
+       "summary": "Percursos (team leader e acima): só quem gere a formação (admin) cria percursos, define os itens e edita; team leaders e supervisores só atribuem (o team…",
        "children": [],
        "container": false,
-       "chars": 204
+       "chars": 270
       },
       {
        "id": "formacao.md#acompanhamento",
@@ -1930,7 +1930,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Promoções: decide o supervisor da cidade, o backoffice ou o admin.",
        "children": [],
        "container": false,
-       "chars": 3460
+       "chars": 3441
       }
      ]
     },
@@ -5288,7 +5288,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Papéis das garagens (tempos das recolhas) (Operação; só o super admin muda): cada garagem da app é provisória (P2: conta o tempo até sair), já num parque…",
        "children": [],
        "container": false,
-       "chars": 2547
+       "chars": 2571
       },
       {
        "id": "definicoes.md#extras-dia-parametros",
