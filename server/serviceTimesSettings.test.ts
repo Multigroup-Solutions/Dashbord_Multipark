@@ -37,6 +37,8 @@ import {
 import { DEFAULT_GARAGE_ROLES, DEFAULT_GPS_GATE } from "../shared/serviceTimes";
 import { assertReadOnlySql } from "./multiparkDb/client";
 import { buildGaragesSql, buildMovementGarageMediansSql, buildParkCentersSql, garageCoordsOf, kindOfGarageName, suggestZoneCenters } from "./multiparkDb/parkZonesSuggest";
+import { TERMINAL_SUGGEST_MIN_N, buildSignaturePositionsSql, suggestTerminalZones } from "./multiparkDb/terminalZonesSuggest";
+import { TERMINAL_ZONE_RADIUS_HINT_M } from "../shared/serviceGps";
 
 const read = (p: string) => fs.readFileSync(path.join(__dirname, "..", p), "utf8");
 const caller = (role: string, id = 1) => appRouter.createCaller({ user: { id, role, name: "Rita", accessOverrides: {} }, req: { headers: {} }, res: {} } as any);
@@ -133,7 +135,7 @@ describe("\"Sugerir\" (centros das garagens, só leitura)", () => {
     expect(read("server/settingsRouter.ts")).toMatch(/parkZonesSuggest: adminOnly\.query\(async \(\{ ctx \}\) => \{\s*requireSuperAdmin\(ctx\.user\.role\);/);
   });
 
-  it("ordem das fontes: link do mapa → mediana da app → centro do parque; cidade pelo parque; garagens só dos movimentos também", () => {
+  it("ordem das fontes: link do mapa → mediana da app (nunca o centro do parque: fica junto ao aeroporto); cidade pelo parque; garagens só dos movimentos também", () => {
     const parks = [
       { id: "pL", name: "Airpark Lisboa", city: "Lisboa", lat: 38.79, lng: -9.11 },
       { id: "pP", name: "Airpark Porto", city: "Porto", lat: 41.24, lng: -8.67 },
@@ -150,12 +152,65 @@ describe("\"Sugerir\" (centros das garagens, só leitura)", () => {
       { city: "porto", garage: "PD", n: 9, lat: 41.241, lng: -8.671 },
     ];
     const r = suggestZoneCenters({ garages, parks, medians });
-    expect(r.lisbon.map((s) => [s.garage, s.source, s.kind])).toEqual([["CENTRAL", "app", "central"], ["COBERTO", "parque", "coberto"], ["P2", "app", "p2"], ["PD", "mapa", "pd"]]);
+    // COBERTO não tem link nem marcas: não se propõe (antes propunha o Park.lat/lng)
+    expect(r.lisbon.map((s) => [s.garage, s.source, s.kind])).toEqual([["CENTRAL", "app", "central"], ["P2", "app", "p2"], ["PD", "mapa", "pd"]]);
     expect(r.lisbon.find((s) => s.garage === "PD")).toMatchObject({ lat: 38.781, lng: -9.121 });
     expect(r.porto).toEqual([expect.objectContaining({ garage: "PD", source: "app", n: 9 })]);
     expect(r.faro).toEqual([]);
     expect(kindOfGarageName("PD FORA")).toBe("pd");
     expect(kindOfGarageName("Central Coberto")).toBe("central");
+  });
+});
+
+describe("\"Sugerir T1/T2\" pelas posições das assinaturas (só leitura; P3b)", () => {
+  const at = (c: { lat: number; lng: number }, dx: number, dy = 0) => ({ lat: c.lat + dy / 111_320, lng: c.lng + dx / (111_320 * Math.cos((c.lat * Math.PI) / 180)) });
+  const T1MEET = at(T1, 600, -500), T2MEET = { lat: 38.769, lng: -9.129 }, PORTO = { lat: 41.2365, lng: -8.6699 };
+  const parks = [
+    { id: "pL", name: "Airpark Lisboa", city: "Lisboa", address: null, firebase_brand: "airpark", listing_type: "ON_PLATFORM" },
+    { id: "pP", name: "Airpark Porto", city: "Porto", address: null, firebase_brand: "airpark", listing_type: "ON_PLATFORM" },
+    { id: "pMK", name: "Top Parking", city: "Lisboa", address: null, firebase_brand: null, listing_type: "ON_PLATFORM" },
+  ];
+  const sig = (park: string, type: string, c: { lat: number; lng: number }, i: number, kind = i % 3 ? "CHECK_OUT" : "CHECK_IN") => ({ park_id: park, delivery_type: type, change_type: kind, ...at(c, ((i % 5) - 2) * 15, ((i % 7) - 3) * 10) });
+
+  it("mediana por cidade e classe (T1/T2 pela regra dos tempos); fora: parques que não operamos, longe do aeroporto, VIP/estação, poucas", () => {
+    const rows = [
+      ...Array.from({ length: 30 }, (_, i) => sig("pL", "Terminal 1", T1MEET, i)),
+      ...Array.from({ length: 25 }, (_, i) => sig("pL", "Terminal 2", T2MEET, i)),
+      ...Array.from({ length: 22 }, (_, i) => sig("pP", "Aeroporto", PORTO, i)),
+      // um parque que não operamos assina no próprio parque; um hotel (classe T1) a 6 km; VIP e Oriente
+      ...Array.from({ length: 40 }, (_, i) => sig("pMK", "Terminal 1", at(T1, 2500), i)),
+      ...Array.from({ length: 10 }, (_, i) => sig("pL", "Hotel Avenida", at(T1, -6000), i)),
+      ...Array.from({ length: 30 }, (_, i) => sig("pL", "VIP", at(T1, 1600), i)),
+      ...Array.from({ length: 30 }, (_, i) => sig("pL", "Estação do Oriente", at(T1, 3000, 3000), i)),
+    ];
+    const r = suggestTerminalZones({ rows, parks, airports });
+    expect(r.lisbon.map((z) => z.label)).toEqual(["T1", "T2"]);
+    const t1 = r.lisbon[0], t2 = r.lisbon[1];
+    expect(t1).toMatchObject({ n: 30, radiusM: TERMINAL_ZONE_RADIUS_HINT_M, checkins: 10, checkouts: 20 });
+    expect(Math.abs(t1.lat - T1MEET.lat)).toBeLessThan(2e-4);
+    expect(Math.abs(t1.lng - T1MEET.lng)).toBeLessThan(2e-4);
+    expect(t1.p90M).toBeLessThan(100);
+    expect(t1.near).toBe(1);
+    expect(t2.n).toBe(25);
+    // Porto: só T1 (a regra das classes não tem T2 no Porto), e o centro sai das assinaturas, não do centro do aeroporto
+    expect(r.porto).toEqual([expect.objectContaining({ label: "T1", n: 22 })]);
+    expect(Math.abs(r.porto[0].lat - PORTO.lat)).toBeLessThan(2e-4);
+    expect(r.faro).toEqual([]);
+    // menos de 20 assinaturas: não propõe
+    expect(suggestTerminalZones({ rows: rows.filter((x) => x.park_id === "pP").slice(0, TERMINAL_SUGGEST_MIN_N - 1), parks, airports }).porto).toEqual([]);
+  });
+
+  it("só o super admin; o SQL passa a guarda de só leitura (sem barras invertidas) e só devolve medianas", async () => {
+    await expect(caller("admin").settings.values.terminalZonesSuggest()).rejects.toThrow(/super admin/);
+    const q = buildSignaturePositionsSql("2026-09-17 00:00:00");
+    expect(() => assertReadOnlySql(q.sql)).not.toThrow();
+    expect(q.sql).not.toMatch(/\\/);
+    expect(q.sql).toMatch(/LIMIT \$4/);
+    expect(q.params).toEqual(["2026-09-17 00:00:00", "CHECK_OUT", "CHECK_IN", 20_000]);
+    expect(read("server/settingsRouter.ts")).toMatch(/terminalZonesSuggest: adminOnly\.query\(async \(\{ ctx \}\) => \{\s*requireSuperAdmin\(ctx\.user\.role\);/);
+    const page = read("client/src/pages/DefinicoesPage.tsx");
+    expect(page).toContain("trpc.settings.values.terminalZonesSuggest.useQuery(undefined, { enabled: false");
+    expect(page).toContain("Sugerir T1/T2 pelas assinaturas");
   });
 });
 

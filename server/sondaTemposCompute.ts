@@ -25,6 +25,7 @@ import {
   type ProbeCity, type ProbeGarageInfo, type ProbeZoneInfo, type SondaResult, type SondaStatic,
 } from "../shared/sondaTempos";
 import { matchKey } from "../shared/textKey";
+import { garageMarkCenters } from "../shared/serviceGps";
 
 const MIN = 60_000;
 
@@ -618,6 +619,11 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
     for (const n of c.notes) if (inDay(n.atMs)) acc.inc(`ciclos.${n.kind}`);
   }
   const parkOf = (bookingId: string) => inp.parks.get(inp.bookings.get(bookingId)?.parkId ?? "");
+  // Item 16 (a): o centro de cada garagem pelas marcas "estacionado aqui" (fim dos movimentos) —
+  // a mesma regra dos tempos (garageMarkCenters), para ver se o GPS no "em entrega" bate com elas
+  const markCenters = garageMarkCenters([...byBooking.values()].flat()
+    .filter((e) => e.type === "MOVEMENT" && FIM_KINDS.has(e.moveKind ?? "") && e.garageTo).map((e) => ({ garage: e.garageTo, lat: e.lat, lng: e.lng })));
+  const markCenterOf = new Map(markCenters.map((m) => [matchKey(m.garage), m]));
   const classOf = (bookingId: string): TerminalClass => inp.bookings.get(bookingId)?.terminalClass ?? "unknown";
 
   // Quem marca (item 7)
@@ -756,11 +762,10 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
     acc.label("gps.aparelho.entregas", windowUsesPda(emp, S.atMs, E.atMs) ? "PDA com check-in" : "Zello da linha");
     // Item 1: intervalos dentro de [S, E] (com os pontos de fora que tocam a janela)
     addGaps("entregas", myPoints(emp, S.atMs - 30 * MIN, E.atMs + 30 * MIN), S.atMs, E.atMs);
-    // Item 8: GPS em S → parque
-    if (park?.lat != null && park.lng != null) {
-      const before = myPoints(emp, S.atMs - 6 * MIN, S.atMs).pop() ?? myPoints(emp, S.atMs, S.atMs + 3 * MIN)[0];
-      if (before) acc.hist("entregas.gps_s_parque", "distM", distTo(before, park.lat, park.lng));
-    }
+    // Item 8: GPS em S → parque (Park.lat/lng) e → garagem mais perto (centro pelas marcas, o que os tempos usam)
+    const before = myPoints(emp, S.atMs - 6 * MIN, S.atMs).pop() ?? myPoints(emp, S.atMs, S.atMs + 3 * MIN)[0];
+    if (before && park?.lat != null && park.lng != null) acc.hist("entregas.gps_s_parque", "distM", distTo(before, park.lat, park.lng));
+    if (before && markCenters.length) acc.hist("distancia.gps_s_garagem", "distM", Math.min(...markCenters.map((m) => distTo(before, m.lat, m.lng))));
     // Item 3: paragem à volta da assinatura; item 14: relógio
     if (E.lat == null || E.lng == null) { acc.inc("paragem.sem_posicao_e"); continue; }
     acc.inc("paragem.base");
@@ -894,6 +899,7 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
     }
   }
 
+  for (const m of markCenters) acc.label("garagens.centro_marcas", garageName(m.garage) ?? m.garage);
   // ── Item 10: movimentos do dia (todas as reservas da cidade); sem a tabela Garage não conta ──
   const nextMoveOf = new Map<string, ProbeEvent[]>();
   if (!garagesDown) for (const [b, evs] of byBooking) nextMoveOf.set(b, sortEvents(evs.filter((e) => e.type === "MOVEMENT")));
@@ -907,6 +913,11 @@ export function computeProbeCity(inp: ProbeCityInput): SondaResult {
       acc.label("garagens.de_para", `${garageName(mv.garageFrom) ?? (mv.garageFrom ? "outra" : "—")} → ${to}`);
       // Item 16 (Q6): a posição da app no fim do movimento bate com as coordenadas da garagem?
       const gc = garageCoordFor(to, inp.bookings.get(mv.bookingId)?.parkId);
+      const mc = markCenterOf.get(matchKey(mv.garageTo));
+      if (mv.lat != null && mv.lng != null) {
+        if (mc) acc.hist("distancia.marca_garagem", "distM", distanceMeters(mv.lat, mv.lng, mc.lat, mc.lng));
+        else acc.inc("garagens.marca_sem_centro");
+      }
       if (mv.lat == null || mv.lng == null) acc.inc("garagens.coord.mov_sem_posicao");
       else if (!gc || gc.lat == null || gc.lng == null) acc.inc("garagens.coord.garagem_sem_coordenadas");
       else acc.hist(`garagens.posicao_vs_coord.${to}`, "distM", distanceMeters(mv.lat, mv.lng, gc.lat, gc.lng));

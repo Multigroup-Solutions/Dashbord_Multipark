@@ -325,6 +325,22 @@ export const settingsRouter = router({
       const r = await safeMultiparkRead("parkZonesSuggest", () => readZoneSuggestions(multiparkDbQuery, Date.now()));
       return r.available ? { available: true as const, cities: r.data } : { available: false as const, reason: r.reason };
     }),
+    /**
+     * Plano 62 (P3b): "Sugerir T1/T2" nos Aeroportos (terminal no ponto) — a
+     * mediana das posições das assinaturas (CHECK_OUT/CHECK_IN) das últimas 4
+     * semanas, por cidade e classe da entrega, só dos parques que operamos.
+     * Só leitura; nada se grava (o super admin carrega em Usar e em Guardar).
+     */
+    terminalZonesSuggest: adminOnly.query(async ({ ctx }) => {
+      requireSuperAdmin(ctx.user.role);
+      const [{ safeMultiparkRead }, { multiparkDbQuery }, { readTerminalZoneSuggestions, TERMINAL_SUGGEST_DAYS }, { getSetting }] = await Promise.all([
+        import("./multiparkDb/read"), import("./multiparkDb/client"), import("./multiparkDb/terminalZonesSuggest"), import("./appSettings"),
+      ]);
+      const excludedParks = ((await getSetting("operations.excludedParks")) ?? SETTINGS["operations.excludedParks"].defaultValue) as string[];
+      const airports = ((await getSetting("ponto.terminalAirports")) ?? SETTINGS["ponto.terminalAirports"].defaultValue) as Record<"lisbon" | "porto" | "faro", { lat: number; lng: number; radiusM: number }>;
+      const r = await safeMultiparkRead("terminalZonesSuggest", () => readTerminalZoneSuggestions(multiparkDbQuery, Date.now(), { excludedParks, airports }));
+      return r.available ? { available: true as const, days: TERMINAL_SUGGEST_DAYS, cities: r.data } : { available: false as const, reason: r.reason };
+    }),
     /** IVA/TSU em vigor HOJE nos cálculos (Definições; sem nada gravado = constantes do código). */
     codeConstants: adminOnly.query(async () => {
       const { financeRatesAt, lisbonTodayIso } = await import("./finance/rates");

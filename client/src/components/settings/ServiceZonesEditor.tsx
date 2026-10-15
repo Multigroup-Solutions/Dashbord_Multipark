@@ -278,7 +278,7 @@ export function ParkZonesEditor({ draft, onChange, locked, airports, parks }: {
               <div key={s.garage} className="flex flex-wrap items-center gap-2 py-0.5 text-xs">
                 <span className="font-medium">{s.garage}</span>
                 <span className="text-muted-foreground">
-                  {s.source === "mapa" ? "link do mapa" : s.source === "app" ? `posições da app (${s.n ?? 0} movimentos)` : `centro do parque${s.parkName ? ` ${s.parkName}` : ""}`}
+                  {s.source === "mapa" ? "link do mapa" : `posições da app (${s.n ?? 0} movimentos)`}
                 </span>
                 <Button size="sm" variant="ghost" className="ml-auto h-7 rounded-[10px] text-xs text-primary" disabled={locked}
                   onClick={() => adjust(s.garage, { lat: txt(s.lat), lng: txt(s.lng) })}><Check className="mr-1 h-3.5 w-3.5" />Usar</Button>
