@@ -20,8 +20,18 @@ vi.mock("../db", () => ({
   logActivity: h.logActivity,
   getUserPermissionOverrides: async () => ({}),
 }));
+// O indicador de pessoal a sério (getStaffingReport → loadEligibleExtras) com as leituras falsas por baixo.
+const st = vi.hoisted(() => ({ candidates: [] as any[], rows: [] as any[], cities: new Map<number, { city: string | null }>() }));
+vi.mock("../extrasDia", () => ({
+  getExtrasDiaForecast: async () => ({ hourly: Array.from({ length: 27 }, (_, h) => ({ hour: h, driversNeeded: h >= 8 && h < 12 ? 2 : 0 })) }),
+  listAssignments: async (_date: string, city?: string) => st.rows.filter((r) => !city || r.city === city),
+  listDriverCandidates: async () => st.candidates,
+}));
+vi.mock("../trainingPaths", () => ({ employeesMissingTraining: async () => new Set<number>() }));
+vi.mock("../employeeCity", () => ({ resolveCitiesForEmployeeIds: async (ids: number[]) => new Map(ids.map((id) => [id, st.cities.get(id) ?? { city: null }])) }));
 
 import type { CityAccess } from "../cityAccess";
+import { getStaffingReport } from "../extrasDiaShift";
 import { setAiProvidersForTests, type ProviderResponse } from "../_core/ai/client";
 import { resetContextCacheForTests } from "../_core/ai/contextCache";
 import { createRedactionContext } from "../_core/ai/pii";
@@ -36,7 +46,10 @@ import { PLANNED_TOOLS, allMultisProfiles, multisProfileFor, MULTIS_PROFILE_RULE
 import { RULES_DOCS } from "./rulesDocs.generated";
 import { askAssistant, staffHelpDocs, type AssistantMode } from "./service";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS, type StaffToolCtx } from "./tools";
-import { MPV_DATA_TOOLS, MPV_DATA_TOOL_NAMES, MPV_TOOL_RESULT_MAX_CHARS, evaluationRulesFor, fitToolResult, summarizeTimesGrid, weekdayArg } from "./mpvDataTools";
+import {
+  CUT_NOTE, MPV_DATA_TOOLS, MPV_DATA_TOOL_NAMES, MPV_TOOL_RESULT_MAX_CHARS, SLOW_CALL_MESSAGE, cutText, evaluationRulesFor, fitToolResult, setSlowCallMsForTests,
+  summarizeTimesGrid, weekdayArg,
+} from "./mpvDataTools";
 import { mpvSuggestions } from "./mpv";
 
 const KEYS = ["GEMINI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY", "AI_ENABLED", "AI_ASSISTANT", "AI_ASSISTANT_SMART", "MPV", "AI_MODEL_SMART",
@@ -56,10 +69,12 @@ beforeEach(() => {
   resetFinalCallModeForTests();
   resetMaskedColumnsForTests(null);
   invalidateSettingsCache();
+  setSlowCallMsForTests(null);
 });
 afterEach(() => {
   for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   setAiProvidersForTests(null);
+  setSlowCallMsForTests(null);
 });
 
 const LISBOA: CityAccess = { all: false, defaultCityId: 10, cityName: "Lisboa", cityNames: ["Lisboa"], cityIds: [10], projectIds: [10, 11, 12], missingCostCenter: false };
@@ -89,6 +104,10 @@ interface ServerOpts {
   totals?: boolean;
   /** Muitas linhas (para o teto do resultado). */
   many?: boolean;
+  /** Avaliação com 8 dias negativos e regras longas. */
+  bigEval?: boolean;
+  /** Os procedimentos lentos (pressure, weekActivity) nunca respondem. */
+  hang?: boolean;
 }
 
 const slot = (weekday: number, hour: number, extra: Record<string, unknown> = {}) => ({
@@ -102,6 +121,7 @@ function fakeServer(opts: ServerOpts = {}) {
   const n = opts.many ? 60 : 3;
   const call = vi.fn(async (path: string, input?: any) => {
     calls.push({ path, input });
+    if (opts.hang && (path === "extrasDia.pressure" || path === "multipark.weekActivity")) return new Promise(() => {});
     switch (path) {
       case "partnerships.live": {
         const money = !!opts.totals;
@@ -162,19 +182,26 @@ function fakeServer(opts: ServerOpts = {}) {
           score: { totalPoints: 150, positivePoints: 175, negativePoints: -25, lines: [{ label: "Excesso de velocidade", count: 1, subtotal: -10 }, { label: "Recolha ou entrega", count: 58, subtotal: 174 }] },
           perHour: { pointsPerHour: 1.9 },
         },
-        days: [
-          { day: "2026-10-03", score: { totalPoints: -5, negativePoints: -15, lines: [{ label: "Excesso de velocidade", count: 1, subtotal: -10 }, { label: "Atraso ao trabalho (≥ 5 min)", count: 1, subtotal: -5 }] } },
-          { day: "2026-10-04", score: { totalPoints: 20, negativePoints: 0, lines: [] } },
-        ],
+        days: opts.bigEval
+          ? Array.from({ length: 8 }, (_, i) => ({
+            day: `2026-10-0${i + 1}`,
+            score: { totalPoints: -10 - i, negativePoints: -20 - i, lines: ["Excesso de velocidade", "Atraso ao trabalho (≥ 5 min)", "Reclamação confirmada", "Acidente ou dano/risco"].map((label) => ({ label: `${label} — ${"descrição longa ".repeat(4)}`, count: 1, subtotal: -5 })) },
+          }))
+          : [
+            { day: "2026-10-03", score: { totalPoints: -5, negativePoints: -15, lines: [{ label: "Excesso de velocidade", count: 1, subtotal: -10 }, { label: "Atraso ao trabalho (≥ 5 min)", count: 1, subtotal: -5 }] } },
+            { day: "2026-10-04", score: { totalPoints: 20, negativePoints: 0, lines: [] } },
+          ],
         disputes: [{ id: 1, status: "open", note: `liga para ${SECRETS.phone}` }],
       };
       case "reviews.stats": return { total: 40, avg: 4.3, star1: 2, star2: 1, star3: 3, star4: 10, star5: 24, unrated: 0, pending: 3, responded: 35, complaints: 2 };
       case "reviews.list": return [
-        { id: 1, rating: 1, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: "2026-10-14 10:00:00", createdAt: "2026-10-14", reviewerName: "Maria Antunes Costa", reviewerEmail: SECRETS.email, vehiclePlate: SECRETS.plate, reviewText: `Péssimo, o carro ${SECRETS.plate} veio sujo. Liguem para ${SECRETS.phone} ou ${SECRETS.email}. ${"Muito mau. ".repeat(40)}`, locationTitle: "Airpark Lisboa", aiResponse: "Lamentamos…" },
-        { id: 2, rating: 5, status: "new", respondedAt: null, complaintId: null, notAReview: 1, duplicateOf: null, reviewDate: "2026-10-13", reviewerName: "Candidato", reviewText: "Envio o meu CV" },
-        { id: 3, rating: 5, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: 1, reviewDate: "2026-10-13", reviewerName: "Repetido", reviewText: "Repetida" },
-        { id: 4, rating: 4, status: "manually_responded", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: "2026-10-12", reviewerName: "Ana", reviewText: "Bom" },
-        ...Array.from({ length: opts.many ? 40 : 1 }, (_, i) => ({ id: 10 + i, rating: 5, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: `2026-10-0${(i % 9) + 1}`, reviewerName: "Rui Gomes Lopes", reviewText: "Excelente serviço" })),
+        { id: 1, projectId: 10, rating: 1, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: "2026-10-14 10:00:00", createdAt: "2026-10-14", reviewerName: "Maria Antunes Costa", reviewerEmail: SECRETS.email, vehiclePlate: SECRETS.plate, reviewText: `Péssimo, o carro ${SECRETS.plate} veio sujo. Liguem para ${SECRETS.phone} ou ${SECRETS.email}. ${"Muito mau. ".repeat(40)}`, locationTitle: "Airpark Lisboa", aiResponse: "Lamentamos…" },
+        { id: 2, projectId: 10, rating: 5, status: "new", respondedAt: null, complaintId: null, notAReview: 1, duplicateOf: null, reviewDate: "2026-10-13", reviewerName: "Candidato", reviewText: "Envio o meu CV" },
+        { id: 3, projectId: 10, rating: 5, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: 1, reviewDate: "2026-10-13", reviewerName: "Repetido", reviewText: "Repetida" },
+        { id: 4, projectId: 10, rating: 4, status: "manually_responded", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: "2026-10-12", reviewerName: "Ana", reviewText: "Bom" },
+        // Lixo: sem parque nem marca (fica fora, como no ecrã).
+        { id: 5, projectId: null, locationTitle: null, rating: 5, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: "2026-10-15", reviewerName: "Lixo", reviewText: "Recebeu 3 críticas novas" },
+        ...Array.from({ length: opts.many ? 40 : 1 }, (_, i) => ({ id: 10 + i, projectId: 10, rating: 5, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: `2026-10-0${(i % 9) + 1}`, reviewerName: "Rui Gomes Lopes", reviewText: "Excelente serviço" })),
       ];
       case "training.myTraining": return {
         employeeId: 5,
@@ -198,13 +225,8 @@ function fakeServer(opts: ServerOpts = {}) {
         startHour: 8, endHour: 16, sentHomeHour: null, isTeamLeader: i === 1, status: i === 1 ? "proposed" : "confirmed", phone: SECRETS.phone,
       }));
       case "extrasDia.schedule": return { state: { status: "proposed", manual: null }, noAnswerCount: 4, notifications: [{ status: "sent" }, { status: "failed" }] };
-      case "extrasDia.candidates": return [
-        { id: 1, fullName: "João Pereira", city: "lisbon", availability: { status: "available" } },
-        { id: 100, fullName: "João Silva", city: "lisbon", availability: { status: "available" } },
-        { id: 2, fullName: "Maria Antunes Costa", city: "lisbon", availability: { status: "unavailable" } },
-        { id: 3, fullName: "Pessoa do Porto", city: "porto", availability: { status: "available" } },
-        { id: 4, fullName: "Sem Resposta", city: "lisbon", availability: { status: "no_response" } },
-      ];
+      case "projects.list": return [{ id: 10, name: "Lisboa", level: "city" }, { id: 20, name: "Porto", level: "city" }];
+      // extrasDia.candidates NÃO: conta toda a gente (backoffice, sem cidade); a ferramenta usa os números do ecrã.
       default: throw new Error(`procedimento inesperado: ${path}`);
     }
   });
@@ -240,8 +262,16 @@ describe("as 8 ferramentas novas: só no MPV, só leitura, sem IA", () => {
     for (const n of MPV_DATA_TOOL_NAMES) expect(STAFF_TOOLS.map((t) => t.name)).not.toContain(n);
     expect(mpv).not.toContain("minha_avaliacao");
     expect(STAFF_TOOLS.map((t) => t.name)).toContain("minha_avaliacao");
-    // Cada uma declara os seus campos com dados pessoais (mesmo que vazio).
-    for (const t of MPV_DATA_TOOLS) expect(t.pii, t.name).toBeDefined();
+    // Cada uma declara os seus campos com dados pessoais (mesmo que vazio) e redige-os ela própria ANTES de cortar.
+    for (const t of MPV_DATA_TOOLS) {
+      expect(t.pii, t.name).toBeDefined();
+      expect(t.selfRedacts, t.name).toBe(true);
+    }
+    // A avaliacao_minha mantém as definições que a minha_avaliacao (v1) dava ao modelo.
+    const desc = MPV_DATA_TOOLS.find((t) => t.name === "avaliacao_minha")!.description;
+    for (const bit of ["movimentos (levar ao parque e entre garagens)", "mudanças de lugar (mesma garagem: não são movimentos)", "entrada 5 min ou mais depois da hora da escala ou do horário"]) expect(desc).toContain(bit);
+    // Horas apertadas: a mesma função do ecrã.
+    expect(src("server/assistant/mpvDataTools.ts")).toMatch(/tightHoursForDay\(slots, date, hours\.map/);
   });
 
   it("nenhuma chama IA: o código não importa o runAi nem a explicação da avaliação; só procedimentos de leitura", async () => {
@@ -253,7 +283,7 @@ describe("as 8 ferramentas novas: só no MPV, só leitura, sem IA", () => {
     const READ_ONLY = new Set([
       "partnerships.live", "expenses.access", "expenses.list", "extrasDia.pressure", "multipark.weekActivity", "evaluation.mine",
       "reviews.stats", "reviews.list", "training.myTraining", "training.dashboard",
-      "extrasDia.staffing", "extrasDia.assignments", "extrasDia.schedule", "extrasDia.candidates",
+      "extrasDia.staffing", "extrasDia.assignments", "extrasDia.schedule", "projects.list",
     ]);
     expect(srv.calls.length).toBeGreaterThan(8);
     for (const c of srv.calls) expect(READ_ONLY.has(c.path), c.path).toBe(true);
@@ -333,6 +363,26 @@ describe("acesso: por ferramenta e por papel (extra, TL de outra cidade, supervi
     const first = (adm.result.lista as any[])[0];
     expect(first).toMatchObject({ valorEsteMes: 1000, nossoEsteMes: 150 });
     expect(first.taxasPorMarcaECidade).toEqual(expect.arrayContaining([expect.objectContaining({ marca: "airpark", cidade: "Lisboa", percentagem: 15 })]));
+    expect(adm.result.nota).toMatch(/todas as tuas cidades juntas/);
+  });
+
+  it("parcerias_resumo com cidade: sem as reservas nem os euros do parceiro (são de todas as cidades); as taxas só dessa cidade", async () => {
+    const r = await runTool(PEOPLE.admin(), "parcerias_resumo", { cidade: "Porto" });
+    expect(r.result.cidade).toBe("Porto");
+    const rows = r.result.lista as any[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.reservasEsteMes, row.nome).toBeUndefined();
+      expect(row.reservas12Meses).toBeUndefined();
+      expect(row.valorEsteMes).toBeUndefined();
+      expect(row.nossoEsteMes).toBeUndefined();
+      expect(row.parques).toBe(1);
+      for (const t of row.taxasPorMarcaECidade) expect(t.cidade).toBe("Porto");
+    }
+    expect(r.result.nota).toMatch(/de todas as cidades juntas e por isso não vêm aqui/);
+    // Sem cidade: vêm, ditas como de todas as cidades.
+    const all = await runTool(PEOPLE.admin(), "parcerias_resumo");
+    expect((all.result.lista as any[])[0].reservasEsteMes).toBeGreaterThan(0);
   });
 
   it("despesas_resumo: os totais em euros só com o canSeeTotals do servidor (a regra do ecrã); as canceladas à parte", async () => {
@@ -446,7 +496,40 @@ describe("dados pessoais nos resultados (redação única do turno)", () => {
     expect(first.avaliador).toBe("Maria");
     expect(String(first.texto).length).toBeLessThanOrEqual(200);
     expect(first.texto).toContain("[MATRICULA_1]");
-    for (const s of [SECRETS.email, SECRETS.plate, SECRETS.phone, "Candidato", "Repetido"]) expect(json, s).not.toContain(s);
+    for (const s of [SECRETS.email, SECRETS.plate, SECRETS.phone, "Candidato", "Repetido", "Lixo"]) expect(json, s).not.toContain(s);
+  });
+
+  it("criticas_por_responder: UM só \"por responder\", o da lista pedida (cidade/estrelas), sem lixo; o geral sem esse número", async () => {
+    const all = await runTool(PEOPLE.supervisor(), "criticas_por_responder");
+    expect(all.result.porResponder).toBe((all.result.ultimas as any[]).length);
+    expect((all.result.ultimas as any[]).map((x) => x.id)).not.toContain(5); // sem parque nem marca
+    expect(all.json.match(/porResponder"/g)?.length).toBe(1);
+    expect(all.result.geral).toMatchObject({ criticas: 40, media: 4.3, respondidas: 35 });
+    expect((all.result.geral as any).porResponder).toBeUndefined();
+    const ctx = PEOPLE.supervisor();
+    const one = await runTool(ctx, "criticas_por_responder", { estrelas: 1 });
+    expect((ctx.call as any).mock.calls.find((c: any[]) => c[0] === "reviews.list")[1]).toEqual({ rating: 1 });
+    expect(one.result.geralSemFiltroDeEstrelas).toBeDefined();
+    expect(one.result.geral).toBeUndefined();
+  });
+
+  it("PII cortada só DEPOIS da redação: um email e um telefone no limite do corte não escapam pela metade", async () => {
+    for (const pad of [150, 160, 165, 170, 175]) {
+      const text = `${"a".repeat(pad)} joao.silva@gmail.com e 912 345 678 fim`;
+      const srv = fakeServer();
+      const call = vi.fn(async (p: string, i?: any) => (p === "reviews.list"
+        ? [{ id: 1, projectId: 10, rating: 2, status: "new", respondedAt: null, complaintId: null, notAReview: 0, duplicateOf: null, reviewDate: "2026-10-14", reviewerName: "Ana", reviewText: text }]
+        : srv.call(p, i)));
+      const { json, redact } = await runTool({ ...PEOPLE.supervisor(), call } as StaffToolCtx, "criticas_por_responder");
+      for (const part of ["joao", "silva@", "gmail", "912 345", "912", "345 678"]) expect(json, `${pad}: ${part}`).not.toContain(part);
+      const texto = String((JSON.parse(json).ultimas as any[])[0].texto);
+      expect(texto.length, String(pad)).toBeLessThanOrEqual(181);
+      // Um marcador nunca fica partido: ou inteiro (e repõe-se) ou fora.
+      expect(texto).not.toMatch(/\[[A-Z]*_?\d*…$/);
+      expect(redact.restore(texto)).not.toMatch(/\[(EMAIL|TELEFONE)_/);
+    }
+    expect(cutText("abc [EMAIL_12] fim", 9)).toBe("abc…");
+    expect(cutText("abc [EMAIL_1] fim", 13)).toBe("abc [EMAIL_1]…");
   });
 
   it("formacao_progresso: o próprio para todos; a equipa (com [NOME_n]) só para quem a acompanha", async () => {
@@ -459,6 +542,23 @@ describe("dados pessoais nos resultados (redação única do turno)", () => {
     expect((tl.result.equipa as any).ambito).toBe("a tua equipa");
     expect((tl.result.equipa as any).maisAtrasados.map((x: any) => x.nome)).toEqual(["[NOME_1]", "[NOME_2]"]);
     expect(tl.redact.restore("[NOME_1] e [NOME_2]")).toBe("João Silva e João Pereira");
+  });
+
+  it("formacao_progresso: sem centro de custos dá na mesma a formação própria (como o ecrã); certificados expirados à parte dos a expirar", async () => {
+    const noCc: CityAccess = { ...LISBOA, missingCostCenter: true };
+    const ctx = ctxFor("team_leader", noCc, fakeServer());
+    const r = await runTool(ctx, "formacao_progresso");
+    expect(r.result.error).toBeUndefined();
+    expect(r.result.minha).toMatchObject({ percursos: [expect.objectContaining({ progressoPct: 50 })], certificados: { validos: 1, aExpirar: 0, expirados: 0 } });
+    expect(r.result.equipa).toMatchObject({ indisponivel: expect.stringMatching(/centro de custos/) });
+    expect((ctx.call as any).mock.calls.map((c: any[]) => c[0])).toEqual(["training.myTraining"]);
+    // Equipa: expirados e a expirar separados.
+    const srv = fakeServer();
+    const call = vi.fn(async (p: string, i?: any) => (p === "training.dashboard"
+      ? { ...(await srv.call(p, i)), certificates: [{ state: "expired" }, { state: "expired" }, { state: "expiring" }] }
+      : srv.call(p, i)));
+    const tl = await runTool({ ...PEOPLE.tlPorto(), call } as StaffToolCtx, "formacao_progresso");
+    expect(tl.result.equipa).toMatchObject({ certificadosExpirados: 2, certificadosAExpirar: 1 });
   });
 });
 
@@ -496,6 +596,48 @@ describe("o que cada ferramenta devolve", () => {
     expect(summarizeTimesGrid({ cells: {}, hidden: {} })).toMatchObject({ entregas: 0, temposDasEntregas: {} });
   });
 
+  it("tempos_resumo: cobertura só dos tempos visíveis; pior célula só com amostra ≥ MIN_SAMPLE", () => {
+    const s = summarizeTimesGrid({
+      cells: {
+        "1:9": { m: { fila: { n: 2, p50Ms: 0, p75Ms: 3_600_000, meanMs: 3_000_000 } } },
+        "1:10": { m: { fila: { n: 10, p50Ms: 0, p75Ms: 600_000, meanMs: 480_000 } } },
+      },
+      hidden: { transito: "Em calibração." }, coverage: { fila: 90, transito: 40 }, deliveries: 12, pickups: 0,
+    });
+    expect(s.coberturaPct).toEqual({ fila: 90 });
+    expect((s.temposDasEntregas as any).fila.piorCelula).toEqual({ celula: "1:10", p75Min: 10, casos: 10 });
+  });
+
+  it("tempos_resumo: declara-se a quem tem um dos modos; cada modo verifica o seu acesso", async () => {
+    const tl = PEOPLE.tlPorto();
+    expect(availableTools(MPV_STAFF_TOOLS, tl).map((t) => t.name)).toContain("tempos_resumo");
+    // Só a Atividade diária (sem Extras Dia) → a semana; pedir a Pressão não dá Pressão.
+    const onlyWeek = ctxFor("supervisor", LISBOA, fakeServer());
+    (onlyWeek.user as any).accessOverrides = { extras_dia: { access: "none", actions: [] } };
+    const r = await runTool(onlyWeek, "tempos_resumo", { dia: "sexta" });
+    expect(r.result.error, JSON.stringify(r.result)).toBeUndefined();
+    expect(r.result.fonte).toMatch(/Semana/);
+    expect((onlyWeek.call as any).mock.calls.map((c: any[]) => c[0])).toEqual(["multipark.weekActivity"]);
+    // Nenhum modo → nem se declara (recusada).
+    const none = ctxFor("extra", LISBOA, fakeServer());
+    expect((await runTool(none, "tempos_resumo")).result).toEqual({ error: TOOL_REFUSED_ERROR });
+  });
+
+  it("leituras lentas com prazo próprio: \"demorou demasiado\" em vez de comer as voltas", async () => {
+    setSlowCallMsForTests(20);
+    for (const [name, args] of [["pressao_explicar", {}], ["tempos_resumo", {}], ["tempos_resumo", { semana: "2026-10-14" }]] as const) {
+      const ctx = ctxFor("supervisor", LISBOA, fakeServer({ hang: true }));
+      const t0 = Date.now();
+      const { result } = await runTool(ctx, name, args);
+      expect(result, name).toEqual({ error: SLOW_CALL_MESSAGE });
+      expect(Date.now() - t0).toBeLessThan(2000);
+    }
+    // Na situação do Extras Dia a Pressão é só um extra: sem ela, as horas apertadas ficam "indisponível".
+    const sit = await runTool(ctxFor("supervisor", LISBOA, fakeServer({ hang: true })), "extras_dia_situacao");
+    expect(sit.result.horasApertadas).toBe("indisponível");
+    expect(sit.result.cobertura).toBeDefined();
+  });
+
   it("avaliacao_minha: evaluation.mine + as regras em vigor (sem IA): dias com mais negativos e as regras desses pontos primeiro", async () => {
     const ctx = PEOPLE.extra();
     const { result } = await runTool(ctx, "avaliacao_minha");
@@ -510,33 +652,105 @@ describe("o que cada ferramenta devolve", () => {
     expect(JSON.stringify(result)).not.toContain(SECRETS.phone);
   });
 
-  it("extras_dia_situacao: cobertura, faltas (com quem está disponível), sobras, horas apertadas e quem respondeu (só desta cidade)", async () => {
-    const { result } = await runTool(PEOPLE.supervisor(), "extras_dia_situacao", { data: "2026-10-16" });
+  it("avaliacao_minha grande (8 dias negativos, regras e valores): cabe no teto e devolve os dias (não só a nota do corte)", async () => {
+    const { result, json } = await runTool(ctxFor("extra", LISBOA, fakeServer({ bigEval: true })), "avaliacao_minha");
+    expect(json.length).toBeLessThanOrEqual(MPV_TOOL_RESULT_MAX_CHARS);
+    expect((result.diasComMaisNegativos as any[]).length).toBe(5);
+    expect(result.pontos).toMatchObject({ total: 150 });
+    expect(Object.keys(result).length).toBeGreaterThan(3);
+  });
+
+  it("extras_dia_situacao: cobertura, faltas (com quem está disponível), sobras, horas apertadas e os números do ecrã (sem extrasDia.candidates)", async () => {
+    const ctx = PEOPLE.supervisor();
+    const { result } = await runTool(ctx, "extras_dia_situacao", { data: "2026-10-16" });
     expect(result).toMatchObject({
       data: "2026-10-16", cidade: "Lisboa",
       cobertura: { horasComPrevisao: 3, horasCobertas: 2, pct: 67, picoNecessario: 2 },
       faltas: [{ de: "08h", ate: "09h", faltam: 1, nomes: ["[NOME_1]"] }],
       sobras: [{ de: "18h", ate: "19h", aMais: 2 }],
-      escala: { estado: "proposed", confirmados: 1, propostos: 1, teamLeaders: 1 },
-      respostas: { "disponível": 2, "indisponível": 1, "sem resposta": 1, semRespostaAosPedidos: 4 },
+      escala: { estado: "proposed", confirmados: 1, propostos: 1, teamLeaders: 1, total: 2 },
+      respostas: { disponiveisPorEscalar: 1, pessoas: [{ nome: "[NOME_1]", horas: "08–14" }], semResposta: 4 },
       avisos: { sent: 1, failed: 1 },
     });
     expect((result.horasApertadas as any[]).map((x) => x.hora)).toContain("18h");
-    // Os disponíveis por escalar: o João Pereira (o João Silva já está na escala); o do Porto não entra.
-    expect((result.respostas as any).disponiveisPorEscalar.nomes).toEqual(["[NOME_1]"]);
-    expect(JSON.stringify(result)).not.toContain("Pessoa do Porto");
+    expect((ctx.call as any).mock.calls.map((c: any[]) => c[0])).not.toContain("extrasDia.candidates");
+  });
+
+  it("extras_dia_situacao com o indicador a sério: um backoffice não conta, sem cidade não entra, escalado noutra cidade não é disponível", async () => {
+    const win = { status: "available", windows: [{ from: 8, to: 12 }], hours: "08–12" };
+    st.candidates = [
+      { id: 1, fullName: "Extra Lisboa", position: "extra", availability: win },
+      { id: 2, fullName: "Backoffice Lisboa", position: "backoffice", availability: win },
+      { id: 3, fullName: "Extra Sem Cidade", position: "extra", availability: win },
+      { id: 4, fullName: "Extra Escalado no Porto", position: "extra", availability: win },
+      { id: 5, fullName: "Extra Do Porto", position: "extra", availability: win },
+      { id: 6, fullName: "Extra Sem Resposta", position: "extra", availability: { status: "no_response", windows: [] } },
+    ];
+    st.cities = new Map([[1, { city: "lisboa" }], [2, { city: "lisboa" }], [4, { city: "lisboa" }], [5, { city: "porto" }], [6, { city: "lisboa" }]]);
+    st.rows = [{ employeeId: 4, city: "porto", isTeamLeader: false, startHour: 8, endHour: 16, sentHomeHour: null }];
+    const report = await getStaffingReport("2026-10-16", "lisbon");
+    const srv = fakeServer();
+    const call = vi.fn(async (p: string, i?: any) => (p === "extrasDia.staffing" ? report : srv.call(p, i)));
+    const { result, redact } = await runTool({ ...PEOPLE.supervisor(), call } as StaffToolCtx, "extras_dia_situacao", { data: "2026-10-16" });
+    const names = ((result.respostas as any).pessoas as any[]).map((p) => redact.restore(p.nome));
+    expect(names).toEqual(["Extra Lisboa"]);
+    expect((result.respostas as any).disponiveisPorEscalar).toBe(1);
+    const gapNames = (result.faltas as any[]).flatMap((g) => g.nomes.map((n: string) => redact.restore(n)));
+    for (const n of ["Backoffice Lisboa", "Extra Sem Cidade", "Extra Escalado no Porto", "Extra Do Porto"]) {
+      expect(names, n).not.toContain(n);
+      expect(gapNames, n).not.toContain(n);
+    }
+    expect(gapNames).toContain("Extra Lisboa");
   });
 });
 
 // ─── Teto do resultado ───────────────────────────────────────────────────────
 
 describe("teto do resultado (~4 000 caracteres)", () => {
-  it("fitToolResult corta listas e textos grandes e marca \"cortado\"", () => {
+  it("fitToolResult corta listas e textos grandes, marca \"cortado\" e a lista principal fica", () => {
     const big = { lista: Array.from({ length: 500 }, (_, i) => ({ nome: `Linha ${i}`, texto: "x".repeat(50) })), nota: "y".repeat(3000) };
     const out = fitToolResult(big);
-    expect(JSON.stringify(out).length).toBeLessThanOrEqual(3600);
-    expect(out.cortado).toMatch(/encurtado/);
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(MPV_TOOL_RESULT_MAX_CHARS);
+    expect(out.cortado).toMatch(/encurtado.*Listas encurtadas: lista/);
+    expect((out.lista as any[]).length).toBeGreaterThan(10);
     expect(fitToolResult({ a: 1 })).toEqual({ a: 1 });
+  });
+
+  it("fitToolResult nunca devolve só a nota quando há dados (a nota conta no teto ANTES de cortar)", () => {
+    // Entradas grandes de todos os feitios, incluindo as que ficam mesmo no limite com a nota.
+    for (let n = 0; n < 120; n++) {
+      const input: Record<string, unknown> = {
+        a: Array.from({ length: n }, (_, i) => ({ k: i, v: "z".repeat(10 + (n % 7) * 5) })),
+        b: "t".repeat(n * 37),
+        c: Array.from({ length: 1 + (n % 5) }, () => "q".repeat(400 + n)),
+      };
+      const out = fitToolResult(input, 1500);
+      const size = JSON.stringify(out).length;
+      expect(size, String(n)).toBeLessThanOrEqual(1500);
+      if (JSON.stringify(input).length > 1500) {
+        expect(Object.keys(out).filter((k) => k !== "cortado").length, String(n)).toBeGreaterThan(0);
+        expect(out, String(n)).not.toEqual({ cortado: CUT_NOTE });
+      }
+    }
+  });
+
+  it("os contadores batem certo depois do corte (mostrados = linhas que ficaram)", async () => {
+    const r = await runTool(ctxFor("admin", ALL, fakeServer({ totals: true, many: true }), true), "parcerias_resumo");
+    expect(r.result.mostrados).toBe((r.result.lista as any[]).length);
+    expect(r.result.parceiros).toBe(60);
+    const s = await runTool(ctxFor("admin", ALL, fakeServer({ totals: true, many: true }), true), "extras_dia_situacao", { cidade: "Lisboa" });
+    const esc = s.result.escala as any;
+    expect(esc.total).toBe(40);
+    expect(esc.mostradas).toBe(esc.pessoas.length);
+    // Despesas: avisa quando as categorias/meses estão cortados.
+    const srv = fakeServer({ totals: true });
+    const call = vi.fn(async (p: string, i?: any) => (p === "expenses.list"
+      ? Array.from({ length: 30 }, (_, k) => ({ expense: { amount: "1", status: "paid", expenseDate: `2025-${String((k % 14) + 1 > 12 ? 12 : (k % 12) + 1).padStart(2, "0")}-01` }, category: { name: `Cat ${k}` } }))
+      : srv.call(p, i)));
+    const d = await runTool({ ...PEOPLE.admin(), call } as StaffToolCtx, "despesas_resumo", { de: "2025-01-01", ate: "2025-12-31" });
+    expect(d.result.porCategoriaCortada).toMatchObject({ mostradas: 10, total: 30 });
+    expect((d.result.porCategoria as any[]).length).toBe(10);
+    expect(d.result.porMesCortado).toBeUndefined();
   });
 
   it("com muitas linhas, cada ferramenta cabe no teto depois da redação", async () => {

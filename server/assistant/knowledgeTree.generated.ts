@@ -5959,7 +5959,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "No piloto, o Multis lê também estes dados, sempre como tu (as tuas cidades e permissões), só para ler e sem usar IA para os ir buscar.",
        "children": [],
        "container": false,
-       "chars": 1325
+       "chars": 1475
       }
      ]
     },
