@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { absenceForScheduler, schedulerAbsenceText } from "../shared/leaves";
+import { absenceForScheduler, noticeBeforeAssignment, schedulerAbsenceText, schedulerAbsenceWarning } from "../shared/leaves";
 
 describe("Extras-Dia: \"avisou a DD/MM\" é o dia em Lisboa", () => {
   const notice = (requestedAt: string) => absenceForScheduler({ leaveType: "unavailable", status: "approved", fromDate: "2026-11-03", toDate: "2026-11-03", requestedAt });
@@ -30,6 +30,31 @@ describe("Extras-Dia: \"avisou a DD/MM\" é o dia em Lisboa", () => {
   it("Date (o mysql2 devolve Date) e sem data", () => {
     expect(absenceForScheduler({ leaveType: "vacation", status: "approved", fromDate: "2026-11-03", toDate: "2026-11-03", requestedAt: new Date("2026-08-02T23:30:00Z") }).noticeDay).toBe("2026-08-03");
     expect(absenceForScheduler({ leaveType: "sick", status: "approved", fromDate: "2026-11-03", toDate: "2026-11-03" }).noticeDay).toBeNull();
+  });
+});
+
+describe("Extras-Dia: o aviso ao pôr a pessoa não promete o que a regra não faz (auditoria final)", () => {
+  const leave = (o: Record<string, unknown> = {}) => ({ leaveType: "unavailable", status: "approved", fromDate: "2026-11-03", toDate: "2026-11-03", hours: null, requestedAt: "2026-10-20 09:00:00", ...o });
+  it("dia inteiro: a falta fica sem pontos (e a regra confirma)", () => {
+    const l = leave();
+    expect(schedulerAbsenceWarning(absenceForScheduler(l), "Zé")).toBe("Zé: indisponível (avisou a 20/10) neste dia. Se escalares na mesma e faltar, a falta fica sem pontos (avisou antes).");
+    expect(noticeBeforeAssignment([l], "2026-11-03", "2026-10-21 10:00:00")).toBe(l);
+  });
+  it("parte do dia: não promete 0 pontos (a regra não os tira)", () => {
+    const l = leave({ leaveType: "other", hours: "2.00" });
+    const w = schedulerAbsenceWarning(absenceForScheduler(l), "Ana")!;
+    expect(w).toBe("Ana: ausente (parte do dia) neste dia. É só parte do dia: se faltar, a falta conta como sempre.");
+    expect(w).not.toMatch(/sem pontos/);
+    expect(noticeBeforeAssignment([l], "2026-11-03", "2026-10-21 10:00:00")).toBeNull();
+  });
+  it("sem ausência: nada", () => {
+    expect(schedulerAbsenceWarning(null)).toBeNull();
+    expect(schedulerAbsenceWarning(undefined, "Zé")).toBeNull();
+  });
+  it("o ecrã usa a regra (não escreve o texto à mão)", () => {
+    const bits = readFileSync(resolve(import.meta.dirname, "..", "client/src/components/ferias/FeriasBits.tsx"), "utf8");
+    expect(bits).toContain("const text = schedulerAbsenceWarning(absence, name);");
+    expect(bits).not.toContain("a falta fica sem pontos (avisou antes).</span>");
   });
 });
 

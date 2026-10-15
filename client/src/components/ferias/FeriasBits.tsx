@@ -7,7 +7,7 @@ import { useLocation } from "wouter";
 import { CalendarRange, CalendarOff } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { schedulerAbsenceText, type SchedulerAbsence } from "@shared/leaves";
+import { schedulerAbsenceText, schedulerAbsenceWarning, type SchedulerAbsence } from "@shared/leaves";
 
 /** Estado do mapa de férias para esta conta (null enquanto carrega / desligado / erro). */
 export function useLeaveStatus() {
@@ -44,12 +44,13 @@ export function AbsenceBadge({ absence, className = "" }: { absence?: SchedulerA
 
 /** Extras-Dia → ao pôr alguém: aviso (nunca bloqueia). */
 export function AbsenceWarning({ absence, name }: { absence?: SchedulerAbsence | null; name?: string | null }) {
-  const text = schedulerAbsenceText(absence);
+  // a parte do dia não tira os pontos à falta: o texto não o promete (shared/leaves.ts)
+  const text = schedulerAbsenceWarning(absence, name);
   if (!text) return null;
   return (
     <div role="status" className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
       <CalendarOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-      <span>{name ? `${name}: ` : ""}{text.toLowerCase()} neste dia. Se escalares na mesma e faltar, a falta fica sem pontos (avisou antes).</span>
+      <span>{text}</span>
     </div>
   );
 }

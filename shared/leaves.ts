@@ -565,3 +565,17 @@ export function schedulerAbsenceText(a: SchedulerAbsence | null | undefined): st
   if (a.kind === "vacation") return `De férias${a.partial ? " (parte do dia)" : ""}`;
   return `Ausente${a.partial ? " (parte do dia)" : ""}`;
 }
+
+/**
+ * O aviso a quem PÕE a pessoa na escala (nunca bloqueia). Só a ausência de dia
+ * inteiro tira os pontos à falta (noticeBeforeAssignment); a de parte do dia
+ * não — o aviso não pode prometer o contrário. PURA.
+ */
+export function schedulerAbsenceWarning(a: SchedulerAbsence | null | undefined, name?: string | null): string | null {
+  const text = schedulerAbsenceText(a);
+  if (!a || !text) return null;
+  const tail = a.partial
+    ? "É só parte do dia: se faltar, a falta conta como sempre."
+    : "Se escalares na mesma e faltar, a falta fica sem pontos (avisou antes).";
+  return `${name ? `${name}: ` : ""}${text.toLowerCase()} neste dia. ${tail}`;
+}
