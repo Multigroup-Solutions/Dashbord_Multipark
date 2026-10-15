@@ -1048,7 +1048,11 @@ export async function noAnswerTargets(
   const cities = await resolveCitiesForEmployeeIds(noAnswer.map((c) => c.id));
   const cityKey = city === "lisbon" ? "lisboa" : city;
   // Sem cidade não se pede disponibilidade para uma cidade (pede-se a cidade — ver employeeCityFix).
-  return noAnswer.filter((c) => cities.get(c.id)?.city === cityKey).map((c) => c.id);
+  const ids = noAnswer.filter((c) => cities.get(c.id)?.city === cityKey).map((c) => c.id);
+  // Plano 63 (11, só com FERIAS_MAPA): quem já avisou que não está nesse dia não é chamado ("quem escala vê e
+  // não te chama") — a mesma regra da proposta automática. Desligado ou erro → ninguém sai (como antes).
+  const away = ids.length ? await (await import("./leaves")).awayForAutoProposal(date, ids) : new Set<number>();
+  return away.size ? ids.filter((id) => !away.has(id)) : ids;
 }
 
 export async function resendAvailabilityRequest(date: string, city: ScheduleCity, userId: number | null): Promise<{ targets: number; emailSent: number; whatsappSent: number }> {

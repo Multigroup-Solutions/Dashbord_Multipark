@@ -2756,7 +2756,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "\"Formação em falta\" = a pessoa ainda não concluiu a formação obrigatória.",
        "children": [],
        "container": false,
-       "chars": 1869
+       "chars": 1940
       }
      ]
     },

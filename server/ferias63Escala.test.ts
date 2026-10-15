@@ -94,7 +94,7 @@ vi.mock("./extraRates", async (original) => {
 });
 vi.mock("./google/pendingSync", () => ({ scheduleGoogleShiftSync: async () => {} }));
 
-import { loadEligibleExtras, loadScheduleCandidates } from "./extrasSchedule";
+import { loadEligibleExtras, loadScheduleCandidates, noAnswerTargets } from "./extrasSchedule";
 import { upsertAssignment } from "./extrasDia";
 
 const extra = (id: number, fullName: string) => ({ id, fullName, position: "extra", suggestedLevel: "junior", availability: { windows: [{ from: 8, to: 20 }] } });
@@ -130,6 +130,18 @@ describe("1. a lista da proposta automática deixa de fora quem avisou que não 
   it("com o mapa DESLIGADO nada muda: entram todos", async () => {
     delete process.env.FERIAS_MAPA;
     expect((await loadEligibleExtras("2026-11-03", "lisbon")).map((c) => c.id)).toEqual([7, 8, 9]);
+  });
+});
+
+describe("(auditoria final) \"Pedir disponibilidade a quem não respondeu\" não chama quem já avisou que não está", () => {
+  const noAnswer = () => st.candidates.map((c) => ({ ...c, availability: { status: "no_response" } }));
+  it("o \"não vou estar\" de dia inteiro sai; parte do dia e os avisos cancelados ficam; noutro dia entra", async () => {
+    expect(await noAnswerTargets("2026-11-03", "lisbon", noAnswer())).toEqual([8, 9]);
+    expect(await noAnswerTargets("2026-11-04", "lisbon", noAnswer())).toEqual([7, 8, 9]);
+  });
+  it("com o mapa DESLIGADO nada muda: pede a todos os que não responderam", async () => {
+    delete process.env.FERIAS_MAPA;
+    expect(await noAnswerTargets("2026-11-03", "lisbon", noAnswer())).toEqual([7, 8, 9]);
   });
 });
 
