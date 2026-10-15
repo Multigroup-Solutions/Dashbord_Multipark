@@ -201,6 +201,8 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0705", () => import("./migration_0705").then((m) => step(m.MIGRATION_0705_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0705))],
   // Plano MPV (F7, seguimento): as colunas novas da 0705 também numa BD onde a 1.ª versão já criou as tabelas; sentAt das 5★.
   ["0715", () => import("./migration_0715").then((m) => step(m.MIGRATION_0715_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0715))],
+  // Plano 63 (passo 1): modo do ponto por pessoa, histórico, alertas, avisos lidos e rasto das picagens.
+  ["0820", () => import("./migration_0820").then((m) => step(m.MIGRATION_0820_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0820))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
