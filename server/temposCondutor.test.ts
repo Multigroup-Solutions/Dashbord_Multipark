@@ -86,6 +86,25 @@ describe("Q7 — n mínimo: \"sem dados suficientes\", nunca 0", () => {
     const ui = src("client/src/components/people/DriverTimesCard.tsx");
     expect(ui).toContain("sem dados suficientes (n = {s.n}, mínimo {d.minN})");
   });
+  it("o gráfico usa o mesmo mínimo da tabela (10), no condutor e nos colegas", () => {
+    // 7 medições na mesma semana e no mesmo mês: abaixo de 10 → sem ponto
+    const rows = [...many(7, () => del(7, 25, 10)), ...many(7, () => del(1, 15, 9))];
+    const m = driverTimesView(rows, { employeeId: 7, refDay: REF, gate: OPEN, isSuperAdmin: false }).metrics[0];
+    expect(m.weekly[0]).toMatchObject({ n: 7, p50Ms: null, peersN: 7, peersP50Ms: null });
+    expect(m.monthly[0]).toMatchObject({ n: 7, p50Ms: null, peersP50Ms: null });
+    const ok = driverTimesView([...many(10, () => del(7, 25, 10)), ...many(10, () => del(1, 15, 9))], { employeeId: 7, refDay: REF, gate: OPEN, isSuperAdmin: false }).metrics[0];
+    expect(ok.weekly[0]).toMatchObject({ n: 10, p50Ms: 25 * MIN, peersP50Ms: 15 * MIN });
+  });
+  it("os textos são neutros em género (o condutor, nunca \"ele\")", () => {
+    const ui = src("client/src/components/people/DriverTimesCard.tsx");
+    const text = ui.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(text).not.toMatch(/\b(ele|dele|Ele|Dele)\b/);
+    const doc = src("docs/ajuda/condutores-agentes.md");
+    const at = doc.indexOf("**Tempos de um condutor**");
+    const section = doc.slice(at, doc.indexOf("\n**Agentes**", at));
+    expect(section.length).toBeGreaterThan(200);
+    expect(section).not.toMatch(/\b(ele|dele|Ele|Dele)\b/);
+  });
   it("o gráfico deixa o ponto em falta (não desenha 0)", () => {
     const rows = many(3, () => del(7, 25, 10));
     const p = driverTimesView(rows, { employeeId: 7, refDay: REF, gate: OPEN, isSuperAdmin: false }).metrics[0].monthly[0];

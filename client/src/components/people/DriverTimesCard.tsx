@@ -2,7 +2,7 @@
  * Tempos de um condutor (Q7, Jorge 14 out 2026) — Condutores e agentes →
  * condutor e Desempenho → detalhe: Fila, Trânsito, Cliente, no terminal e P2,
  * por semana, mês e 6 meses, ao lado dos colegas da mesma cidade e do mesmo
- * tipo de serviço, e a evolução num gráfico (ele a azul, os colegas a
+ * tipo de serviço, e a evolução num gráfico (o condutor a azul, os colegas a
  * cinzento: forma de ênfase, paleta .times-viz validada nos dois modos). Só
  * informação: não dá pontos. Abaixo do mínimo: "sem dados suficientes".
  * Os números chegam já com o portão dos tempos com GPS aplicado (servidor).
@@ -50,7 +50,7 @@ function ChartTip({ active, payload, label }: any) {
   return (
     <div className="rounded-[10px] border bg-popover px-3 py-2 text-xs shadow-sm">
       <p className="font-medium mb-1">{periodTick(String(label))}</p>
-      <p className="flex items-center gap-2"><span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--times-me)" }} /><b className="tabular-nums">{p.me == null ? "sem dados suficientes" : minTxt(p.me)}</b><span className="text-muted-foreground">ele (n={p.n})</span></p>
+      <p className="flex items-center gap-2"><span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--times-me)" }} /><b className="tabular-nums">{p.me == null ? "sem dados suficientes" : minTxt(p.me)}</b><span className="text-muted-foreground">condutor (n={p.n})</span></p>
       <p className="flex items-center gap-2"><span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--times-peers)" }} /><b className="tabular-nums">{p.peers == null ? "sem dados suficientes" : minTxt(p.peers)}</b><span className="text-muted-foreground">colegas (n={p.peersN})</span></p>
     </div>
   );
@@ -68,6 +68,17 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
   const hiddenSeries = series.length > 0 && series.every((p) => p.gpsHidden) ? series[0].gpsHidden : null;
   const gpsNote = m ? Object.values(m.periods).flat().find((s) => s.gpsLabel)?.gpsLabel ?? null : null;
   const last = [...data].reverse().find((x) => x.me != null);
+  // rótulos diretos só no último ponto de cada linha (o resto fica no eixo, na dica e na tabela)
+  const lastIdx = (k: "me" | "peers") => { for (let i = data.length - 1; i >= 0; i--) if (data[i][k] != null) return i; return -1; };
+  const iMe = lastIdx("me"), iPeers = lastIdx("peers");
+  const meAbove = (data[iMe]?.me ?? 0) >= (data[iPeers]?.peers ?? 0);
+  const endLabel = (idx: number, above: boolean, strong: boolean) => (props: any) => {
+    if (props?.index !== idx || props?.value == null) return <g key={`l-${props?.index}`} />;
+    return (
+      <text key={`l-${props.index}`} x={Number(props.x) + 8} y={Number(props.y) + (above ? -8 : 15)} fontSize={11} textAnchor="start"
+        fill={strong ? "var(--foreground)" : "var(--muted-foreground)"} fontWeight={strong ? 600 : 400}>{minTxt(props.value)}</text>
+    );
+  };
 
   return (
     <section className={`times-viz rounded-[14px] border bg-card ${compact ? "p-3" : "p-4"} space-y-3`}>
@@ -90,7 +101,7 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
                 </button>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground">{METRIC_SHORT[m.metric]} Colegas = os outros condutores da mesma cidade e do mesmo serviço (T1, T2, VIP, Outro), sem ele. Mínimo {d.minN} medições por linha; abaixo disso, "sem dados suficientes".</p>
+            <p className="text-[11px] text-muted-foreground">{METRIC_SHORT[m.metric]} Colegas = os outros condutores da mesma cidade e do mesmo serviço (T1, T2, VIP, Outro), sem este condutor. Mínimo {d.minN} medições por linha e por ponto do gráfico; abaixo disso, "sem dados suficientes".</p>
             <CalibrationBadge note={gpsNote} />
 
             <div className="overflow-x-auto -mx-1">
@@ -136,7 +147,7 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
 
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-semibold">Evolução — mediana dele e dos colegas</p>
+                <p className="text-xs font-semibold">Evolução — mediana do condutor e dos colegas</p>
                 <div className="inline-flex rounded-[10px] border p-0.5" role="radiogroup" aria-label="Por semana ou por mês">
                   {([["monthly", "Por mês"], ["weekly", "Por semana"]] as const).map(([k, l]) => (
                     <button key={k} type="button" role="radio" aria-checked={bucket === k} onClick={() => setBucket(k)}
@@ -150,25 +161,25 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
                 <p className="text-xs text-muted-foreground">Sem casos para o gráfico.</p>
               ) : (
                 <>
-                  <div className="h-[220px] w-full" role="img" aria-label={`Mediana de ${m.label} por ${bucket === "monthly" ? "mês" : "semana"}: ele e os colegas`}>
+                  <div className="h-[220px] w-full" role="img" aria-label={`Mediana de ${m.label} por ${bucket === "monthly" ? "mês" : "semana"}: o condutor e os colegas`}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={data} margin={{ top: 12, right: 24, left: 0, bottom: 0 }}>
+                      <LineChart data={data} margin={{ top: 16, right: 56, left: 0, bottom: 0 }}>
                         <CartesianGrid vertical={false} stroke="var(--border)" strokeWidth={1} />
                         <XAxis dataKey="period" tickFormatter={periodTick} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} stroke="var(--border)" interval="preserveStartEnd" />
                         <YAxis tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} stroke="var(--border)" width={56} allowDecimals={false} unit=" min" />
                         <Tooltip content={<ChartTip />} cursor={{ stroke: "var(--muted-foreground)", strokeWidth: 1 }} />
                         <Legend wrapperStyle={{ fontSize: 12 }} formatter={(v) => <span className="text-foreground">{v}</span>} />
-                        <Line type="monotone" dataKey="peers" name="Colegas" stroke="var(--times-peers)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "var(--card)", fill: "var(--times-peers)" }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive={false} />
-                        <Line type="monotone" dataKey="me" name={name ?? "Ele"} stroke="var(--times-me)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "var(--card)", fill: "var(--times-me)" }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive={false} />
+                        <Line type="monotone" dataKey="peers" name="Colegas" stroke="var(--times-peers)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "var(--card)", fill: "var(--times-peers)" }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive={false} label={endLabel(iPeers, !meAbove, false)} />
+                        <Line type="monotone" dataKey="me" name={name ?? "Condutor"} stroke="var(--times-me)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "var(--card)", fill: "var(--times-me)" }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive={false} label={endLabel(iMe, meAbove, true)} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                  {last && <p className="text-[11px] text-muted-foreground">{bucket === "monthly" ? "Último mês" : "Última semana"} com dados ({periodTick(last.period)}): ele <b className="text-foreground">{minTxt(last.me)}</b>{last.peers != null ? <> · colegas <b className="text-foreground">{minTxt(last.peers)}</b></> : null}. Pontos em falta = menos medições do que o mínimo.</p>}
+                  {last && <p className="text-[11px] text-muted-foreground">{bucket === "monthly" ? "Último mês" : "Última semana"} com dados ({periodTick(last.period)}): condutor <b className="text-foreground">{minTxt(last.me)}</b>{last.peers != null ? <> · colegas <b className="text-foreground">{minTxt(last.peers)}</b></> : null}. Pontos em falta = menos medições do que o mínimo.</p>}
                   <button type="button" className="text-xs text-primary underline underline-offset-2" onClick={() => setTable((t) => !t)}>{table ? "Esconder a tabela" : "Ver em tabela"}</button>
                   {table && (
                     <div className="overflow-x-auto -mx-1">
                       <table className="w-full text-xs min-w-[22rem]">
-                        <thead><tr className="border-b text-left text-muted-foreground"><th className="p-1">{bucket === "monthly" ? "Mês" : "Semana"}</th><th className="p-1 text-right">Ele (mediana)</th><th className="p-1 text-right">n</th><th className="p-1 text-right">Colegas (mediana)</th><th className="p-1 text-right">n</th></tr></thead>
+                        <thead><tr className="border-b text-left text-muted-foreground"><th className="p-1">{bucket === "monthly" ? "Mês" : "Semana"}</th><th className="p-1 text-right">Condutor (mediana)</th><th className="p-1 text-right">n</th><th className="p-1 text-right">Colegas (mediana)</th><th className="p-1 text-right">n</th></tr></thead>
                         <tbody>{data.map((p) => (
                           <tr key={p.period} className="border-b"><td className="p-1">{periodTick(p.period)}</td><td className="p-1 text-right tabular-nums">{minTxt(p.me)}</td><td className="p-1 text-right tabular-nums">{p.n}</td><td className="p-1 text-right tabular-nums">{minTxt(p.peers)}</td><td className="p-1 text-right tabular-nums">{p.peersN}</td></tr>
                         ))}</tbody>

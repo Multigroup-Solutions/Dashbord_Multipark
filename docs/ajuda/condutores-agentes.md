@@ -30,16 +30,16 @@ Em **Pessoas → Condutores e agentes**. Antes estavam nas Críticas.
 - Todas as colunas ordenam; em baixo ficam os totais.
 
 **Tempos de um condutor** (desde 15 out 2026)
-"Se durante 6 meses os colegas entregam todos entre 13 e 17 min e ele entrega sempre com 20 a 30, é importante saber." Cada condutor tem os seus tempos, ao lado dos colegas.
+Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demora sempre 20 a 30, é importante saber. Por isso cada condutor tem os seus tempos, ao lado dos colegas.
 1. Em **Condutores**, carrega no **relógio** da linha do condutor (coluna **Tempos**). Também aparecem por baixo da tabela quando escolhes **um condutor** em cima, e no detalhe do **Desempenho** (condutores e team leaders).
-2. Escolhe o tempo nos botões: **Fila** (da chamada do cliente, ou do pendente, até ele pegar no carro), **Trânsito** (até chegar ao terminal, pelo GPS), **Cliente** (nas entregas em que fez o check-out: a espera pelo cliente no terminal), **No terminal** (nas recolhas que tirou do terminal) e **No P2** (nas recolhas que tirou do P2).
-3. A tabela mostra a **última semana**, o **último mês** e os **últimos 6 meses**, uma linha por cidade e tipo de serviço (T1, T2, VIP, Outro): quantas medições (n), a **média**, a **mediana** e o **p75**, a mediana dos **colegas** (os outros condutores da mesma cidade e do mesmo serviço, sem ele) e a **diferença** (a âmbar quando ele demora mais).
-4. O **gráfico** mostra a evolução, **por mês** ou **por semana**: a mediana dele a azul e a dos colegas a cinzento. Passa o rato (ou toca) num ponto para ver os números; **Ver em tabela** mostra-os todos.
+2. Escolhe o tempo nos botões: **Fila** (da chamada do cliente, ou do pendente, até o condutor pegar no carro), **Trânsito** (até chegar ao terminal, pelo GPS), **Cliente** (nas entregas em que fez o check-out: a espera pelo cliente no terminal), **No terminal** (nas recolhas que tirou do terminal) e **No P2** (nas recolhas que tirou do P2).
+3. A tabela mostra a **última semana**, o **último mês** e os **últimos 6 meses**, uma linha por cidade e tipo de serviço (T1, T2, VIP, Outro): quantas medições (n), a **média**, a **mediana** e o **p75**, a mediana dos **colegas** (os outros condutores da mesma cidade e do mesmo serviço, sem o próprio) e a **diferença** (a âmbar quando o condutor demora mais).
+4. O **gráfico** mostra a evolução, **por mês** ou **por semana**: a mediana do condutor a azul e a dos colegas a cinzento. Passa o rato (ou toca) num ponto para ver os números; **Ver em tabela** mostra-os todos.
 - Com menos de **10 medições** numa linha aparece **"sem dados suficientes"** (nunca 0); no gráfico, esse ponto fica em falta.
 - O Trânsito, o Cliente e o tempo no terminal dependem do GPS: até a calibração acabar só o super admin os vê, como provisórios; os outros veem **"Em calibração"**. Depois de o portão abrir (Definições → Parâmetros → **Tempos com GPS: portão**), aparecem por cidade e período quando há pelo menos 60 % de medições e 20 casos; abaixo disso, "Sem dados suficientes". A Fila e o P2 veem-se sempre.
 - Os números vêm da tabela dos tempos (o cálculo da noite), até ontem. Sem ela, aparece "Sem tempos deste condutor".
 - **Só informação: não dá pontos.** Não entra na Avaliação nem no ranking do Desempenho.
-- Quem vê: quem vê os Condutores (supervisor nas cidades dele, back office, admin e super admin), só para fichas das suas cidades.
+- Quem vê: quem vê os Condutores (supervisor nas suas cidades, back office, admin e super admin), só para fichas das suas cidades.
 
 **Agentes**
 - A mesma lista, com **todas** as ações de cada agente no período: recolhas, entregas, movimentos, mudanças de lugar, reservas em que mexeu e a última ação. **Movimentos** = levar ao parque + movimentos entre garagens (o início de cada movimento não conta); **mudanças de lugar** = o carro ficou na mesma garagem, só mudou de lugar. Primeiro a lista, depois o detalhe.

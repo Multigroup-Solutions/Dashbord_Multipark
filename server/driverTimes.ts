@@ -32,7 +32,7 @@ export interface DriverMetricView {
   gps: boolean;
   /** Por período: as linhas DESTE condutor, uma por cidade e tipo de serviço (com os colegas ao lado). */
   periods: Record<DriverPeriod, DriverStat[]>;
-  /** Evolução (o p50 dele e o dos colegas nas mesmas cidades e tipos). */
+  /** Evolução (o p50 do condutor e o dos colegas nas mesmas cidades e tipos), com o mesmo n mínimo. */
   monthly: ReturnType<typeof driverTimeSeries>;
   weekly: ReturnType<typeof driverTimeSeries>;
 }
@@ -65,8 +65,9 @@ export function driverTimesView(rows: readonly ServiceRow[], o: { employeeId: nu
     if (periods["6meses"].length) hasRows = true;
     return {
       metric, label: def.label, kind: def.kind, gps: def.gps, periods,
-      monthly: driverTimeSeries(rows, { metric, employeeId: o.employeeId, fromDay: ranges["6meses"].fromDay, toDay: o.refDay, bucket: "mes", gpsGate }),
-      weekly: driverTimeSeries(rows, { metric, employeeId: o.employeeId, fromDay: weeklyFrom, toDay: o.refDay, bucket: "semana", gpsGate }),
+      // o mesmo mínimo nos pontos do gráfico (dele e dos colegas) que nas linhas da tabela
+      monthly: driverTimeSeries(rows, { metric, employeeId: o.employeeId, fromDay: ranges["6meses"].fromDay, toDay: o.refDay, bucket: "mes", minN, gpsGate }),
+      weekly: driverTimeSeries(rows, { metric, employeeId: o.employeeId, fromDay: weeklyFrom, toDay: o.refDay, bucket: "semana", minN, gpsGate }),
     };
   });
   return { employeeId: o.employeeId, refDay: o.refDay, ranges, minN, metrics, hasRows };
