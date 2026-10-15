@@ -15,6 +15,7 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzl
 import { getDb, getDocumentChecklistForEmployee, getPayrollData, toMysqlDateTime } from "./db";
 import { employeeLeaves, employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
 import { manualBlockReason } from "../shared/suspendSuggest";
+import { isTerminalExtra } from "../shared/terminalSession";
 
 const nowMysql = () => toMysqlDateTime(new Date());
 
@@ -160,6 +161,20 @@ export function noShowSkipReason(r: { status?: string | null; sentHomeHour?: num
   return null;
 }
 
+/**
+ * Plano 63, passo 2b (decidido: as faltas dos funcionários nunca bloqueiam):
+ * os pontos de uma possível falta ao Extras-Dia. Extra (posto ou contrato
+ * "extra", a mesma regra de isExtraEmployee) → 1 ponto (3 confirmados
+ * bloqueiam a entrada na app, como sempre); funcionário escalado numa linha
+ * normal (condutor com salário, back office…) → 0 pontos — a falta fica
+ * marcada, sem pontos, como no horário fixo. As linhas de TL continuam sem
+ * possível falta. Sem a ficha lida → 1, como antes. PURA.
+ */
+export function extraDiaNoShowPoints(e: { position?: string | null; contractType?: string | null } | null | undefined): 0 | 1 {
+  if (!e) return 1;
+  return isTerminalExtra(e) ? 1 : 0;
+}
+
 export interface NoShowReport { scanned: number; created: number; alreadyPending: number; skipped: Record<NoShowSkip, number>; multiparkRead: boolean }
 
 /**
@@ -209,14 +224,23 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
       }
     } catch { /* sem identidade/Multipark: fica como antes */ }
   }
+  // Plano 63 (2b): posto e contrato de cada um — o funcionário (não extra) fica com 0 pontos
+  const kindOf = new Map<number, { position: string | null; contractType: string | null }>();
+  const candIds = Array.from(new Set(candidates.map((c) => Number(c.employeeId)).filter((id) => Number.isFinite(id))));
+  if (candIds.length) {
+    for (const e of await db.select({ id: employees.id, position: employees.position, contractType: employees.contractType }).from(employees).where(inArray(employees.id, candIds))) {
+      kindOf.set(Number(e.id), { position: e.position ?? null, contractType: e.contractType ?? null });
+    }
+  }
   let created = 0, alreadyPending = 0;
   for (const r of candidates) {
     if (r.employeeId == null) continue;
     if (noShowSkipReason({ status: r.status, sentHomeHour: r.sentHomeHour, hasCheckIn: false, multiparkMoves: movesByEmployee.get(r.employeeId) ?? 0 })) { skipped.multipark++; continue; }
+    const points = extraDiaNoShowPoints(kindOf.get(r.employeeId));
     try {
       await db.insert(employeePenalties).values({
-        employeeId: r.employeeId, reason: "no_show_extra_dia", severity: "penalty", points: 1, relatedId: r.id, status: "pending",
-        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
+        employeeId: r.employeeId, reason: "no_show_extra_dia", severity: "penalty", points, relatedId: r.id, status: "pending",
+        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}${points === 0 ? " · funcionário: sem pontos" : ""}; confirmar com a operação`.slice(0, 512),
       });
       created++;
     } catch (err: any) {

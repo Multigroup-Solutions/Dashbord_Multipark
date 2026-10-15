@@ -195,6 +195,7 @@ Em **RH → Dashboard** (super admin).
 
 **Possíveis faltas por validar** (no fim da página, fechado; abre-se ao carregar)
 - Todas as noites (e no botão **Processar faltas (ontem)**) cada extra escalado sem ponto no turno fica como **possível falta**, que não conta pontos enquanto não for confirmada.
+- **Funcionários escalados no Extras-Dia** (condutor com salário, back office… numa linha que não é de TL): a possível falta fica **sem pontos** (a nota diz "funcionário: sem pontos"). Confirmada, fica marcada como falta mas **nunca bloqueia** — as faltas dos funcionários não contam para os 3 pontos. Os **extras** continuam com 1 ponto. As linhas de **TL** não dão possível falta. As que já estavam por validar antes desta mudança ficam com o ponto que tinham.
 - **Não** fica como possível falta: o turno só **proposto** (escala automática por confirmar), quem foi **mandado para casa** e quem **mexeu em carros na Multipark** nesse dia (trabalhou sem picar o ponto). Se a Multipark não responder, a nota diz "movimentos da Multipark não lidos".
 - **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **"RH: possíveis faltas de quem tem horário fixo"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Corre de madrugada, **só para ontem**. Fora: quem estava na escala do Extras-Dia nesse dia (mesmo só proposta), férias e baixas, dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro), quem mexeu em carros na Multipark e quem está na lista **Fora das faltas automáticas** (ver "Horários por rever"). Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).
 - Nas **Falta (horário fixo)**, em vez de **Libertar** há **Dispensar ▾**, com o motivo:
@@ -203,7 +204,7 @@ Em **RH → Dashboard** (super admin).
   - **Libertar sem motivo** — como antes.
   - Nada se apaga: a possível falta fica dispensada, com o motivo e quem dispensou.
 - O número entre parênteses é o **total real** das tuas cidades; a lista mostra as 200 mais recentes.
-- **Falta** / **Libertar** em cada linha, ou em massa: **Marcar falta a todas** / **Libertar todas** (as da lista), ou escolhe algumas e os botões passam a "as N escolhidas". Cada falta confirmada vale 1 ponto e com 3 pontos o acesso fica bloqueado. As que não der para rever (ex.: foste tu a propor) ficam e vêm contadas.
+- **Falta** / **Libertar** em cada linha, ou em massa: **Marcar falta a todas** / **Libertar todas** (as da lista), ou escolhe algumas e os botões passam a "as N escolhidas". Cada falta confirmada de um **extra** vale 1 ponto e com 3 pontos o acesso fica bloqueado (as dos funcionários e as do horário fixo valem 0). As que não der para rever (ex.: foste tu a propor) ficam e vêm contadas.
 
 **Detalhe por colaborador**
 - **Horas mês**: as do ponto; sem ponto, aparecem as da escala dos Extras, a cinzento, com "(escala)".

@@ -218,7 +218,7 @@ export function PendingNoShowsPanel({ defaultOpen = false, onlyFixed = false }: 
   const scope = picked.size ? `as ${picked.size} escolhidas` : `todas (${items.length})`;
   const bulk = (decision: "confirmed" | "dismissed") => {
     const verb = decision === "confirmed" ? "Marcar falta a" : "Libertar";
-    if (!confirm(`${verb} ${scope}?${decision === "confirmed" ? " Cada falta confirmada a um extra conta 1 ponto; com 3 pontos o acesso fica bloqueado (as do horário fixo não contam pontos)." : " Deixam de contar."}`)) return;
+    if (!confirm(`${verb} ${scope}?${decision === "confirmed" ? " Cada falta confirmada a um extra conta 1 ponto; com 3 pontos o acesso fica bloqueado (as dos funcionários e as do horário fixo não contam pontos)." : " Deixam de contar."}`)) return;
     reviewMany.mutate({ ids: ids.slice(0, 200), decision });
   };
   const toggle = (id: number) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
