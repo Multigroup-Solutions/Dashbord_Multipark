@@ -507,6 +507,7 @@ function DashboardLayoutContent({
   const pontoDone = () => {
     utils.rh.timeRecords.myStatus.invalidate();
     utils.rh.timeRecords.list.invalidate();
+    utils.rh.timeRecords.monthlyHours.invalidate();
     utils.terminal.status.invalidate();
     setPontoMode(null);
     setPontoTerminal(false);
@@ -514,6 +515,8 @@ function DashboardLayoutContent({
   const quickCheckIn = trpc.rh.timeRecords.checkIn.useMutation({
     onSuccess: (d) => {
       toast.success("Entrada registada!");
+      // ex.: a conta está em duas fichas (as horas ficavam divididas) ou falta o agente
+      if (d?.warning) toast.warning(d.warning, { duration: 12000 });
       // "Estou no terminal" marcado: a entrada fica feita mesmo com o terminal ocupado
       if (d?.terminalSession) terminal.handleOpenResult(d.terminalSession as any);
       pontoDone();

@@ -2,17 +2,21 @@
  * Recolha de dados para o cálculo mensal (o cálculo em si é puro: compute.ts).
  *
  *  - colaboradores com VÍNCULO no mês (não só os ativos): contrato a
- *    intersetar o mês, ou ativos sem datas de contrato;
+ *    intersetar o mês, ou ativos sem datas de contrato — e, SEMPRE, as fichas
+ *    com entradas do ponto no mês (mesmo inativas ou fora do contrato: as
+ *    horas nunca ficam de fora em silêncio; vão com aviso);
  *  - registos de ponto do mês (com folga de 1 dia para turnos que atravessam
  *    a meia-noite/mês) emparelhados em turnos;
  *  - ausências com TIPO, horário individual, histórico salarial e taxas.
  * Filtro opcional por centro de custos (com descendentes).
  */
-import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { getDb, resolveProjectIds } from "../db";
 import { employeeLeaves, employeeSalaryHistory, employees, extraRates, projects, schedules, timeRecords } from "../../drizzle/schema";
 import { pairShifts } from "./shifts";
 import { computeEmployeeMonth, type EmployeeMonthResult } from "./compute";
+import { lisbonDayRangeUtc } from "../../shared/lisbonDay";
+import { pontoFichaWarnings, type PontoFichaLike } from "../../shared/pontoFichas";
 
 export type PayrollRow = EmployeeMonthResult & {
   department: string | null; projectName: string | null; projectId: number | null; nif: string | null; nib: string | null;
@@ -27,17 +31,24 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
   const monthFirst = `${year}-${pad(month)}-01`;
   const monthLast = `${year}-${pad(month)}-${pad(dim)}`;
 
+  // Fichas com ENTRADAS do ponto no mês (dia de Lisboa, como os turnos da
+  // folha), com as contas de login de cada uma. Entram SEMPRE na folha: antes,
+  // uma ficha inativa sem fim de contrato ficava de fora com as horas todas
+  // (ex.: a 2.ª ficha da mesma conta, para onde foram as picagens a meio do mês).
+  const monthRange = lisbonDayRangeUtc(monthFirst, monthLast);
+  const pontoFichas = await loadPontoFichas(db, monthRange.start, monthRange.end);
+  const withPontoIds = pontoFichas.map((f) => f.employeeId);
+
   // vínculo no mês: contrato a intersetar, ou ativo sem datas
-  const conds: any[] = [
-    or(
-      and(isNull(employees.contractStart), isNull(employees.contractEnd), eq(employees.isActive, 1)),
-      and(
-        or(isNull(employees.contractStart), lte(employees.contractStart, `${monthLast} 23:59:59`)),
-        or(isNull(employees.contractEnd), gte(employees.contractEnd, `${monthFirst} 00:00:00`)),
-        or(eq(employees.isActive, 1), sql`${employees.contractEnd} IS NOT NULL`),
-      ),
+  const bond = or(
+    and(isNull(employees.contractStart), isNull(employees.contractEnd), eq(employees.isActive, 1)),
+    and(
+      or(isNull(employees.contractStart), lte(employees.contractStart, `${monthLast} 23:59:59`)),
+      or(isNull(employees.contractEnd), gte(employees.contractEnd, `${monthFirst} 00:00:00`)),
+      or(eq(employees.isActive, 1), sql`${employees.contractEnd} IS NOT NULL`),
     ),
-  ];
+  );
+  const conds: any[] = [withPontoIds.length ? or(bond, inArray(employees.id, withPontoIds)) : bond];
   let projectIds: number[] | null = null;
   if (opts.projectId) {
     projectIds = await resolveProjectIds(opts.projectId);
@@ -91,6 +102,7 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
   const schedByEmp = new Map<number, typeof scheds>();
   for (const s of scheds) { if (!schedByEmp.has(s.employeeId)) schedByEmp.set(s.employeeId, []); schedByEmp.get(s.employeeId)!.push(s); }
 
+  const fichaWarnings = pontoFichaWarnings(pontoFichas);
   const out: PayrollRow[] = [];
   for (const { employee: e, project } of emps) {
     const { shifts } = pairShifts((recordsByEmp.get(e.id) ?? []).map((r) => ({ id: r.id, type: r.type, recordedAt: r.recordedAt, hoursWorked: r.hoursWorked, notes: r.notes, reviewStatus: (r as any).reviewStatus ?? null, terminalStatus: r.terminalStatus ?? null, terminalUntil: r.terminalUntil ?? null })));
@@ -103,9 +115,45 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
       terminalSessions: sessionsByEmp.get(e.id) ?? null,
     });
     if (terminalSessionsFailed && res.isExtra) res.warnings.push("terminal pelo perfil: as sessões não foram lidas — horas de terminal em falta (recarrega antes de fechar o mês)");
+    // ficha inativa com picagens / a mesma conta picou noutra ficha (shared/pontoFichas.ts)
+    res.warnings.push(...(fichaWarnings.get(e.id) ?? []));
+    if (Number(e.isActive) !== 1 && !e.contractEnd && !res.isExtra && res.baseSalary > 0) {
+      res.warnings.push("ficha inativa sem data de fim de contrato: o salário base está a contar o mês inteiro — põe a data de fim na ficha");
+    }
     // fichas sem vínculo no mês e sem qualquer valor não entram na folha
     if (!res.inContract && res.totalHours === 0 && res.suspiciousHours === 0 && res.openShifts === 0) continue;
     out.push({ ...res, department: e.department, projectName: project?.name ?? null, projectId: e.projectId, nif: e.nif, nib: e.nib });
   }
   return out;
+}
+
+const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r?.rows ?? r) as any[]) ?? [];
+
+/**
+ * Todas as fichas com entradas do ponto em [start, end) (UTC) — de qualquer
+ * cidade, ativas ou não — com as contas de login de cada uma (a principal e as
+ * extra de employee_accounts). Serve para as meter na folha e para ver se a
+ * mesma conta picou em mais do que uma ficha.
+ */
+async function loadPontoFichas(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, start: string, end: string): Promise<PontoFichaLike[]> {
+  const rows = await db.select({
+    id: employees.id, fullName: employees.fullName, isActive: employees.isActive, userId: employees.userId,
+    checkIns: sql<number>`COUNT(*)`,
+  }).from(timeRecords).innerJoin(employees, eq(employees.id, timeRecords.employeeId))
+    .where(and(eq(timeRecords.type, "check_in"), gte(timeRecords.recordedAt, start), lt(timeRecords.recordedAt, end)))
+    .groupBy(employees.id, employees.fullName, employees.isActive, employees.userId);
+  if (!rows.length) return [];
+  const extraLogins = new Map<number, number[]>();
+  try {
+    const ids = rows.map((r) => r.id);
+    const aliases = rowsOf(await db.execute(sql`SELECT userId, employeeId FROM employee_accounts WHERE employeeId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`));
+    for (const a of aliases) extraLogins.set(Number(a.employeeId), [...(extraLogins.get(Number(a.employeeId)) ?? []), Number(a.userId)]);
+  } catch { /* employee_accounts ainda não criada: só a conta principal */ }
+  return rows.map((r) => ({
+    employeeId: r.id,
+    fullName: r.fullName,
+    isActive: Number(r.isActive) === 1,
+    logins: [...(r.userId != null ? [Number(r.userId)] : []), ...(extraLogins.get(r.id) ?? [])],
+    checkIns: Number(r.checkIns),
+  }));
 }

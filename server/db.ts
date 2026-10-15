@@ -1613,16 +1613,33 @@ export async function createTimeRecord(data: InsertTimeRecord) {
   return db.insert(timeRecords).values(data);
 }
 
+/**
+ * Ponto de UM mês de uma ficha (ficha → Ponto): as picagens do mês (dias de
+ * Lisboa, mais recentes primeiro) e as horas pela regra da folha
+ * (payroll/shifts.ts pontoMonthSummary). Antes: soma das horas de todas as
+ * saídas do mês em hora do servidor, também as suspeitas e as rejeitadas.
+ */
 export async function getMonthlyHours(employeeId: number, year: number, month: number) {
   const db = await getDb();
-  if (!db) return { totalHours: 0, records: [] };
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 0, 23, 59, 59);
-  const records = await db.select().from(timeRecords)
-    .where(and(eq(timeRecords.employeeId, employeeId), gte(timeRecords.recordedAt, toMysqlDateTime(start)), lte(timeRecords.recordedAt, toMysqlDateTime(end))))
-    .orderBy(timeRecords.recordedAt);
-  const totalHours = records.reduce((sum, r) => sum + parseFloat(String(r.hoursWorked ?? 0)), 0);
-  return { totalHours, records };
+  const empty = { totalHours: 0, shifts: 0, suspiciousHours: 0, suspiciousShifts: 0, openShifts: 0, records: [] as (typeof timeRecords.$inferSelect)[] };
+  if (!db) return empty;
+  const { lisbonDayRangeUtc, addDays } = await import("../shared/lisbonDay");
+  const { pontoMonthSummary } = await import("./payroll/shifts");
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const firstDay = `${year}-${pad(month)}-01`;
+  const lastDay = `${year}-${pad(month)}-${pad(new Date(Date.UTC(year, month, 0)).getUTCDate())}`;
+  const { start, end } = lisbonDayRangeUtc(firstDay, lastDay);
+  // folga de 1 dia: o turno que começa no último dia acaba no seguinte
+  const until = lisbonDayRangeUtc(addDays(lastDay, 1)).end;
+  const rows = await db.select().from(timeRecords)
+    .where(and(eq(timeRecords.employeeId, employeeId), gte(timeRecords.recordedAt, start), lt(timeRecords.recordedAt, until)))
+    .orderBy(asc(timeRecords.recordedAt), asc(timeRecords.id));
+  const summary = pontoMonthSummary(rows.map((r) => ({
+    id: r.id, type: r.type, recordedAt: r.recordedAt, hoursWorked: r.hoursWorked, notes: r.notes,
+    reviewStatus: r.reviewStatus ?? null, terminalStatus: r.terminalStatus ?? null, terminalUntil: r.terminalUntil ?? null,
+  })), firstDay, lastDay);
+  const records = rows.filter((r) => r.recordedAt >= start && r.recordedAt < end).reverse();
+  return { ...summary, records };
 }
 
 // ─── RH: EXTRA RATES ──────────────────────────────────────────────────────────

@@ -1406,6 +1406,19 @@ export const rhRouter = router({
         const missingAgentWarning = !empForPonto.employee.multiparkAgentName
           ? "Falta ligar o agente Multipark a este colaborador — pede à administração para o associar na ficha."
           : null;
+        // A mesma conta em mais do que uma ficha ativa (set 2026: o ponto mudou
+        // de ficha a meio do mês e ninguém viu). A entrada fica nesta; avisa-se.
+        let fichaWarning: string | null = null;
+        // Só quando a pessoa pica o SEU ponto (um admin a picar por outra pessoa não conta).
+        const picksOwn = ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"] || empForPonto.employee.userId === ctx.user.id;
+        if (picksOwn) {
+          try {
+            const { pontoFichaSplitWarning } = await import("../shared/pontoFichas");
+            const { activeFichaIdsOfAccount } = await import("./identity");
+            const db = await (await import("./db")).getDb();
+            if (db) fichaWarning = pontoFichaSplitWarning(input.employeeId, await activeFichaIdsOfAccount(db as any, ctx.user.id));
+          } catch { /* o aviso nunca impede a entrada */ }
+        }
         // Terminal pelo perfil (plano 56 B1, interruptor PONTO_TERMINAL; desligado → nada):
         // o método antigo (saída + entrada no aeroporto) já não corre. "Estou no
         // terminal" marcado → a sessão abre a seguir à entrada (ocupado → a
@@ -1482,7 +1495,7 @@ export const rhRouter = router({
             console.warn("[pda] ponto→PDA automático (check-in) falhou:", err);
           }
         }
-        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached, terminalSession };
+        return { success: true, warning: [fichaWarning, missingAgentWarning].filter(Boolean).join(" ") || null, outsideGeofence: !!geoNoteIn, pdaAttached, terminalSession };
       }),
 
     checkOut: protectedProcedure
