@@ -4,7 +4,7 @@ grupo: Suporte
 pagina: perdidos
 titulo: Perdidos e Achados
 rotas: /perdidos-achados
-palavras: perdidos, achados, por confirmar, criado pela ia, perdido por email, é um perdido, não é um perdido, marcar como devolvido, como foi devolvido, data da devolução, parado há, perdido, objeto, item, esquecido, encontrado, devolução, devolver, entregar ao cliente, cruzamento de condutores, ocorrências do condutor, acidentes no cruzamento, documentos, eletrónica, acessórios, correspondências, sem cidade, prazo, lembretes, arquivar, arquivados, tirar do arquivo, eliminar, pontos, avisar cliente, quem mexeu no carro
+palavras: perdidos, achados, por confirmar, criado pela ia, perdido por email, é um perdido, não é um perdido, marcar como devolvido, como foi devolvido, data da devolução, parado há, perdido, objeto, item, esquecido, encontrado, devolução, devolver, entregar ao cliente, cruzamento de condutores, documentos, eletrónica, acessórios, correspondências, sem cidade, prazo, lembretes, arquivar, arquivados, tirar do arquivo, eliminar, pontos, avisar cliente, quem mexeu no carro
 ---
 # Perdidos e Achados
 
@@ -44,7 +44,6 @@ Objetos esquecidos pelos clientes nos carros.
 - **Anexar** leva a ficha da pessoa; **Tirar** pede confirmação, anula os pontos por confirmar e fica registado.
 - **Pontos a um condutor**: quem gere o caso propõe (só a uma ficha anexada); **só um supervisor (ou acima) confirma**, e nunca quem os propôs. Aos 3 pontos confirmados o login da pessoa fica bloqueado. Só dá para anexar e propor pontos a pessoas das tuas cidades.
 - **Cruzamento de condutores** mostra quem aparece em vários casos. Se o período tiver histórico a mais, diz que o resultado está incompleto.
-- A coluna **Ocorrências** do cruzamento conta as ocorrências contra o condutor no período, pela mesma fonte da Avaliação: os **acidentes confirmados pelo team leader** nas Ocorrências (desde 3 de outubro de 2026; uma confirmação desfeita deixa de contar). Antes desse dia contam as ocorrências antigas do dashboard. Antes desta mudança só se viam as antigas, e as ocorrências novas faltavam. A cidade é a do parque da ocorrência. Passa o rato por cima do título da coluna para ver isto no ecrã.
 
 **Arquivar (em vez de eliminar)**
 - **Arquivar** (admin) pede o motivo. O caso sai das listas, contadores, lembretes e cruzamento; os pontos por confirmar são anulados. Nada é apagado, nem os ficheiros.

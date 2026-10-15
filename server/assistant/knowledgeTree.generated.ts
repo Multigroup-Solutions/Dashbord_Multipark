@@ -1361,7 +1361,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Movimentos: quem mexeu em que reserva, quando e em que fase.",
        "children": [],
        "container": false,
-       "chars": 2339
+       "chars": 2898
       },
       {
        "id": "avaliacao.md#separador-dia",
@@ -1575,7 +1575,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "condutores-agentes.md#telefonemas-emails-e-horas-do-dia"
        ],
        "container": false,
-       "chars": 2945
+       "chars": 3252
       },
       {
        "id": "condutores-agentes.md#quem-entra-nas-contas-do-desempenho",
@@ -4252,7 +4252,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "As ocorrências registadas no dashboard antes da ligação à app Multipark ficam guardadas, mas já não entram nos números nem nos lembretes.",
        "children": [],
        "container": false,
-       "chars": 441
+       "chars": 608
       }
      ]
     },
@@ -4325,7 +4325,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "perdidos.md#quem-pode"
        ],
        "container": false,
-       "chars": 1176
+       "chars": 680
       },
       {
        "id": "perdidos.md#arquivar-em-vez-de-eliminar",

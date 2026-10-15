@@ -9,10 +9,10 @@
  */
 import { incidentCountsAgainstDriver } from "../shared/caseRules";
 import {
+  ACCIDENTS_FROM_DAY,
   DAMAGE_INCIDENT_TYPES,
   LATE_ARRIVAL_FROM_MINUTES,
   MAX_LATE_ARRIVALS_PER_DAY,
-  accidentCounts,
   actionCategory,
   actionPoints,
   emptyDayMetrics,
@@ -532,7 +532,7 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
   // ── Acidentes confirmados pelo TL nas ocorrências da app Multipark (D15),
   // só a partir de ACCIDENTS_FROM_DAY (os antigos não contam).
   for (const a of input.confirmedAccidents ?? []) {
-    if (!a.employeeId || !inRange(a.day, startDay, endDay) || !accidentCounts(a)) continue;
+    if (!a.employeeId || !inRange(a.day, startDay, endDay) || a.day < ACCIDENTS_FROM_DAY) continue;
     const m = row(a.employeeId, a.day).metrics;
     m.incidentsAgainst += 1;
     m.accidents += 1;
