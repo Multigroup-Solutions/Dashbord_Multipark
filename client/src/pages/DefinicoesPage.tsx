@@ -48,6 +48,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
 import { AiUsageDailyCard } from "@/components/settings/AiUsageDailyCard";
+import { MultisPilotCard } from "@/components/settings/MultisPilotCard";
 import { DEFAULT_REMINDER_RECIPIENTS, ISO_WEEKDAYS, REMINDER_ROLES, REMINDER_ROLE_LABELS, WEEKDAY_SHORT_PT, describeReminderRule, type ReminderRecipients } from "@shared/extrasReminders";
 import { MANUAL_EDIT_AT_CONFIRM_LABELS, MANUAL_EDIT_AT_CONFIRM_MODES } from "@shared/extrasSchedule";
 
@@ -98,7 +99,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard />{isMultisAdmin(user.role) && <AiUsageDailyCard />}</TabsContent>
+        <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard />{isMultisAdmin(user.role) && <AiUsageDailyCard />}{isMultisAdmin(user.role) && <MultisPilotCard />}</TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes" className="space-y-4"><IntegrationsCard /><WebAnalyticsSettings /></TabsContent>
         <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings />{user.role === "super_admin" && <MailTriageEvalCard />}<SharedCalendarsSettings /><GooglePushSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
