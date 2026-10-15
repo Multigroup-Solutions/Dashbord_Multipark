@@ -21,7 +21,9 @@
  *                 por reserva, com o motivo e o reembolso dessa linha),
  *                 estado CANCELLED; as canceladas SEM linha na Cancellation
  *                 entram pela última alteração (Booking.updatedAt, índice
- *                 parkId+updatedAt) e ficam marcadas como data aproximada.
+ *                 parkId+updatedAt) e ficam marcadas como data aproximada —
+ *                 só se essa alteração for até 2 dias depois da saída
+ *                 prevista (opsEvents.ts, APPROX_CANCEL_GRACE_DAYS).
  *
  * Plano 64 (B0): os predicados de cada lista, os estados e os parques são os
  * de opsEvents.ts — a MESMA regra das contagens (opsCounts.ts) que o Geral,

@@ -25,7 +25,7 @@ Reservas com **recolha (check-in)** no período, sem as canceladas.
 Reservas com **entrega (check-out)** no período, sem as canceladas.
 
 ### Cancelados
-Reservas **canceladas** no período, pela **data do cancelamento** (o registo de cancelamento **mais recente**: cada reserva conta **uma vez**, com o motivo e o reembolso desse registo). Cada linha mostra também as datas de recolha e entrega da reserva, o **motivo** (e as observações), o **reembolso** (não, pedido ou reembolsado, com o valor) e **quem cancelou** (o último movimento de cancelamento da reserva). As canceladas sem registo de cancelamento na Multipark aparecem pela última alteração da reserva, com **≈** (data aproximada).
+Reservas **canceladas** no período, pela **data do cancelamento** (o registo de cancelamento **mais recente**: cada reserva conta **uma vez**, com o motivo e o reembolso desse registo). Cada linha mostra também as datas de recolha e entrega da reserva, o **motivo** (e as observações), o **reembolso** (não, pedido ou reembolsado, com o valor) e **quem cancelou** (o último movimento de cancelamento da reserva). As canceladas sem registo de cancelamento na Multipark aparecem pela última alteração da reserva, com **≈** (data aproximada) — só se essa alteração for **até 2 dias depois da saída prevista**. Se a reserva foi mexida mais tarde (por exemplo, uma nota meses depois), essa data já não diz quando foi cancelada: não entra em nenhum dia, para não aparecer como "cancelada hoje".
 
 ## Ler as listas
 
@@ -44,7 +44,7 @@ Reservas **canceladas** no período, pela **data do cancelamento** (o registo de
 - **Marketplace** = a regra única (a mesma do Marketing, das Reservas do dia e das Parcerias): **todas** as reservas dos parques que não são nossos e as dos nossos que vieram pelo Marketplace (origem Marketplace). Cada linha do Marketplace diz por baixo se o parque é **Operado por nós** ou **Não operado** (os da lista do dono e os de Definições → Parques que a operação não faz) — a comissão é diferente. É só uma etiqueta: a lista não muda.
 
 **As listas, o Dashboard e o Geral contam o mesmo**
-- O **Dashboard** (primeira aba), o **Dashboard das Operações** e o **Geral** contam o **mesmo** que estas listas: **todos os parques das tuas cidades** (os nossos e todo o Marketplace, operado e não operado), com as compras por pagar, e os cancelados com data aproximada (≈). Com a mesma cidade no topo e o mesmo dia: "Reservas criadas hoje" = Reservas → não canceladas; "Entradas hoje" = Recolhas; "Saídas hoje" = Entregas; "Cancelados hoje" = Cancelados.
+- O **Dashboard** (primeira aba), o **Dashboard das Operações** e o **Geral** contam o **mesmo** que estas listas: **todos os parques das tuas cidades** (os nossos e todo o Marketplace, operado e não operado), com as compras por pagar, e os cancelados com data aproximada (≈, com o mesmo limite dos 2 dias). Com a mesma cidade no topo e o mesmo dia: "Reservas criadas hoje" = Reservas → não canceladas; "Entradas hoje" = Recolhas; "Saídas hoje" = Entregas; "Cancelados hoje" = Cancelados.
 - As listas seguem a **cidade e a marca escolhidas no topo** da app, como o Dashboard da primeira aba e o Geral (sem cidade escolhida, todas as tuas cidades). O filtro **parque** continua; se o parque escolhido sair do âmbito, limpa-se sozinho.
 - Sem filtros, a lista diz por baixo dos contadores quantas são de **parques nossos** e quantas do **Marketplace**.
 - As **Reservas do dia** são outra coisa: tiram os parques que não operamos (a operação não os faz), por isso podem ter números mais baixos.
