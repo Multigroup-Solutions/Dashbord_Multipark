@@ -4115,7 +4115,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "As críticas do Google entram pela API do Google (ou pela Windsor).",
        "children": [],
        "container": false,
-       "chars": 2725
+       "chars": 3636
       },
       {
        "id": "criticas.md#emails-que-nao-sao-criticas-e-criticas-repetidas",
@@ -4126,7 +4126,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Dois interruptores em Definições → Automações, desligados por omissão.",
        "children": [],
        "container": false,
-       "chars": 1807
+       "chars": 1836
       },
       {
        "id": "criticas.md#respostas-automaticas-as-5",
@@ -4666,7 +4666,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "comunicacao.md#caixas-super-admin"
        ],
        "container": false,
-       "chars": 1409
+       "chars": 1532
       },
       {
        "id": "comunicacao.md#caixas-super-admin",
@@ -5318,7 +5318,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Página API Keys (menu Sistema, só super admin): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades)…",
        "children": [],
        "container": false,
-       "chars": 320
+       "chars": 311
       },
       {
        "id": "api-keys.md#criar-e-gerir-as-chaves",

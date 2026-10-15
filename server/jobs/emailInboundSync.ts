@@ -76,7 +76,10 @@ export type InboundAttachment = { filename?: string; contentType?: string; size?
  *  - à mão (`manualBy` = quem disse que é crítica): cria sempre (nem o
  *    REVIEWS_EMAIL_STRICT nem os filtros dos avisos administrativos — a pessoa
  *    decidiu), com quem e quando (`emailImportedById` / `emailImportedAt`) e
- *    uma linha no registo de atividade. O REVIEWS_DEDUP continua a valer.
+ *    uma linha no registo de atividade. Compara SEMPRE com as que já estão nas
+ *    Críticas (a regra do REVIEWS_DEDUP, ligado ou não): a API já trouxe as
+ *    críticas do Google, e importar o aviso de uma delas não a pode repetir —
+ *    a do email fica marcada como repetida (não se apaga; Limpeza desfaz).
  * Uma crítica criada aqui fica sempre com `emailImportedAt` (está nas Críticas);
  * as que entraram antes sem a marca ficam fora (server/reviewVisibility.ts).
  */
@@ -89,6 +92,11 @@ export async function reviewFromEmail(
     insert?: (data: InsertGoogleReview) => Promise<number | undefined>;
     /** O registo de atividade e o rascunho da IA ficam para quem chama (`reviewEmailFollowUps`, depois de gravar). */
     deferFollowUps?: boolean;
+    /**
+     * À mão, por quem só vê as suas cidades: sem parque reconhecido no email, a crítica fica nesta (a cidade
+     * da conversa) — senão desaparecia-lhe das Críticas, como o "Nova crítica" à mão.
+     */
+    fallbackProjectId?: number | null;
   } = {},
 ): Promise<{ targetModule: string; targetId?: number; createdId?: number; duplicateOf?: number | null; sourceEmailDate?: string | null }> {
   const manualBy = opts.manualBy ?? null;
@@ -100,7 +108,8 @@ export async function reviewFromEmail(
   // Plano MPV F6b: interruptores das críticas por email (desligados por omissão).
   const { reviewFlagOn } = await import("../reviewCleanup");
   const strict = manual ? false : await reviewFlagOn("REVIEWS_EMAIL_STRICT");
-  const dedup = await reviewFlagOn("REVIEWS_DEDUP");
+  // À mão compara sempre (ver acima): importar o aviso de uma crítica que a API já trouxe não a repete.
+  const dedup = manual ? true : await reviewFlagOn("REVIEWS_DEDUP");
   // R3: com o REVIEWS_DEDUP lê também o ASSUNTO (o nome e o perfil podem vir só lá).
   const g = parseGoogleReviewNotification(ctx.bodyText, dedup ? ctx.subject : "");
   // R2/R3: resumos ("recebeu N críticas") nunca viram crítica; com o
@@ -147,7 +156,7 @@ export async function reviewFromEmail(
   // Parque: o "sobre Y" do email é o título do perfil Google (16d). Sem
   // correspondência exata fica "Sem parque" (nunca adivinha).
   const { projectIdForReviewPark } = await import("../reviewOps");
-  const projectId = await projectIdForReviewPark(g.parkName);
+  const projectId = (await projectIdForReviewPark(g.parkName)) ?? (manual ? opts.fallbackProjectId ?? null : null);
   const sourceEmailDate = sqlUtcOrNull(ctx.receivedAt);
   // R3: a mesma crítica (a Google manda 2 emails; a Windsor pode já a ter
   // trazido) fica marcada como repetida da primeira — guarda-se, não se

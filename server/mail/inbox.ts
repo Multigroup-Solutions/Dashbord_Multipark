@@ -607,9 +607,16 @@ export async function importMessageAsReview(viewer: MailViewer, messageId: numbe
   if (!isReviewMailbox(acc.mailbox)) throw bad("Só os emails da caixa das Críticas se importam para as Críticas (move a conversa para lá primeiro).");
   if (!can(viewer, "criticas", "edit")) throw forbidden("Não podes editar as Críticas.");
   if (m.direction !== "in") throw bad("Só um email recebido pode ser importado para as Críticas.");
+  // Quem só vê as suas cidades: sem parque reconhecido no email, a crítica fica na cidade da conversa (ou na
+  // cidade da pessoa) — senão desaparecia-lhe das Críticas. Quem vê tudo fica com "Sem parque" (escolhe-o lá).
+  const scoped = scopedProjectIds();
+  const threadCity = acc.thread.projectId != null ? Number(acc.thread.projectId) : null;
+  const fallbackProjectId = scoped === undefined ? null
+    : threadCity != null && scoped.includes(threadCity) ? threadCity
+    : (await import("../cityScope")).cityScope.getStore()?.defaultCityId ?? null;
   const { importMailMessageAsReview, ReviewImportError } = await import("../reviewEmailImport");
   try {
-    return await importMailMessageAsReview(messageId, viewer.id);
+    return await importMailMessageAsReview(messageId, viewer.id, { fallbackProjectId });
   } catch (err) {
     if (err instanceof ReviewImportError) throw bad(err.message);
     throw err;

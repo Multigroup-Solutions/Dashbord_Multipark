@@ -227,8 +227,8 @@ function ReviewImportBar({ m, allowed, onImported }: { m: Msg; allowed: boolean;
   const importMut = trpc.mail.threads.importReview.useMutation({
     onSuccess: (r) => {
       toast.success(r.status === "already" ? `Já estava nas Críticas (#${r.reviewId}).`
+        : r.duplicateOf ? `Esta crítica já estava nas Críticas (#${r.duplicateOf}) — a do email fica marcada como repetida, não aparece duas vezes.`
         : r.status === "restored" ? `Voltou às Críticas (#${r.reviewId}).`
-        : "duplicateOf" in r && r.duplicateOf ? `Importada — é repetida da crítica #${r.duplicateOf} (fica marcada, não aparece duas vezes).`
         : `Importada para as Críticas (#${r.reviewId}).`);
       onImported();
     },

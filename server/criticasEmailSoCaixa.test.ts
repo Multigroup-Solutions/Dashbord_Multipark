@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   claimed: new Set<string>(),
   created: [] as any[],
   dupQueries: [] as any[],
+  dupResult: null as number | null,
   parkQueries: [] as any[],
   autoDraft: vi.fn(async (..._a: any[]) => ({ drafted: true })),
   logs: [] as any[],
@@ -53,7 +54,7 @@ vi.mock("./db", async (orig) => {
 vi.mock("./reviewCleanup", async (orig) => ({
   ...(await orig<object>()),
   reviewFlagOn: async (name: string) => !!h.flags[name],
-  findEmailReviewDuplicate: async (n: any) => { h.dupQueries.push(n); return null; },
+  findEmailReviewDuplicate: async (n: any) => { h.dupQueries.push(n); return h.dupResult; },
 }));
 vi.mock("./reviewOps", async (orig) => ({
   ...(await orig<object>()),
@@ -62,8 +63,8 @@ vi.mock("./reviewOps", async (orig) => ({
 vi.mock("./reviewAutoDraft", async (orig) => ({ ...(await orig<object>()), autoDraftEmailReview: h.autoDraft }));
 
 import { processInboundEmail, reviewFromEmail } from "./jobs/emailInboundSync";
-import { importMailMessageAsReview, reviewsOfMessageIds } from "./reviewEmailImport";
-import { reviewInCriticas, reviewInCriticasSql } from "./reviewVisibility";
+import { NOT_A_REVIEW_IMPORT, importMailMessageAsReview, reviewsOfMessageIds } from "./reviewEmailImport";
+import { reviewInCriticas, reviewInCriticasSql, reviewLinkableToApi } from "./reviewVisibility";
 import { EMAIL_ONLY_REVIEW_READONLY, isEmailOnlyReview } from "../shared/reviewRules";
 import { isReviewMailbox } from "../shared/mail";
 import { AUTOMATION_FLAGS, automationFlagDefault } from "../shared/appSettings";
@@ -99,6 +100,7 @@ beforeEach(() => {
   h.flags = { REVIEWS_EMAIL_STRICT: false, REVIEWS_DEDUP: false, REVIEWS_FROM_EMAIL: false };
   h.created = [];
   h.dupQueries = [];
+  h.dupResult = null;
   h.parkQueries = [];
   h.logs = [];
   h.autoDraft.mockClear();
@@ -260,6 +262,42 @@ describe("uma pessoa importa: cria a crítica e ela aparece", () => {
     expect(isEmailOnlyReview({ ...h.created[0], googleReviewKey: null })).toBe(false);
     expect(h.logs[0]).toMatchObject({ userId: 42, action: "review_email_import", entity: "google_review", entityId: 701 });
     expect(h.autoDraft).toHaveBeenCalledWith(701, "2026-10-15 09:00:00", { timeoutMs: 15_000 });
+    // à mão compara SEMPRE com as que estão nas Críticas (o REVIEWS_DEDUP está desligado aqui)
+    expect(h.dupQueries).toHaveLength(1);
+    expect(h.dupQueries[0]).toMatchObject({ rating: 5, parkKey: "p7", apiKey: false });
+  });
+
+  it("à mão, a crítica que a API já trouxe não se repete: a do email fica marcada como repetida (sem rascunho)", async () => {
+    h.dupResult = 321;
+    const r = await reviewFromEmail(parsed, ctx(), { manualBy: 42 });
+    expect(r).toMatchObject({ targetModule: "review", targetId: 321, createdId: 701, duplicateOf: 321 });
+    expect(h.created[0]).toMatchObject({ duplicateOf: 321, emailImportedById: 42 });
+    expect(isEmailOnlyReview({ ...h.created[0], googleReviewKey: null })).toBe(false);
+    expect(h.logs[0]).toMatchObject({ userId: 42, action: "review_email_import", entityId: 701 });
+    expect(String(h.logs[0].details)).toContain("repetida de #321");
+    expect(h.autoDraft).not.toHaveBeenCalled();
+  });
+
+  it("cidade: quem só vê as suas cidades e importa um email sem parque reconhecido fica com a crítica na cidade da conversa", async () => {
+    const other = ctx({ subject: "Opinião", bodyText: "Gostei muito do serviço, voltarei.", fromEmail: "ana@gmail.com", clientName: "Ana" });
+    await reviewFromEmail(parsed, other, { manualBy: 42, fallbackProjectId: 3 });
+    expect(h.created[0].projectId).toBe(3);
+    // parque reconhecido no email ganha sempre
+    await reviewFromEmail(parsed, ctx(), { manualBy: 42, fallbackProjectId: 3 });
+    expect(h.created[1].projectId).toBe(7);
+    // automático nunca adivinha
+    h.flags.REVIEWS_FROM_EMAIL = true;
+    await reviewFromEmail(parsed, other, { fallbackProjectId: 3 });
+    expect(h.created[2].projectId).toBeNull();
+    const inbox = src("server/mail/inbox.ts");
+    expect(inbox).toContain("const fallbackProjectId = scoped === undefined ? null");
+    expect(inbox).toContain("return await importMailMessageAsReview(messageId, viewer.id, { fallbackProjectId });");
+  });
+
+  it("automático (ligado) sem o REVIEWS_DEDUP: não compara (como até hoje)", async () => {
+    h.flags.REVIEWS_FROM_EMAIL = true;
+    await reviewFromEmail(parsed, ctx(), {});
+    expect(h.dupQueries).toEqual([]);
   });
 
   it("a pessoa decide: um email que a regra não daria como crítica (não é da Google, sem estrelas) também entra", async () => {
@@ -283,23 +321,28 @@ describe("uma pessoa importa: cria a crítica e ela aparece", () => {
   });
 
   // BD simulada: a transação, o email guardado e as críticas desse Message-ID.
-  function fakeDb(o: { existing?: any | null }) {
+  function fakeDb(o: { existing?: any | null; rfc?: string; byId?: Record<number, any> }) {
     const executed: string[] = [];
+    const params: unknown[][] = [];
     const inserted: any[] = [];
     const exec = async (q: SQL) => {
-      const text = compile(q).sql;
+      const c = compile(q);
+      const text = c.sql;
       executed.push(text);
+      params.push(c.params);
       if (/FROM mail_messages WHERE id =/.test(text)) {
-        return [[{ id: 31, threadId: 5, direction: "in", rfcMessageId: "<abc@google.com>", subject: SUBJECT, fromName: "Google Business Profile", fromEmail: GOOGLE, bodyText: BODY, bodyHtml: null, sentAt: "2026-10-15 09:00:00" }]];
+        return [[{ id: 31, threadId: 5, direction: "in", rfcMessageId: o.rfc ?? "<abc@google.com>", subject: SUBJECT, fromName: "Google Business Profile", fromEmail: GOOGLE, bodyText: BODY, bodyHtml: null, sentAt: "2026-10-15 09:00:00" }]];
       }
-      if (/FROM google_reviews\s+WHERE sourceEmailId =/.test(text)) return [o.existing ? [o.existing] : []];
+      if (/FROM google_reviews\s+WHERE sourceEmailId =/.test(text)) return [o.existing ? (Array.isArray(o.existing) ? o.existing : [o.existing]) : []];
+      if (/FROM google_reviews WHERE id =/.test(text)) return [[o.byId?.[Number(c.params[0])]].filter(Boolean)];
+      if (/^SELECT/.test(text.trim())) return [[]];
       return [{ affectedRows: 1 }];
     };
     const tx = {
       execute: exec,
       insert: () => ({ values: async (data: any) => { inserted.push(data); return [{ insertId: 900 }]; } }),
     };
-    return { db: { execute: exec, transaction: async (fn: any) => fn(tx) }, executed, inserted };
+    return { db: { execute: exec, transaction: async (fn: any) => fn(tx) }, executed, params, inserted };
   }
 
   it("'Importar para as Críticas': cria uma vez, tranca o email, liga o email e o registo de entrada; o registo e a IA só depois", async () => {
@@ -309,7 +352,12 @@ describe("uma pessoa importa: cria a crítica e ela aparece", () => {
     expect(r).toEqual({ status: "created", reviewId: 900, duplicateOf: null });
     expect(f.inserted).toHaveLength(1);
     expect(f.inserted[0]).toMatchObject({ sourceEmailId: "<abc@google.com>", emailImportedById: 42, rating: 5 });
-    expect(f.executed[0]).toMatch(/FOR UPDATE/);
+    // trinco: todas as cópias deste email (outras contas) pela ordem do id, ANTES de procurar a crítica
+    const lock = f.executed.findIndex((t) => /SELECT id FROM mail_messages WHERE rfcMessageId = \? ORDER BY id FOR UPDATE/.test(t));
+    const look = f.executed.findIndex((t) => /FROM google_reviews\s+WHERE sourceEmailId =/.test(t));
+    expect(lock).toBeGreaterThan(-1);
+    expect(look).toBeGreaterThan(lock);
+    expect(h.dupQueries).toHaveLength(1); // compara sempre com as que estão nas Críticas
     expect(f.executed.some((t) => /UPDATE mail_messages SET pipeline = 'criticas', pipelineStatus = 'processed'/.test(t))).toBe(true);
     // o Message-ID fica reservado: uma 2.ª cópia do mesmo email liga-se a esta crítica e nunca cria outra
     expect(f.executed.some((t) => /INSERT IGNORE INTO inbound_emails \(messageId, alias, fromName, fromEmail, subject, targetModule, targetId, status, receivedAt\)/.test(t))).toBe(true);
@@ -320,16 +368,63 @@ describe("uma pessoa importa: cria a crítica e ela aparece", () => {
     expect(h.autoDraft).toHaveBeenCalledWith(900, "2026-10-15 09:00:00", { timeoutMs: 15_000 });
   });
 
+  const OLD = { id: 55, sourceEmailId: "<abc@google.com>", googleReviewKey: null, emailImportedAt: null, notAReview: 0, duplicateOf: null,
+    reviewerName: "Rui Costa", rating: 5, reviewText: `${SUBJECT}\n\nO serviço foi rápido`, reviewDate: null, sourceEmailDate: "2026-10-15 09:00:00", createdAt: "2026-10-15 09:01:00", projectId: 7 };
+
   it("a crítica antiga desse email (fora das Críticas) volta a contar — só essa linha, sem criar outra", async () => {
-    const f = fakeDb({ existing: { id: 55, sourceEmailId: "<abc@google.com>", googleReviewKey: null, emailImportedAt: null } });
+    const f = fakeDb({ existing: OLD });
     h.db = f.db;
-    expect(await importMailMessageAsReview(31, 42)).toEqual({ status: "restored", reviewId: 55 });
+    expect(await importMailMessageAsReview(31, 42)).toEqual({ status: "restored", reviewId: 55, duplicateOf: null });
     expect(f.inserted).toHaveLength(0);
     const upd = f.executed.filter((t) => /^UPDATE google_reviews/.test(t.trim()));
     expect(upd).toHaveLength(1);
-    expect(upd[0]).toMatch(/SET emailImportedAt = \?, emailImportedById = \?\s+WHERE id = \? AND emailImportedAt IS NULL AND googleReviewKey IS NULL/);
+    expect(upd[0]).toMatch(/SET emailImportedAt = \?, emailImportedById = \?\s+WHERE id = \? AND emailImportedAt IS NULL AND googleReviewKey IS NULL AND notAReview = 0 AND duplicateOf IS NULL/);
+    expect(upd[0]).not.toContain("duplicateOf =");
+    // comparou com as que estão nas Críticas (com os factos da guardada)
+    expect(h.dupQueries[0]).toMatchObject({ rating: 5, parkKey: "p7", apiKey: false });
     expect(h.logs[0]).toMatchObject({ userId: 42, action: "review_email_import", entityId: 55 });
     expect(h.autoDraft).not.toHaveBeenCalled();
+  });
+
+  it("a antiga que a API já trouxe: volta como repetida da da API (não aparece duas vezes)", async () => {
+    h.dupResult = 400;
+    const f = fakeDb({ existing: OLD });
+    h.db = f.db;
+    expect(await importMailMessageAsReview(31, 42)).toEqual({ status: "restored", reviewId: 400, duplicateOf: 400 });
+    const upd = f.executed.filter((t) => /^UPDATE google_reviews/.test(t.trim()));
+    expect(upd).toHaveLength(1);
+    expect(upd[0]).toMatch(/SET emailImportedAt = \?, emailImportedById = \?\s*, duplicateOf = \?, reviewMarkedAt = \?, reviewMarkedById = \?/);
+    expect(h.logs[0]).toMatchObject({ entityId: 55 });
+    expect(String(h.logs[0].details)).toContain("repetida de #400");
+  });
+
+  it("marcada como «não é crítica»: não mexe e diz onde se desfaz", async () => {
+    const f = fakeDb({ existing: { ...OLD, notAReview: 1 } });
+    h.db = f.db;
+    await expect(importMailMessageAsReview(31, 42)).rejects.toThrow(NOT_A_REVIEW_IMPORT);
+    expect(f.executed.some((t) => /^(UPDATE|INSERT)/.test(t.trim()))).toBe(false);
+    expect(h.logs).toEqual([]);
+  });
+
+  it("a do email era repetida de uma que conta: já está nas Críticas (a original); a do email fica com a marca", async () => {
+    const f = fakeDb({ existing: { ...OLD, duplicateOf: 12 }, byId: { 12: { ...OLD, id: 12, sourceEmailId: null, googleReviewKey: "k" } } });
+    h.db = f.db;
+    expect(await importMailMessageAsReview(31, 42)).toEqual({ status: "already", reviewId: 12 });
+    const upd = f.executed.filter((t) => /^UPDATE google_reviews/.test(t.trim()));
+    expect(upd).toHaveLength(1);
+    expect(f.params[f.executed.indexOf(upd[0])]).toContain(55);
+  });
+
+  it("Message-ID comprido: a crítica guarda os 100 primeiros, o registo de entrada o inteiro", async () => {
+    const rfc = `<${"x".repeat(150)}@google.com>`;
+    const f = fakeDb({ existing: null, rfc });
+    h.db = f.db;
+    await importMailMessageAsReview(31, 42);
+    expect(f.inserted[0].sourceEmailId).toBe(rfc.slice(0, 100));
+    const ins = f.executed.findIndex((t) => /INSERT IGNORE INTO inbound_emails/.test(t));
+    expect(f.params[ins][0]).toBe(rfc);
+    const look = f.executed.findIndex((t) => /FROM google_reviews\s+WHERE sourceEmailId =/.test(t));
+    expect(f.params[look][0]).toBe(rfc.slice(0, 100));
   });
 
   it("já nas Críticas → nada muda", async () => {
@@ -342,15 +437,22 @@ describe("uma pessoa importa: cria a crítica e ela aparece", () => {
   });
 
   it("a conversa diz se cada email já está nas Críticas (a que conta ganha a uma cópia que ficou fora)", async () => {
+    const long = `<${"y".repeat(150)}>`;
     h.db = { execute: async () => [[
       { id: 1, sourceEmailId: "<a>", googleReviewKey: null, emailImportedAt: null },
       { id: 2, sourceEmailId: "<a>", googleReviewKey: null, emailImportedAt: "2026-10-15 10:00:00" },
       { id: 3, sourceEmailId: "<b>", googleReviewKey: null, emailImportedAt: null },
+      { id: 4, sourceEmailId: "<d>", googleReviewKey: null, emailImportedAt: "2026-10-15 10:00:00", duplicateOf: 40 },
+      { id: 5, sourceEmailId: "<e>", googleReviewKey: "k", emailImportedAt: null, notAReview: 1 },
+      { id: 6, sourceEmailId: long.slice(0, 100), googleReviewKey: null, emailImportedAt: "2026-10-15 10:00:00" },
     ]] };
-    const m = await reviewsOfMessageIds(["<a>", "<b>", "<c>"]);
+    const m = await reviewsOfMessageIds(["<a>", "<b>", "<c>", "<d>", "<e>", long]);
     expect(m.get("<a>")).toEqual({ id: 2, inCriticas: true });
     expect(m.get("<b>")).toEqual({ id: 3, inCriticas: false });
     expect(m.has("<c>")).toBe(false);
+    expect(m.get("<d>")).toEqual({ id: 40, inCriticas: true }); // repetida → a original
+    expect(m.get("<e>")).toEqual({ id: 5, inCriticas: false }); // «não é crítica» não está na lista
+    expect(m.get(long)).toEqual({ id: 6, inCriticas: true }); // a crítica guarda só os 100 primeiros
   });
 
   it("o botão só existe na caixa das Críticas, para quem age na caixa e edita as Críticas", () => {
@@ -381,9 +483,12 @@ describe("as críticas que entraram sozinhas por email não contam em lado nenhu
   });
 
   it("a mesma regra em SQL (Drizzle e cru com alias)", () => {
-    expect(compile(reviewInCriticas()).sql).toBe("(`google_reviews`.`sourceEmailId` is null or `google_reviews`.`googleReviewKey` is not null or `google_reviews`.`emailImportedAt` is not null)");
-    expect(compile(reviewInCriticasSql("r")).sql).toBe("(r.`sourceEmailId` IS NULL OR r.`googleReviewKey` IS NOT NULL OR r.`emailImportedAt` IS NOT NULL)");
-    expect(compile(reviewInCriticasSql()).sql).toBe("(`sourceEmailId` IS NULL OR `googleReviewKey` IS NOT NULL OR `emailImportedAt` IS NOT NULL)");
+    // vazio = NULL ou só espaços, como na regra pura (a lista e o "só consulta" nunca discordam)
+    expect(compile(reviewInCriticas()).sql).toBe("(NULLIF(TRIM(`google_reviews`.`sourceEmailId`), '') IS NULL OR NULLIF(TRIM(`google_reviews`.`googleReviewKey`), '') IS NOT NULL OR `google_reviews`.`emailImportedAt` IS NOT NULL)");
+    expect(compile(reviewInCriticasSql("r")).sql).toBe("(NULLIF(TRIM(r.`sourceEmailId`), '') IS NULL OR NULLIF(TRIM(r.`googleReviewKey`), '') IS NOT NULL OR r.`emailImportedAt` IS NOT NULL)");
+    expect(compile(reviewInCriticasSql()).sql).toBe("(NULLIF(TRIM(`sourceEmailId`), '') IS NULL OR NULLIF(TRIM(`googleReviewKey`), '') IS NOT NULL OR `emailImportedAt` IS NOT NULL)");
+    expect(isEmailOnlyReview({ sourceEmailId: "  ", googleReviewKey: null, emailImportedAt: null })).toBe(false);
+    expect(isEmailOnlyReview({ sourceEmailId: "<m@x>", googleReviewKey: "  ", emailImportedAt: null })).toBe(true);
     expect(() => reviewInCriticasSql("r; DROP")).toThrow();
   });
 
@@ -413,20 +518,28 @@ describe("as críticas que entraram sozinhas por email não contam em lado nenhu
     const seen: string[] = [];
     h.db = { execute: async (q: SQL) => { seen.push(compile(q).sql); return [[]]; } };
     await realAutoPublishDeps.candidates(5);
-    expect(seen[0]).toContain("r.`sourceEmailId` IS NULL OR r.`googleReviewKey` IS NOT NULL OR r.`emailImportedAt` IS NOT NULL");
+    expect(seen[0]).toContain("NULLIF(TRIM(r.`sourceEmailId`), '') IS NULL OR NULLIF(TRIM(r.`googleReviewKey`), '') IS NOT NULL OR r.`emailImportedAt` IS NOT NULL");
     expect(seen[0]).toContain("r.googleReviewName IS NOT NULL");
     // e a regra pura recusa uma de email (não está ligada ao Google)
     expect(autoPublishEntryRefusal({ rating: 5, googleReviewName: null, status: "pending_response", reviewDate: new Date().toISOString() }, Date.now())).toMatch(/veio por email/);
   });
 
-  it("Desempenho: as respostas a críticas só contam as que estão nas Críticas", () => {
+  it("Desempenho: as respostas já dadas continuam a contar (foi trabalho feito; os meses passados não mudam)", () => {
     const s = userSources("2026-10-01 00:00:00", "2026-10-15 00:00:00").find((x) => x.key === "reviewsReplied")!;
-    expect(compile(s.q).sql).toContain("(`sourceEmailId` IS NULL OR `googleReviewKey` IS NOT NULL OR `emailImportedAt` IS NOT NULL)");
+    const q = compile(s.q).sql;
+    expect(q).toContain("FROM google_reviews");
+    expect(q).not.toContain("sourceEmailId");
+    expect(q).not.toContain("emailImportedAt");
   });
 
-  it("conciliação da API: as que ficaram só no email não prendem uma crítica nova 'por conciliar'", () => {
+  it("conciliação da API: as que ficaram só no email não prendem uma crítica nova 'por conciliar' — salvo a que já virou reclamação", () => {
+    expect(compile(reviewLinkableToApi()).sql).toBe(`(${compile(reviewInCriticas()).sql} OR \`google_reviews\`.\`complaintId\` IS NOT NULL)`);
     const s = src("server/integrations/googleBusiness/service.ts");
-    expect(s.split("reviewInCriticas()").length - 1).toBe(3); // por nome, por texto e na lista dos candidatos
+    expect(s.split("reviewLinkableToApi()").length - 1).toBe(3); // por nome, por texto e na lista dos candidatos
+    expect(s).not.toContain("reviewInCriticas()");
+    // a lista dos candidatos diz quais vieram por email (fora das Críticas)
+    expect(s).toContain("fromEmailOnly: isEmailOnlyReview({ sourceEmailId, googleReviewKey, emailImportedAt })");
+    expect(src("client/src/components/GoogleBusinessConnection.tsx")).toContain("c.fromEmailOnly");
   });
 
   it("Limpeza e repetidas: não propõe as que já estão fora (as marcadas continuam para desfazer)", () => {
