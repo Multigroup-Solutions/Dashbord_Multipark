@@ -78,7 +78,7 @@ describe("4 — os dias mais recentes primeiro, com o aviso do corte", () => {
     expect(GRID_ROW_COLUMNS).toContain("refHour");
     expect(GRID_ROW_COLUMNS).not.toContain("startEmployeeId");
   });
-  it("tempos por condutor: uma leitura por cidade; a cache guarda o resultado (não as linhas) e leva o portão na chave", async () => {
+  it("tempos por condutor: uma leitura por cidade; o resultado em cache com o portão na chave; as linhas partilhadas 2 min (uma entrada)", async () => {
     state.cities = ["lisboa", "porto"];
     state.result = [dbRow("2026-10-13", 1)];
     const a = await getDriverTimes({ employeeId: 7, refDay: "2026-10-13", cityKeys: null, isSuperAdmin: false });
@@ -88,10 +88,20 @@ describe("4 — os dias mais recentes primeiro, com o aviso do corte", () => {
     await getDriverTimes({ employeeId: 7, refDay: "2026-10-13", cityKeys: null, isSuperAdmin: false });
     expect(reads()).toBe(2); // da cache
     state.gate = { visible: false, minCoveragePct: 60, minN: 20 };
-    await getDriverTimes({ employeeId: 7, refDay: "2026-10-13", cityKeys: null, isSuperAdmin: false });
-    expect(reads()).toBe(4); // portão mudou: conta outra vez
+    const closed = await getDriverTimes({ employeeId: 7, refDay: "2026-10-13", cityKeys: null, isSuperAdmin: false });
+    // portão mudou: as contas refazem-se logo (das linhas guardadas, sem nova leitura)
+    expect(closed.metrics.find((m) => m.metric === "transito")!.periods.semana.every((s) => s.p50Ms == null)).toBe(true);
+    expect(reads()).toBe(2);
+    // outro condutor das mesmas cidades: as mesmas linhas, nenhuma leitura de 6 meses a mais
+    await getDriverTimes({ employeeId: 8, refDay: "2026-10-13", cityKeys: null, isSuperAdmin: false });
+    expect(reads()).toBe(2);
+    // outras cidades: a entrada única é substituída
+    state.cities = ["faro"];
+    await getDriverTimes({ employeeId: 9, refDay: "2026-10-13", cityKeys: null, isSuperAdmin: false });
+    expect(reads()).toBe(3);
     const f = src("server/driverTimes.ts");
     expect(f).toContain("value: DriverTimesResult");
+    expect(f).toContain("DRIVER_ROWS_CACHE_MS = 2 * 60_000");
     expect(f).not.toMatch(/cache\.set\(key, \{ at: Date\.now\(\), rows/);
   });
 });
@@ -113,14 +123,14 @@ describe("7 — dayServiceRows: sem cidades ou dia futuro, nada a ler nem a calc
   it("sem cidades no âmbito: nem a tabela, nem o cálculo ao vivo", async () => {
     const compute = vi.fn();
     const r = await dayServiceRows("2026-10-13", { cityKeys: [], nowMs: Date.parse("2026-10-14T10:00:00Z"), compute });
-    expect(r).toMatchObject({ source: "tabela", rows: [], reason: "sem cidades no teu acesso" });
+    expect(r).toMatchObject({ source: "vazio", rows: [], reason: "sem cidades no teu acesso" });
     expect(compute).not.toHaveBeenCalled();
     expect(state.queries).toHaveLength(0);
   });
   it("um dia que ainda não começou: nada", async () => {
     const compute = vi.fn();
     const r = await dayServiceRows("2026-10-20", { cityKeys: null, nowMs: Date.parse("2026-10-14T10:00:00Z"), compute });
-    expect(r).toMatchObject({ source: "tabela", rows: [], reason: "o dia ainda não começou" });
+    expect(r).toMatchObject({ source: "vazio", rows: [], reason: "o dia ainda não começou" });
     expect(compute).not.toHaveBeenCalled();
     expect(state.queries).toHaveLength(0);
   });

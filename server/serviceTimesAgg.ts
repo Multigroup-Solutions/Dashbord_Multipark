@@ -461,6 +461,8 @@ export function driverDayTimes(dayRows: readonly ServiceRow[], employeeId: numbe
   pickups: DriverPickupTime[];
   /** O texto do portão: o das entregas (Trânsito, Cliente, máxima no Trânsito) e o das recolhas (No terminal), cada um pela sua cobertura. */
   gpsHiddenDeliveries: string | null;
+  /** O Cliente das entregas tem o seu (a cobertura do Cliente, não a do Trânsito). */
+  gpsHiddenCustomer: string | null;
   gpsHiddenPickups: string | null;
   /** Um dos dois (compatibilidade: o primeiro que estiver fechado). */
   gpsHidden: string | null;
@@ -499,8 +501,9 @@ export function driverDayTimes(dayRows: readonly ServiceRow[], employeeId: numbe
     });
   // cada tabela com o seu portão: as entregas pela cobertura do Trânsito, as recolhas pela do terminal
   const gpsHiddenDeliveries = deliveries.length ? vT.hidden : null;
+  const gpsHiddenCustomer = deliveries.length ? vC.hidden : null;
   const gpsHiddenPickups = pickups.length ? vX.hidden : null;
-  return { deliveries, pickups, gpsHiddenDeliveries, gpsHiddenPickups, gpsHidden: gpsHiddenDeliveries ?? gpsHiddenPickups, gpsNote: vT.note ?? vX.note };
+  return { deliveries, pickups, gpsHiddenDeliveries, gpsHiddenCustomer, gpsHiddenPickups, gpsHidden: gpsHiddenDeliveries ?? gpsHiddenPickups, gpsNote: vT.note ?? vX.note };
 }
 
 // ─── Grelhas (P9): Pressão (dia da semana × hora) e Semana (dia × hora) ─────

@@ -26,17 +26,21 @@ import { operationalDayWindowUtc } from "../shared/shiftHandover";
 import { teamLines } from "../shared/shiftDayReview";
 
 /**
- * PRAZO (auditoria do #389). A função da Vercel morre aos 60 s. Leituras à
- * Multipark neste pedido:
- *  - os CHECK_OUT do dia (reclamações dos carros que saíram) — até 15 s + 2 s;
- *  - a Atividade do Dia (getDayActivity → loadActivityActions, ao vivo) — até
- *    15 s + 2 s, em PARALELO com as outras (começa logo, a pool tem duas
- *    ligações por instância);
- *  - os tempos: a tabela; sem linhas, o cálculo ao vivo, com o prazo que
- *    sobra até SUPERVISOR_DAY_BUDGET_MS (no máximo 35 s, ver dayServiceRows).
- * Sem a Atividade em série, o pior caso fica perto de 48 s + as leituras da
- * nossa BD (escala, reclamações, nomes). Os tempos que não chegam a tempo vêm
- * "indisponíveis" (só eles; o resto do resumo vem sempre).
+ * PRAZO (auditoria do #389, ronda 2). A função da Vercel morre aos 60 s e a
+ * pool da Multipark tem DUAS ligações por instância (5 s de espera por uma).
+ * Leituras à Multipark neste pedido, por esta ordem:
+ *  1. em PARALELO (uma ligação cada): os CHECK_OUT do dia (reclamações dos
+ *     carros que saíram) e a Atividade do Dia (getDayActivity →
+ *     loadActivityActions, ao vivo) — cada uma até 15 s + 2 s;
+ *  2. DEPOIS, com a pool livre: os tempos — a tabela; sem linhas, o cálculo
+ *     ao vivo (parques e garagens em paralelo, depois a History), com o prazo
+ *     que sobra até SUPERVISOR_DAY_BUDGET_MS (no máximo 35 s, ver
+ *     dayServiceRows).
+ * Três leituras ao mesmo tempo deixavam o cálculo dos tempos à espera de
+ * ligação (CONNECT_FAILED) e "Sem tempos deste dia" nos dias lentos. Pior
+ * caso: ≈ 17 s + 31 s, mais as leituras da nossa BD (escala, reclamações,
+ * nomes). Os tempos que não chegam a tempo vêm "indisponíveis" (só eles; o
+ * resto do resumo vem sempre).
  */
 export const SUPERVISOR_DAY_BUDGET_MS = 48_000;
 
@@ -46,7 +50,7 @@ export async function getSupervisorDayDashboard(date: string, opts: { isSuperAdm
   if (!db) return null;
   const { start, end } = operationalDayWindowUtc(date);
 
-  // A Atividade do Dia começa já, em paralelo (antes vinha depois dos tempos e podia passar dos 60 s).
+  // A Atividade do Dia começa já, em paralelo com os CHECK_OUT (antes vinha depois dos tempos e podia passar dos 60 s).
   // O erro fica guardado e só se lança quando se espera por ela (nunca uma rejeição sem dono).
   const activityP = getDayActivity(date).then((v) => ({ ok: true as const, v }), (err: unknown) => ({ ok: false as const, err }));
 
@@ -64,11 +68,10 @@ export async function getSupervisorDayDashboard(date: string, opts: { isSuperAdm
   // o prazo que sobra deste pedido). O portão no servidor.
   const { dayServiceRows, loadServiceViewSettings, scopedServiceCityKeys, employeeNames } = await import("./serviceTimesRead");
   const { dayTimesView, teamActs } = await import("./serviceTimesAgg");
-  const [svc, svcSettings, hist] = await Promise.all([
-    (async () => dayServiceRows(date, { cityKeys: await scopedServiceCityKeys(), deadlineMs: SUPERVISOR_DAY_BUDGET_MS - (Date.now() - t0) }))(),
-    loadServiceViewSettings(),
-    histP,
-  ]);
+  // 1.º as duas leituras em paralelo (as duas ligações da pool); 2.º os tempos, com a pool livre
+  const [hist, activity, svcSettings] = await Promise.all([histP, activityP, loadServiceViewSettings()]);
+  if (!activity.ok) throw activity.err;
+  const svc = await dayServiceRows(date, { cityKeys: await scopedServiceCityKeys(), deadlineMs: SUPERVISOR_DAY_BUDGET_MS - (Date.now() - t0) });
   const gate = { gate: svcSettings.gate, isSuperAdmin: !!opts.isSuperAdmin };
   const timesView = dayTimesView(svc.rows, { targetMinutes: svcSettings.targetMinutes, gate });
 
@@ -123,8 +126,6 @@ export async function getSupervisorDayDashboard(date: string, opts: { isSuperAdm
   const listed = new Set([...timesView.deliveries.slowest.map((x) => x.driverEmployeeId), ...timesView.pickups.longest.map((x) => x.driverEmployeeId)]);
   const driverNames = Object.fromEntries(Object.entries(names).filter(([id]) => listed.has(Number(id))));
 
-  const activity = await activityP;
-  if (!activity.ok) throw activity.err;
   const dayActivity = activity.v;
 
   return {

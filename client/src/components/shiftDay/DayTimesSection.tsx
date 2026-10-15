@@ -15,14 +15,14 @@ import { fmtPTTime } from "@/lib/lisbonTime";
 import { CalibrationBadge, DeliveryBar, DeliveryBarLegend, DeliveryCoverageNote, MetricTile, PickupCoverageNote, fmtDur } from "@/components/serviceTimes/TimesBits";
 import type { DayTimesView, SlowDeliveryItem } from "../../../../server/serviceTimesAgg";
 
-export type DayTimes = DayTimesView & { source: "tabela" | "ao_vivo" | "indisponivel"; computedAt: string | null; truncated: boolean; reason: string | null };
+export type DayTimes = DayTimesView & { source: "tabela" | "ao_vivo" | "indisponivel" | "vazio"; computedAt: string | null; truncated: boolean; reason: string | null };
 
 const TERMINAL_LABEL: Record<string, string> = { t1: "T1", t2: "T2", vip: "VIP", other: "Outro", unknown: "sem tipo" };
 
 function SourceLine({ t }: { t: DayTimes }) {
   if (t.source === "indisponivel") return <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-[10px] px-2 py-1">Sem tempos deste dia: {t.reason ?? "a BD da Multipark não respondeu"}. Tenta outra vez daqui a pouco.</p>;
   // nada a ler (dia ainda por começar, sem cidades): o motivo, sem "tenta outra vez"
-  if (t.source === "tabela" && t.reason) return <p className="text-[11px] text-muted-foreground">Sem tempos deste dia: {t.reason}.</p>;
+  if (t.source === "vazio") return <p className="text-[11px] text-muted-foreground">Sem tempos deste dia: {t.reason}.</p>;
   return (
     <p className="text-[11px] text-muted-foreground">
       {t.source === "tabela"

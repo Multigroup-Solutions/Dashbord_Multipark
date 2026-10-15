@@ -31,7 +31,25 @@ const state = vi.hoisted(() => ({
   timesDelayMs: 0,
   histFails: false,
   names: {} as Record<number, string>,
+  /** Pool falsa da Multipark: 2 lugares, espera curta por um lugar (como connectionTimeoutMillis). */
+  pool: null as null | { free: number; waitMs: number; holdMs: number; waiters: Array<() => void> },
 }));
+
+/** Pede um lugar à pool falsa; sem lugar dentro da espera → CONNECT_FAILED (como o pg). */
+async function withPoolSlot<T>(fn: () => Promise<T>): Promise<T> {
+  const p = state.pool;
+  if (!p) return fn();
+  if (p.free > 0) p.free--;
+  else {
+    await new Promise<void>((resolve, reject) => {
+      const wake = () => { clearTimeout(t); resolve(); };
+      const t = setTimeout(() => { p.waiters.splice(p.waiters.indexOf(wake), 1); reject(Object.assign(new Error("timeout exceeded when trying to connect"), { code: "CONNECT_FAILED" })); }, p.waitMs);
+      p.waiters.push(wake);
+    });
+  }
+  try { return await fn(); } finally { const next = p.waiters.shift(); if (next) next(); else p.free++; }
+}
+const hold = () => new Promise((r) => setTimeout(r, state.pool?.holdMs ?? 0));
 
 vi.mock("./cityAccess", async (original) => ({
   ...(await original<object>()),
@@ -52,6 +70,7 @@ vi.mock("./db", async (original) => {
     getEmployeeByUserId: async () => null,
     getDayActivity: async () => {
       state.calls.push("activity:start");
+      await withPoolSlot(hold);
       await new Promise((r) => setTimeout(r, state.activityDelayMs));
       state.calls.push("activity:end");
       return { totals: { checkins: 0 }, people: [], gpsMissingDays: [] };
@@ -62,6 +81,7 @@ vi.mock("./multiparkDb/historyLive", async (original) => ({
   ...(await original<object>()),
   readLiveHistory: async () => {
     state.calls.push("hist");
+    await withPoolSlot(hold);
     if (state.histFails) throw new Error("ligação recusada");
     return [];
   },
@@ -74,6 +94,13 @@ vi.mock("./serviceTimesRead", async (original) => ({
   employeeNames: async (ids: Iterable<number | null | undefined>) => Object.fromEntries([...ids].filter((x): x is number => typeof x === "number" && state.names[x] != null).map((x) => [x, state.names[x]])),
   dayServiceRows: async () => {
     state.calls.push("times:start");
+    // como o cálculo ao vivo: parques e garagens em paralelo (duas ligações)
+    try {
+      await Promise.all([withPoolSlot(hold), withPoolSlot(hold)]);
+    } catch (err: any) {
+      state.calls.push(`times:${err.code}`);
+      return { source: "indisponivel", rows: [], computedAt: null, truncated: false, reason: "Sem ligação à BD da Multipark neste momento." };
+    }
     await new Promise((r) => setTimeout(r, state.timesDelayMs));
     state.calls.push("times:end");
     return { source: "tabela", rows: state.rows, computedAt: null, truncated: false, reason: null };
@@ -137,7 +164,7 @@ const CLOSED_GATE = { visible: false, minCoveragePct: 60, minN: 20 };
 
 beforeEach(() => {
   state.roster = []; state.rows = []; state.bookingRows = []; state.calls = []; state.names = {};
-  state.gate = { ...CLOSED_GATE }; state.activityDelayMs = 0; state.timesDelayMs = 0; state.histFails = false;
+  state.gate = { ...CLOSED_GATE }; state.activityDelayMs = 0; state.timesDelayMs = 0; state.histFails = false; state.pool = null;
 });
 
 // ─── 9. O portão pelos procedimentos (admin vs super admin) ─────────────────
@@ -187,13 +214,24 @@ describe("9 — o portão aplica-se nos procedimentos, pelo papel de quem pede",
 // ─── 1. Prazo do Resumo do dia ──────────────────────────────────────────────
 
 describe("1 — Resumo do dia dentro dos 60 s da função", () => {
-  it("a Atividade do Dia corre em paralelo com os tempos (não depois)", async () => {
-    state.activityDelayMs = 40;
-    state.timesDelayMs = 40;
+  it("a Atividade do Dia corre em paralelo com os CHECK_OUT; os tempos vêm a seguir (pool livre)", async () => {
+    state.activityDelayMs = 20;
     const r = await caller("admin").shiftHandover.supervisorDashboard({ date: DAY });
     expect(r!.totals).toEqual({ checkins: 0 });
-    // a atividade começou antes de os tempos acabarem
-    expect(state.calls.indexOf("activity:start")).toBeLessThan(state.calls.indexOf("times:end"));
+    // a atividade começa antes de os CHECK_OUT acabarem…
+    expect(state.calls.indexOf("activity:start")).toBeLessThan(state.calls.indexOf("times:start"));
+    // …e os tempos só começam com as duas leituras acabadas
+    expect(state.calls.indexOf("activity:end")).toBeLessThan(state.calls.indexOf("times:start"));
+  });
+
+  it("pool de 2 lugares com espera curta: os tempos (2 ligações) nunca ficam à espera das outras leituras", async () => {
+    // CHECK_OUT e Atividade seguram cada uma um lugar 60 ms; quem espera mais de 20 ms falha (CONNECT_FAILED)
+    state.pool = { free: 2, waitMs: 20, holdMs: 60, waiters: [] };
+    state.rows = many(3, () => del());
+    const r = await caller("admin").shiftHandover.supervisorDashboard({ date: DAY });
+    expect(state.calls.some((c) => c === "times:CONNECT_FAILED")).toBe(false);
+    expect(r!.times.source).toBe("tabela");
+    expect(r!.times.deliveries.n).toBe(3);
   });
 
   it("a Multipark em baixo (CHECK_OUT do dia) não leva o resumo inteiro: só as reclamações dos carros que saíram ficam por contar", async () => {
@@ -209,7 +247,8 @@ describe("1 — Resumo do dia dentro dos 60 s da função", () => {
     expect(SUPERVISOR_DAY_BUDGET_MS).toBe(48_000);
     const f = src("server/supervisorDay.ts");
     expect(f).not.toContain("o resto — escala, reclamações — é a nossa BD");
-    expect(f).toContain("getDayActivity → loadActivityActions");
+    expect(f).toContain("loadActivityActions, ao vivo");
+    expect(f).toContain("DEPOIS, com a pool livre");
     expect(f).toContain("const activityP = getDayActivity(date)");
   });
 
@@ -289,6 +328,17 @@ describe("8 — a escala sem ficha ligada (só o nome) também recebe as suas en
 });
 
 // ─── 10. Dia do condutor: um portão por tabela ──────────────────────────────
+
+describe("10 — dia do condutor: o Cliente com o seu portão", () => {
+  it("Trânsito aberto e Cliente fechado: só o Cliente fica com o cadeado", () => {
+    const rows = [...many(25, () => del({ customerMs: null, customerStatus: "sem_pontos" })), del()];
+    const d = driverDayTimes(rows, 7, { gate: OPEN });
+    expect(d.gpsHiddenDeliveries).toBeNull();
+    expect(d.gpsHiddenCustomer).toMatch(/^Sem dados suficientes/);
+    expect(d.deliveries.every((x) => x.customerMs == null)).toBe(true);
+    expect(src("client/src/components/shiftDay/ShiftDayReview.tsx")).toContain("gpsCell(hiddenC, x.customerMs");
+  });
+});
 
 describe("10 — dia do condutor: o portão das entregas e o das recolhas à parte", () => {
   it("entregas abertas e recolhas fechadas: só as recolhas ficam com o cadeado", () => {

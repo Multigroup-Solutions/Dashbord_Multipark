@@ -171,7 +171,8 @@ export async function loadBookingServiceRows(bookingId: string): Promise<Service
 
 // ─── Um dia: a tabela ou, sem linhas, ao vivo ───────────────────────────────
 
-export type DayRowsSource = "tabela" | "ao_vivo" | "indisponivel";
+/** "vazio" = nada a ler (sem cidades no âmbito, ou um dia que ainda não começou). */
+export type DayRowsSource = "tabela" | "ao_vivo" | "indisponivel" | "vazio";
 export interface DayServiceRows { source: DayRowsSource; rows: ServiceRow[]; computedAt: string | null; truncated: boolean; reason: string | null }
 
 /*
@@ -200,6 +201,12 @@ export const LIVE_CACHE_TODAY_MS = 5 * 60_000;
 export const LIVE_CACHE_YESTERDAY_MS = 15 * 60_000;
 export const LIVE_CACHE_OLDER_MS = 60 * 60_000;
 export const LIVE_FAILURE_CACHE_MS = 60_000;
+/**
+ * Ronda 2 da auditoria do #389: sem ligação livre na pool (CONNECT_FAILED — a
+ * pool da Multipark tem 2 ligações por instância e 5 s de espera) não é a
+ * Multipark em baixo: guarda-se só 5 s, para o pedido seguinte tentar outra vez.
+ */
+export const LIVE_POOL_WAIT_FAILURE_CACHE_MS = 5_000;
 export const LIVE_MAX_CONCURRENT = 1;
 export const LIVE_QUEUE_WAIT_MS = 12_000;
 export const LIVE_MIN_BUDGET_MS = 12_000;
@@ -216,11 +223,13 @@ export function liveCacheTtlMs(date: string, nowMs: number): number {
 }
 
 type LiveOutcome = { ok: true; rows: ServiceRow[]; truncated: boolean; at: number } | { ok: false; error: string; busy?: boolean };
+type LiveFailure = { ok: false; error: string; poolWait?: boolean };
 /** O cálculo de um dia (injetável nos testes): UMA leitura da History, só leitura, sem gravar. */
-export type LiveCompute = (date: string, deadlineAt: number) => Promise<{ ok: true; rows: ServiceRow[]; truncated: boolean } | { ok: false; error: string }>;
+/** `poolWait` = falhou à espera de uma ligação da pool (CONNECT_FAILED): só 5 s na cache das falhas. */
+export type LiveCompute = (date: string, deadlineAt: number) => Promise<{ ok: true; rows: ServiceRow[]; truncated: boolean } | LiveFailure>;
 
 const liveCache = new Map<string, { at: number; value: { rows: ServiceRow[]; truncated: boolean } }>();
-const liveFailures = new Map<string, { at: number; error: string }>();
+const liveFailures = new Map<string, { at: number; error: string; ttl: number }>();
 const liveInflight = new Map<string, Promise<LiveOutcome>>();
 let liveRunning = 0;
 const liveWaiters: Array<() => void> = [];
@@ -277,7 +286,7 @@ async function runLive(date: string, budgetMs: number, compute: LiveCompute): Pr
     const r = await compute(date, Date.now() + left);
     const at = Date.now();
     if (!r.ok) {
-      liveFailures.set(date, { at, error: r.error });
+      liveFailures.set(date, { at, error: r.error, ttl: r.poolWait ? LIVE_POOL_WAIT_FAILURE_CACHE_MS : LIVE_FAILURE_CACHE_MS });
       return { ok: false, error: r.error };
     }
     liveFailures.delete(date);
@@ -289,7 +298,7 @@ async function runLive(date: string, budgetMs: number, compute: LiveCompute): Pr
     return { ok: true, rows: r.rows, truncated: r.truncated, at };
   } catch (err: any) {
     const error = String(err?.message ?? err).slice(0, 160);
-    liveFailures.set(date, { at: Date.now(), error });
+    liveFailures.set(date, { at: Date.now(), error, ttl: LIVE_FAILURE_CACHE_MS });
     return { ok: false, error };
   } finally {
     releaseLiveSlot();
@@ -307,7 +316,7 @@ const utcText = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace(
 export async function dayServiceRows(date: string, o: { cityKeys: readonly string[] | null; nowMs?: number; deadlineMs?: number; compute?: LiveCompute }): Promise<DayServiceRows> {
   // auditoria do #389: sem cidades no âmbito, ou um dia que ainda não começou, não há nada a ler
   // nem a calcular (nem a tabela, nem a Multipark)
-  const nothing = (reason: string): DayServiceRows => ({ source: "tabela", rows: [], computedAt: null, truncated: false, reason });
+  const nothing = (reason: string): DayServiceRows => ({ source: "vazio", rows: [], computedAt: null, truncated: false, reason });
   if (o.cityKeys && !o.cityKeys.length) return nothing("sem cidades no teu acesso");
   if (date > operationalDayOf(o.nowMs ?? Date.now())) return nothing("o dia ainda não começou");
   const inScope = (r: ServiceRow) => !o.cityKeys || o.cityKeys.includes(r.cityKey ?? "");
@@ -322,7 +331,7 @@ export async function dayServiceRows(date: string, o: { cityKeys: readonly strin
   const hit = liveCache.get(date);
   if (hit && now - hit.at < liveCacheTtlMs(date, now)) return { source: "ao_vivo", rows: hit.value.rows.filter(inScope), computedAt: utcText(hit.at), truncated: hit.value.truncated, reason: null };
   const failed = liveFailures.get(date);
-  if (failed && now - failed.at < LIVE_FAILURE_CACHE_MS) return unavailable(failed.error);
+  if (failed && now - failed.at < failed.ttl) return unavailable(failed.error);
   const budget = Math.min(o.deadlineMs ?? LIVE_DEFAULT_BUDGET_MS, LIVE_DEFAULT_BUDGET_MS);
   if (budget < LIVE_MIN_BUDGET_MS) return unavailable("sem tempo para os calcular neste pedido");
   try {

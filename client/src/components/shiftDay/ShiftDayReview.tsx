@@ -178,6 +178,7 @@ type DriverTimes = {
   reason?: string | null;
   /** O portão de cada tabela (as entregas pela cobertura do Trânsito, as recolhas pela do terminal). */
   gpsHiddenDeliveries?: string | null;
+  gpsHiddenCustomer?: string | null;
   gpsHiddenPickups?: string | null;
   gpsHidden: string | null;
   gpsNote: string | null;
@@ -191,12 +192,14 @@ function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number 
   if (t.source === "indisponivel") {
     return <p className="text-[11px] text-amber-800 dark:text-amber-300">Tempos deste dia indisponíveis: {t.reason ?? "a BD da Multipark não respondeu"}. Tenta outra vez daqui a pouco.</p>;
   }
+  if (t.source === "vazio") return <p className="text-[11px] text-muted-foreground">Tempos: {t.reason ?? "nada a mostrar neste dia"}.</p>;
   if (!t.deliveries.length && !t.pickups.length) {
     return <p className="text-[11px] text-muted-foreground">Tempos: nenhuma entrega começada por esta pessoa nem recolha tirada do terminal neste dia.</p>;
   }
   const dash = (status: string | null | undefined) => <span className="text-muted-foreground" title={statusLabel(status)} aria-label={`sem medição: ${statusLabel(status)}`}>—</span>;
   // cada tabela com o seu portão: fechado nas recolhas não esconde as entregas (nem o contrário)
   const hiddenD = t.gpsHiddenDeliveries !== undefined ? t.gpsHiddenDeliveries : t.gpsHidden;
+  const hiddenC = t.gpsHiddenCustomer !== undefined ? t.gpsHiddenCustomer : hiddenD;
   const hiddenP = t.gpsHiddenPickups !== undefined ? t.gpsHiddenPickups : t.gpsHidden;
   const gpsCell = (hidden: string | null, v: number | null, status?: string | null) => (hidden ? <span className="text-muted-foreground inline-flex" title={hidden} aria-label={hidden}><Lock className="w-3 h-3" /></span> : v != null ? fmtDur(v) : dash(status));
   return (
@@ -206,7 +209,8 @@ function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number 
         {t.source === "ao_vivo" && <Badge variant="outline" className="text-[10px]">calculado agora · provisório</Badge>}
         <CalibrationBadge note={t.gpsNote} />
       </div>
-      {hiddenD && <p className="text-[11px] text-muted-foreground">Trânsito, Cliente e máxima no Trânsito: {hiddenD}.</p>}
+      {hiddenD && <p className="text-[11px] text-muted-foreground">Trânsito e máxima no Trânsito: {hiddenD}.</p>}
+      {hiddenC && <p className="text-[11px] text-muted-foreground">Cliente: {hiddenC}.</p>}
       {hiddenP && <p className="text-[11px] text-muted-foreground">Tempo no terminal: {hiddenP}.</p>}
       {t.deliveries.length > 0 && (
         <div className="overflow-x-auto -mx-1">
@@ -230,7 +234,7 @@ function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number 
                     <td className="p-1"><BookingLink code={x.bookingCode} id={x.bookingId} /></td>
                     <td className="p-1 text-right tabular-nums">{x.queueMs != null ? fmtDur(x.queueMs) : dash(x.queueStatus)}</td>
                     <td className="p-1 text-right tabular-nums">{gpsCell(hiddenD, x.transitMs, x.transitStatus)}</td>
-                    <td className="p-1 text-right tabular-nums">{gpsCell(hiddenD, x.customerMs, x.customerStatus ?? x.transitStatus)}</td>
+                    <td className="p-1 text-right tabular-nums">{gpsCell(hiddenC, x.customerMs, x.customerStatus ?? x.transitStatus)}</td>
                     <td className={`p-1 text-right tabular-nums ${max != null && threshold != null && max > threshold ? "text-red-700 font-semibold" : ""}`}>{hiddenD ? gpsCell(hiddenD, null) : max != null ? `${max} km/h` : <span className="text-muted-foreground">—</span>}</td>
                   </tr>
                 );
