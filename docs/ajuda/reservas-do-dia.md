@@ -3,12 +3,13 @@ modulo: reservas_operacoes
 grupo: Operações
 pagina: operacoes
 titulo: Reservas do dia (entradas e saídas)
-separadores: dia=Reservas do dia (entradas e saídas)
+separadores: dia=Reservas do dia
 rotas: /operacoes
 palavras: por cidade, por hora, o que entra, o que sai, marketplace, travelparking, boardingpark, parques não operados, não operado, parques que não operamos, top parking, check-in park, lista de reservas, lista do dia, entradas e saídas, movimentos do dia, entradas, saídas, recolhas, entregas, check-in, check-out, parque, parques, airpark, redpark, skypark, outros parques, parques que a operação não faz, excluir parque, firebaseBrand, voo, eta, lugar, garagem, cancelada, pendente, compra por acabar, multipark
 ---
 # Reservas do dia
 
+## Reservas do dia (o separador)
 Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **um dia**. Os dados vêm **em tempo real** da base de dados da Multipark: não se copia nada e não é preciso sincronizar.
 
 **Onde**

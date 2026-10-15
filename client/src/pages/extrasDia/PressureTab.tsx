@@ -391,7 +391,7 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
             </p>
             {pct !== 75 && (
               <p className="mt-1">
-                O <b>Tempo por carro</b> nesta cidade usa o p{pct} (Definições → Parâmetros → Percentil do tempo por carro): o valor a {pct} % do caminho — em {pct} de cada 100 vezes demorou isso ou menos. É menos prudente do que o p75. Os outros mapas usam sempre o p75, e a Semana da Atividade diária também.
+                O <b>Tempo por carro</b> nesta cidade usa o p{pct} (Definições → Parâmetros → Percentil do tempo por carro): o valor a {pct} % do caminho — em {pct} de cada 100 vezes demorou isso ou menos. {pct < 75 ? "É menos prudente do que o p75." : "É mais prudente do que o p75."} Os outros mapas usam sempre o p75, e a Semana da Atividade diária também.
               </p>
             )}
           </details>

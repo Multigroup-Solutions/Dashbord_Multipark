@@ -52,16 +52,22 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
        - Se a janela tiver tempos de mais e a leitura chegar ao limite, entram os dias mais recentes e por cima diz "Leitura cortada no limite". Mudar o portão ou a meta vale logo (não fica à espera da cache).
        - O botão só aparece quando há tempos guardados (o cálculo da noite **Tempos de entrega e de recolha** está ligado, ou um dia foi reprocessado à mão).
      - **Pessoas a trabalhar**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL** (se nessa hora não carregou em nenhum botão na app, junta-se 1). São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.
+
+### Ler o mapa e onde aperta
+
 3. **O mapa (dia da semana × hora)** ocupa quase o ecrã. Por cima diz em palavras o que a cor quer dizer; por baixo há a legenda (os 4 tons de azul com os valores, cinzento = sem dados, contorno laranja = hora apertada, horas a âmbar = horas de ponta). Nos tempos, mais escuro = mais minutos (pior); no **% na meta** é ao contrário: **mais escuro = mais entregas na meta (melhor)**.
    - **Carrega numa célula** (ou passa o rato) para ver o detalhe dessa hora: volume, carros em simultâneo, entrega, recolha, por carro (juntas, só entregas e só recolhas), na estrada, recolhido → no parque e pessoas.
    - **O que é o p75?** Ordenam-se os casos dessa hora do mais rápido ao mais lento: o p75 é o valor a 75 % do caminho. Em 3 de cada 4 vezes demorou isso ou menos; só 1 em 4 demorou mais. Usa-se em vez da média para os dias maus contarem sem que um caso raro estrague tudo.
-   - **E o p{{regra:extras.timesPercentile.porto}}?** É a mesma conta a {{regra:extras.timesPercentile.porto}} % do caminho: em 6 de cada 10 vezes demorou isso ou menos — um pouco acima do meio (a mediana é o p50), menos prudente do que o p75. É o que o **Tempo por carro** usa no Porto e em Faro por omissão. A caixa "O que é o p75 (e o p…)?" do ecrã explica só o p75.
+   - **E o percentil da cidade?** O **Tempo por carro** usa o percentil escolhido para a cidade (por omissão p{{regra:extras.timesPercentile.lisbon}} em Lisboa e p{{regra:extras.timesPercentile.porto}} no Porto e em Faro; o que está em uso aparece no botão). É a mesma conta, a esse ponto do caminho: num p*N*, em *N* % das vezes demorou isso ou menos. Abaixo de 75 é menos prudente do que o p75 (mais perto do meio — a mediana é o p50); acima, mais prudente. A caixa "O que é o p75 (e o p…)?" do ecrã explica o p75 e o percentil da cidade.
    - **Média por hora vs contagem real**: **Carros por hora** é a **média por dia** desse dia da semana e hora em toda a janela (ex.: 4,5 carros/h às sextas 17h), não a contagem de um dia concreto; para o dia real vê a Atividade diária → **Semana** (contagens desse dia). Os tempos são percentis dos casos de toda a janela.
-   - A **Semana** da Atividade diária mostra o tempo por carro sempre em **p75** (em todas as cidades): no Porto e em Faro não bate com a Pressão, que usa o p{{regra:extras.timesPercentile.porto}} — é a mesma medição com outro percentil.
+   - A **Semana** da Atividade diária mostra o tempo por carro sempre em **p75** (em todas as cidades): no Porto e em Faro não bate com a Pressão, que usa o percentil da cidade (por omissão o p{{regra:extras.timesPercentile.porto}}) — é a mesma medição com outro percentil.
    - Uma célula **cinzenta** não tem dados: sem movimento nessa hora, ou menos de {{regra:extras.pressureMinSample}} casos (pouco fiável).
    - Se o último cálculo de um grupo falhou, aparece um aviso amarelo e o mapa mostra os dados do dia anterior que correu bem (em vez de ficar vazio).
 4. **Onde aperta**: frases curtas com os blocos mais apertados, por exemplo "sextas 17–20h em Lisboa: 42 saídas/h, entrega p75 28 min".
    - **Hora apertada pela Fila** (Definições → Parâmetros → **Hora apertada pela Fila (por cidade)**, **desligada** por omissão): ligada numa cidade, a parte "entregas lentas" da hora apertada (no mapa, em "Onde aperta" e na escala do separador **Dia**) usa o p75 da **Fila** em vez do total — a Fila é o que mostra se falta gente; o total também tem o caminho e a espera pelo cliente. Só quando a Fila está medida em pelo menos **60 %** das entregas da cidade; abaixo disso fica o total e por baixo diz porquê. Desligada, as horas apertadas ficam exatamente como até aqui.
+
+### Tempo por carro por condutor e carga × tempo de entrega
+
 5. **Tempo por carro, por condutor** (só na cidade toda): tabela por número de pessoas a trabalhar (os escalões da tabela de máximos das Definições).
    - **Horas cheias**: cada pessoa teve pelo menos um serviço nessa hora. É aqui que se vê a capacidade.
    - **Horas calmas**: o intervalo inclui esperar por trabalho.
@@ -69,6 +75,9 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - O valor é o p{{regra:extras.timesPercentile.lisbon}} em Lisboa e o p{{regra:extras.timesPercentile.porto}} no Porto e em Faro (por omissão): em {{regra:extras.timesPercentile.lisbon}} % (ou {{regra:extras.timesPercentile.porto}} %) das vezes foi isto ou menos. Muda-se em Definições → Parâmetros → **Percentil do tempo por carro, por cidade**.
    - A cinzento: menos de {{regra:extras.pressureMinSample}} serviços, pouco fiável.
 6. **Carga × tempo de entrega**: tabela que compara o tempo de entrega consoante os carros tratados nessa hora, separando horas de ponta (07–10h e 17–20h, aproximação do trânsito) do resto do dia.
+
+### Notas do dia
+
 7. **Notas do dia** (por cidade): o cartão **Notas do dia DD/MM** mostra as notas internas desse dia de trabalho (das 03h às 03h do dia seguinte).
    - O dia começa no **dia da escala** da página; muda-se com as setas ou a data, e **Dia da escala** volta a ele.
    - Cada dia pode ter **várias notas**, cada uma com quem a escreveu e quando, e (se quiseres) uma hora, das 03h às 02h da madrugada seguinte.
@@ -76,6 +85,9 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Arquivar** (o ícone da caixa) tira a nota do dia; só o pode fazer quem a escreveu ou um administrador. Fica no registo de atividade.
    - Ao **carregar numa célula** do mapa, o detalhe mostra também as notas das **últimas 4 datas com esse dia da semana**: as do dia todo e as dessa hora. As células das 00h–02h são a noite do dia anterior (ex.: quinta 01h mostra as notas de quarta à noite).
    - No separador **Dia**, ao lado dos parques, aparece **Notas do dia: N**; carrega para ir às notas.
+
+### De onde vêm os dados (desde abril, lidos todas as noites)
+
 8. Os dados vêm da BD da Multipark **desde 3 de abril de 2026** e a janela **cresce todos os dias**: nunca se deita fora o que já foi medido, para no próximo ano haver o ano inteiro. O dia de início muda-se em Definições → Parâmetros → **Tempos medidos desde**.
    - Todos os dias a partir das 04:45 (tarefa automática **Extras-Dia: pressão**) lê-se da BD da Multipark **só o dia de ontem**, de cada grupo de parques, e junta-se aos dias já guardados. Se uma noite falhar, na seguinte apanham-se os dias em falta. Os números são os mesmos de antes: os tempos de cada dia guardam-se ao milissegundo e os percentis calculam-se sobre todos os dias, como quando se lia a janela inteira.
    - Um dia guardado **não se volta a ler**: uma correção feita depois na Multipark a um dia já guardado só entra se esse dia for reprocessado (super admin, à mão: `/api/cron/extras-pressure?reprocessar=AAAA-MM-DD` ou `?reprocessar=AAAA-MM-DD..AAAA-MM-DD`; se a resposta trouxer `done: false`, repete com o `cursor` que vem nela).

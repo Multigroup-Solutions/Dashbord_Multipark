@@ -3,7 +3,7 @@ modulo: caixa
 grupo: Financeiro
 pagina: caixa
 titulo: Caixa
-separadores: dia=Separadores, confirmacao=Confirmação da caixa, resumo=Separadores, correcao=Correção de caixa — casos
+separadores: dia=Por dia, confirmacao=Confirmação da caixa, resumo=Resumo, correcao=Correção de caixa — casos
 rotas: /caixa
 palavras: caixa por dia, 03:00, dia da caixa, quem fechou, quem entregou, despesas do turno, dia certo, dia não certo, caixa, dinheiro, recebido, por cobrar, no-shows, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos, contagem, fecho de caixa
 ---
@@ -13,17 +13,26 @@ palavras: caixa por dia, 03:00, dia da caixa, quem fechou, quem entregou, despes
 
 As reservas e os pagamentos são lidos **ao vivo da base de dados da Multipark**, só dos parques que operamos.
 
-**Separadores**
-- **Por dia** (abre aqui; por omissão a última caixa já fechada): a caixa de cada dia **por cidade**, só nos parques que operamos.
-  - **O dia da caixa vai das 03:00 às 03:00 do dia seguinte** (hora de Lisboa): a caixa fecha no fim do turno da noite, em n+1. O que se recebe às 01:30 de dia 7 ainda conta na caixa de dia 6. Enquanto não passar das 03:00 do dia seguinte, o dia aparece **Em curso**.
-  - **Recebido** no dia por método (dinheiro, multibanco/TPA, online/Stripe, MB Way…), pelos pagamentos registados na Multipark nesse dia da caixa (03:00 → 03:00).
-  - **Despesas do turno**: as que o team leader lançou na **Passagem de turno** (ver abaixo). Abatem ao dinheiro.
-  - **Tem de estar em dinheiro** = recebido em dinheiro − despesas do turno − gastos escritos na contagem. **Contado** = soma das contagens dos parques; **Diferença** = contado − tem de estar ("—" enquanto nenhum parque estiver contado).
-  - **Por condutor** (quem fez a saída): saídas, valor, em dinheiro, se **entregou o dinheiro ao líder** e se a **caixa foi fechada** (e por quem). Quem tem dinheiro por entregar aparece primeiro.
-  - **Correção do dia**: **Dia certo** ou **Dia não certo**, com o motivo (o que mudou, se está correto ou não). "Não certo" pede sempre motivo; "certo" com diferença também. Só se faz depois de a caixa fechar (03:00 do dia seguinte). Cada gravação fica no **Histórico** (quem, quando, esperado e contado). Precisa de Caixa → editar.
-- **Confirmação** (13 out 2026): a confirmação da caixa **reserva a reserva**, por cidade e dia (03:00 → 03:00), só nos parques que operamos. Ver **Confirmação da caixa** abaixo.
-- **Resumo**: o dinheiro no período — recebido (por método de pagamento), por cobrar, no-shows pré-pagos e canceladas com pagamento (só informativo). As despesas a pagar estão na **Previsão** da Faturação.
-- **Correção de caixa**: casos da varredura automática, contagem da caixa por parque e dia, multibanco do dia (talões), confirmar pagamentos (Stripe, Viva, fim do mês), preços iniciais e o **Comparar** era / é.
+## Separadores
+### Por dia (abre aqui; por omissão a última caixa já fechada)
+A caixa de cada dia **por cidade**, só nos parques que operamos.
+- **O dia da caixa vai das 03:00 às 03:00 do dia seguinte** (hora de Lisboa): a caixa fecha no fim do turno da noite, em n+1. O que se recebe às 01:30 de dia 7 ainda conta na caixa de dia 6. Enquanto não passar das 03:00 do dia seguinte, o dia aparece **Em curso**.
+- **Recebido** no dia por método (dinheiro, multibanco/TPA, online/Stripe, MB Way…), pelos pagamentos registados na Multipark nesse dia da caixa (03:00 → 03:00).
+- **Despesas do turno**: as que o team leader lançou na **Passagem de turno** (ver abaixo). Abatem ao dinheiro.
+- **Tem de estar em dinheiro** = recebido em dinheiro − despesas do turno − gastos escritos na contagem. **Contado** = soma das contagens dos parques; **Diferença** = contado − tem de estar ("—" enquanto nenhum parque estiver contado).
+- **Por condutor** (quem fez a saída): saídas, valor, em dinheiro, se **entregou o dinheiro ao líder** e se a **caixa foi fechada** (e por quem). Quem tem dinheiro por entregar aparece primeiro.
+- **Correção do dia**: **Dia certo** ou **Dia não certo**, com o motivo (o que mudou, se está correto ou não). "Não certo" pede sempre motivo; "certo" com diferença também. Só se faz depois de a caixa fechar (03:00 do dia seguinte). Cada gravação fica no **Histórico** (quem, quando, esperado e contado). Precisa de Caixa → editar.
+
+### Confirmação (13 out 2026)
+A confirmação da caixa **reserva a reserva**, por cidade e dia (03:00 → 03:00), só nos parques que operamos. Ver **Confirmação da caixa** abaixo.
+
+### Resumo
+O dinheiro no período — recebido (por método de pagamento), por cobrar, no-shows pré-pagos e canceladas com pagamento (só informativo). As despesas a pagar estão na **Previsão** da Faturação.
+
+### Correção de caixa
+Casos da varredura automática, contagem da caixa por parque e dia, multibanco do dia (talões), confirmar pagamentos (Stripe, Viva, fim do mês), preços iniciais e o **Comparar** era / é.
+
+## Passo a passo
 
 **Correção de caixa — casos**
 1. No topo do separador **Correção de caixa** está a fila **Casos da varredura automática** (por explicar, por defeito), com as gravidades em cima. Filtra por **Fechados / resolvidos** ou **Todos** e pela gravidade.

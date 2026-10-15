@@ -38,8 +38,16 @@ export interface HelpTreeSection {
   level: 1 | 2 | 3 | 4;
   /** 1.ª frase (≤ 160 car.), sem markdown. */
   summary: string;
-  /** Texto da secção (markdown, sem a linha do título). */
+  /** Texto da secção (markdown, sem a linha do título e sem as subsecções). */
   text: string;
+  /**
+   * Ids das subsecções diretas (`##` → os `###` e as linhas a negrito até ao
+   * `##` seguinte; `###` → as linhas a negrito até ao título seguinte de nível
+   * igual ou maior). Vazio nas folhas.
+   */
+  children: string[];
+  /** Secção só de arrumação (sem texto próprio, com subsecções): abrir = ver a lista dos filhos. */
+  container: boolean;
 }
 
 export interface HelpTreeTab {
@@ -84,7 +92,7 @@ export class HelpTreeError extends Error {
 
 /** Separa o cabeçalho `---` do corpo. Chaves em minúsculas. PURA. */
 export function splitFrontMatter(raw: string): { head: Record<string, string>; body: string } {
-  const text = raw.replace(/\r\n/g, "\n");
+  const text = raw.replace(/^﻿/, "").replace(/\r\n/g, "\n");
   const m = /^---\n([\s\S]*?)\n---\n?/.exec(text);
   const head: Record<string, string> = {};
   if (m) {
@@ -112,8 +120,11 @@ export function parseTabsField(v: string | undefined): Array<{ tab: string; sect
 }
 
 const HEADING_RE = /^(#{2,3})\s+(.+?)\s*#*\s*$/;
-/** Linha que é SÓ negrito, com ou sem ":" no fim. */
-export const BOLD_SECTION_RE = /^\*\*([^*]+)\*\*:?\s*$/;
+/** Linha que é SÓ negrito, com ou sem ":" no fim (também "**X** :"). */
+export const BOLD_SECTION_RE = /^\*\*([^*]+)\*\*\s*:?\s*$/;
+
+/** Abre/fecha um bloco de código: a linha é só a cerca (``` ou ~~~, com a língua a seguir), nada mais. */
+const FENCE_RE = /^\s*(```|~~~)[^`~]*$/;
 
 /** A linha abre secção? (regra única). PURA. */
 export function sectionHeading(line: string): { title: string; level: 2 | 3 | 4 } | null {
@@ -152,44 +163,80 @@ export function slugify(title: string): string {
   return s.slice(0, 60).replace(/-+$/g, "") || "secao";
 }
 
+/** Abreviaturas que acabam em "." sem acabar a frase (minúsculas, sem o ponto). */
+const ABBREVIATIONS = new Set([
+  "sr", "sra", "srs", "dr", "dra", "drs", "eng", "enga", "arq", "prof", "profa", "ex", "p", "pág", "pags", "págs", "n", "nº", "n.º", "art", "av", "etc", "máx", "mín", "aprox", "obs", "tel", "telm", "vs", "sto", "sta", "lda", "s.a", "cf", "ref",
+]);
+
+/** Corta no fim da 1.ª frase: ". ", "! " ou "? " seguido de maiúscula (ou o fim), sem cortar em "Sr.", "p. ex.", "3.5". PURA. */
+function cutSentence(s: string): string {
+  const re = /[.!?](?=\s+[A-ZÁÉÍÓÚÂÊÔÃÕÀÇ"“(«]|\s*$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    if (s[m.index] === ".") {
+      const before = /([\p{L}.º]+)$/u.exec(s.slice(0, m.index))?.[1]?.toLowerCase() ?? "";
+      if (ABBREVIATIONS.has(before) || ABBREVIATIONS.has(before.replace(/^.*\./, "")) || /^\p{L}$/u.test(before)) continue;
+    }
+    return s.slice(0, m.index + 1).trim();
+  }
+  return s.trim();
+}
+
 /** 1.ª frase do texto, sem markdown, no máx. `max` caracteres (corta à palavra, com "…"). PURA. */
 export function firstSentence(text: string, max = HELP_SUMMARY_MAX): string {
-  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l && !/^(#|---|```|\|)/.test(l));
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l && !/^(#|---|```|~~~|\|)/.test(l));
   const first = stripMarkdown((lines[0] ?? "").replace(/^([-*]|\d+[.)])\s+/, ""));
   if (!first) return "";
-  // fim da frase: ". " / "! " / "? " seguido de maiúscula ou fim (evita "p. ex." e "3.5")
-  const m = /^(.+?[.!?])(\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÀÇ"“(«])|$)/.exec(first);
-  const sentence = (m ? m[1] : first).trim();
+  const sentence = cutSentence(first);
   if (sentence.length <= max) return sentence;
   const cut = sentence.slice(0, max - 1);
   const sp = cut.lastIndexOf(" ");
   return `${(sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[,;:\s]+$/, "")}…`;
 }
 
-/** Divide o corpo em secções (regra única; ignora o que está dentro de ``` ). PURA. */
+/**
+ * Divide o corpo em secções (regra única; ignora o que está dentro de blocos
+ * ``` ou ~~~ — um bloco aberto no fim é erro). Slugs repetidos: `-2`, `-3`…,
+ * saltando os que já existam (ex.: "Notas", "Notas", "Notas 2" → notas,
+ * notas-2, notas-2-2). PURA.
+ */
 export function splitSections(file: string, body: string, pageTitle: string): HelpTreeSection[] {
   const lines = body.split("\n");
   type Raw = { title: string; level: 1 | 2 | 3 | 4; lines: string[] };
   const raws: Raw[] = [{ title: pageTitle, level: 1, lines: [] }];
-  let fence = false;
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) fence = !fence;
-    if (!fence && /^#\s+/.test(line) && raws.length === 1 && !raws[0].lines.some((l) => l.trim())) continue; // título "# …" da página
-    const h = fence ? null : sectionHeading(line);
+  let fence: string | null = null;
+  let fenceLine = 0;
+  lines.forEach((line, i) => {
+    const f = FENCE_RE.exec(line);
+    if (f && (fence === null || f[1] === fence)) {
+      if (fence === null) { fence = f[1]; fenceLine = i + 1; } else fence = null;
+      raws[raws.length - 1].lines.push(line);
+      return;
+    }
+    if (fence === null && /^#\s+/.test(line) && raws.length === 1 && !raws[0].lines.some((l) => l.trim())) return; // título "# …" da página
+    const h = fence === null ? sectionHeading(line) : null;
     if (h) raws.push({ title: h.title, level: h.level, lines: [] });
     else raws[raws.length - 1].lines.push(line);
-  }
-  const used = new Map<string, number>();
-  const out: HelpTreeSection[] = [];
-  for (const r of raws) {
-    const text = r.lines.join("\n").trim();
-    if (r.level === 1 && !text) continue;
+  });
+  if (fence !== null) throw new HelpTreeError(`${file}: bloco de código aberto na linha ${fenceLine} do corpo e nunca fechado.`);
+  const used = new Set<string>();
+  const kept = raws.map((r) => ({ ...r, text: r.lines.join("\n").trim() })).filter((r) => r.level > 1 || r.text);
+  const out: HelpTreeSection[] = kept.map((r) => {
     const base = r.level === 1 ? "inicio" : slugify(r.title);
-    const n = (used.get(base) ?? 0) + 1;
-    used.set(base, n);
-    const slug = n === 1 ? base : `${base}-${n}`;
-    out.push({ id: `${file}#${slug}`, file, slug, title: r.title, level: r.level, summary: firstSentence(text), text });
-  }
+    let slug = base;
+    for (let n = 2; used.has(slug); n++) slug = `${base}-${n}`;
+    used.add(slug);
+    return { id: `${file}#${slug}`, file, slug, title: r.title, level: r.level, summary: firstSentence(r.text), text: r.text, children: [], container: false };
+  });
+  // Filhos diretos: as secções seguintes de nível mais fundo, até à próxima do mesmo nível ou acima.
+  out.forEach((s, i) => {
+    if (s.level === 1 || s.level === 4) return;
+    for (let j = i + 1; j < out.length && out[j].level > s.level; j++) {
+      const parentOfJ = (() => { for (let k = j - 1; k >= i; k--) if (out[k].level < out[j].level) return k; return i; })();
+      if (parentOfJ === i) s.children.push(out[j].id);
+    }
+    s.container = !s.text && s.children.length > 0;
+  });
   return out;
 }
 
@@ -267,9 +314,17 @@ export function treePages(tree: HelpTree): HelpTreePage[] {
   return tree.groups.flatMap((g) => g.pages);
 }
 
-/** Página ou secção pelo id (`pagina` ou `ficheiro.md#slug`; aceita também `ficheiro.md`). PURA. */
-export function findHelpNode(tree: HelpTree, id: string): { page: HelpTreePage; section: HelpTreeSection | null } | null {
-  const key = id.trim();
+/**
+ * Página ou secção pelo id (`pagina` ou `ficheiro.md#slug`; aceita também
+ * `ficheiro.md`). Um id antigo (renomeado) segue o mapa de aliases. PURA.
+ */
+export function findHelpNode(
+  tree: HelpTree,
+  id: string,
+  aliases: Readonly<Record<string, string>> = {},
+): { page: HelpTreePage; section: HelpTreeSection | null } | null {
+  let key = id.trim();
+  for (let hops = 0; aliases[key] && hops < 10; hops++) key = aliases[key];
   for (const page of treePages(tree)) {
     if (page.id === key || page.file === key) return { page, section: null };
     const section = page.sections.find((s) => s.id === key);
@@ -278,21 +333,66 @@ export function findHelpNode(tree: HelpTree, id: string): { page: HelpTreePage; 
   return null;
 }
 
+/**
+ * O que `ajuda_abrir(id)` mostra: página → a lista das secções; secção
+ * contentor → a lista dos filhos (id, título, resumo); secção normal → o texto
+ * (e, se tiver subsecções, a lista delas por baixo). null = id desconhecido. PURA.
+ */
+export function openHelpNode(tree: HelpTree, id: string, aliases: Readonly<Record<string, string>> = {}): { id: string; title: string; text: string } | null {
+  const hit = findHelpNode(tree, id, aliases);
+  if (!hit) return null;
+  const { page, section } = hit;
+  if (!section) return { id: page.id, title: page.title, text: renderPageSections(page) };
+  const kids = section.children
+    .map((cid) => page.sections.find((s) => s.id === cid))
+    .filter((s): s is HelpTreeSection => !!s)
+    .map((s) => `- ${s.id}: ${s.title}${s.summary ? ` — ${s.summary}` : ""}`)
+    .join("\n");
+  const text = section.container ? `Subsecções (abre cada uma pelo id):\n${kids}` : kids ? `${section.text}\n\nSubsecções:\n${kids}` : section.text;
+  return { id: section.id, title: section.title, text };
+}
+
+/** A árvore sem o texto das secções (o texto está no helpDocs e lê-se em execução). */
+export type HelpTreeOutlineSection = Omit<HelpTreeSection, "text"> & { chars: number };
+export type HelpTreeOutline = { groups: Array<{ group: HelpGroup; pages: Array<Omit<HelpTreePage, "sections"> & { sections: HelpTreeOutlineSection[] }> }> };
+
+/** Tira o texto (fica o n.º de caracteres) — para o ficheiro gerado não repetir a ajuda. PURA. */
+export function treeOutline(tree: HelpTree): HelpTreeOutline {
+  return {
+    groups: tree.groups.map((g) => ({
+      group: g.group,
+      pages: g.pages.map((p) => ({ ...p, sections: p.sections.map(({ text, ...s }) => ({ ...s, chars: text.length })) })),
+    })),
+  };
+}
+
+/** Todos os ids (páginas e secções), por ordem. PURA. */
+export function treeIds(tree: HelpTree | HelpTreeOutline): string[] {
+  return tree.groups.flatMap((g) => g.pages.flatMap((p) => [p.id, ...p.sections.map((s) => s.id)]));
+}
+
 function normPath(path: string): string {
   return path.split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
 }
 
 /**
  * Páginas da ajuda para um caminho da app, da mais específica para a menos:
- * rota exata > rota mais comprida a servir de prefixo; depois a página
- * principal (id sem ".") antes dos tópicos; depois a rota principal (1.ª da
- * lista) antes das outras; por fim o ficheiro. "/" só conta exato. PURA.
+ *  1. rota exata antes de prefixo; rota mais comprida antes da mais curta;
+ *  2. a rota é a principal da página (1.ª da lista) antes de ser secundária;
+ *  3. o nome da página (último pedaço do id) é o último pedaço da rota
+ *     (/marketing/web → marketing.web; /definicoes → definicoes);
+ *  4. a página com menos rotas (mais específica);
+ *  5. a página principal (id sem ".") antes dos tópicos; por fim o ficheiro.
+ * "/" só conta exato. PURA.
  */
-export function pagesForPath(tree: HelpTree, path: string | null | undefined): HelpTreePage[] {
+export function pagesForPath<T extends HelpTree | HelpTreeOutline>(tree: T, path: string | null | undefined): Array<T["groups"][number]["pages"][number]> {
+  type Page = T["groups"][number]["pages"][number];
   if (!path) return [];
   const p = normPath(path);
-  const scored: Array<{ page: HelpTreePage; exact: number; len: number; main: number; idx: number }> = [];
-  for (const page of treePages(tree)) {
+  const last = p.split("/").filter(Boolean).pop() ?? "";
+  type Score = { page: Page; exact: number; len: number; idx: number; named: number; nRoutes: number; main: number };
+  const scored: Score[] = [];
+  for (const page of (tree.groups as Array<{ pages: Page[] }>).flatMap((g) => g.pages)) {
     let best: { exact: number; len: number; idx: number } | null = null;
     page.routes.forEach((r0, idx) => {
       const r = normPath(r0);
@@ -301,10 +401,12 @@ export function pagesForPath(tree: HelpTree, path: string | null | undefined): H
       const cand = { exact: exact ? 1 : 0, len: r.length, idx };
       if (!best || cand.exact > best.exact || (cand.exact === best.exact && (cand.len > best.len || (cand.len === best.len && cand.idx < best.idx)))) best = cand;
     });
-    if (best) scored.push({ page, ...(best as { exact: number; len: number; idx: number }), main: page.id.includes(".") ? 0 : 1 });
+    if (!best) continue;
+    const name = page.id.split(".").pop() ?? page.id;
+    scored.push({ page, ...(best as { exact: number; len: number; idx: number }), named: last && name === last ? 1 : 0, nRoutes: page.routes.length, main: page.id.includes(".") ? 0 : 1 });
   }
   return scored
-    .sort((a, b) => b.exact - a.exact || b.len - a.len || b.main - a.main || a.idx - b.idx || a.page.file.localeCompare(b.page.file))
+    .sort((a, b) => b.exact - a.exact || b.len - a.len || a.idx - b.idx || b.named - a.named || a.nRoutes - b.nRoutes || b.main - a.main || a.page.file.localeCompare(b.page.file))
     .map((s) => s.page);
 }
 

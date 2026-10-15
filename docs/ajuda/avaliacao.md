@@ -3,7 +3,7 @@ modulo: avaliacao
 grupo: Pessoas
 pagina: avaliacao
 titulo: Avaliação (dia e mês)
-separadores: dia=Separador Dia, mes=Separador Mês, minha=Quem vê o quê, contestacoes=Quem vê o quê
+separadores: dia=Separador Dia, mes=Separador Mês, minha=A minha avaliação, contestacoes=Contestações
 rotas: /avaliacao, /avaliacao-operacional
 palavras: não deu para ler o fecho do mês, fecho do mês, fechar o mês, horário fixo, atraso num feriado, fechado até, reabrir, prémios, quem fecha o mês, atraso ao trabalho, 5 minutos, atraso de 5 min, entrega atrasada saiu, regra antiga, mudanças de lugar, mudança de lugar, movimento entre garagens, início do movimento, excesso do gps, limite 120, 120 km/h sem tolerância, 132 km/h, trava da velocidade, dia recolhido com outro limite, picos do gps, entrega atrasada, pesquisar condutor, procurar condutor, procurar pessoa, pesquisa no ranking, n.º de agente, filtros, filtro, filtros como no odoo, odoo, só com reclamações, excesso de velocidade, excessos de velocidade, regra, regras, pontos maior que, entre, tem, não tem, agrupar por, filtros guardados, abrir com este, csv filtrado, sheets filtrado, avaliação do mês na atividade diária, mês, mensal, avaliação do team leader, tl como condutor, tl como team leader, supervisão, equipa do dia, extras a mais, extras a menos, previsão, filtro de cidade, filtro de marca, avaliação, acidente, acidente confirmado, menos 6000, avaliação operacional, avaliação individual, avaliação do dia, ranking, pontuação, pontos da avaliação, movimentos do agente, levar ao parque, histórico do agente, buscar histórico, 4 semanas, recalcular, contestação, contestar, ajuste da avaliação, avaliações dos clientes, equipa do team leader, avaliação semanal
 ---
@@ -83,7 +83,7 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
   - **Levar ao parque**: o carro foi arrumado (ainda não tinha garagem), por exemplo logo a seguir à recolha. Vale +{{regra:evaluation.points.firstMoveAfterPickup}}.
   - **Movimento entre parques**: o carro mudou de garagem (ex.: PD → COBERTO). Vale +{{regra:evaluation.points.movement}}.
   - **Mudança de lugar**: o carro ficou na mesma garagem, só mudou de lugar (ex.: PD 26/3 → PD 70/1). Não é movimento. Vale +{{regra:evaluation.points.spotChange}}.
-- **Atraso ao trabalho** ({{regra:evaluation.points.delay}}): a entrada no ponto foi **{{regra:evaluation.lateArrivalFromMinutes}} minutos ou mais** depois da hora da escala. Contam minutos inteiros: numa escala das 03:00, entrar às 03:04:59 não é atraso; às 03:05:00 já é (−5), e às 03:10 também. Conta no máximo **1 por dia**. Vale para **todos os que têm horário**: nos dias em que a pessoa está na escala do Extras-Dia conta a hora da escala; nos outros, o **horário fixo** da ficha do RH (Horário; para os funcionários — os extras regem-se pela escala). Nos dias livres do horário, nas férias ou baixas registadas no RH, fora do contrato e nos **feriados** (os nacionais e o municipal da cidade da ficha) não há atraso pelo horário fixo; quem estiver escalado no Extras-Dia num feriado tem a hora da escala.
+- **Atraso ao trabalho** ({{regra:evaluation.points.delay}}): a entrada no ponto foi **{{regra:evaluation.lateArrivalFromMinutes}} minutos ou mais** depois da hora da escala. Contam minutos inteiros: numa escala das 03:00, entrar às 03:04:59 não é atraso; às 03:05:00 já é ({{regra:evaluation.points.delay}}), e às 03:10 também. Conta no máximo **{{regra:evaluation.maxLateArrivalsPerDay}} por dia**. Vale para **todos os que têm horário**: nos dias em que a pessoa está na escala do Extras-Dia conta a hora da escala; nos outros, o **horário fixo** da ficha do RH (Horário; para os funcionários — os extras regem-se pela escala). Nos dias livres do horário, nas férias ou baixas registadas no RH, fora do contrato e nos **feriados** (os nacionais e o municipal da cidade da ficha) não há atraso pelo horário fixo; quem estiver escalado no Extras-Dia num feriado tem a hora da escala.
 - **Entrega atrasada: saiu**. Os tempos das entregas e das recolhas são da equipa, não de cada pessoa, e a hora marcada na ficha não conta para eles. Vale para todos os dias, também os de setembro e outubro (não são meses de prémios).
   - Nos dias antigos a coluna das entregas atrasadas fica guardada, com o rótulo "(regra antiga)", mas já não tira pontos nem aparece nos ecrãs, no CSV nem nos filtros. Os **atrasos** que se veem são sempre só os atrasos ao trabalho.
   - Os ajustes antigos de "entregas atrasadas" ficam no histórico do dia com "Sem efeito: regra retirada". Já não se pode ajustar nem contestar essa métrica.
@@ -107,6 +107,15 @@ A avaliação dos condutores e extras está numa só página: menu **Pessoas →
 - O fecho congela os **números**, não as **regras**: a pontuação calcula-se ao ler. Depois do primeiro fecho, qualquer mudança nos pontos ou nas regras tem de dizer **a partir de que dia vale**, senão mudava meses já pagos.
 - No detalhe de uma pessoa, os dias fechados têm a etiqueta **fechado** e não mostram Ajustar nem Contestar.
 - Se a barra disser **"Não deu para ler o fecho do mês: por agora nada se recalcula nem se ajusta."**, a leitura da data do fecho falhou (não quer dizer que nada esteja fechado): enquanto não se souber até onde está fechado, o ecrã não deixa recalcular nem ajustar, para não mexer em dias já pagos. Recarrega a página daqui a pouco.
+
+**A minha avaliação**
+- Separador **A minha avaliação** (cada pessoa com ficha, mesmo sem centro de custos): os teus pontos no período, a explicação das regras e o detalhe dia a dia. Só vês os teus dados.
+- Se algo estiver errado num dia, abre o dia e carrega em **Contestar**. A contestação fica **Em análise** até quem gere a avaliação a aceitar (às vezes com um ajuste dos pontos desse dia) ou recusar. Ninguém decide a sua própria. Os dias **fechados** (fecho do mês) já não se contestam.
+- Sem ficha ligada à conta aparece "A tua conta não está ligada a uma ficha de colaborador — fala com o RH."
+
+**Contestações**
+- Separador **Contestações** (só quem gere a avaliação: supervisores, front e backoffice e a administração): as contestações por estado — **Em análise**, **Aceites** e **Recusadas** — com **Procurar pessoa…**, que filtra pelo nome.
+- Abre uma para ver o dia, o que a pessoa escreveu e **aceitar** (com ou sem ajuste dos pontos) ou **recusar**. Fica no histórico do dia, com quem decidiu e quando.
 
 **Quem vê o quê**
 São as permissões de Definições → Permissões, iguais no ecrã e no servidor, com as permissões por utilizador.

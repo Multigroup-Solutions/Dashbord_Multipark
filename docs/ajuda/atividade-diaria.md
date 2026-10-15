@@ -47,6 +47,9 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 4. **Terminal — linha do tempo** (só com o interruptor "Terminal no ponto (aeroporto)" ligado): quem esteve no terminal da cidade nesse dia, **de que horas a que horas**, como entrou e como saiu, e **até que hora contou** para o pagamento (ex.: "contou até 16:40 (último GPS no aeroporto)" ou "por confirmar").
    - Entre duas pessoas aparecem os buracos a amarelo: **"terminal vazio 12:10–12:40"**.
    - "sem nível +1" = condutor ou TL no terminal (o valor não muda).
+
+### Entregas (tarde) e recolhas (manhã): os tempos
+
 5. **Entregas (tarde)**: um cartão por tempo, com a **mediana** em grande, o p75 e a média por baixo e **medido em X %** (de quantas entregas há esse tempo).
    - **Fila**: da chamada do cliente (central ou WhatsApp, pelo telefone da reserva) ou do pendente, o que vier primeiro, até o condutor pegar no carro ("em entrega"). Mostra como está o trabalho e serve para acertar os extras.
    - **Trânsito**: de pegar no carro até chegar ao terminal (o carro parou na zona do terminal, ou o condutor saiu a pé, pelo GPS do Zello).
@@ -61,6 +64,9 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
    - Se os tempos não se conseguirem calcular a tempo (a BD da Multipark lenta), só os tempos aparecem como indisponíveis; o resto do resumo vem na mesma. Num dia que ainda não começou aparece "Sem tempos deste dia: o dia ainda não começou".
    - **De onde vem**: da tabela dos tempos (o cálculo da noite). Enquanto ela não tem o dia (o cálculo da noite está desligado, ou é o dia de hoje), os números são **calculados agora** com as mesmas regras, sem o GPS (que só chega à noite): aparece "provisório" e os tempos com GPS ficam "GPS por recolher".
      - Para não pesar na BD da Multipark, esse cálculo é **um por dia para toda a gente** e fica guardado uns minutos (5 min no dia de hoje, 15 min para ontem, 1 hora para dias mais antigos): a hora do cálculo aparece por cima. Se alguém estiver a calcular outro dia nesse momento, ou a Multipark não responder, aparece **"Sem tempos deste dia"** com o motivo: volta a abrir daqui a um minuto.
+
+### O que se passava e quem trabalhou
+
 7. **O que se passava nesse horário** (ao tocar numa das mais lentas):
    - a reserva (com o link para a **Ficha da reserva**);
    - a linha do tempo: pedido (pendente), quem pegou no carro, entregue, minutos;
@@ -80,7 +86,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 2. Escolhe **Entregas** ou **Recolhas** e **Quantidade**, **Tempo por carro** ou **Tempos**.
 3. Cada **linha** é um dia **operacional** (03:00 → 03:00). As **colunas** são as horas, das 03h às 02h: as colunas 00, 01 e 02 são a madrugada a seguir, ainda desse dia.
    - **Quantidade**: carros entregues (entrega feita) ou recolhidos (recolha feita) nessa hora.
-   - **Tempo por carro**: a métrica da Pressão, minutos entre o início de uma entrega (ou recolha) e o início do serviço seguinte do mesmo condutor, dos serviços começados nessa hora. Mostra-se o **p75**: em 3 de cada 4 vezes foi isto ou menos. É **sempre o p75**, em todas as cidades — no Porto e em Faro a Pressão do Extras-Dia usa o p{{regra:extras.timesPercentile.porto}} (o percentil da cidade), por isso os números não batem: é a mesma medição com outro percentil. Em **itálico** com contorno tracejado: menos de 5 serviços (pouco fiável).
+   - **Tempo por carro**: a métrica da Pressão, minutos entre o início de uma entrega (ou recolha) e o início do serviço seguinte do mesmo condutor, dos serviços começados nessa hora. Mostra-se o **p75**: em 3 de cada 4 vezes foi isto ou menos. É **sempre o p75**, em todas as cidades — no Porto e em Faro a Pressão do Extras-Dia usa o percentil da cidade (por omissão o p{{regra:extras.timesPercentile.porto}}; o que está em uso aparece no botão da Pressão), por isso os números não batem: é a mesma medição com outro percentil. Em **itálico** com contorno tracejado: menos de {{regra:extras.pressureMinSample}} serviços (pouco fiável).
    - **Tempos**: escolhe ao lado qual — nas entregas **Fila**, **Trânsito**, **Nosso tempo**, **% na meta**, **Cliente** ou **Total**; nas recolhas **Cliente**, **No terminal** ou **No P2** (o que cada um é está no Resumo do dia). Mostra-se o p75 (ou a %), pela hora em que o cliente ligou (ou ficou pendente / em recolha). Células com menos de 5 casos ficam em branco. Vêm da tabela dos tempos (o cálculo da noite): sem ela, aparece o aviso. Os tempos com GPS seguem o mesmo portão (Em calibração / Sem dados suficientes), aqui para a cidade e a semana.
    - A coluna **Total** é o dia todo; a linha **Total** é a semana toda nessa hora. Nas quantidades são somas; no tempo é o p75 de todos os serviços (não a média das células).
    - Mais escuro = mais carros (ou mais minutos); no **% na meta** mais escuro = mais entregas na meta (**melhor**). Cinzento = sem casos. Na semana atual, as horas que ainda não chegaram ficam em branco, tracejadas.

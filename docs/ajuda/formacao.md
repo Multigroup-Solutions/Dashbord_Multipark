@@ -3,7 +3,7 @@ modulo: formacao
 grupo: Pessoas
 pagina: formacao
 titulo: Formação
-separadores: mine=Fazer a tua formação, quiz=Quiz, career=Carreira, faqs=FAQs, paths=Gestão, dashboard=Gestão
+separadores: mine=Fazer a tua formação, videos=Vídeos, manuals=Manuais, faqs=FAQs, quiz=Quiz, career=Carreira, paths=Percursos, dashboard=Acompanhamento
 rotas: /formacao
 palavras: formação, formacao, curso, vídeos, manuais, faqs, quiz, exame, carreira, percurso, percursos, acompanhamento, formação obrigatória, formação em falta, formação por verificar, certificado, nível, n1, n2, n3, n4, promoção, prazo, lembrete, arquivar, procurar formação, faz esta formação, formação por área, área, subsecção, multipark, dashboard, operacional, comunicação, arrumar por área, área proposta, quiz da ia, perguntas novas, perguntas fixas, rever tentativa, faqs da ia, faqs automáticas, gerar agora
 ---
@@ -40,9 +40,19 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
 - Se for ligado, um percurso marcado **Obrigatório para ser escalado** tem de ser concluído para entrares na escala: no Extras-Dia aparece "Formação em falta" e a proposta e o preenchimento automáticos não te escolhem. Um admin pode forçar (fica registado). Se a formação não se conseguir verificar, aparece "Formação por verificar".
 - Esses percursos deviam ter pelo menos um **quiz ou exame obrigatório** (o "visto" dos vídeos e manuais é a própria pessoa que o marca): sem isso aparece um aviso no percurso, mas grava-se na mesma.
 
-**Gestão**
+**Vídeos**
+- Separador **Vídeos**: os vídeos de formação que podes ver, arrumados por **área** e **subsecção**. Os do teu percurso obrigatório marcam-se como vistos em **A minha formação**.
+
+**Manuais**
+- Separador **Manuais**: os manuais e documentos, escolhidos pela **área** e pela **subsecção**; o tipo (Manuais, Procedimentos, Atualizações, Notícias, Links interativos) é um filtro ao lado. Quem gere a formação vê também **Arrumar por área** (ver Gestão).
+
+**Percursos**
 - **Percursos** (team leader e acima): define que itens cada função tem de fazer e atribui. O team leader só atribui à equipa. Um percurso que bloqueia a escala sem quiz/exame obrigatório mostra um aviso.
+
+**Acompanhamento**
 - **Acompanhamento** (team leader e acima): progresso da equipa. **Remover atribuição** (só quem gere a formação) tira o percurso a uma pessoa e fica no registo.
+
+**Gestão**
 - **Promoções**: decide o supervisor da cidade, o backoffice ou o admin. Ninguém decide a sua própria promoção.
 - O admin cria vídeos, manuais, FAQs e perguntas, e pode **Gerar rascunhos** de perguntas a partir dos manuais com IA.
 - **Área e subsecção** (quem gere a formação): no formulário de cada vídeo e manual escolhe a **Área** e escreve ou escolhe a **Subsecção** (aparecem as habituais e as que já existem).
@@ -58,7 +68,7 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
   - **Gerar agora** escolhe 2 ou 3 documentos da base de conhecimento (primeiro os atualizados há pouco e os que ainda não deram FAQ) e a IA escreve até 3 FAQs novas, com resposta curta e a ligação ao documento. Entram logo publicadas, marcadas **IA**.
   - Só usa documentos que **todos** podem ver (sem papéis nem cidades marcados) e nunca a ajuda da app.
   - Nunca repete uma FAQ que existe ou que arquivaste: **Arquivar** uma FAQ da IA é dizer "esta não".
-  - Para correr sozinho **uma vez por semana** (segunda a partir das 09:30), liga **Formação: FAQs novas da base de conhecimento (semanal)** em Definições → Automações (vem **desligado por omissão**; o estado de agora vê-se nesse interruptor). Vem **desligado**. Precisa também de **IA: FAQs a partir da base de conhecimento** (ligado).
+  - Para correr sozinho **uma vez por semana** (segunda a partir das 09:30), liga **Formação: FAQs novas da base de conhecimento (semanal)** em Definições → Automações (vem **desligado por omissão**). Vem **desligado**. Precisa também de **IA: FAQs a partir da base de conhecimento** (ligado).
   - O cartão diz se o semanal está ligado e o que aconteceu da última vez.
   - **Gerar agora** pode ser usado no máximo 3 vezes por hora e 8 por dia (para toda a gente junta). Corre uma geração de cada vez: se a semanal ou outra pessoa já estiver a gerar, aparece "já há uma geração a correr" — tenta daqui a um minuto.
 - **Arquivar** (antes "Eliminar") vídeos, manuais, FAQs, perguntas e percursos tira-os das listas, mas nada se apaga. Um vídeo ou manual arquivado deixa de contar nos percursos, por isso ninguém fica preso por ele.

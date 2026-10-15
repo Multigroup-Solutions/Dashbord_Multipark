@@ -3,7 +3,7 @@ modulo: reservas_operacoes
 grupo: Operações
 pagina: operacoes.listas
 titulo: Reservas, Recolhas, Entregas e Cancelados (listas por período)
-separadores: dashboard=O Dashboard (primeira aba), reservas=As quatro listas, entradas=As quatro listas, saidas=As quatro listas, cancelados=As quatro listas
+separadores: dashboard=O Dashboard (primeira aba), reservas=Reservas, entradas=Recolhas, saidas=Entregas, cancelados=Cancelados
 rotas: /operacoes
 palavras: operado por nós, não operado, dashboard das operações, número diferente, pendentes, compras por acabar, reservas criadas, lista de reservas por período, recolhas, entregas, cancelados, canceladas, cancelamentos, cancelamento, motivo do cancelamento, reembolso, quem cancelou, período, comparar, período anterior, por parque, canal, direto, parceiro, marketplace, falta pagar, csv, multipark, toldo, toldos, coberto, tipo de lugar
 ---
@@ -11,13 +11,23 @@ palavras: operado por nós, não operado, dashboard das operações, número dif
 
 Quatro listas por **período**, nas **Operações → Reservas & Operações**, ao lado de "Reservas do dia". Os dados vêm **em tempo real** da base de dados da Multipark (não se copia nada).
 
-**As quatro listas**
-- **Reservas**: reservas **criadas** no período (pela data de criação), incluindo as que entretanto foram canceladas.
-- **Recolhas**: reservas com **recolha (check-in)** no período, sem as canceladas.
-- **Entregas**: reservas com **entrega (check-out)** no período, sem as canceladas.
-- **Cancelados**: reservas **canceladas** no período, pela **data do cancelamento**. Cada linha mostra também as datas de recolha e entrega da reserva, o **motivo** (e as observações), o **reembolso** (não, pedido ou reembolsado, com o valor) e **quem cancelou** (o último movimento de cancelamento da reserva). As canceladas sem registo de cancelamento na Multipark aparecem pela última alteração da reserva, com **≈** (data aproximada).
+## As quatro listas
 - O tipo de lugar **Toldo** é o antigo "coberto" (o carro fica sob toldo); Descoberto, Interior e VIP ficam iguais. Na Multipark o produto continua a chamar-se COVERED.
 - As **compras online por pagar** (reserva "Pendente": o cliente começou a compra no site e ainda não pagou) **contam** nas listas e nos números, como nas Reservas do dia, na Passagem de turno e no Extras Dia: o carro vem na mesma. Saem sozinhas quando a Multipark as passa a recolhidas ou canceladas. Na Faturação e no Financeiro continuam de fora.
+
+### Reservas
+Reservas **criadas** no período (pela data de criação), incluindo as que entretanto foram canceladas.
+
+### Recolhas
+Reservas com **recolha (check-in)** no período, sem as canceladas.
+
+### Entregas
+Reservas com **entrega (check-out)** no período, sem as canceladas.
+
+### Cancelados
+Reservas **canceladas** no período, pela **data do cancelamento**. Cada linha mostra também as datas de recolha e entrega da reserva, o **motivo** (e as observações), o **reembolso** (não, pedido ou reembolsado, com o valor) e **quem cancelou** (o último movimento de cancelamento da reserva). As canceladas sem registo de cancelamento na Multipark aparecem pela última alteração da reserva, com **≈** (data aproximada).
+
+## Ler as listas
 
 **O período**
 - Abre **em hoje** (hora de Lisboa) — ou no período do Dashboard, quando se chega lá a partir de um cartão.

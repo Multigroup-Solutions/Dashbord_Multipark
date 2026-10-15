@@ -68,6 +68,9 @@ Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demor
   - **Pontos**: a soma ponderada do que a aba mede, com os pesos da tabela "Como se contam os pontos desta aba". Nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação. Os dias acima do limite já descontam aí, como excesso de velocidade (−10), por isso não descontam outra vez no ranking. Colunas separadas para **Atrasos à entrada** (no máximo 1 por dia), **Entregas atrasadas** e **Mudanças de lugar**. **Ocorrências que registou** = as que a pessoa criou na app Multipark ou no dashboard (+1 cada).
   - **Nota**: 100 para o melhor.
 - Na tabela, o **nome** abre a ficha no RH; o resto da linha abre o **detalhe** (a evolução dela e todos os números). Todos os cabeçalhos ordenam (um clique sobe, outro desce, o terceiro volta ao ranking).
+
+### Quem entra nas contas do Desempenho
+
 - **Cidade e marca**: o filtro do topo. Com uma cidade escolhida, cada dia conta na cidade onde a pessoa trabalhou (a escala ou a avaliação do dia). Quem tem a ficha noutra cidade entra só com os dias que fez nesta. A marca conta como a cidade dela.
 - **Condutores e extras**: quem não fez nada no período não aparece. **km sem movimentos** quer dizer que a pessoa tem km do Zello mas nenhum movimento na Multipark: o utilizador do Zello/PDA e o agente da Multipark não estão na mesma ficha. Carrega no aviso para abrir as **Ligações** e juntar.
 - **Team leaders pela escala**: quem tem posto de condutor ou extra mas foi team leader em pelo menos metade dos dias escalados do período aparece nos Team leaders, com a etiqueta "TL pela escala".
@@ -77,6 +80,9 @@ Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demor
   - Para cada um mostra: dias com equipa, pessoas·dia, movimentos da equipa (recolhas, entregas e movimentos), custo da equipa (como na Atividade do dia), quem mexeu carros sem o Zello ligado, horas paradas (GPS), movimentos por pessoa·dia e € por movimento.
   - No supervisor mostra também as **extras a menos / a mais**: as horas·pessoa abaixo ou acima da previsão do Extras Dia. Só aparece com **Dia** ou **Semana**, porque a previsão é lida ao vivo, dia a dia.
   - **Pontos da equipa**: contam-se por dia e por pessoa da equipa, para uma equipa maior não ganhar só por ser maior. Por omissão, cada movimento dá +1, cada pessoa que mexeu carros sem Zello −20 e cada hora parada −2, sempre a dividir pelo número de pessoas da equipa (mudam-se em **Editar pesos**). Somam-se aos pontos do TL (que é avaliado também como condutor) e do supervisor.
+
+### Como se contam os pontos desta aba
+
 - **Como se contam os pontos desta aba**: em cima, a régua e o que conta; a seguir, quanto vale cada coisa **agora** (com "alterado" ao lado do que já não é a omissão), em duas colunas a toda a largura (no telemóvel, uma só); por baixo, lado a lado, os pontos da avaliação (recolha +3, movimento +2…) e os da equipa.
   - A régua: **1 ponto ≈ 5 minutos de trabalho**, a mesma escala da avaliação (recolha ou entrega 3, movimento entre parques 2, levar ao parque 5, mudança de lugar 1). Por exemplo: reserva criada 2, email 1, chamada atendida 0,5 mais 0,2 por minuto ao telefone, fecho de mês de um parceiro 6, contagem de caixa 2. Horas e km não dão pontos.
   - **Mudar os pesos** (sem esperar por uma atualização da app; só o super admin):
@@ -88,6 +94,9 @@ Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demor
     - **Repor omissões da aba** volta a pôr no ecrã os pesos do código dessa aba (e os da equipa); fica gravado quando carregas em **Guardar**. **Cancelar** sai sem gravar.
     - Pesos entre −10 000 e 10 000, com uma casa decimal no máximo.
   - Fica registado quem mudou e quando: por baixo do botão e em **Definições → Parâmetros → Histórico de alterações**. Também se mudam em Definições → Parâmetros → **Pessoas (desempenho)** → "Pesos do ranking do Desempenho" (em JSON, para quem preferir).
+
+### Telefonemas, emails e horas do dia
+
 - **Telefonemas da central**: contam quando a consola da Vodafone os regista na dashboard (Integrações → Central Vodafone), para quem atendeu ou ligou. As chamadas internas (com colegas do RH ou de extensões) não contam, exceto as do supervisor a ligar aos extras (a chamar o pessoal). As chamadas do WhatsApp contam sempre.
   - **Perdidas**: recebidas que a pessoa não atendeu. Aparecem a vermelho, mas não contam nos pontos (a chamada toca em várias consolas).
   - **Devolvidas**: a 1.ª chamada feita para um número (ou contacto) que teve uma perdida nas 24 h anteriores, de quem quer que fosse a perdida. Ligar outra vez à mesma pessoa já não conta como devolvida.
@@ -104,7 +113,7 @@ Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demor
 - **Horas trabalhadas**: o ponto (sem os registos suspeitos); sem ponto, a escala. **Dias com trabalho**: dias com horas ou com ações.
 - **Pontos da avaliação**: a soma dos pontos de cada dia da Avaliação (com os ajustes).
 - **Recolhas, entregas, movimentos, levar ao parque, mudanças de lugar, pôs em recolha/entrega, alterações de reserva**: a Multipark, pela avaliação diária.
-- **Atrasos ao trabalho** (−5 cada): a 1.ª picagem **5 minutos ou mais** depois da hora da escala ou, sem escala nesse dia, do horário fixo da ficha do RH (03:04:59 não conta; 03:05 já conta), no máximo 1 por dia. Nos dias antigos o número já vem sem as entregas atrasadas.
+- **Atrasos ao trabalho** ({{regra:evaluation.points.delay}} cada): a 1.ª picagem **{{regra:evaluation.lateArrivalFromMinutes}} minutos ou mais** depois da hora da escala ou, sem escala nesse dia, do horário fixo da ficha do RH (03:04:59 não conta; 03:05 já conta), no máximo 1 por dia. Nos dias antigos o número já vem sem as entregas atrasadas.
 - **Entregas atrasadas: saíram**. A coluna saiu das abas e já não tira pontos. Os tempos de cada condutor (Fila, Trânsito, Cliente, terminal, P2, ao lado dos colegas) aparecem mais abaixo neste detalhe, só como informação (ver **Tempos de um condutor**).
 - Por cima dos números, o detalhe explica em texto de onde vêm os atrasos ao trabalho, os excessos de velocidade e os dias sem GPS.
 - **Km (GPS)**, **velocidade máxima**: o GPS do Zello das partes de PDA da pessoa (e do Zello fixo da ficha). A máxima já não tem os picos falsos do GPS.
@@ -118,7 +127,7 @@ Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demor
 - **Dias recolhidos com outro limite**: cada dia de GPS guarda o limite com que foi recolhido. Nos **dias acima do limite** (aqui) e nos pontos da Avaliação, um dia só conta acima do **maior** entre o limite de hoje e esse. Os dias recolhidos com o limite antigo contam a **132** até se voltarem a dividir (Atividade diária → Histórico Diário → Forçar re-divisão): uma máxima entre 120 e 132 nesses dias pode ser um ponto solto que nunca foi confirmado. Quando há dias assim, aparece uma nota por baixo da tabela.
 - **Excesso** = pontos de GPS seguidos acima do limite (2 por omissão; um troço de autoestrada com uma descida curta é **um** excesso). Com o Zello a mandar pontos espaçados (de minutos em minutos), o mesmo troço sem nenhum ponto abaixo do limite pelo meio também é **um** excesso. Um ponto sozinho só conta se a distância percorrida até ao ponto ao lado (a pelo menos 30 s) o confirmar.
 - **Picos falsos** (nunca contam, nem para a máxima): pontos imprecisos (mais de 100 m), acima de 250 km/h, ou um salto isolado (sobe e desce mais de 15 km/h por segundo, ex.: 40 → 141 → 40 em 4 s). Antes deitava-se fora tudo acima de 150 km/h, e um 160 real desaparecia.
-- **Pontos**: na Avaliação, **1 excesso de velocidade (−10) por dia** em que a máxima do GPS passou o limite; se nesse dia já houver um alerta ou uma penalização de velocidade, o GPS não conta outra vez. Os dias acima do limite não descontam outra vez no Desempenho.
+- **Pontos**: na Avaliação, **1 excesso de velocidade ({{regra:evaluation.points.speeding}}) por dia** em que a máxima do GPS passou o limite; se nesse dia já houver um alerta ou uma penalização de velocidade, o GPS não conta outra vez. Os dias acima do limite não descontam outra vez no Desempenho.
 - **Aviso**: com o interruptor **"Avisos de excesso de velocidade (GPS do Zello)"** ligado (Definições → Automações; desligado por omissão), cada excesso fica registado e o team leader e o supervisor da cidade recebem no sino "Excesso de velocidade", um por pessoa em cada recolha (a final, 2 dias depois, só volta a avisar se trouxer excessos que a das 23h ainda não tinha). Só avisa dias dos últimos 3; recolher à mão um dia antigo grava os excessos mas não avisa. O aviso não mexe nos pontos.
 - A recolha do Zello é às 23h (provisória) e a final 2 dias depois. Para refazer um dia recolhido antes de 14 out 2026 com a regra nova: **Atividade diária → Histórico Diário → Forçar re-divisão** desse dia e depois **Recalcular** a Avaliação.
 

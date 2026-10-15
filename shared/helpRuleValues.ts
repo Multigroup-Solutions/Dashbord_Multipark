@@ -14,35 +14,42 @@
  */
 import { DEFAULT_TIMES_PERCENTILE, SETTINGS } from "./appSettings";
 import { EVALUATION_POINTS, LATE_ARRIVAL_FROM_MINUTES, MAX_LATE_ARRIVALS_PER_DAY, RECOMPUTE_WINDOW_DAYS } from "./evaluationRules";
-import { MIN_SAMPLE, PRESSURE_WINDOW_DAYS } from "./extrasPressure";
+import { MIN_SAMPLE } from "./extrasPressure";
 import { DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES, DRIVER_STATS_MIN_N } from "./serviceTimes";
 
 export interface HelpRuleValue {
   value: string | number;
   /** De onde vem (ficheiro:constante) — para quem mantém a ajuda. */
   source: string;
+  /**
+   * É o valor POR OMISSÃO de uma definição que se muda nas Definições: a
+   * ajuda tem de dizer "por omissão" (ou "em uso") perto de cada uso, porque
+   * em produção pode estar outro valor. O gerador falha se não disser.
+   */
+  setting?: boolean;
 }
 
 /** Números negativos com o sinal menos tipográfico (−5), como no resto da ajuda. */
 const v = (value: string | number, source: string): HelpRuleValue => ({ value: typeof value === "number" && value < 0 ? `−${-value}` : value, source });
+/** Valor por omissão de uma definição (ver `setting`). */
+const d = (value: string | number, source: string): HelpRuleValue => ({ ...v(value, source), setting: true });
 
 /** Os marcadores conhecidos. Acrescentar aqui antes de usar na ajuda. */
 export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   // Extras Dia → Pressão / tempos por carro
-  "extras.timesPercentile.lisbon": v(DEFAULT_TIMES_PERCENTILE.lisbon, "shared/appSettings.ts:DEFAULT_TIMES_PERCENTILE"),
-  "extras.timesPercentile.porto": v(DEFAULT_TIMES_PERCENTILE.porto, "shared/appSettings.ts:DEFAULT_TIMES_PERCENTILE"),
-  "extras.timesPercentile.faro": v(DEFAULT_TIMES_PERCENTILE.faro, "shared/appSettings.ts:DEFAULT_TIMES_PERCENTILE"),
-  "extras.autoProposeAt": v(String(SETTINGS["extras.autoProposeAt"].defaultValue), "shared/appSettings.ts:SETTINGS[extras.autoProposeAt]"),
-  "extras.autoProposeDaysAhead": v(Number(SETTINGS["extras.autoProposeDaysAhead"].defaultValue), "shared/appSettings.ts:SETTINGS[extras.autoProposeDaysAhead]"),
-  "extras.autoConfirm": v(SETTINGS["extras.autoConfirm"].defaultValue ? "ligado" : "desligado", "shared/appSettings.ts:SETTINGS[extras.autoConfirm]"),
-  "extras.autoConfirmAt": v(String(SETTINGS["extras.autoConfirmAt"].defaultValue), "shared/appSettings.ts:SETTINGS[extras.autoConfirmAt]"),
-  "extras.pressureWindowDays": v(PRESSURE_WINDOW_DAYS, "shared/extrasPressure.ts:PRESSURE_WINDOW_DAYS"),
+  "extras.timesPercentile.lisbon": d(DEFAULT_TIMES_PERCENTILE.lisbon, "shared/appSettings.ts:DEFAULT_TIMES_PERCENTILE"),
+  "extras.timesPercentile.porto": d(DEFAULT_TIMES_PERCENTILE.porto, "shared/appSettings.ts:DEFAULT_TIMES_PERCENTILE"),
+  "extras.timesPercentile.faro": d(DEFAULT_TIMES_PERCENTILE.faro, "shared/appSettings.ts:DEFAULT_TIMES_PERCENTILE"),
+  "extras.autoProposeAt": d(String(SETTINGS["extras.autoProposeAt"].defaultValue), "shared/appSettings.ts:SETTINGS[extras.autoProposeAt]"),
+  "extras.autoProposeDaysAhead": d(Number(SETTINGS["extras.autoProposeDaysAhead"].defaultValue), "shared/appSettings.ts:SETTINGS[extras.autoProposeDaysAhead]"),
+  "extras.autoConfirm": d(SETTINGS["extras.autoConfirm"].defaultValue ? "ligado" : "desligado", "shared/appSettings.ts:SETTINGS[extras.autoConfirm]"),
+  "extras.autoConfirmAt": d(String(SETTINGS["extras.autoConfirmAt"].defaultValue), "shared/appSettings.ts:SETTINGS[extras.autoConfirmAt]"),
   "extras.pressureMinSample": v(MIN_SAMPLE, "shared/extrasPressure.ts:MIN_SAMPLE"),
   // Tempos de serviço
-  "serviceTimes.targetMinutes": v(DEFAULT_SERVICE_TARGET_MINUTES, "shared/serviceTimes.ts:DEFAULT_SERVICE_TARGET_MINUTES"),
-  "serviceTimes.pickupT2TargetMinutes": v(DEFAULT_PICKUP_T2_TARGET_MINUTES, "shared/serviceTimes.ts:DEFAULT_PICKUP_T2_TARGET_MINUTES"),
-  "serviceTimes.gpsGate.minCoveragePct": v(DEFAULT_GPS_GATE.minCoveragePct, "shared/serviceTimes.ts:DEFAULT_GPS_GATE"),
-  "serviceTimes.gpsGate.minN": v(DEFAULT_GPS_GATE.minN, "shared/serviceTimes.ts:DEFAULT_GPS_GATE"),
+  "serviceTimes.targetMinutes": d(DEFAULT_SERVICE_TARGET_MINUTES, "shared/serviceTimes.ts:DEFAULT_SERVICE_TARGET_MINUTES"),
+  "serviceTimes.pickupT2TargetMinutes": d(DEFAULT_PICKUP_T2_TARGET_MINUTES, "shared/serviceTimes.ts:DEFAULT_PICKUP_T2_TARGET_MINUTES"),
+  "serviceTimes.gpsGate.minCoveragePct": d(DEFAULT_GPS_GATE.minCoveragePct, "shared/serviceTimes.ts:DEFAULT_GPS_GATE"),
+  "serviceTimes.gpsGate.minN": d(DEFAULT_GPS_GATE.minN, "shared/serviceTimes.ts:DEFAULT_GPS_GATE"),
   "serviceTimes.driverStatsMinN": v(DRIVER_STATS_MIN_N, "shared/serviceTimes.ts:DRIVER_STATS_MIN_N"),
   // Avaliação (pontos v3)
   "evaluation.points.movement": v(EVALUATION_POINTS.movement, "shared/evaluationRules.ts:EVALUATION_POINTS"),
@@ -69,8 +76,33 @@ const MARKER_RE = /\{\{\s*regra\s*:\s*([^}\s]*)\s*\}\}/g;
 /** Qualquer `{{…regra…}}` que o marcador estrito não apanhe (mal escrito). */
 const LOOSE_RE = /\{\{[^}]*regra[^}]*\}\}?/i;
 
-/** Troca os `{{regra:chave}}` pelos valores do código; desconhecido ou mal escrito = erro. PURA. */
-export function renderRuleMarkers(text: string, file = "?", values: Readonly<Record<string, HelpRuleValue>> = HELP_RULE_VALUES): string {
+/** Distância (caracteres) em que tem de aparecer "por omissão" ou "em uso" à volta de um marcador de definição. */
+export const SETTING_NOTE_WINDOW = 120;
+const SETTING_NOTE_RE = /por omiss[aã]o|em uso/i;
+
+/** Os usos de marcadores de definições sem "por omissão"/"em uso" por perto. PURA. */
+export function settingMarkersWithoutNote(text: string, values: Readonly<Record<string, HelpRuleValue>> = HELP_RULE_VALUES): Array<{ key: string; at: number; context: string }> {
+  const out: Array<{ key: string; at: number; context: string }> = [];
+  for (const m of text.matchAll(MARKER_RE)) {
+    const hit = Object.prototype.hasOwnProperty.call(values, m[1]) ? values[m[1]] : undefined;
+    if (!hit?.setting) continue;
+    const at = m.index ?? 0;
+    const around = text.slice(Math.max(0, at - SETTING_NOTE_WINDOW), at + m[0].length + SETTING_NOTE_WINDOW);
+    if (!SETTING_NOTE_RE.test(around)) out.push({ key: m[1], at, context: around.replace(/\s+/g, " ").slice(0, 160) });
+  }
+  return out;
+}
+
+/**
+ * Troca os `{{regra:chave}}` pelos valores do código; desconhecido ou mal
+ * escrito = erro; marcador de definição sem "por omissão"/"em uso" por perto
+ * = erro (desliga-se com `requireDefaultNote: false`, só para testes). PURA.
+ */
+export function renderRuleMarkers(text: string, file = "?", values: Readonly<Record<string, HelpRuleValue>> = HELP_RULE_VALUES, opts: { requireDefaultNote?: boolean } = {}): string {
+  if (opts.requireDefaultNote !== false) {
+    const bad = settingMarkersWithoutNote(text, values);
+    if (bad.length) throw new HelpRuleMarkerError(`${file}: {{regra:${bad[0].key}}} é o valor por omissão de uma definição — escreve "por omissão" (ou "em uso") perto: «${bad[0].context}».`);
+  }
   const out = text.replace(MARKER_RE, (_m, key: string) => {
     const hit = Object.prototype.hasOwnProperty.call(values, key) ? values[key] : undefined;
     if (!hit) throw new HelpRuleMarkerError(`${file}: marcador desconhecido {{regra:${key}}} (acrescenta-o em shared/helpRuleValues.ts).`);
