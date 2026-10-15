@@ -1296,6 +1296,22 @@ export async function existingFichaFor(db: any, lead: { phoneE164: string | null
 }
 
 /**
+ * Reserva o lead ANTES de criar a ficha: dois cliques (ou duas pessoas) ao
+ * mesmo tempo já não criam duas fichas. employeeId 0 = "a converter"; uma
+ * reserva com mais de 10 min (a função morreu a meio) já não prende (18b).
+ * O updatedAt vai no SET de propósito: retomar uma reserva velha (0 → 0) não
+ * mudava a linha, logo o ON UPDATE CURRENT_TIMESTAMP não corria e, com o
+ * FOUND_ROWS do mysql2 (ligado por omissão), contava na mesma como 1 linha —
+ * dois cliques retomavam-na os dois. Com a hora no SET a linha muda sempre e
+ * só o primeiro passa. true = é nossa.
+ */
+export async function claimLeadForConversion(db: { execute: (q: any) => Promise<any> }, leadId: number): Promise<boolean> {
+  const res = await db.execute(sql`UPDATE extra_leads SET employeeId = 0, updatedAt = NOW()
+    WHERE id = ${leadId} AND (employeeId IS NULL OR (employeeId = 0 AND updatedAt < NOW() - INTERVAL 10 MINUTE))`);
+  return extractAffectedRows(res) === 1;
+}
+
+/**
  * D39: NIF e números dos documentos do candidato que faltam na ficha. Nunca
  * substitui o que a ficha já tem. PURA.
  */
@@ -1350,13 +1366,8 @@ export async function convertLeadToExtra(
     }
   }
 
-  // Reserva o lead ANTES de criar a ficha: dois cliques (ou duas pessoas) ao
-  // mesmo tempo já não criam duas fichas. employeeId 0 = "a converter"; uma
-  // reserva com mais de 10 min (a função morreu a meio) já não prende (18b).
-  const { sql } = await import("drizzle-orm");
-  const claim = await db.update(extraLeads).set({ employeeId: 0 })
-    .where(and(eq(extraLeads.id, leadId), sql`(${extraLeads.employeeId} IS NULL OR (${extraLeads.employeeId} = 0 AND ${extraLeads.updatedAt} < NOW() - INTERVAL 10 MINUTE))`));
-  if (Number((claim as any)[0]?.affectedRows ?? (claim as any).affectedRows ?? 0) !== 1) {
+  // Reserva o lead ANTES de criar a ficha (claimLeadForConversion).
+  if (!(await claimLeadForConversion(db, leadId))) {
     throw new Error("Este lead já está a ser convertido.");
   }
 

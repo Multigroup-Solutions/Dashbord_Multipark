@@ -59,7 +59,8 @@ describe("Converter/Aprovar quem já teve ficha", () => {
     expect(src("server/routers.ts")).toContain("confirmReactivate: input.confirmReactivate");
   });
   it("a reserva do Converter já não prende para sempre (10 min)", () => {
-    expect(src("server/extrasAutomation.ts")).toContain("(${extraLeads.employeeId} = 0 AND ${extraLeads.updatedAt} < NOW() - INTERVAL 10 MINUTE)");
+    // Comportamento (e a hora no SET por causa do FOUND_ROWS) em foundRowsAudit.test.ts.
+    expect(src("server/extrasAutomation.ts")).toContain("(employeeId IS NULL OR (employeeId = 0 AND updatedAt < NOW() - INTERVAL 10 MINUTE))");
   });
 });
 
