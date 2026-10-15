@@ -25,7 +25,7 @@ function SourceLine({ t }: { t: DayTimes }) {
     <p className="text-[11px] text-muted-foreground">
       {t.source === "tabela"
         ? <>Da tabela dos tempos (cálculo da noite{t.computedAt ? `, ${t.computedAt.slice(0, 16)} UTC` : ""}).</>
-        : <>Calculado agora com as mesmas regras, <b>provisório</b>: a tabela dos tempos ainda não tem este dia e o GPS do dia só chega à noite (os tempos com GPS ficam "GPS por recolher").</>}
+        : <>Calculado {t.computedAt ? `às ${fmtPTTime(t.computedAt)}` : "agora"} com as mesmas regras, <b>provisório</b>: a tabela dos tempos ainda não tem este dia e o GPS do dia só chega à noite (os tempos com GPS ficam "GPS por recolher"). Um cálculo por dia para toda a gente, guardado uns minutos.</>}
       {t.truncated && <span className="text-amber-700"> Leitura cortada no limite: só parte do dia.</span>}
       {" "}Meta da entrega: {t.targetMinutes} min de nosso tempo (Fila + Trânsito). A hora marcada não entra em nenhum tempo.
     </p>
@@ -84,7 +84,7 @@ export function DayTimesSection({ t, driverNames, onOpenSlow }: { t: DayTimes; d
                           {name(x.driverEmployeeId) ? <span className="text-muted-foreground"> · {name(x.driverEmployeeId)}</span> : null}
                         </span>
                         <span className="col-span-2 sm:col-span-1 min-w-0"><DeliveryBar queueMs={x.queueMs} transitMs={x.transitMs} customerMs={x.customerMs} max={maxBar} /></span>
-                        <span className="hidden sm:block text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+                        <span className="col-span-2 sm:col-span-1 text-[11px] text-muted-foreground tabular-nums sm:whitespace-nowrap">
                           Fila {fmtDur(x.queueMs)}{x.transitMs != null ? ` · Trânsito ${fmtDur(x.transitMs)}` : ""}{x.customerMs != null ? ` · Cliente ${fmtDur(x.customerMs)}` : ""}
                         </span>
                       </button>

@@ -4118,6 +4118,9 @@ export function supervisorTimings(
   return { deliveryTimes: t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent })) };
 }
 
+/** Prazo do Resumo do dia para as leituras à Multipark (o resto — escala, reclamações — é a nossa BD). */
+const SUPERVISOR_DAY_BUDGET_MS = 48_000;
+
 /** Resumo do dia do supervisor: condutores por turno, carros
  *  recolhidos/entregues, reclamações do dia e, por chefe de turno, o que a
  *  equipa dele fez (12 out 2026).
@@ -4132,23 +4135,27 @@ export function supervisorTimings(
  *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
  *  dentro das cidades do utilizador (ou da cidade pedida). */
 export async function getSupervisorDayDashboard(date: string, opts: { isSuperAdmin?: boolean } = {}) {
+  const t0 = Date.now();
   const db = await getDb();
   if (!db) return null;
-  const { start, end, endMs } = operationalDayWindowUtc(date);
-  // Entregas: o CHECK_OUT pode acontecer até 10h depois do pendente — limite superior explícito.
-  const checkoutEnd = new Date(endMs + 600 * 60_000).toISOString().slice(0, 19).replace("T", " ");
+  const { start, end } = operationalDayWindowUtc(date);
 
   // Movimentos AO VIVO da BD da Multipark ("History"; a cópia local está congelada desde o #141):
-  // para as reclamações dos carros que saíram.
+  // só para as reclamações dos carros que saíram — por isso só os CHECK_OUT do dia (15 out 2026: os
+  // pendentes e as recolhas já não entram aqui; os tempos vêm da tabela dos tempos ou do cálculo ao vivo).
   const { readLiveHistory } = await import("./multiparkDb/historyLive");
   const { scopedCityNamesLive } = await import("./cityScope");
   const HIST_LIMIT = 5000;
-  const hist = await readLiveHistory({ changeTypes: ["PENDING_CHECKOUT", "CHECK_OUT", "CHECK_IN"], from: start, to: checkoutEnd, cities: scopedCityNamesLive(), limit: HIST_LIMIT, order: "asc" });
+  const hist = await readLiveHistory({ changeTypes: ["CHECK_OUT"], from: start, to: end, cities: scopedCityNamesLive(), limit: HIST_LIMIT, order: "asc" });
 
-  // Tempos (15 out 2026): a tabela; sem linhas, ao vivo. O portão no servidor.
+  // Tempos (15 out 2026): a tabela; sem linhas, ao vivo (uma leitura por dia, partilhada e com
+  // o prazo que sobra deste pedido: a função da Vercel morre aos 60 s). O portão no servidor.
   const { dayServiceRows, loadServiceViewSettings, scopedServiceCityKeys, employeeNames } = await import("./serviceTimesRead");
   const { dayTimesView, teamActs } = await import("./serviceTimesAgg");
-  const [svc, svcSettings] = await Promise.all([dayServiceRows(date, { cityKeys: await scopedServiceCityKeys() }), loadServiceViewSettings()]);
+  const [svc, svcSettings] = await Promise.all([
+    dayServiceRows(date, { cityKeys: await scopedServiceCityKeys(), deadlineMs: SUPERVISOR_DAY_BUDGET_MS - (Date.now() - t0) }),
+    loadServiceViewSettings(),
+  ]);
   const gate = { gate: svcSettings.gate, isSuperAdmin: !!opts.isSuperAdmin };
   const timesView = dayTimesView(svc.rows, { targetMinutes: svcSettings.targetMinutes, gate });
 

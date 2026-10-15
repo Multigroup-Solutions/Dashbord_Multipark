@@ -27,6 +27,7 @@ import { HANDOVER_CITY_LABELS, type HandoverCity, type HandoverShift } from "@sh
 import { COMPLIANCE_LABELS, type ComplianceStatus } from "@shared/shiftHandoverAuto";
 import { DELIVERY_LATE_MIN, DELIVERY_VERY_LATE_MIN, deliveryBand, type TeamLine } from "@shared/shiftDayReview";
 import { CalibrationBadge, fmtDur, statusLabel } from "@/components/serviceTimes/TimesBits";
+import { Lock } from "lucide-react";
 
 const CITY_LABELS: Record<string, string> = HANDOVER_CITY_LABELS;
 const CHANGE_LABEL: Record<string, string> = { CHECK_IN: "Recolha", CHECK_OUT: "Entrega", MOVEMENT: "Movimento", SPOT_CHANGE: "Mudança de lugar" };
@@ -124,7 +125,7 @@ export function DriverDaySheet({ date, city, person, onClose, onOpenEmployee }: 
                       <tr className="border-b text-left text-muted-foreground">
                         <th className="p-1">Hora</th><th className="p-1">Ação</th><th className="p-1">Reserva</th><th className="p-1">Matrícula</th><th className="p-1">Parque</th>
                         <th className="p-1 text-right" title="Entregas: do pedido (pendente) à entrega.">Tempo</th>
-                        <th className="p-1 text-right" title="Velocidade máxima do GPS dele entre o pedido (ou, sem pedido, quando pegou no carro) e a entrega">Vel. máx.</th>
+                        <th className="p-1 text-right" title="Velocidade máxima do GPS da pessoa entre o pedido (ou, sem pedido, quando pegou no carro) e a entrega">Vel. máx.</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -158,7 +159,7 @@ export function DriverDaySheet({ date, city, person, onClose, onOpenEmployee }: 
               )}
               <p className="text-[11px] text-muted-foreground mt-1">
                 Contam as ações do dia do TURNO (a noite que passa a meia-noite fica no dia em que começou), como na Atividade diária. Tempo da entrega: do pedido (pendente) até entregue — a amarelo acima de {DELIVERY_LATE_MIN} min, a vermelho acima de {DELIVERY_VERY_LATE_MIN}.
-                Vel. máx.: o GPS do PDA/telemóvel dele entre o pedido (sem pedido, desde que pegou no carro) e a entrega{gps?.threshold != null ? ` (excesso acima de ${Math.round(gps.threshold)} km/h)` : ""}.
+                Vel. máx.: o GPS do PDA/telemóvel da pessoa entre o pedido (sem pedido, desde que pegou no carro) e a entrega{gps?.threshold != null ? ` (excesso acima de ${Math.round(gps.threshold)} km/h)` : ""}.
                 {gps && !gps.available && " Ainda sem GPS recolhido para este dia (a recolha do próprio dia corre às 23h; a final, dois dias depois)."}
               </p>
             </section>
@@ -174,6 +175,7 @@ export function DriverDaySheet({ date, city, person, onClose, onOpenEmployee }: 
 
 type DriverTimes = {
   source: string;
+  reason?: string | null;
   gpsHidden: string | null;
   gpsNote: string | null;
   maxInTransit: Record<string, number | null>;
@@ -183,10 +185,14 @@ type DriverTimes = {
 
 /** Cada entrega que ELE começou (pegou no carro) e cada recolha que tirou do terminal. Sem médias aqui. */
 function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number | null }) {
+  if (t.source === "indisponivel") {
+    return <p className="text-[11px] text-amber-800 dark:text-amber-300">Tempos deste dia indisponíveis: {t.reason ?? "a BD da Multipark não respondeu"}. Tenta outra vez daqui a pouco.</p>;
+  }
   if (!t.deliveries.length && !t.pickups.length) {
     return <p className="text-[11px] text-muted-foreground">Tempos: nenhuma entrega começada por esta pessoa nem recolha tirada do terminal neste dia.</p>;
   }
-  const gpsCell = (v: number | null, status?: string | null) => (t.gpsHidden ? <span className="text-muted-foreground" title={t.gpsHidden}>🔒</span> : v != null ? fmtDur(v) : <span className="text-muted-foreground" title={statusLabel(status)}>—</span>);
+  const dash = (status: string | null | undefined) => <span className="text-muted-foreground" title={statusLabel(status)} aria-label={`sem medição: ${statusLabel(status)}`}>—</span>;
+  const gpsCell = (v: number | null, status?: string | null) => (t.gpsHidden ? <span className="text-muted-foreground inline-flex" title={t.gpsHidden} aria-label={t.gpsHidden}><Lock className="w-3 h-3" /></span> : v != null ? fmtDur(v) : dash(status));
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -215,7 +221,7 @@ function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number 
                   <tr key={`${x.bookingId}-${x.startedAt}`} className="border-b">
                     <td className="p-1 tabular-nums">{x.startedAt ? fmtPTTime(new Date(x.startedAt).toISOString()) : "—"}</td>
                     <td className="p-1"><BookingLink code={x.bookingCode} id={x.bookingId} /></td>
-                    <td className="p-1 text-right tabular-nums">{x.queueMs != null ? fmtDur(x.queueMs) : <span className="text-muted-foreground" title={statusLabel(x.queueStatus)}>—</span>}</td>
+                    <td className="p-1 text-right tabular-nums">{x.queueMs != null ? fmtDur(x.queueMs) : dash(x.queueStatus)}</td>
                     <td className="p-1 text-right tabular-nums">{gpsCell(x.transitMs, x.transitStatus)}</td>
                     <td className="p-1 text-right tabular-nums">{gpsCell(x.customerMs, x.customerStatus ?? x.transitStatus)}</td>
                     <td className={`p-1 text-right tabular-nums ${max != null && threshold != null && max > threshold ? "text-red-700 font-semibold" : ""}`}>{t.gpsHidden ? gpsCell(null) : max != null ? `${max} km/h` : <span className="text-muted-foreground">—</span>}</td>
@@ -245,7 +251,7 @@ function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number 
                   <td className="p-1"><BookingLink code={x.bookingCode} id={x.bookingId} /></td>
                   <td className="p-1 text-right tabular-nums">{gpsCell(x.terminalMs, x.terminalStatus)}</td>
                   <td className="p-1">{x.firstGarage ?? <span className="text-muted-foreground">—</span>}{x.parkedGarage && x.parkedGarage !== x.firstGarage ? ` → ${x.parkedGarage}` : ""}</td>
-                  <td className="p-1 text-right tabular-nums">{x.p2Ms != null ? fmtDur(x.p2Ms) : <span className="text-muted-foreground" title={statusLabel(x.p2Status)}>—</span>}</td>
+                  <td className="p-1 text-right tabular-nums">{x.p2Ms != null ? fmtDur(x.p2Ms) : dash(x.p2Status)}</td>
                 </tr>
               ))}
             </tbody>

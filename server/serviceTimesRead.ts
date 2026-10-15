@@ -4,7 +4,8 @@
  *  - sem linhas para o dia (trabalho desligado ou dia por calcular), o
  *    cálculo AO VIVO com as mesmas regras (server/serviceTimesJob.ts →
  *    computeServiceRowsLive: uma leitura da History da Multipark, sem GPS,
- *    sem gravar nada), guardado em memória 2 minutos;
+ *    sem gravar nada), com as proteções de carga descritas em dayServiceRows
+ *    (cache por dia partilhada, um cálculo de cada vez, prazo do pedido);
  *  - as definições que os ecrãs usam (portão, meta, alvo do T2).
  * As contas e o portão estão em server/serviceTimesAgg.ts (PURO).
  */
@@ -12,6 +13,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { SETTINGS } from "../shared/appSettings";
 import { matchCityKey } from "../shared/city";
+import { addDays, operationalDayOf } from "../shared/lisbonDay";
 import { DEFAULT_GPS_GATE, type GpsGate } from "../shared/serviceTimes";
 import { utcTextMs } from "./multiparkDb/serviceRows";
 import type { ServiceRow } from "./serviceTimesAgg";
@@ -135,39 +137,169 @@ export async function loadBookingServiceRows(bookingId: string): Promise<Service
 export type DayRowsSource = "tabela" | "ao_vivo" | "indisponivel";
 export interface DayServiceRows { source: DayRowsSource; rows: ServiceRow[]; computedAt: string | null; truncated: boolean; reason: string | null }
 
-const LIVE_CACHE_MS = 2 * 60_000;
+/*
+ * CARGA NA BD DA MULTIPARK (auditoria final da fase 3). A "History" não tem
+ * índices: cada leitura é sequencial (segundos; até 25 s com a BD carregada).
+ * O cálculo ao vivo faz UMA dessas leituras por dia pedido (mais umas leituras
+ * por chave: reservas, telefones, agentes, parques). Por isso:
+ *  1. guarda-se por DIA (todas as cidades; cada pedido filtra as suas), na
+ *     memória da instância, partilhado por todos os utilizadores: 5 min para
+ *     o dia de hoje, 15 min para ontem e 60 min para os dias mais antigos
+ *     (sem GPS ao vivo, um dia fechado quase não muda);
+ *  2. pedidos ao mesmo tempo para o MESMO dia esperam pelo mesmo cálculo
+ *     (uma leitura, não uma por pessoa);
+ *  3. no máximo UM cálculo ao vivo de cada vez por instância (a pool da
+ *     Multipark tem 2 ligações por instância: a outra fica livre para os
+ *     outros ecrãs). Um pedido de outro dia espera a vez até 12 s; depois
+ *     devolve "indisponível" com o motivo (o ecrã diz para tentar daqui a pouco);
+ *  4. uma falha (Multipark em baixo ou lenta) fica guardada 60 s: não se
+ *     insiste a cada clique;
+ *  5. quem chama passa o prazo que ainda tem (a função da Vercel morre aos
+ *     60 s); com menos de 12 s não se começa nenhuma leitura.
+ * A Pressão, a Semana, os tempos por condutor e o cartão da cobertura NÃO
+ * calculam ao vivo: só leem a nossa tabela (zero leituras à Multipark).
+ */
+export const LIVE_CACHE_TODAY_MS = 5 * 60_000;
+export const LIVE_CACHE_YESTERDAY_MS = 15 * 60_000;
+export const LIVE_CACHE_OLDER_MS = 60 * 60_000;
+export const LIVE_FAILURE_CACHE_MS = 60_000;
+export const LIVE_MAX_CONCURRENT = 1;
+export const LIVE_QUEUE_WAIT_MS = 12_000;
+export const LIVE_MIN_BUDGET_MS = 12_000;
+/** Prazo por omissão de um cálculo ao vivo (quem chama pode dar menos). */
+export const LIVE_DEFAULT_BUDGET_MS = 35_000;
+const LIVE_CACHE_MAX_DAYS = 20;
+
+/** Quanto tempo o cálculo ao vivo de um dia fica guardado (hoje 5 min, ontem 15, antes 60). PURA. */
+export function liveCacheTtlMs(date: string, nowMs: number): number {
+  const today = operationalDayOf(nowMs);
+  if (date >= today) return LIVE_CACHE_TODAY_MS;
+  if (date === addDays(today, -1)) return LIVE_CACHE_YESTERDAY_MS;
+  return LIVE_CACHE_OLDER_MS;
+}
+
+type LiveOutcome = { ok: true; rows: ServiceRow[]; truncated: boolean; at: number } | { ok: false; error: string; busy?: boolean };
+/** O cálculo de um dia (injetável nos testes): UMA leitura da History, só leitura, sem gravar. */
+export type LiveCompute = (date: string, deadlineAt: number) => Promise<{ ok: true; rows: ServiceRow[]; truncated: boolean } | { ok: false; error: string }>;
+
 const liveCache = new Map<string, { at: number; value: { rows: ServiceRow[]; truncated: boolean } }>();
+const liveFailures = new Map<string, { at: number; error: string }>();
+const liveInflight = new Map<string, Promise<LiveOutcome>>();
+let liveRunning = 0;
+const liveWaiters: Array<() => void> = [];
+/** Leituras ao vivo começadas (para os testes e para o log). */
+let liveStarted = 0;
 
 /** Só para os testes. */
 export function clearServiceLiveCache(): void {
   liveCache.clear();
+  liveFailures.clear();
+  liveInflight.clear();
+  liveRunning = 0;
+  liveWaiters.length = 0;
+  liveStarted = 0;
 }
+/** Só para os testes: quantos cálculos ao vivo começaram. */
+export function serviceLiveStarted(): number {
+  return liveStarted;
+}
+
+function acquireLiveSlot(waitMs: number): Promise<boolean> {
+  if (liveRunning < LIVE_MAX_CONCURRENT) { liveRunning++; return Promise.resolve(true); }
+  if (waitMs <= 0) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const wake = () => { clearTimeout(timer); liveRunning++; resolve(true); };
+    const timer = setTimeout(() => {
+      const i = liveWaiters.indexOf(wake);
+      if (i >= 0) liveWaiters.splice(i, 1);
+      resolve(false);
+    }, waitMs);
+    liveWaiters.push(wake);
+  });
+}
+function releaseLiveSlot(): void {
+  liveRunning = Math.max(0, liveRunning - 1);
+  const next = liveWaiters.shift();
+  if (next) next();
+}
+
+const defaultLiveCompute: LiveCompute = async (date, deadlineAt) => {
+  const [{ computeServiceRowsLive }, { realServiceTimesDeps }] = await Promise.all([import("./serviceTimesJob"), import("./serviceTimesDeps")]);
+  const r = await computeServiceRowsLive(await realServiceTimesDeps(), { from: date, to: date, deadlineAt });
+  return r.ok ? { ok: true, rows: r.rows.map(serviceRowFromJob), truncated: r.truncated } : r;
+};
+
+async function runLive(date: string, budgetMs: number, compute: LiveCompute): Promise<LiveOutcome> {
+  const t0 = Date.now();
+  const got = await acquireLiveSlot(Math.min(LIVE_QUEUE_WAIT_MS, budgetMs - LIVE_MIN_BUDGET_MS));
+  if (!got) return { ok: false, busy: true, error: "a calcular os tempos de outro dia" };
+  try {
+    const left = budgetMs - (Date.now() - t0);
+    if (left < LIVE_MIN_BUDGET_MS) return { ok: false, busy: true, error: "sem tempo para os calcular neste pedido" };
+    liveStarted++;
+    const r = await compute(date, Date.now() + left);
+    const at = Date.now();
+    if (!r.ok) {
+      liveFailures.set(date, { at, error: r.error });
+      return { ok: false, error: r.error };
+    }
+    liveFailures.delete(date);
+    if (liveCache.size >= LIVE_CACHE_MAX_DAYS) {
+      const oldest = [...liveCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) liveCache.delete(oldest[0]);
+    }
+    liveCache.set(date, { at, value: { rows: r.rows, truncated: r.truncated } });
+    return { ok: true, rows: r.rows, truncated: r.truncated, at };
+  } catch (err: any) {
+    const error = String(err?.message ?? err).slice(0, 160);
+    liveFailures.set(date, { at: Date.now(), error });
+    return { ok: false, error };
+  } finally {
+    releaseLiveSlot();
+  }
+}
+
+const utcText = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
 /**
  * As linhas de UM dia operacional: as da tabela; sem nenhuma (nas cidades
- * pedidas), as calculadas agora com as mesmas regras (sem GPS). Nunca lança.
+ * pedidas), as calculadas agora com as mesmas regras (sem GPS), com as
+ * proteções de carga acima. `deadlineMs` = o tempo que quem chama ainda tem.
+ * Nunca lança.
  */
-export async function dayServiceRows(date: string, o: { cityKeys: readonly string[] | null; nowMs?: number; deadlineMs?: number }): Promise<DayServiceRows> {
+export async function dayServiceRows(date: string, o: { cityKeys: readonly string[] | null; nowMs?: number; deadlineMs?: number; compute?: LiveCompute }): Promise<DayServiceRows> {
   const inScope = (r: ServiceRow) => !o.cityKeys || o.cityKeys.includes(r.cityKey ?? "");
   const stored = (await loadServiceRows({ fromDay: date, toDay: date, cityKeys: o.cityKeys })).filter(inScope);
   if (stored.length) {
     const computedAt = stored.reduce<string | null>((m, r) => (r.computedAt && (!m || r.computedAt > m) ? r.computedAt : m), null);
     return { source: "tabela", rows: stored, computedAt, truncated: false, reason: null };
   }
+  const unavailable = (reason: string): DayServiceRows => ({ source: "indisponivel", rows: [], computedAt: null, truncated: false, reason });
   const now = o.nowMs ?? Date.now();
   const hit = liveCache.get(date);
-  if (hit && now - hit.at < LIVE_CACHE_MS) return { source: "ao_vivo", rows: hit.value.rows.filter(inScope), computedAt: new Date(hit.at).toISOString().slice(0, 19).replace("T", " "), truncated: hit.value.truncated, reason: null };
+  if (hit && now - hit.at < liveCacheTtlMs(date, now)) return { source: "ao_vivo", rows: hit.value.rows.filter(inScope), computedAt: utcText(hit.at), truncated: hit.value.truncated, reason: null };
+  const failed = liveFailures.get(date);
+  if (failed && now - failed.at < LIVE_FAILURE_CACHE_MS) return unavailable(failed.error);
+  const budget = Math.min(o.deadlineMs ?? LIVE_DEFAULT_BUDGET_MS, LIVE_DEFAULT_BUDGET_MS);
+  if (budget < LIVE_MIN_BUDGET_MS) return unavailable("sem tempo para os calcular neste pedido");
   try {
-    const [{ computeServiceRowsLive }, { realServiceTimesDeps }] = await Promise.all([import("./serviceTimesJob"), import("./serviceTimesDeps")]);
-    const deps = await realServiceTimesDeps();
-    const r = await computeServiceRowsLive(deps, { from: date, to: date, deadlineAt: Date.now() + (o.deadlineMs ?? 35_000) });
-    if (!r.ok) return { source: "indisponivel", rows: [], computedAt: null, truncated: false, reason: r.error };
-    const rows = r.rows.map(serviceRowFromJob);
-    if (liveCache.size > 20) liveCache.clear();
-    liveCache.set(date, { at: now, value: { rows, truncated: r.truncated } });
-    return { source: "ao_vivo", rows: rows.filter(inScope), computedAt: new Date(now).toISOString().slice(0, 19).replace("T", " "), truncated: r.truncated, reason: null };
+    let p = liveInflight.get(date);
+    if (!p) {
+      p = runLive(date, budget, o.compute ?? defaultLiveCompute);
+      liveInflight.set(date, p);
+      const mine = p;
+      void p.finally(() => { if (liveInflight.get(date) === mine) liveInflight.delete(date); });
+    }
+    // quem se junta a um cálculo já em curso não espera mais do que o seu prazo
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const r = await Promise.race([
+      p,
+      new Promise<LiveOutcome>((resolve) => { timer = setTimeout(() => resolve({ ok: false, busy: true, error: "ainda a calcular" }), budget); }),
+    ]).finally(() => clearTimeout(timer));
+    if (!r.ok) return unavailable(r.error);
+    return { source: "ao_vivo", rows: r.rows.filter(inScope), computedAt: utcText(r.at), truncated: r.truncated, reason: null };
   } catch (err: any) {
-    return { source: "indisponivel", rows: [], computedAt: null, truncated: false, reason: String(err?.message ?? err).slice(0, 160) };
+    return unavailable(String(err?.message ?? err).slice(0, 160));
   }
 }
 

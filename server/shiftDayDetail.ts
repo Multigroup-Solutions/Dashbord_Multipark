@@ -36,6 +36,8 @@ const mysqlTs = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace(
 const r1 = (n: number) => Math.round(n * 10) / 10;
 /** Leitura do GPS: no máximo isto (a função morre aos 60 s). */
 const GPS_DEADLINE_MS = 25_000;
+/** Até aqui (desde o início do pedido) para as leituras à Multipark do dia do condutor; depois vem o GPS. */
+const DRIVER_DAY_LIVE_BUDGET_MS = 32_000;
 const HIST_LIMIT = 5000;
 
 // ─── Turno de cada pessoa (picagens / escala) ───────────────────────────────
@@ -149,6 +151,7 @@ export interface DriverAction {
  * pendente→entregue e a velocidade máxima em cada entrega; e o GPS do turno.
  */
 export async function getDriverShiftDay(date: string, key: string, nowMs: number = Date.now(), opts: { isSuperAdmin?: boolean } = {}) {
+  const t0 = Date.now();
   const [kind, ...rest] = key.split(":");
   const ref = rest.join(":");
   if (!["emp", "agent"].includes(kind) || !ref) throw new TRPCError({ code: "BAD_REQUEST", message: "Sem ações para mostrar desta linha (PDA sem login)." });
@@ -216,12 +219,17 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
 
   // 15 out 2026: os tempos das entregas que ele começou e das recolhas que tirou do terminal
   // (a tabela dos tempos; sem linhas, ao vivo), com o portão pela cobertura da cidade no dia
-  let times: (ReturnType<typeof import("./serviceTimesAgg").driverDayTimes> & { source: string; maxInTransit: Record<string, number | null> }) | null = null;
+  let times: (ReturnType<typeof import("./serviceTimesAgg").driverDayTimes> & { source: string; reason: string | null; maxInTransit: Record<string, number | null> }) | null = null;
   if (empId != null) {
     const { dayServiceRows, loadServiceViewSettings, scopedServiceCityKeys } = await import("./serviceTimesRead");
     const { driverDayTimes } = await import("./serviceTimesAgg");
-    const [svc, st] = await Promise.all([dayServiceRows(date, { cityKeys: await scopedServiceCityKeys() }), loadServiceViewSettings()]);
-    times = { ...driverDayTimes(svc.rows, empId, { gate: { gate: st.gate, isSuperAdmin: !!opts.isSuperAdmin } }), source: svc.source, maxInTransit: {} };
+    // o cálculo ao vivo (sem linhas na tabela) é o MESMO do Resumo do dia (guardado por dia); com prazo,
+    // para sobrar tempo ao GPS do turno (até GPS_DEADLINE_MS) dentro dos 60 s da função
+    const [svc, st] = await Promise.all([
+      dayServiceRows(date, { cityKeys: await scopedServiceCityKeys(), deadlineMs: DRIVER_DAY_LIVE_BUDGET_MS - (Date.now() - t0) }),
+      loadServiceViewSettings(),
+    ]);
+    times = { ...driverDayTimes(svc.rows, empId, { gate: { gate: st.gate, isSuperAdmin: !!opts.isSuperAdmin } }), source: svc.source, reason: svc.reason, maxInTransit: {} };
   }
 
   // GPS (só com ficha): o turno e cada entrega
