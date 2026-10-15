@@ -103,6 +103,9 @@ export async function emailParser(): Promise<Parse> {
 
 const rowsOf = (res: any): any[] => (Array.isArray(res?.[0]) ? res[0] : Array.isArray(res) ? res : []);
 
+/** Do corpo de cada email só se lê o início (o texto da crítica e o "Responder" estão lá; poupa memória). */
+export const RAW_BODY_MAX = 8000;
+
 /**
  * Os emails originais (corpo + remetente) pelo Message-ID: inbound_emails e,
  * se lá não estiver, mail_messages. Em lotes, sem JOIN entre colações.
@@ -114,13 +117,13 @@ export async function loadRawEmails(exec: { execute: (q: any) => Promise<any> },
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500);
     const list = sql.join(chunk.map((m) => sql`${m}`), sql`, `);
-    for (const g of rowsOf(await exec.execute(sql`SELECT messageId, fromEmail, bodyText FROM inbound_emails WHERE messageId IN (${list})`))) {
+    for (const g of rowsOf(await exec.execute(sql`SELECT messageId, fromEmail, SUBSTRING(bodyText, 1, ${RAW_BODY_MAX}) AS bodyText FROM inbound_emails WHERE messageId IN (${list})`))) {
       out.set(String(g.messageId), { body: g.bodyText ?? null, fromEmail: g.fromEmail ?? null });
     }
     const missing = chunk.filter((m) => !out.get(m)?.fromEmail || !out.get(m)?.body);
     if (!missing.length) continue;
     const list2 = sql.join(missing.map((m) => sql`${m}`), sql`, `);
-    for (const g of rowsOf(await exec.execute(sql`SELECT rfcMessageId, fromEmail, bodyText FROM mail_messages WHERE rfcMessageId IN (${list2}) AND direction = 'in'`))) {
+    for (const g of rowsOf(await exec.execute(sql`SELECT rfcMessageId, fromEmail, SUBSTRING(bodyText, 1, ${RAW_BODY_MAX}) AS bodyText FROM mail_messages WHERE rfcMessageId IN (${list2}) AND direction = 'in'`))) {
       const k = String(g.rfcMessageId);
       const prev = out.get(k);
       out.set(k, { body: prev?.body || g.bodyText || null, fromEmail: prev?.fromEmail || g.fromEmail || null });
@@ -199,8 +202,22 @@ async function loadRows(kind: ReviewCleanupKind): Promise<LoadedRow[]> {
   const rows = rowsOf(await db.execute(sql`SELECT id, reviewerName, rating, reviewText, reviewDate, sourceEmailDate, createdAt, projectId, googleReviewKey,
       sourceEmailId, complaintId, googleReply, respondedAt, status, notAReview, duplicateOf, reviewMarkUndoneAt, aiResponse
     FROM google_reviews WHERE ${where} AND ${projectScope(googleReviews.projectId)} ORDER BY id DESC LIMIT ${SCAN_MAX}`));
-  const raw = await loadRawEmails(db, rows.filter((r) => r.sourceEmailId && !r.googleReviewKey).map((r) => r.sourceEmailId));
+  // Só os emails de que a regra precisa (seguimento F6b — memória): as repetidas
+  // só olham para as de 1 estrela ou mais; o "não é crítica" só para as sem estrelas.
+  const parse = await emailParser();
+  const need = rows.filter((r) => rawEmailNeeded(kind, r, emailNameAndRating(r, parse, null).rating));
+  const raw = await loadRawEmails(db, need.map((r) => r.sourceEmailId));
   return rows.map((r) => ({ ...r, raw: r.sourceEmailId ? raw.get(String(r.sourceEmailId)) ?? null : null }));
+}
+
+/**
+ * Esta crítica precisa do email original para a limpeza? Só as de email
+ * (sem chave da API) ainda por marcar; repetidas: com estrelas (as guardadas
+ * ou as relidas do texto guardado); "não é crítica": sem estrelas. PURA.
+ */
+export function rawEmailNeeded(kind: ReviewCleanupKind, r: Pick<ReviewRowLite, "sourceEmailId" | "googleReviewKey" | "notAReview" | "duplicateOf">, rating: number): boolean {
+  if (!r.sourceEmailId || r.googleReviewKey || isOn(r.notAReview) || r.duplicateOf != null) return false;
+  return kind === "duplicate" ? rating >= 1 : !(rating > 0);
 }
 
 function itemOf(r: LoadedRow, extra: Partial<ReviewCleanupItem> = {}): ReviewCleanupItem {
@@ -315,7 +332,15 @@ export async function applyReviewCleanup(kind: ReviewCleanupKind, ids: readonly 
   return { marked, skipped: Math.max(0, wanted.size - marked) };
 }
 
-/** O que se guardou ao marcar "não é crítica" (JSON_OBJECT do UPDATE). PURA. */
+/**
+ * A cópia guardada quando uma crítica nasce já marcada como repetida (à
+ * entrada): ainda não havia tentativa de rascunho — ao desfazer volta a NULL.
+ */
+export function entryDuplicateBackup(): string {
+  return JSON.stringify({ aiDraftAttemptedAt: null, markedAt: "entrada" });
+}
+
+/** O que se guardou ao marcar (JSON_OBJECT do UPDATE, ou `entryDuplicateBackup`). PURA. */
 export function parseMarkBackup(raw: unknown): { aiResponse: string | null; aiResponseApproved: number; status: string | null; aiDraftAttemptedAt: string | null; hasAttempted: boolean } {
   let o: any = {};
   try { o = typeof raw === "string" ? JSON.parse(raw) : raw && typeof raw === "object" ? raw : {}; } catch { o = {}; }
@@ -345,8 +370,13 @@ export async function undoReviewCleanup(kind: ReviewCleanupKind, ids: readonly n
   const done: number[] = [];
   for (const r of list) {
     if (kind === "duplicate") {
-      const res = await db.update(googleReviews).set({ duplicateOf: null, reviewMarkUndoneAt: nowStr() })
-        .where(and(eq(googleReviews.id, r.id), isNotNull(googleReviews.duplicateOf)));
+      // Marcada à entrada (server/jobs/emailInboundSync.ts): a "tentativa de
+      // rascunho" que a marca pôs volta a NULL (a cópia diz que antes não havia).
+      const b = parseMarkBackup(r.backup);
+      const res = await db.update(googleReviews).set({
+        duplicateOf: null, reviewMarkUndoneAt: nowStr(), reviewMarkBackup: null,
+        ...(b.hasAttempted && !b.aiDraftAttemptedAt ? { aiDraftAttemptedAt: null } : {}),
+      }).where(and(eq(googleReviews.id, r.id), isNotNull(googleReviews.duplicateOf)));
       if (affected(res) > 0) done.push(r.id);
       continue;
     }

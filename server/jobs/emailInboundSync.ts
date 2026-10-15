@@ -149,8 +149,10 @@ async function routeToModule(
     // trazido) fica marcada como repetida da primeira — guarda-se, não se
     // apaga, e sai das listas e dos rascunhos automáticos.
     let duplicateOf: number | null = null;
+    let entryDuplicateBackup: () => string = () => "";
     if (dedup) {
       const { findEmailReviewDuplicate } = await import("../reviewCleanup");
+      ({ entryDuplicateBackup } = await import("../reviewCleanup"));
       const { reviewDateMs, reviewTextKeyFromEmail, reviewerNameKey } = await import("../../shared/reviewDedup");
       duplicateOf = await findEmailReviewDuplicate({
         parkKey: projectId != null ? `p${projectId}` : null,
@@ -173,7 +175,8 @@ async function routeToModule(
       sourceEmailId: ctx.messageId,
       sourceEmailDate,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
-      ...(duplicateOf ? { duplicateOf, reviewMarkedAt: markedAt, aiDraftAttemptedAt: markedAt } : {}),
+      // A cópia diz que a tentativa de rascunho é da marca (desfazer volta a pô-la a NULL).
+      ...(duplicateOf ? { duplicateOf, reviewMarkedAt: markedAt, aiDraftAttemptedAt: markedAt, reviewMarkBackup: entryDuplicateBackup() } : {}),
     } as any);
     // rascunho de resposta por IA (prompt central + sentimento/contexto),
     // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
