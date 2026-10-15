@@ -81,7 +81,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "A página Dashboards (permissão Dashboards) é de admin e super admin (ou de quem tenha essa permissão dada por pessoa, em Permissões).",
        "children": [],
        "container": false,
-       "chars": 1518
+       "chars": 1557
       },
       {
        "id": "dashboards.md#geral-o-resumo-de-hoje",
@@ -103,7 +103,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Receita, custos e margem com a mesma base da Faturação: carros entregues (saída feita, CHECKED_OUT), sem IVA, no período escolhido.",
        "children": [],
        "container": false,
-       "chars": 2554
+       "chars": 3660
       },
       {
        "id": "dashboards.md#operacoes-operacoes-dashboard",
@@ -529,7 +529,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Separador Resumo: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos…",
        "children": [],
        "container": false,
-       "chars": 243
+       "chars": 563
       },
       {
        "id": "despesas.md#gerir-admin",

@@ -3906,6 +3906,7 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       await requireFinanceTotals(ctx.user, "financeiro", "view");
       const { computeFinance } = await import("./finance/engine");
+      const { expensesByCategory } = await import("./finance/expenseCategories");
       const r = await computeFinance({ ...input, granularity: "month" });
       return {
         range: r.range, asOf: r.asOf, isCurrentPeriod: r.quality.isCurrentPeriod,
@@ -3914,7 +3915,11 @@ export const appRouter = router({
         margin: { margin: r.margin.margin, marginPct: r.margin.marginPct },
         projection: r.projection,
         monthly: r.timeseries.map((p) => ({ month: p.bucket, revenueNet: p.producedNet, costsNet: p.totalCost, margin: p.margin, revenueForecastNet: p.revenueForecastNet, costForecast: p.costForecast })),
-        expensesByCategory: r.details.expenses.reduce((acc, e) => { const k = e.categoryName ?? "Sem categoria"; acc[k] = (acc[k] ?? 0) + e.totalNet; return acc; }, {} as Record<string, number>),
+        // As MESMAS despesas dos custos (details.expenses), por categoria: s/ IVA (Exportar para
+        // Sheets) e, plano 64 (C3, Jorge: "sim, mas COM IVA"), c/ IVA — os gráficos do Financeiro.
+        // Uma só corrida do motor: o conjunto é o mesmo por construção.
+        expensesByCategory: expensesByCategory(r.details.expenses, "net"),
+        expensesByCategoryGross: expensesByCategory(r.details.expenses, "gross"),
         excludedExpenses: r.quality.excludedExpenses.total,
       };
     }),

@@ -42,6 +42,7 @@ Registo de faturas e despesas da empresa.
 
 **Resumo**
 - Separador **Resumo**: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos próximos 7 dias. Despesas com data futura não entram nos totais do mês nem do ano.
+- No **Dashboard Financeiro**, **Este ano (c/ IVA)** e **Pago este ano** são estas mesmas contas do ano. Já as **categorias** de lá seguem o **período** escolhido e a base da Faturação (as despesas que entram nos custos, sem salários nem extras), **com IVA** — por isso não batem com o "por categoria (este mês)" daqui.
 
 **Gerir (admin)**
 - Na linha: **Marcar como paga** (fica paga hoje), **Editar** (valores, datas, estado, data de pagamento) e, só o super admin, **Eliminar**.

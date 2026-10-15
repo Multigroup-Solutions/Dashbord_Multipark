@@ -135,3 +135,18 @@ export function daysUntil(due: string, today: string): number | null {
   const ms = (s: string) => { const [a, b, c] = s.split("-").map(Number); return Date.UTC(a, b - 1, c); };
   return Math.round((ms(day) - ms(today)) / 86_400_000);
 }
+
+const PT_MONTHS_SHORT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"] as const;
+
+/**
+ * "20 out" (o mesmo que `format(…, "dd MMM", { locale: pt })`) a partir do
+ * TEXTO do dia — "YYYY-MM-DD" ou o "YYYY-MM-DD 00:00:00" da BD —, sem
+ * `new Date`: o Safari não aceita "AAAA-MM-DD HH:MM:SS" (data inválida → o
+ * `format` rebentava e a página caía). Dia inválido → null (o ecrã mostra "—").
+ */
+export function shortDayLabel(due: unknown): string | null {
+  const day = String(due ?? "").slice(0, 10);
+  if (!isIsoDay(day)) return null;
+  const [, m, d] = day.split("-");
+  return `${d} ${PT_MONTHS_SHORT[Number(m) - 1]}`;
+}
