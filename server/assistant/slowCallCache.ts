@@ -101,7 +101,7 @@ function remember(key: string, userId: number, value: unknown, startedAt: number
  *
  * As entradas que acabam em "." são prefixos; as outras, caminhos exatos.
  * A lista das mutations do appRouter apanhadas por isto está aprovada num
- * teste (mpvF4Cache.test.ts): uma nova falha o teste até ser revista. PURA.
+ * teste (mpvF4CacheList.test.ts): uma nova falha o teste até ser revista. PURA.
  *
  * Limite conhecido: só as mutações da PRÓPRIA pessoa limpam. O que outra
  * pessoa ou um cron mude não limpa a cache de quem perguntou — por isso um
