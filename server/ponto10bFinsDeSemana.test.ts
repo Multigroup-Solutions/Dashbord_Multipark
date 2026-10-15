@@ -17,6 +17,9 @@ const state = vi.hoisted(() => ({
   escala: [] as number[],
   checkIns: new Set<number>(),
   inserted: [] as any[],
+  /** a ficha de quem pede (Perfil → O meu horário) e o horário dela (todas as linhas, como a leitura do ecrã) */
+  me: null as any,
+  personSchedules: [] as any[],
 }));
 
 const national = vi.hoisted(() => ({ all: true, defaultCityId: null, cityName: null, cityIds: [] as number[], projectIds: [] as number[], missingCostCenter: false }));
@@ -32,6 +35,7 @@ vi.mock("./db", async (original) => {
     execute: async (q: any) => {
       const t = dialect.sqlToQuery(q).sql;
       if (t.includes("FROM schedules s JOIN employees e")) return [state.schedules];
+      if (t.includes("FROM schedules WHERE employeeId IN")) return [state.personSchedules];
       if (t.includes("FROM employee_leaves")) return [state.leaves];
       if (t.includes("FROM schedule_overrides o JOIN employees e")) { state.overrideQueries++; return [state.overrides]; }
       return [[]];
@@ -55,12 +59,14 @@ vi.mock("./db", async (original) => {
       },
     }),
   };
+  const orig = await original<any>();
   return {
-    ...(await original<object>()),
+    ...orig,
     getDb: async () => db,
     getUserPermissionOverrides: async () => ({}),
     getUserModuleOverrides: async () => ({}),
-    getEmployeeByUserId: async () => null,
+    getEmployeeByUserId: async () => (state.me ? { employee: state.me } : null),
+    getEmployeeById: async (id: number) => (state.me && state.me.id === id ? { employee: state.me } : orig.getEmployeeById(id)),
     logActivity: async () => undefined,
   };
 });
@@ -81,6 +87,7 @@ import {
 import { AUTOMATION_FLAGS, automationFlagDefault, automationFlagSuperAdminOnly } from "../shared/appSettings";
 import { kindDef } from "../shared/notificationRouting";
 import { SCHEMA_MIGRATION_IDS } from "./migrations/index";
+import { expectedHoursFromSchedule } from "./payroll/compute";
 import { MIGRATION_0725_STATEMENTS, IDEMPOTENT_ERROR_CODES_0725 } from "./migrations/migration_0725";
 import { WEEKENDS_FLAG, WEEKENDS_NOTIFY_FLAG, canMarkScheduleOverride, loadActiveOverridesForReaders, overrideNoticeText } from "./scheduleOverrides";
 import { appRouter } from "./routers";
@@ -97,6 +104,7 @@ const ov = (employeeId: number, day: string, kind: "work" | "off", o: Partial<Sc
 
 beforeEach(() => {
   state.schedules = []; state.leaves = []; state.overrides = []; state.overrideQueries = 0; state.escala = []; state.checkIns = new Set(); state.inserted = [];
+  state.me = null; state.personSchedules = [];
   process.env.FINS_DE_SEMANA = "on";
 });
 afterEach(() => { delete process.env.FINS_DE_SEMANA; delete process.env.FINS_DE_SEMANA_AVISO; });
@@ -611,6 +619,77 @@ describe("interruptores, migração, aviso e ajuda", () => {
     expect(src("docs/ajuda/rh-ponto.md")).toMatch(/## Fins de semana e exceções por data/);
     expect(src("docs/ajuda/perfil.md")).toMatch(/O meu horário/);
     expect(src("docs/ajuda/definicoes.md")).toMatch(/RH: fins de semana e exceções por data/);
+  });
+});
+
+// Integração 10a + 10b: UMA regra para a linha que conta (workRowOn), em todos os leitores.
+describe("a linha que conta é a mesma em todos os leitores (10a + 10b)", () => {
+  // sábado 7 nov 2026 (Lisboa = UTC): uma FOLGA de id baixo (3) e uma linha de TRABALHO de id alto (9), 10:00–16:00
+  const mixed = (): FixedScheduleRow[] => [
+    row(2, 6, "00:00", "00:00", { id: 3, isWorkDay: false }),
+    row(2, 6, "10:00", "16:00", { id: 9 }),
+  ];
+  const onlyOff = (): FixedScheduleRow[] => [row(2, 6, "10:00", "16:00", { id: 3, isWorkDay: false }), row(2, 6, "11:00", "17:00", { id: 9, isWorkDay: 0 as any })];
+  const sat = "2026-11-07";
+  const ci = (at: string) => ({ id: Math.random(), employeeId: 2, type: "check_in" as const, recordedAt: at });
+
+  it("folga de id baixo + trabalho de id alto → dia de trabalho (10:00–16:00) na ficha, Avaliação, faltas, folha, quadro e Perfil", async () => {
+    const rows = mixed();
+    // a regra única
+    expect(workRowOn(rows, 6)).toMatchObject({ id: 9, startTime: "10:00" });
+    expect(dayPlan({ calendarDay: sat, schedules: rows })).toMatchObject({ kind: "work", source: "fixed", startTime: "10:00", endTime: "16:00" });
+    // ficha → Horário: o ecrã mostra a linha do workRowOn
+    expect(src("client/src/pages/HRPage.tsx")).toContain("const s = workRowOn(schedules, d) ?? schedules.find(x => x.weekday === d);");
+    // Avaliação e faltas (fixedScheduledStarts): com todas as linhas = só as de trabalho (o que a consulta delas traz)
+    expect(fixedScheduledStarts(sat, sat, rows).map((f) => iso(f.startMs))).toEqual(["2026-11-07T10:00:00.000Z"]);
+    expect(fixedScheduledStarts(sat, sat, rows.filter((r) => r.isWorkDay))).toEqual(fixedScheduledStarts(sat, sat, rows));
+    // Avaliação: entrada às 10:10 → atraso (−5); às 10:00 → nada
+    const identity = buildEvaluationIdentity({ employees: [{ id: 2, fullName: "Rui Escritório", userId: 11, multiparkAgentName: null, multiparkAgentUserId: null }], agentAliases: [], accountAliases: [] });
+    const delays = (at: string) => computeEmployeeDays({
+      startDay: sat, endDay: sat, identity, employees: new Map(), actions: [], ponto: [ci(at)], assignments: [], incidents: [], complaints: [], speedAlerts: [], penalties: [], rate: () => 10, tlWorkingDaysPerMonth: 15, fixedSchedules: rows,
+    }).rows.find((r) => r.employeeId === 2)?.metrics.delays ?? 0;
+    expect(delays("2026-11-07 10:10:00")).toBe(1);
+    expect(delays("2026-11-07 10:00:00")).toBe(0);
+    // faltas: a consulta só traz isWorkDay = 1 (a linha 9) → possível falta com a hora dela
+    state.schedules = rows.filter((r) => r.isWorkDay).map((r) => ({ ...r, isWorkDay: 1, contractStart: null, contractEnd: null }));
+    expect(await detectFixedScheduleNoShows(sat)).toMatchObject({ scanned: 1, created: 1 });
+    expect(state.inserted[0].notes).toContain("horário 10:00–16:00");
+    // folha de ordenados: 6 h esperadas nesse sábado (a linha de trabalho; a folga não tapa)
+    expect(expectedHoursFromSchedule(rows.map((r) => ({ ...r, endTime: String(r.endTime), isWorkDay: r.isWorkDay ? 1 : 0 })), sat, sat)).toBe(6);
+    // quadro dos Fins de semana: de serviço pelo horário fixo, com as horas da linha de trabalho; horas por omissão iguais
+    const person: PersonSchedule = { employeeId: 2, name: "Rui", schedules: rows, overrides: [], leaves: [] };
+    expect(planOf(person, sat)).toMatchObject({ kind: "work", startTime: "10:00", endTime: "16:00" });
+    expect(weekendBoard([person], [sat])[0].days[0].onDuty).toMatchObject([{ employeeId: 2, startTime: "10:00", endTime: "16:00", source: "fixed" }]);
+    expect(defaultDutyHours(rows, sat)).toEqual({ startTime: "10:00", endTime: "16:00" });
+    // Perfil → O meu horário: o sábado é de trabalho, 10:00–16:00
+    state.me = { id: 2, fullName: "Rui", position: "backoffice", contractType: null, projectId: null, isActive: 1, contractStart: null, contractEnd: null, userId: 11 };
+    state.personSchedules = rows.map((r) => ({ ...r, isWorkDay: r.isWorkDay ? 1 : 0 }));
+    const mine = await appRouter.createCaller({ user: { id: 11, role: "backoffice", name: "Rui" }, req: { headers: {} }, res: {} } as any).rh.weekends.mine();
+    expect(mine).toMatchObject({ enabled: true, employeeId: 2 });
+    expect((mine as any).fixed.find((f: any) => f.weekday === 6)).toEqual({ weekday: 6, isWorkDay: true, startTime: "10:00", endTime: "16:00" });
+  });
+
+  it("só folgas nesse dia → folga em todos (sem entrada, sem horas, fora do quadro, 09:00–18:00 por omissão)", async () => {
+    const rows = onlyOff();
+    expect(workRowOn(rows, 6)).toBeUndefined();
+    expect(dayPlan({ calendarDay: sat, schedules: rows })).toMatchObject({ kind: "none", reason: "day_off" });
+    expect(fixedScheduledStarts(sat, sat, rows)).toEqual([]);
+    expect(expectedHoursFromSchedule(rows.map((r) => ({ ...r, endTime: String(r.endTime), isWorkDay: 0 })), sat, sat)).toBeNull();
+    const person: PersonSchedule = { employeeId: 2, name: "Rui", schedules: rows, overrides: [], leaves: [] };
+    expect(weekendBoard([person], [sat])[0].days[0].onDuty).toEqual([]);
+    expect(defaultDutyHours(rows, sat)).toEqual({ startTime: "09:00", endTime: "18:00" });
+    state.me = { id: 2, fullName: "Rui", position: "backoffice", contractType: null, projectId: null, isActive: 1, contractStart: null, contractEnd: null, userId: 11 };
+    state.personSchedules = rows.map((r) => ({ ...r, isWorkDay: 0 }));
+    const mine = await appRouter.createCaller({ user: { id: 11, role: "backoffice", name: "Rui" }, req: { headers: {} }, res: {} } as any).rh.weekends.mine();
+    expect((mine as any).fixed.find((f: any) => f.weekday === 6)).toEqual({ weekday: 6, isWorkDay: false, startTime: null, endTime: null });
+  });
+
+  it("ninguém escolhe a linha de outra maneira: os ecrãs dos Fins de semana usam o workRowOn", () => {
+    expect(src("shared/workSchedule.ts")).not.toMatch(/export function fixedRowOn/);
+    for (const f of ["shared/weekendRotation.ts", "server/rhWeekendsRouter.ts"]) {
+      expect(src(f)).not.toContain("fixedRowOn");
+      expect(src(f)).toContain("workRowOn(");
+    }
   });
 });
 
