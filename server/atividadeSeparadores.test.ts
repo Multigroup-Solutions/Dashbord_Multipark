@@ -16,9 +16,11 @@ const state = vi.hoisted(() => ({ sql: [] as string[], params: [] as unknown[][]
 vi.mock("./db", () => ({
   getDb: async () => ({
     execute: async (q: any) => {
-      // drizzle sql`` → texto + parâmetros (só o que o teste precisa)
-      const chunks = (q?.queryChunks ?? []) as any[];
-      const text = chunks.map((c) => (typeof c === "string" ? c : Array.isArray(c?.value) ? c.value.join("") : "?")).join("");
+      // drizzle sql`` → texto + parâmetros (só o que o teste precisa). Os pedaços
+      // aninhados (ex.: a condição única "conta como reclamação", plano 64 E7) entram no texto.
+      const render = (chunks: any[]): string =>
+        chunks.map((c) => (typeof c === "string" ? c : Array.isArray(c?.value) ? c.value.join("") : c && typeof c === "object" && Array.isArray(c.queryChunks) ? render(c.queryChunks) : "?")).join("");
+      const text = render((q?.queryChunks ?? []) as any[]);
       state.sql.push(text);
       const params: unknown[] = [];
       const walk = (x: any) => {

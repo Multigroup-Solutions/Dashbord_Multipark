@@ -529,6 +529,33 @@ export function complaintPhotoType(filename: string): { ext: string; mime: strin
 export const COMPLAINT_LIST_DEFAULT_DAYS = 90;
 export const COMPLAINT_OPEN_STATUSES: readonly string[] = ["new", "analyzing", "waiting_client"];
 
+/**
+ * Contadores das reclamações (plano 64, E1) — a conta ÚNICA do cartão
+ * "Reclamações abertas" do Suporte (e do Geral) e do `complaints.stats`.
+ * As arquivadas nunca contam. `open` = COMPLAINT_OPEN_STATUSES; `total` = de
+ * sempre (não é o total da página, que abre nos últimos 90 dias); "Fechados"
+ * junta fechadas e convertidas, como a coluna Fechado do quadro; `overdue` =
+ * `complaintOverdue` (o SLA para em "Aguarda Cliente"). PURA.
+ */
+export function complaintCounts(
+  rows: ReadonlyArray<{ complaintStatus?: string | null; slaDeadline?: string | null; archivedAt?: string | null }>,
+  nowMs: number,
+) {
+  const all = rows.filter((c) => !c.archivedAt);
+  const n = (s: string) => all.filter((c) => c.complaintStatus === s).length;
+  return {
+    total: all.length,
+    open: all.filter((c) => COMPLAINT_OPEN_STATUSES.includes(String(c.complaintStatus ?? ""))).length,
+    new: n("new"),
+    analyzing: n("analyzing"),
+    waitingClient: n("waiting_client"),
+    resolved: n("resolved"),
+    closed: n("closed") + n("converted"),
+    converted: n("converted"),
+    overdue: all.filter((c) => complaintOverdue(c, nowMs)).length,
+  };
+}
+
 /** Estados que uma pessoa (ou a API) pode escolher; "converted" só por conversão. */
 export const COMPLAINT_MANUAL_STATUSES: readonly string[] = ["new", "analyzing", "waiting_client", "resolved", "closed"];
 

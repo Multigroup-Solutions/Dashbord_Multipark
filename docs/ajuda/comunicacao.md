@@ -4,7 +4,7 @@ grupo: Comunicação
 pagina: comunicacao
 titulo: Comunicação (email e calendário)
 rotas: /comunicacao, /comunicacao/meu-email, /calendario
-palavras: não lidas, por tratar, aberta, abertas, filtros, por responder, todas, drive da empresa, conta google errada, drive pessoal, calendário, agenda, google calendar, a minha agenda, eventos, novo evento, criar evento, reunião, google meet, videochamada, convidados, convite, vista dia, vista semana, vista mês, dia inteiro, calendário multipark, ocupado, mostrar calendário, esconder calendário, ativar calendário, caixas de email, caixa inicial, estrela, como no gmail, ligar, telefonar, enviar email, enviar whatsapp, ficha do cliente, ficha da reserva, ficha do colaborador, email, emails, gmail, caixas por tema, mover para, separar pela ia, movido pela ia, a ia separou, corrigir a caixa, ficou no info, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala, triagem, testar a triagem, por confirmar, reclamação noutra caixa, perdido noutra caixa, críticas lidas, ocorrência da app, rever emails antigos, varrimento
+palavras: não lidas, por tratar, aberta, abertas, filtros, por responder, todas, drive da empresa, conta google errada, drive pessoal, calendário, agenda, google calendar, a minha agenda, eventos, novo evento, criar evento, reunião, google meet, videochamada, convidados, convite, vista dia, vista semana, vista mês, dia inteiro, calendário multipark, ocupado, mostrar calendário, esconder calendário, ativar calendário, caixas de email, caixa inicial, estrela, como no gmail, ligar, telefonar, enviar email, enviar whatsapp, ficha do cliente, ficha da reserva, ficha do colaborador, email, emails, gmail, caixas por tema, mover para, separar pela ia, movido pela ia, a ia separou, corrigir a caixa, ficou no info, faturação, parcerias, alterações, serviços extra, arquivo, arquivadas, retenção, emails antigos, sem confirmação, enviar outra vez, duplicado, desativar caixa, caixas antigas, antigas, caso por criar, emails que não criaram o caso, fotos no email, por classificar, alias, etiqueta, caixa, caixas, info@, comercial@, admin@, reclamacoes@, perdidos@, responder, reencaminhar, enviar como, alias, assinatura, conta google, ligar conta, o meu email, ligações, anexos, mostrar imagens, rascunho ia, automáticos, mostrar automáticos, nova reserva, notificações de reserva, disponibilidade, pedidos de disponibilidade, lembrete, recursos-humanos@, extras, comunicações automáticas, escala, triagem, testar a triagem, por confirmar, reclamação noutra caixa, perdido noutra caixa, críticas lidas, ocorrência da app, rever emails antigos, varrimento
 ---
 # Comunicação (email)
 
@@ -18,6 +18,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
    - Aqui só há email. O WhatsApp tem a entrada dele: **Comunicação → WhatsApp**.
    - No PC, o **menu do lado recolhe** quando entras nas caixas, para os emails terem o ecrã todo; abre-o no botão do menu quando precisares e, ao sair, volta como estava.
    - No telemóvel, a caixa escolhe-se na lista do topo.
+   - **Antigas** (super admin): as caixas desativadas, numa secção fechada no fim, sem contadores; não contam no número do menu.
    - **Trabalha sempre daqui:** o que envias pelo dashboard fica registado na conversa e ligado ao cliente — também do **O meu email** (uma mensagem nova para um cliente fica no separador **Comunicações** da ficha dele).
 2. Por cima da lista escolhes o que queres ver: **Não lidas · Por responder · Todas** (cada uma com o número ao lado).
    - As **caixas partilhadas abrem sempre em Não lidas**. O **O meu email** e a pesquisa da barra de cima ("ver todos") abrem em **Todas**.
@@ -78,7 +79,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 - O que continuar a falhar aparece em **Definições → Comunicação → Emails que não criaram o caso**, com **Tentar de novo** (admin).
 
 **Caixas (super admin)**
-- Uma caixa já não se apaga: **Desativar** tira-a das listas e da sincronização, e as conversas ficam guardadas (o super admin continua a vê-las). Para voltar: **Editar → Ativa**.
+- Uma caixa já não se apaga: **Desativar** tira-a das listas e da sincronização, e as conversas ficam guardadas (o super admin continua a vê-las, na secção **Antigas**, e não contam no número do menu). Para voltar: **Editar → Ativa**.
 
 ## O meu email (menu **Comunicação → O meu email**, ou **O meu email** na lista das caixas)
 1. Carrega em **Ligar a minha conta Google** (também no Perfil). Só contas do Workspace da empresa.

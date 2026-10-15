@@ -65,6 +65,12 @@ interface DashboardFilterBarProps {
   showPeriod?: boolean;
   period?: string;
   onPeriodChange?: (v: string) => void;
+  /**
+   * Mostra o Período (as datas). Por omissão sim. Plano 64 (E6/D8): as páginas
+   * onde as datas não mudam nenhum número (Suporte, Pessoas) passam `false` e
+   * ficam só a Cidade e a Marca, que valem para todos os cartões.
+   */
+  showDates?: boolean;
 }
 
 export function DashboardFilterBar({
@@ -79,6 +85,7 @@ export function DashboardFilterBar({
   showPeriod,
   period,
   onPeriodChange,
+  showDates = true,
 }: DashboardFilterBarProps) {
   const globalFilters = useGlobalFilters();
   // Granularidade das setinhas (padrão transversal do Jorge: ◀ mês/semana/… ▶).
@@ -112,20 +119,22 @@ export function DashboardFilterBar({
 
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <div>
-        <Label className="text-xs mb-1 block">Período</Label>
-        <DateRangeNav
-          start={from}
-          end={to}
-          gran={gran}
-          showAll={false}
-          onChange={(s, e, g) => {
-            onFromChange(s);
-            onToChange(e);
-            setGran(g);
-          }}
-        />
-      </div>
+      {showDates && (
+        <div>
+          <Label className="text-xs mb-1 block">Período</Label>
+          <DateRangeNav
+            start={from}
+            end={to}
+            gran={gran}
+            showAll={false}
+            onChange={(s, e, g) => {
+              onFromChange(s);
+              onToChange(e);
+              setGran(g);
+            }}
+          />
+        </div>
+      )}
       <div>
         <Label className="text-xs mb-1 block">Cidade</Label>
         <Select

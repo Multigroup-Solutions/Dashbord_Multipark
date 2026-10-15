@@ -2,6 +2,7 @@ import { trpc } from "@/lib/trpc";
 import { seesBeyondOwn } from "@shared/access";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { isForbidden, retryTransient } from "@/lib/queryRetry";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
@@ -64,12 +65,22 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   converted: { label: "Convertido", color: "bg-violet-100 text-violet-800" },
 };
 
+/** Subtítulo de um cartão cuja leitura falhou: "Sem acesso" (permissão) ou erro — nunca 0. */
+const failedNote = (error: unknown) => (isForbidden(error) ? "Sem acesso" : "Leitura falhou — não é 0");
+
 export default function SuporteDashboard() {
   const filters = useDashboardFilters();
   const globalFilters = useGlobalFilters();
+  // Plano 64 (E1–E3): a cidade/marca do topo vale para TODOS os cartões, com as mesmas
+  // consultas das páginas Reclamações, Críticas e Perdidos.
+  const scope = globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {};
 
-  const { data: complaintStats, isLoading: loadingComplaints } = trpc.complaints.stats.useQuery();
-  const { data: reviewStats, isLoading: loadingReviews } = trpc.reviews.stats.useQuery();
+  const complaintsQ = trpc.complaints.stats.useQuery(scope, { retry: retryTransient });
+  const complaintStats = complaintsQ.data;
+  const loadingComplaints = complaintsQ.isLoading;
+  const reviewsQ = trpc.reviews.stats.useQuery(scope, { retry: retryTransient });
+  const reviewStats = reviewsQ.data;
+  const loadingReviews = reviewsQ.isLoading;
   // Ocorrências = as da app Multipark ao vivo (as mesmas de /ocorrencias),
   // com a cidade escolhida. As antigas `incidents` do dashboard já não contam.
   const { user } = useAuth();
@@ -84,24 +95,19 @@ export default function SuporteDashboard() {
   const incidentsFailed = seesIncidents && !incidentsQ.isLoading && !incidentStats;
   const incidentsReason = incidentsQ.error?.message
     ?? (incidentsQ.data && !incidentsQ.data.available ? incidentsQ.data.reason : "as contagens não responderam");
-  const { data: lostFoundItems = [], isLoading: loadingLostFound } = trpc.lostFound.list.useQuery(
-    globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : undefined
-  );
-  const { data: pendingComplaints = [] } = trpc.complaints.list.useQuery(
-    globalFilters.projectId !== undefined
-      ? { status: "new", projectId: globalFilters.projectId }
-      : { status: "new" }
-  );
+  // Perdidos "abertos" = o painel da página Perdidos (getLostDashboard: Novo, Em investigação e
+  // Encontrado ainda por devolver), contado no servidor. Quem só vê os próprios casos não o pede (16c).
+  const seesLost = seesBeyondOwn(user, "perdidos");
+  const lostQ = trpc.lostFound.dashboard.useQuery(scope, { enabled: seesLost, retry: retryTransient, staleTime: 60_000 });
+  const loadingLostFound = lostQ.isLoading;
+  const pendingQ = trpc.complaints.list.useQuery({ status: "new", ...scope }, { retry: retryTransient });
+  const pendingComplaints = pendingQ.data ?? [];
 
   const isLoading = loadingComplaints || loadingReviews || loadingIncidents || loadingLostFound;
 
-  // Derived data
-  const openLostFound = useMemo(
-    () => lostFoundItems.filter((i: any) => i.status === "new" || i.status === "investigating").length,
-    [lostFoundItems]
-  );
-
-  const openComplaints = (complaintStats?.new ?? 0) + (complaintStats?.analyzing ?? 0) + (complaintStats?.waitingClient ?? 0);
+  // Abertas = Novo + Em análise + Aguarda cliente (COMPLAINT_OPEN_STATUSES), contado no servidor.
+  const openComplaints = complaintStats ? complaintStats.open : null;
+  const openLostFound = lostQ.data ? lostQ.data.open : null;
 
   // Chart data: Reclamacoes por estado (donut)
   const complaintDonutData = useMemo(() => {
@@ -156,6 +162,7 @@ export default function SuporteDashboard() {
         </p>
       </div>
 
+      {/* Sem Período (E6): os números são "agora"; a cidade e a marca valem para todos os cartões. */}
       <DashboardFilterBar
         from={filters.from}
         to={filters.to}
@@ -165,6 +172,7 @@ export default function SuporteDashboard() {
         onCityChange={filters.setCityId}
         brandId={filters.brandId}
         onBrandChange={filters.setBrandId}
+        showDates={false}
       />
 
       {/* KPIs */}
@@ -174,8 +182,8 @@ export default function SuporteDashboard() {
             <div className="flex items-start justify-between gap-2">
               <div className="space-y-1 min-w-0">
                 <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Reclamações Abertas</p>
-                <p className="text-2xl font-bold text-foreground tabular-nums truncate">{openComplaints}</p>
-                <p className="text-xs text-muted-foreground">{complaintStats?.total ?? 0} total</p>
+                <p className="text-2xl font-bold text-foreground tabular-nums truncate">{openComplaints ?? "—"}</p>
+                <p className="text-xs text-muted-foreground">{complaintStats ? `${complaintStats.total} de sempre` : complaintsQ.error ? failedNote(complaintsQ.error) : ""}</p>
               </div>
               <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-red-100">
                 <AlertTriangle className="h-5 w-5 text-red-600" />
@@ -190,16 +198,20 @@ export default function SuporteDashboard() {
               <div className="space-y-1 min-w-0">
                 <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Rating Médio Google</p>
                 <p className="text-2xl font-bold text-foreground">
-                  {reviewStats?.avg ?? 0}<span className="text-lg text-muted-foreground">/5</span>
+                  {reviewStats ? reviewStats.avg : "—"}<span className="text-lg text-muted-foreground">/5</span>
                 </p>
-                <div className="flex gap-0.5">
-                  {[1, 2, 3, 4, 5].map(i => (
-                    <Star
-                      key={i}
-                      className={`w-3 h-3 ${i <= Math.round(reviewStats?.avg ?? 0) ? "fill-amber-400 text-amber-400" : "text-gray-300"}`}
-                    />
-                  ))}
-                </div>
+                {reviewStats ? (
+                  <div className="flex gap-0.5">
+                    {[1, 2, 3, 4, 5].map(i => (
+                      <Star
+                        key={i}
+                        className={`w-3 h-3 ${i <= Math.round(reviewStats.avg) ? "fill-amber-400 text-amber-400" : "text-gray-300"}`}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{reviewsQ.error ? failedNote(reviewsQ.error) : ""}</p>
+                )}
               </div>
               <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-amber-100">
                 <Star className="h-5 w-5 text-amber-600" />
@@ -213,8 +225,8 @@ export default function SuporteDashboard() {
             <div className="flex items-start justify-between gap-2">
               <div className="space-y-1 min-w-0">
                 <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Reviews Pendentes</p>
-                <p className="text-2xl font-bold text-yellow-700 tabular-nums truncate">{reviewStats?.pending ?? 0}</p>
-                <p className="text-xs text-muted-foreground">sem resposta</p>
+                <p className="text-2xl font-bold text-yellow-700 tabular-nums truncate">{reviewStats ? reviewStats.pending : "—"}</p>
+                <p className="text-xs text-muted-foreground">{reviewStats ? "sem resposta" : reviewsQ.error ? failedNote(reviewsQ.error) : ""}</p>
               </div>
               <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-yellow-100">
                 <MessageSquare className="h-5 w-5 text-yellow-600" />
@@ -245,8 +257,8 @@ export default function SuporteDashboard() {
             <div className="flex items-start justify-between gap-2">
               <div className="space-y-1 min-w-0">
                 <p className="text-xs sm:text-sm text-muted-foreground font-medium break-words">Itens Perdidos</p>
-                <p className="text-2xl font-bold text-blue-700 tabular-nums truncate">{openLostFound}</p>
-                <p className="text-xs text-muted-foreground">abertos</p>
+                <p className="text-2xl font-bold text-blue-700 tabular-nums truncate">{openLostFound ?? "—"}</p>
+                <p className="text-xs text-muted-foreground">{lostQ.data ? "abertos (com os encontrados por devolver)" : !seesLost ? "Sem acesso" : lostQ.error ? failedNote(lostQ.error) : ""}</p>
               </div>
               <div className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl flex items-center justify-center bg-blue-100">
                 <Package className="h-5 w-5 text-blue-600" />
@@ -264,7 +276,9 @@ export default function SuporteDashboard() {
             <CardTitle className="text-base">Reclamações por Estado</CardTitle>
           </CardHeader>
           <CardContent>
-            {complaintDonutData.length === 0 ? (
+            {complaintsQ.error && !complaintStats ? (
+              <QueryErrorNote error={complaintsQ.error} what="as reclamações" onRetry={() => complaintsQ.refetch()} retrying={complaintsQ.isFetching} />
+            ) : complaintDonutData.length === 0 ? (
               <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
                 Sem dados de reclamações
               </div>
@@ -306,7 +320,9 @@ export default function SuporteDashboard() {
             <CardTitle className="text-base">Distribuição de Ratings Google</CardTitle>
           </CardHeader>
           <CardContent>
-            {starBarData.every(d => d.count === 0) ? (
+            {reviewsQ.error && !reviewStats ? (
+              <QueryErrorNote error={reviewsQ.error} what="as críticas Google" onRetry={() => reviewsQ.refetch()} retrying={reviewsQ.isFetching} />
+            ) : starBarData.every(d => d.count === 0) ? (
               <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
                 Sem dados de reviews
               </div>
@@ -359,15 +375,17 @@ export default function SuporteDashboard() {
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Clock className="w-4 h-4" />
-              Últimas Reclamações Pendentes
+              Últimas reclamações novas
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {pendingComplaints.length === 0 ? (
+            {pendingQ.error ? (
+              <QueryErrorNote error={pendingQ.error} what="as reclamações novas" onRetry={() => pendingQ.refetch()} retrying={pendingQ.isFetching} />
+            ) : pendingComplaints.length === 0 ? (
               <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
                 <div className="text-center">
                   <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-green-500" />
-                  <p>Sem reclamações pendentes</p>
+                  <p>Sem reclamações novas</p>
                 </div>
               </div>
             ) : (

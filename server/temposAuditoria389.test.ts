@@ -86,7 +86,7 @@ vi.mock("./multiparkDb/historyLive", async (original) => ({
     return [];
   },
 }));
-vi.mock("./departedComplaints", () => ({ countComplaintsForRefs: async () => 0 }));
+vi.mock("./departedComplaints", async (original) => ({ ...(await original<object>()), countComplaintsForRefs: async () => 0 }));
 vi.mock("./serviceTimesRead", async (original) => ({
   ...(await original<object>()),
   loadServiceViewSettings: async () => ({ gate: state.gate, targetMinutes: 15, t2TargetMinutes: 15 }),

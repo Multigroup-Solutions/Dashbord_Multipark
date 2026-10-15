@@ -11,7 +11,7 @@
 import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
-  MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
+  MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, badgeTotal, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
   isHrMailThread, mailAttachmentDriveAllowed, extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, mailboxIsMine, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
   pickFromAddress, type MailLinkType, type MailViewer, type MailThreadStatus,
 } from "../../shared/mail";
@@ -175,6 +175,8 @@ export async function visibleMailboxes(viewer: MailViewer) {
       canCompose: canActOnMailbox(viewer, m) && m.sourceKind !== "tema",
       // Lote 45: a caixa é "dela" quando um endereço tem a pessoa (ou o papel dela) como responsável.
       mine: mailboxIsMine(m.addresses, viewer),
+      // Plano 64 (E10): só o super admin vê as desativadas — vão para "Antigas" e não contam no badge.
+      active: m.active,
       unread: Number(r.unread ?? 0), awaiting: Number(r.awaiting ?? 0), open: Number(r.open ?? 0),
     });
   }
@@ -189,10 +191,10 @@ export async function visibleMailboxes(viewer: MailViewer) {
   return { mailboxes: out, personalUnread: Number(pr.unread ?? 0), triage };
 }
 
-/** Badge do menu: conversas por ler nas caixas visíveis + pessoal. */
+/** Badge do menu: conversas por ler nas caixas visíveis e ATIVAS (`badgeTotal`) + pessoal. */
 export async function mailBadge(viewer: MailViewer): Promise<{ shared: number; personal: number }> {
   const v = await visibleMailboxes(viewer);
-  return { shared: v.mailboxes.reduce((s, m) => s + m.unread, 0), personal: v.personalUnread };
+  return { shared: badgeTotal(v.mailboxes), personal: v.personalUnread };
 }
 
 // ─── Lista de conversas ─────────────────────────────────────────────────────

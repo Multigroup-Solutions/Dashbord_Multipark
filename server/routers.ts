@@ -6700,11 +6700,11 @@ export const appRouter = router({
       return { slaMinutes: slaMinutes(), aiConfigured: await aiFeatureAvailableFresh("whatsapp_reply") };
     }),
 
-    // Badge do menu: conversas visíveis que precisam de atenção.
+    // Badge do menu: conversas visíveis que precisam de atenção (as das caixas que a pessoa não vê não contam, como na lista).
     badge: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "whatsapp", "view");
       const { inboxBadge } = await import("./whatsappInboxOps");
-      return inboxBadge();
+      return inboxBadge(ctx.user);
     }),
 
     // Com `conversationId`: só quem pode responder E vê essa conversa (17a).

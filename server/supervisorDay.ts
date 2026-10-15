@@ -75,9 +75,12 @@ export async function getSupervisorDayDashboard(date: string, opts: { isSuperAdm
   const gate = { gate: svcSettings.gate, isSuperAdmin: !!opts.isSuperAdmin };
   const timesView = dayTimesView(svc.rows, { targetMinutes: svcSettings.targetMinutes, gate });
 
-  // Reclamações criadas no mesmo dia operacional
+  // Reclamações criadas no mesmo dia operacional (03h–03h), pela condição única
+  // "conta como reclamação" (plano 64, E7): sem as arquivadas nem as convertidas.
+  const { countableComplaintSql } = await import("./departedComplaints");
   const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
-    WHERE createdAt >= ${start} AND createdAt < ${end} AND ${projectScope(sql`complaints.projectId`)}`) as any;
+    WHERE createdAt >= ${start} AND createdAt < ${end} AND ${countableComplaintSql("complaints")}
+      AND ${projectScope(sql`complaints.projectId`)}`) as any;
   // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM neste dia (entrega feita
   // no dia operacional), seja qual for o dia em que chegaram — com o histórico já lido.
   let complaintsDeparted: { available: true; complaints: number; bookings: number; truncated: boolean } | { available: false; reason: string };
