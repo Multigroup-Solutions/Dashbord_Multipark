@@ -2,7 +2,9 @@
  * Plano 64, F2 — Marketing → Web & SEO pela fonte do Painel do Marketing:
  *  1. reservas do site: a MESMA leitura do Painel (loadMarketingBookings com
  *     `{ marketplace: true }` e o âmbito de cidade) e a mesma regra de "feita
- *     no site" (isSiteBooking); a marca Multipark inclui o Marketplace;
+ *     no site" (isSiteBooking: sites das marcas, formulário e multipark.pt —
+ *     a origem MARKETPLACE conta desde 15 out 2026); a marca Multipark inclui
+ *     o Marketplace;
  *  2. o KPI do GA4 é "Eventos-chave GA4" (não são reservas) e há a lista dos
  *     eventos que o GA4 conta como tal (parte "allEvents" da recolha, só leitura);
  *  3. o funil diz que passos não chegam ao GA4;
@@ -60,13 +62,17 @@ const bk = (o: any) => ({
   hasPartner: false, viaNet: true, hasOriginUrl: false, hasClickId: false, adAttribution: "unknown", adCampaignExternalId: null,
   utmCampaign: null, campaign: null, campaignName: null, total: 50, hasEmail: true, newClient: true, marketplace: false, operated: true, ...o,
 });
-/** As reservas do período: nossas e do Marketplace, do site e não. */
+/**
+ * As reservas do período: nossas e do Marketplace, do site e não. "Feitas no
+ * site" (Jorge, 15 out 2026: sites das marcas, formulário e multipark.pt) são
+ * todas menos a "own-phone" (telefone).
+ */
 const BOOKINGS = [
-  bk({ id: "own-site", origin: "API", total: 50 }),                                                         // Airpark, site
-  bk({ id: "own-phone", origin: "MANUAL", total: 40 }),                                                     // Airpark, telefone
-  bk({ id: "mkt-third-site", day: "2026-10-14", projectId: 300, parkId: "t1", origin: "API", total: 100, value: 20, marketplace: true, parkOurs: false }),
-  bk({ id: "mkt-own-origin", day: "2026-10-14", projectId: 30, origin: "MARKETPLACE", total: 60, marketplace: true }),   // nossa, veio pelo multipark.pt
-  bk({ id: "mkt-unplaced-form", day: "2026-10-15", projectId: null, parkId: "t9", origin: "GENERAL_FORM", total: 80, value: 16, marketplace: true, parkOurs: false }),
+  bk({ id: "own-site", origin: "API", total: 50 }),                                                         // 13/10 Airpark, site da marca → site
+  bk({ id: "own-phone", origin: "MANUAL", total: 40 }),                                                     // 13/10 Airpark, telefone → NÃO é site
+  bk({ id: "mkt-third-site", day: "2026-10-14", projectId: 300, parkId: "t1", origin: "API", total: 100, value: 20, marketplace: true, parkOurs: false }), // 14/10 terceiros → site
+  bk({ id: "mkt-own-origin", day: "2026-10-14", projectId: 30, origin: "MARKETPLACE", total: 60, marketplace: true }),   // 14/10 nossa, veio pelo multipark.pt → site (nó Marketplace)
+  bk({ id: "mkt-unplaced-form", day: "2026-10-15", projectId: null, parkId: "t9", origin: "GENERAL_FORM", total: 80, value: 16, marketplace: true, parkOurs: false }), // 15/10 sem cidade, formulário → site
 ];
 const ADS: any = {
   totals: { cost: 30, conversions: 3, impressions: 1000, clicks: 60, cpc: 0.5, ctr: 0.06 },
@@ -101,22 +107,23 @@ describe("F2.1 — Web & SEO: as reservas do Painel do Marketing (com o Marketpl
 
   it("uma reserva do Marketplace feita no site entra (todas as marcas e na marca Multipark)", async () => {
     const all = await bookingsByDay(FROM, TO, null);
-    expect(all.get("2026-10-14")).toMatchObject({ bookings: 2, siteBookings: 1 });
+    // 14/10: mkt-third-site (API) + mkt-own-origin (MARKETPLACE, multipark.pt) — as duas são "site"
+    expect(all.get("2026-10-14")).toMatchObject({ bookings: 2, siteBookings: 2 });
     expect(all.get("2026-10-15")).toMatchObject({ bookings: 1, siteBookings: 1 }); // Marketplace sem cidade, formulário
     const mp = await bookingsByDay(FROM, TO, "multipark");
     const sum = (m: Map<string, { siteBookings: number; bookings: number }>, k: "siteBookings" | "bookings") => [...m.values()].reduce((t, x) => t + x[k], 0);
     expect(sum(mp, "bookings")).toBe(3);      // as três do Marketplace
-    expect(sum(mp, "siteBookings")).toBe(2);  // terceiros por API + sem cidade por formulário (a origem MARKETPLACE não é "site", como no Painel)
+    expect(sum(mp, "siteBookings")).toBe(3);  // terceiros por API + nossa pelo multipark.pt (MARKETPLACE) + sem cidade por formulário
     const air = await bookingsByDay(FROM, TO, "airpark");
-    expect(sum(air, "bookings")).toBe(2);
-    expect(sum(air, "siteBookings")).toBe(1);
+    expect(sum(air, "bookings")).toBe(2);     // own-site + own-phone (a mkt-own-origin está no nó Marketplace, não na Airpark)
+    expect(sum(air, "siteBookings")).toBe(1); // own-site (o telefone não é site)
   });
 
   it("o valor é o TOTAL da reserva (o que o cliente paga), também nos parques de terceiros — não a comissão do Marketing (Jorge, 15 out)", async () => {
     const all = await bookingsByDay(FROM, TO, null);
-    expect(all.get("2026-10-14")).toMatchObject({ siteRevenue: 100, revenue: 160 }); // terceiros 100 (não a comissão de 20) + nossa 60
+    expect(all.get("2026-10-14")).toMatchObject({ siteRevenue: 160, revenue: 160 }); // terceiros 100 (não a comissão de 20) + nossa pelo multipark.pt 60, as duas do site
     expect(all.get("2026-10-15")).toMatchObject({ siteRevenue: 80, revenue: 80 });   // sem cidade: 80 (não 16)
-    expect(all.get("2026-10-13")).toMatchObject({ siteRevenue: 50, revenue: 90 });
+    expect(all.get("2026-10-13")).toMatchObject({ siteRevenue: 50, revenue: 90 });   // site 50; o telefone (40) só no total
   });
 
   it("Web & SEO e Painel do Marketing contam as MESMAS reservas do site para os mesmos dados (a mesma leitura e a mesma regra)", async () => {
@@ -124,7 +131,7 @@ describe("F2.1 — Web & SEO: as reservas do Painel do Marketing (com o Marketpl
     const s: any = await getMarketingStats({ from: FROM, to: TO }, ADS);
     const webSite = [...web.values()].reduce((t, x) => t + x.siteBookings, 0);
     const webAll = [...web.values()].reduce((t, x) => t + x.bookings, 0);
-    expect(s.attributionQuality.siteBookings).toBe(3);
+    expect(s.attributionQuality.siteBookings).toBe(4); // own-site, mkt-third-site, mkt-own-origin (multipark.pt), mkt-unplaced-form; fora só o telefone
     expect(webSite).toBe(s.attributionQuality.siteBookings);
     expect(webAll).toBe(s.bookingsTotal);
     // a mesma chamada nos dois ecrãs
@@ -132,13 +139,18 @@ describe("F2.1 — Web & SEO: as reservas do Painel do Marketing (com o Marketpl
     expect(h.load.mock.calls[1]).toEqual([FROM, TO, null, { marketplace: true }]);
   });
 
-  it("regra única de 'feita no site' (shared/bookingOrigin.ts), usada pelos dois", () => {
-    expect([...SITE_BOOKING_ORIGINS]).toEqual(["API", "GENERAL_FORM"]);
+  it("regra única de 'feita no site' (shared/bookingOrigin.ts), usada pelos dois: sites das marcas, formulário e multipark.pt", () => {
+    expect([...SITE_BOOKING_ORIGINS]).toEqual(["API", "GENERAL_FORM", "MARKETPLACE"]);
     expect(isSiteBooking("API")).toBe(true);
     expect(isSiteBooking("GENERAL_FORM")).toBe(true);
-    expect(isSiteBooking("MARKETPLACE")).toBe(false);
+    // Jorge (15 out 2026): as feitas no multipark.pt contam como site
+    expect(isSiteBooking("MARKETPLACE")).toBe(true);
+    // telefone, parceiros (ex.: Booking, pela API ou pelo painel de parceiro) e sem origem não são site
     expect(isSiteBooking("MANUAL")).toBe(false);
+    expect(isSiteBooking("PARTNER_DASHBOARD")).toBe(false);
+    expect(isSiteBooking("PARTNER_API")).toBe(false);
     expect(isSiteBooking(null)).toBe(false);
+    expect(isSiteBooking("")).toBe(false);
     expect(src("server/integrations/googleAds/marketingStats.ts")).toContain("if (isSiteBooking(b.origin)) {");
     expect(src("server/webAnalytics/queries.ts")).toContain("if (isSiteBooking(b.origin)) {");
     expect(src("server/integrations/googleAds/marketingStats.ts")).not.toContain("SITE_ORIGINS = [");
@@ -195,9 +207,11 @@ describe("F2 — vista geral do Web & SEO", () => {
     // as reservas de hoje contam (parciais); a conversão de hoje fica sem taxa (sem sessões)
     expect(o.series[2]).toMatchObject({ siteBookings: 1, conversionRate: null });
     // as reservas de hoje contam no total (bate com o Painel), mas não na taxa: as sessões só vão até ontem (auditoria)
-    expect(o.business.totals).toMatchObject({ siteBookings: 3, sessions: 300, daysWithoutSessions: 1 });
-    expect(o.business.totals.conversionRate).toBeCloseTo(2 / 300, 10);
-    expect(o.business.totals.revenuePerSession).toBeCloseTo((50 + 100) / 300, 10);
+    // site: 13/10 own-site; 14/10 mkt-third-site + mkt-own-origin (multipark.pt); 15/10 mkt-unplaced-form → 4
+    expect(o.business.totals).toMatchObject({ siteBookings: 4, sessions: 300, daysWithoutSessions: 1 });
+    // taxa só com 13 e 14/10 (os dias com GA4): 1 + 2 reservas no site ÷ 300 sessões
+    expect(o.business.totals.conversionRate).toBeCloseTo(3 / 300, 10);
+    expect(o.business.totals.revenuePerSession).toBeCloseTo((50 + 100 + 60) / 300, 10);
   });
 
   it("eventos-chave por evento (o que o GA4 conta) e os eventos que o site envia", async () => {
@@ -325,5 +339,27 @@ describe("F2.4/F2.5 — páginas de entrada e o dia de hoje no ecrã", () => {
     expect(help).toContain("**com o Marketplace**");
     expect(help).toContain("A marca **Multipark** inclui o **Marketplace**");
     expect(help).toContain("**Hoje** aparece como \"hoje\" (parcial)");
+  });
+
+  it("textos de 'feitas no site' (Jorge, 15 out 2026): sites das marcas, formulário e multipark.pt; telefone, parceiros e balcão não", () => {
+    const help = src("docs/ajuda/web-analytics.md");
+    expect(help).toContain("**sites das marcas, formulário e multipark.pt**");
+    expect(help).toContain("**Não contam** como site as de telefone, de parceiros (ex.: **Booking**) e de balcão");
+    expect(help).not.toContain("mas **não** como \"feitas no site\"");
+    const mkt = src("docs/ajuda/marketing.md");
+    expect(mkt).toContain("**Reservas feitas no site**");
+    expect(mkt).toContain("\"Mais de metade das reservas do site não tem link de origem\"");
+    expect(mkt).toContain("**multipark.pt não enviar o link de origem**");
+    // o aviso não muda (só a ajuda explica quando aparece)
+    expect(src("shared/marketingAttribution.ts")).toContain("Mais de metade das reservas do site não tem link de origem");
+    // Web & SEO: as dicas já não dizem que as do Marketplace ficam de fora
+    expect(panel).toContain("«no site» = sites das marcas, formulário e multipark.pt");
+    expect(panel).toContain("Reservas feitas no site (sites das marcas, formulário e multipark.pt");
+    expect(panel).not.toContain("não como «no site»");
+    expect(panel).not.toContain("origem API/formulário");
+    // Painel do Marketing: dica curta em "Reservas feitas no site"
+    const dash = src("client/src/components/marketing/MarketingDashboardPanel.tsx");
+    expect(dash).toContain(`const SITE_BOOKINGS_TIP = "Sites das marcas, formulário e multipark.pt`);
+    expect(dash).toContain("<span title={SITE_BOOKINGS_TIP}>");
   });
 });

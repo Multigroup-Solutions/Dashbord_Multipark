@@ -11,7 +11,8 @@
  *  - Velocidade: PageSpeed móvel/computador com verde/âmbar/vermelho;
  *  - Negócio: reservas feitas no site ÷ sessões, receita por sessão e gasto
  *    dos anúncios por sessão (as mesmas reservas do Painel do Marketing, com o
- *    Marketplace — plano 64, F2).
+ *    Marketplace — plano 64, F2; "no site" = sites das marcas, formulário e
+ *    multipark.pt — Jorge, 15 out 2026).
  *  - Plano 64 (F2): o KPI do GA4 chama-se "Eventos-chave GA4" (não são
  *    reservas) e há a lista dos eventos que o GA4 conta como tal; o funil diz
  *    que passos não chegam ao GA4; o dia de hoje vem marcado como parcial.
@@ -251,7 +252,7 @@ export default function MarketingWebPanel() {
       <div className="flex items-end justify-between flex-wrap gap-2">
         <p className="text-xs text-muted-foreground max-w-2xl">
           Google Analytics 4 e Search Console (totais por dia, recolhidos 1×/dia) e PageSpeed (1×/semana). A Search Console chega com ~2–3 dias de atraso.
-          Reservas: as mesmas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; "no site" = feitas num site (formulário ou site da marca). A marca Multipark inclui o Marketplace.
+          Reservas: as mesmas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; "no site" = sites das marcas, formulário e multipark.pt. A marca Multipark inclui o Marketplace.
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <Select value={brand || "all"} onValueChange={(v) => setBrand(v === "all" ? "" : (v as WebBrand))}>
@@ -368,7 +369,7 @@ export default function MarketingWebPanel() {
             <Kpi icon={Globe} label="Impressões" value={num(s?.cur.impressions)} cur={s?.cur.impressions} prev={s?.prev.impressions} hint={`CTR ${pctOf(s?.cur.ctr)}`} />
             <Kpi icon={Search} label="Posição média" value={posFmt(s?.cur.position)} cur={s?.cur.position} prev={s?.prev.position} invert abs={(d) => `${d > 0 ? "+" : "−"}${posFmt(Math.abs(d))}`} hint="menor é melhor" />
             <Kpi icon={ShoppingCart} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate}
-              hint={b?.bookingsError ? "reservas da Multipark indisponíveis" : `${num(b?.totals.siteBookings)} reservas no site${rateGap}`} tip="Reservas feitas no site (as mesmas do Painel do Marketing, com o Marketplace) ÷ sessões do GA4, só nos dias que já têm GA4 (hoje fica de fora da taxa). Indicador, não atribuição." />
+              hint={b?.bookingsError ? "reservas da Multipark indisponíveis" : `${num(b?.totals.siteBookings)} reservas no site${rateGap}`} tip="Reservas feitas no site (sites das marcas, formulário e multipark.pt — as mesmas do Painel do Marketing) ÷ sessões do GA4, só nos dias que já têm GA4 (hoje fica de fora da taxa). Telefone, parceiros (ex.: Booking) e balcão não contam. Indicador, não atribuição." />
           </div>
 
           <Tabs value={section} onValueChange={setSection}>
@@ -539,7 +540,7 @@ export default function MarketingWebPanel() {
             <TabsContent value="negocio" className={`mt-4 space-y-4 ${SERIES}`}>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 <Kpi icon={ShoppingCart} label="Reservas feitas no site" value={b?.bookingsError ? "—" : num(b?.totals.siteBookings)} cur={b?.bookingsError ? null : b?.totals.siteBookings} prev={b?.bookingsError ? null : b?.prevTotals.siteBookings} hint={b?.bookingsError ? "indisponíveis (BD da Multipark não respondeu)" : `de ${num(b?.totals.bookings)} no total (com o Marketplace)`}
-                  tip="As mesmas reservas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; «no site» = origem API ou formulário (a mesma regra do Painel). As de origem Marketplace (multipark.pt) contam no total, não como «no site»." />
+                  tip="As mesmas reservas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; «no site» = sites das marcas, formulário e multipark.pt (a mesma regra do Painel). Telefone, parceiros (ex.: Booking) e balcão contam só no total." />
                 <Kpi icon={TrendingUp} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate} hint={b?.bookingsError ? "reservas indisponíveis" : `reservas no site ÷ sessões${rateGap}`} />
                 <Kpi icon={TrendingUp} label="Receita por sessão" value={b?.bookingsError ? "—" : eur(b?.totals.revenuePerSession, 2)} cur={b?.bookingsError ? null : b?.totals.revenuePerSession} prev={b?.bookingsError ? null : b?.prevTotals.revenuePerSession}
                   hint={b?.bookingsError ? "reservas indisponíveis" : `valor total das reservas do site (c/ IVA) ÷ sessões${rateGap}`}
@@ -566,7 +567,7 @@ export default function MarketingWebPanel() {
                   </ResponsiveContainer>
                   <p className="text-[11px] text-muted-foreground">
                     {hasToday && <>«hoje» é o dia em curso: as reservas de hoje ainda estão a entrar e o GA4 ainda não tem as sessões de hoje. </>}
-                    Indicador, não atribuição: compara as sessões da GA4 com as reservas feitas num site (origem API/formulário — a regra do Painel do Marketing, com o Marketplace) no mesmo dia e marca.
+                    Indicador, não atribuição: compara as sessões da GA4 com as reservas feitas num site (sites das marcas, formulário e multipark.pt — a regra do Painel do Marketing) no mesmo dia e marca.
                     O detalhe por canal pago está em <Link href="/marketing" className="underline">Dashboard</Link> e <Link href="/marketing/canais" className="underline">Canais e clientes</Link>.
                   </p>
                 </CardContent>

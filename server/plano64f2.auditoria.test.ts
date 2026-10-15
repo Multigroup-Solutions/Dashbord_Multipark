@@ -10,7 +10,11 @@
  *     por marca (reservas, valor e gasto);
  *  2. âmbito de cidade: um supervisor de Lisboa não vê reservas do Porto nem
  *     as do "Marketplace (sem cidade)";
- *  3. a cache das reservas (60 s) não passa a lista de um âmbito a outro.
+ *  3. a cache das reservas (60 s) não passa a lista de um âmbito a outro;
+ *  4. "feita no site" = sites das marcas, formulário e multipark.pt (Jorge,
+ *     15 out 2026): uma reserva de parque nosso com origem MARKETPLACE conta
+ *     como site e fica no Marketplace (não na marca do parque); telefone,
+ *     painel de parceiro e parceiros como o Booking não são site.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adAccounts, projects } from "../drizzle/schema";
@@ -65,6 +69,7 @@ import { loadMarketingBookings, resetMarketingBookingsCache } from "./marketingL
 import { adSpendByDay, bookingsByDay } from "./webAnalytics/queries";
 import { getMarketingStats, getSpendAndBookingsByBrand } from "./integrations/googleAds/marketingStats";
 import { cityScope } from "./cityScope";
+import { isSiteBooking } from "../shared/bookingOrigin";
 
 // Lisboa (1) → Airpark (10) → Airpark Lisboa (100); Lisboa → Marketplace (30) → Readypark Lisboa (300)
 // Porto (2)  → Airpark (20) → Airpark Porto (200);  Porto  → Marketplace (40)
@@ -92,15 +97,16 @@ const row = (id: string, parkId: string, origin: string, total: number, o: Recor
   partnerId: null, partnerName: null, paymentMethod: null, paymentSource: null, campaignName: null, discountCode: null,
   total, hasEmail: true, newClient: true, commission: null, pro: false, plan: false, ...o,
 });
+/** "Feitas no site" (sites das marcas, formulário e multipark.pt): todas menos a a2 (telefone). */
 const ROWS = [
-  row("a1", "pA", "API", 50),                                                         // Airpark Lisboa, site
-  row("a2", "pA", "MANUAL", 40),                                                      // Airpark Lisboa, telefone
-  row("a3", "pA", "MARKETPLACE", 60, { day: "2026-10-14" }),                          // nossa pelo multipark.pt → Marketplace Lisboa
-  row("p1", "pP", "GENERAL_FORM", 70),                                                // Airpark Porto, formulário
-  row("p2", "pP", "MARKETPLACE", 30, { day: "2026-10-14" }),                          // nossa pelo multipark.pt → Marketplace Porto
+  row("a1", "pA", "API", 50),                                                         // Airpark Lisboa, site da marca → site
+  row("a2", "pA", "MANUAL", 40),                                                      // Airpark Lisboa, telefone → NÃO é site
+  row("a3", "pA", "MARKETPLACE", 60, { day: "2026-10-14" }),                          // nossa pelo multipark.pt → Marketplace Lisboa, site
+  row("p1", "pP", "GENERAL_FORM", 70),                                                // Airpark Porto, formulário → site
+  row("p2", "pP", "MARKETPLACE", 30, { day: "2026-10-14" }),                          // nossa pelo multipark.pt → Marketplace Porto, site
   row("t1a", "t1", "API", 100, { commission: 20 }),                                   // terceiros Lisboa, site
-  row("t1b", "t1", "MARKETPLACE", 80, { commission: 16, day: "2026-10-14" }),         // terceiros Lisboa, multipark.pt
-  row("t9a", "t9", "GENERAL_FORM", 90, { commission: 18, day: "2026-10-14" }),        // terceiros sem cidade, formulário
+  row("t1b", "t1", "MARKETPLACE", 80, { commission: 16, day: "2026-10-14" }),         // terceiros Lisboa, multipark.pt → site
+  row("t9a", "t9", "GENERAL_FORM", 90, { commission: 18, day: "2026-10-14" }),        // terceiros sem cidade, formulário → site
 ];
 const camp = (key: string, projectId: number, cost: number) => ({
   key, name: key, accountName: null, campaignId: null, accountId: 1, source: "api", provider: "google_ads", status: "ENABLED", externalId: key,
@@ -141,7 +147,7 @@ describe("F2 (auditoria) — Web & SEO == Painel do Marketing, com a leitura rea
     const web = total(await bookingsByDay(FROM, TO, null));
     const painel: any = await getMarketingStats({ from: FROM, to: TO }, ADS);
     expect(painel.bookingsTotal).toBe(8);
-    expect(painel.attributionQuality.siteBookings).toBe(4); // a1, p1, t1a, t9a (as de origem MARKETPLACE não são "site")
+    expect(painel.attributionQuality.siteBookings).toBe(7); // todas menos a a2 (telefone): a1, a3, p1, p2, t1a, t1b, t9a — as do multipark.pt (MARKETPLACE) contam
     expect(web.bookings).toBe(painel.bookingsTotal);
     expect(web.siteBookings).toBe(painel.attributionQuality.siteBookings);
   });
@@ -149,7 +155,7 @@ describe("F2 (auditoria) — Web & SEO == Painel do Marketing, com a leitura rea
   it("uma marca: Airpark == Painel filtrado por 'Airpark (todas as cidades)'", async () => {
     const web = total(await bookingsByDay(FROM, TO, "airpark"));
     const painel: any = await getMarketingStats({ from: FROM, to: TO, projectId: -10 }, ADS);
-    expect(web).toMatchObject({ bookings: 3, siteBookings: 2 }); // a1, a2, p1 (a3/p2 vieram pelo multipark.pt → Marketplace)
+    expect(web).toMatchObject({ bookings: 3, siteBookings: 2 }); // a1, a2, p1; site a1, p1 (a3/p2 vieram pelo multipark.pt → contam no Marketplace, não aqui)
     expect(web.bookings).toBe(painel.bookingsTotal);
     expect(web.siteBookings).toBe(painel.attributionQuality.siteBookings);
   });
@@ -157,12 +163,13 @@ describe("F2 (auditoria) — Web & SEO == Painel do Marketing, com a leitura rea
   it("uma marca: Multipark == Painel filtrado por 'Marketplace (todas as cidades)' + as do Marketplace (sem cidade)", async () => {
     const web = total(await bookingsByDay(FROM, TO, "multipark"));
     const painel: any = await getMarketingStats({ from: FROM, to: TO, projectId: -30 }, ADS);
-    expect(web).toMatchObject({ bookings: 5, siteBookings: 2 }); // a3, p2, t1a, t1b, t9a; site: t1a, t9a
+    expect(web).toMatchObject({ bookings: 5, siteBookings: 5 }); // a3, p2, t1a, t1b, t9a — todas do site (multipark.pt, site, formulário)
     expect(painel.bookingsTotal).toBe(4);                        // sem o t9a (sem cidade fica fora de qualquer filtro de centro)
+    expect(painel.attributionQuality.siteBookings).toBe(4);      // a3, p2, t1a, t1b
     expect(painel.marketplace.withoutCity.bookings).toBe(0);
     const all: any = await getMarketingStats({ from: FROM, to: TO }, ADS);
     expect(web.bookings).toBe(painel.bookingsTotal + all.marketplace.withoutCity.bookings);
-    expect(web.siteBookings).toBe(painel.attributionQuality.siteBookings + 1);
+    expect(web.siteBookings).toBe(painel.attributionQuality.siteBookings + 1); // + o t9a (sem cidade, formulário)
   });
 
   it("tabela por marca do Marketing: as mesmas reservas e o mesmo gasto por marca; o valor é o total da reserva", async () => {
@@ -203,7 +210,7 @@ describe("F2 (auditoria) — âmbito de cidade", () => {
     expect(ids).toEqual(["a1", "a2", "a3", "t1a", "t1b"]);
     const web = total(await asUser(LISBOA, () => bookingsByDay(FROM, TO, null)));
     const painel: any = await asUser(LISBOA, () => getMarketingStats({ from: FROM, to: TO }, ADS));
-    expect(web).toMatchObject({ bookings: 5, siteBookings: 2 });
+    expect(web).toMatchObject({ bookings: 5, siteBookings: 4 }); // site: a1, a3 (multipark.pt), t1a, t1b (multipark.pt); fora a a2 (telefone)
     expect(web.bookings).toBe(painel.bookingsTotal);
     expect(web.siteBookings).toBe(painel.attributionQuality.siteBookings);
   });
@@ -226,5 +233,58 @@ describe("F2 (auditoria) — âmbito de cidade", () => {
     const before = h.reads;
     await idsOf(SEM_MKT);
     expect(h.reads).toBe(before);
+  });
+});
+
+describe("F2 — 'feita no site' com o multipark.pt (Jorge, 15 out 2026)", () => {
+  it("parque nosso (Airpark) com origem MARKETPLACE: conta como site e fica no Marketplace (Web & SEO e Painel), não na Airpark", async () => {
+    h.rows = [row("m1", "pA", "MARKETPLACE", 60)];
+    const [m1] = await loadMarketingBookings(FROM, TO, null, { marketplace: true });
+    // toMarketingBooking: parque nosso que veio pelo multipark.pt → nó Marketplace Lisboa (30), não o Airpark Lisboa (100)
+    expect(m1).toMatchObject({ id: "m1", projectId: 30, parkOurs: true, marketplace: true });
+    expect(isSiteBooking(m1.origin)).toBe(true);
+    // Web & SEO: na marca Multipark (Marketplace), como site; a Airpark não a vê
+    expect(total(await bookingsByDay(FROM, TO, "multipark"))).toEqual({ bookings: 1, siteBookings: 1, revenue: 60 });
+    expect(total(await bookingsByDay(FROM, TO, "airpark"))).toEqual({ bookings: 0, siteBookings: 0, revenue: 0 });
+    expect(total(await bookingsByDay(FROM, TO, null))).toEqual({ bookings: 1, siteBookings: 1, revenue: 60 });
+    // Painel: todas as marcas e "Marketplace (todas as cidades)" contam-na como site; "Airpark (todas as cidades)" não a tem
+    const painelAll: any = await getMarketingStats({ from: FROM, to: TO }, ADS);
+    const painelMkt: any = await getMarketingStats({ from: FROM, to: TO, projectId: -30 }, ADS);
+    const painelAir: any = await getMarketingStats({ from: FROM, to: TO, projectId: -10 }, ADS);
+    expect([painelAll.bookingsTotal, painelAll.attributionQuality.siteBookings]).toEqual([1, 1]);
+    expect([painelMkt.bookingsTotal, painelMkt.attributionQuality.siteBookings]).toEqual([1, 1]);
+    expect([painelAir.bookingsTotal, painelAir.attributionQuality.siteBookings]).toEqual([0, 0]);
+    // tabela por marca do Marketing: na linha Marketplace, não na Airpark
+    const byBrand: any = await getSpendAndBookingsByBrand({ from: FROM, to: TO }, ADS);
+    const brandRow = (name: string) => byBrand.brands.find((b: any) => b.brand === name);
+    expect(brandRow("Marketplace").bookings).toBe(1);
+    expect(brandRow("Airpark")?.bookings ?? 0).toBe(0);
+  });
+
+  it("telefone, painel de parceiro e parceiro Booking não contam como site (nem passam ao Marketplace num parque nosso)", async () => {
+    h.rows = [
+      row("ph", "pA", "MANUAL", 40),                                                          // telefone
+      row("pd", "pA", "PARTNER_DASHBOARD", 70),                                               // painel de parceiro
+      row("bk", "pA", "PARTNER_API", 120, { partnerId: "booking", partnerName: "Booking" }), // Booking (parceiro, pela API dele)
+    ];
+    const loaded = await loadMarketingBookings(FROM, TO, null, { marketplace: true });
+    expect(loaded.map((b) => [b.id, b.projectId, b.marketplace, isSiteBooking(b.origin)])).toEqual([
+      ["ph", 100, false, false], ["pd", 100, false, false], ["bk", 100, false, false],
+    ]);
+    // Web & SEO: contam nas reservas da Airpark, nenhuma como site; a marca Multipark não as recebe
+    expect(total(await bookingsByDay(FROM, TO, "airpark"))).toEqual({ bookings: 3, siteBookings: 0, revenue: 230 });
+    expect(total(await bookingsByDay(FROM, TO, "multipark"))).toEqual({ bookings: 0, siteBookings: 0, revenue: 0 });
+    // Painel: as mesmas contagens, 0 feitas no site
+    const painel: any = await getMarketingStats({ from: FROM, to: TO }, ADS);
+    expect([painel.bookingsTotal, painel.attributionQuality.siteBookings]).toEqual([3, 0]);
+    expect(total(await bookingsByDay(FROM, TO, null)).siteBookings).toBe(painel.attributionQuality.siteBookings);
+  });
+
+  it("parceiro (Booking) num parque de terceiros: não é site — a origem decide, não o parque", async () => {
+    h.rows = [row("bk3", "t1", "PARTNER_API", 90, { partnerId: "booking", partnerName: "Booking", commission: 18 })];
+    const web = total(await bookingsByDay(FROM, TO, null));
+    const painel: any = await getMarketingStats({ from: FROM, to: TO }, ADS);
+    expect(web).toMatchObject({ bookings: 1, siteBookings: 0 });
+    expect([painel.bookingsTotal, painel.attributionQuality.siteBookings]).toEqual([1, 0]);
   });
 });

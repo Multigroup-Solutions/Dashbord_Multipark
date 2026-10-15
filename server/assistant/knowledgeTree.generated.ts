@@ -781,7 +781,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Conversões (Google + Meta): o que cada plataforma conta (Google à parte, Meta à parte).",
        "children": [],
        "container": false,
-       "chars": 3224
+       "chars": 4127
       }
      ]
     },
@@ -955,10 +955,10 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "slug": "negocio-reservas-conversao-e-receita-por-sessao",
        "title": "Negócio: reservas, conversão e receita por sessão",
        "level": 4,
-       "summary": "As reservas são as mesmas do Painel do Marketing (a mesma leitura, com o Marketplace), pela data de criação, sem canceladas; \"feitas no site\" = origem…",
+       "summary": "As reservas são as mesmas do Painel do Marketing (a mesma leitura, com o Marketplace), pela data de criação, sem canceladas.",
        "children": [],
        "container": false,
-       "chars": 1960
+       "chars": 2324
       },
       {
        "id": "web-analytics.md#configurar-super-admin",
