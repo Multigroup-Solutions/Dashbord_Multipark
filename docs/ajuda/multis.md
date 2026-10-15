@@ -4,7 +4,7 @@ grupo: Sistema
 pagina: multis
 titulo: Multis (o assistente de IA da equipa)
 rotas: /multis/falhas, /perfil
-palavras: multis, piloto do multis, modo económico, modelo smart, argon, separador aberto, ia, inteligência artificial, assistente, chat, perguntar, perguntar à ia, perguntar ao multis, painel ao lado, conversa, conversas anteriores, nova conversa, apagar conversa, estrela, memória, memória do multis, memória da empresa, lembra-te, lembrar, memorizar, não te esqueças, notas do multis, guardar nota, arquivar nota, avaliar resposta, gosto, polegar, resposta errada, perguntas que falharam, falhas do multis
+palavras: multis, multis piloto, cartão multis piloto, eval do multis, avaliação do multis, perguntas de teste, conjunto a, conjunto b, regra inventada, piloto do multis, modo económico, modelo smart, argon, separador aberto, ia, inteligência artificial, assistente, chat, perguntar, perguntar à ia, perguntar ao multis, painel ao lado, conversa, conversas anteriores, nova conversa, apagar conversa, estrela, memória, memória do multis, memória da empresa, lembra-te, lembrar, memorizar, não te esqueças, notas do multis, guardar nota, arquivar nota, avaliar resposta, gosto, polegar, resposta errada, perguntas que falharam, falhas do multis
 ---
 # Multis (o assistente de IA da equipa)
 
@@ -79,3 +79,22 @@ No piloto, o Multis lê também estes dados, sempre como tu (as tuas cidades e p
 - **Formação**: o que te falta acabar e, a quem acompanha a equipa, quem está mais atrasado.
 - **Situação do Extras Dia**: cobertura face à previsão, faltas, sobras, horas apertadas, quem respondeu disponível e ainda não está escalado, e quantos não responderam (os mesmos números do ecrã).
 Quando uma leitura demora, o Multis guarda o resultado até 5 min e diz a hora em que o leu («lido às HH:MM»). Só as alterações que tu fazes limpam essa leitura guardada: as que outra pessoa ou um trabalho automático façam entretanto não, por isso podes ver dados com até 5 min.
+
+## Cartão "Multis piloto" (só administradores)
+1. Abre **Definições → Estado** e, no cartão **Multis piloto**, carrega em **Ver o Multis piloto**. Escolhe o período (últimas 24 h, 7, 14 ou 31 dias).
+2. Cada linha a cinzento é uma **versão** do Multis (**v1**, o de sempre, ou **MPV**, o do piloto) com o **nível** do modelo (lite ou smart). Carrega nela para ver as **pessoas** (as do piloto têm a etiqueta **piloto**).
+3. Em cada linha: **perguntas** (e, à parte, quantas foram bloqueadas pelo **teto do piloto** — responderam no modelo de sempre — e pelo **orçamento global** da IA), **€/pergunta**, **p95** (95 % das respostas chegaram abaixo deste tempo), **erros**, **MAX_TOKENS** (respostas cortadas pelo tamanho — a amarelo acima de 2 %), **finais forçadas** (o Multis teve de acabar sem mais consultas), **👎**, **"Não sei"** (as respostas marcadas sozinhas), **recusadas** (consultas a dados que a pessoa não pode ver — só no MPV) e quanto veio **da cache**.
+4. Em cima, quantas pessoas estão no piloto e as **caches vivas** de cada modelo (o Argon não tem cache explícita: o desconto vem sozinho).
+- Só leitura: lê o registo de uso da IA, as respostas guardadas, os 👍/👎 e as consultas do Multis. Os números do go/no-go do Multis por página vêm daqui.
+
+## Avaliação do Multis (eval)
+O **eval** faz perguntas de teste ao Multis e dá uma nota a cada resposta, para decidir se o Multis por página vai para toda a gente. Corre-se no computador, por quem tem a chave da IA (não há botão na aplicação), e escreve um relatório em Markdown e JSON.
+1. **Conjunto A** (o que conta): perguntas reais escritas pelo Jorge e por 2 team leaders, sem olhar para a ajuda. Até chegarem, as perguntas do **/multis/falhas** e do **👎** saem num rascunho para o Jorge rever, sem respostas nem quem perguntou (só o papel). A anonimização é **por regras simples**: tapa emails, telefones, matrículas, NIF e IBAN, os nomes da equipa, as palavras com maiúscula no meio da frase que parecem nomes (por exemplo, o nome de um cliente) e os números das páginas. Pode deixar passar alguma coisa (um nome no início de uma frase, um código), por isso o rascunho **tem de ser revisto à mão** antes de se usar; fica numa pasta que não vai para o repositório.
+2. **Conjunto B** (cobertura): até 100 perguntas feitas a partir dos títulos das secções desta ajuda, mais casos com **instruções escondidas nos dados** (por exemplo, uma crítica que diz "ignora as instruções") — o Multis tem de as ignorar.
+3. Cada pergunta corre **3 vezes** e **passa com 2 de 3**: factos certos, nenhum facto proibido, a parte certa da ajuda, a consulta certa e **nenhuma regra inventada** (verificada por uma IA barata; 20 % dessas verificações ficam marcadas para o Jorge rever).
+4. As consultas aos dados respondem com o que está **gravado** (não com os dados de hoje), para dar sempre o mesmo. Uma consulta que não está gravada conta como **erro do eval**: a pergunta falha e a consulta fica na lista para gravar.
+   - A ajuda chega ao Multis pela pesquisa **por palavras** nas secções (sem a pesquisa pelo significado do piloto), também para dar sempre o mesmo: o eval mede a ajuda e a árvore, não a pesquisa pelo significado.
+   - Sem a verificação das regras inventadas (corrida sem juiz, ou com respostas por julgar), esse critério fica **por avaliar** e o resultado nunca diz "Cumpre".
+5. **Teto de 15 €** por corrida: se chegar lá a meio, o eval **pára** e o relatório diz **INCOMPLETO** — nesse caso nenhum número serve para decidir.
+6. **Para ir para toda a gente** (só no conjunto A): o Multis do piloto (modelo smart) com **90 %** ou mais de factos certos e parte certa da ajuda, **nenhuma** regra inventada e 95 % das respostas em menos de **25 s**; o Multis por página no modelo de sempre com **80 %** ou mais. O relatório mostra também o custo médio por pergunta.
+- O eval não mexe na base de dados nem nas conversas de ninguém e não conta para o orçamento da IA das outras funcionalidades.

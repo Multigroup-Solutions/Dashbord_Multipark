@@ -71,7 +71,7 @@ const execute = async () => ({ total: 1 });
 
 describe("assistant_smart: catálogo, interruptores e definições", () => {
   it("nível smart, interruptor próprio desligado, não essencial, teto próprio; MPV só super admin", () => {
-    expect(AI_OWN_BUDGET_FEATURES).toEqual(["assistant_smart"]);
+    expect(AI_OWN_BUDGET_FEATURES).toEqual(["assistant_smart", "assistant_eval"]);
     expect(hasOwnBudget("assistant_smart")).toBe(true);
     expect(hasOwnBudget("assistant")).toBe(false);
     expect(AUTOMATION_FLAGS.find((f) => f.name === "AI_ASSISTANT_SMART")).toMatchObject({ defaultEnabled: false, group: "ia" });
@@ -201,8 +201,9 @@ describe("teto próprio do assistant_smart", () => {
     const r = await runAi({ feature: "mail_routing", input: "email" });
     expect(r.output).toBe('{"ok":true}');
     const q = h.db.queries.find((x: FakeQuery) => x.sql.includes("NOT IN"))!;
-    expect(q.sql).toContain("AND feature NOT IN (?)");
-    expect(q.params).toContain("assistant_smart");
+    // O eval do Multis (F8) também tem teto próprio: fica de fora do global.
+    expect(q.sql).toContain("AND feature NOT IN (?, ?)");
+    expect(q.params).toEqual(expect.arrayContaining(["assistant_smart", "assistant_eval"]));
     expect(await monthSpendEur()).toBeCloseTo(5, 2); // + o custo desta chamada
   });
 
