@@ -42,6 +42,9 @@ import { HELP_FILES } from "./helpDocs.generated";
 import { staffToolsFor, type StaffToolCtx } from "./tools";
 import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnBudget, mpvTurnKnowledge } from "./mpv";
 import type { CityAccess } from "../cityAccess";
+import type { AiFeature } from "../_core/ai/features";
+import type { AiTier } from "../_core/ai/models";
+import type { ChatTool } from "../_core/ai/chat/tools";
 
 /** Quantos trechos da ajuda a base devolve por pergunta (dão até 3 ficheiros). */
 export const HELP_KB_TOP_K = 6;
@@ -279,6 +282,14 @@ export async function askAssistant(
     memoryEnabled?: boolean;
     /** Versão desta pessoa (omisso = assistantModeFor). */
     mode?: AssistantMode;
+    /**
+     * Avaliação (scripts/eval-multis.ts, plano MPV §8.2/F8): o turno corre como
+     * `feature` (assistant_eval) no `tier` da versão, sem conversa guardada nem
+     * limite de pedidos e sem descer para o lite, com as ferramentas embrulhadas
+     * (respostas gravadas). O resto — sistema, contexto, ajuda, perfis, voltas —
+     * é o da versão (`mode`). Nunca em produção.
+     */
+    evalRun?: { feature: AiFeature; tier: AiTier; wrapTools: (tools: ChatTool<StaffToolCtx>[]) => ChatTool<StaffToolCtx>[] };
   } = {},
 ): Promise<AssistantTurnResult> {
   const startedAt = Date.now();
@@ -298,7 +309,7 @@ export async function askAssistant(
   // Plano MPV (F3): quem está no piloto recebe o conteúdo do MPV (também no
   // modo económico — é o "MPV-lite"); os outros, o v1 tal e qual.
   const mpv = mode.pilot;
-  const tools = staffToolsFor(mode);
+  const tools = hooks.evalRun ? hooks.evalRun.wrapTools(staffToolsFor(mode)) : staffToolsFor(mode);
   const context = turnContext({
     today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn, tab: page.tab, entity: page.entity,
     ...(mpv ? { tools: mpvAllowedToolNames(toolCtx, tools) } : {}),
@@ -310,7 +321,8 @@ export async function askAssistant(
   let kbOnce: Promise<ChatKnowledge | null> | null = null;
   const knowledge = kbSource ? (q: string) => (kbOnce ??= kbSource(q)) : undefined;
   const turn = async (feature: AssistantFeature, conversationId: number | null, newConversation: boolean | undefined, deadlineMs?: number) => runChatTurn<StaffToolCtx>({
-    feature,
+    feature: hooks.evalRun?.feature ?? feature,
+    ...(hooks.evalRun ? { tier: hooks.evalRun.tier, ephemeral: true } : {}),
     channel: ASSISTANT_CHANNEL,
     ownerKey: ownerKeyFor(user.id),
     userId: user.id,
@@ -350,7 +362,7 @@ export async function askAssistant(
   let economyWhy: string | null = mode.economyReason;
   let r = await turn(feature, input.conversationId ?? null, input.newConversation);
   // Teto próprio atingido entre a escolha e a chamada (ou orçamento): desce para o lite, na mesma conversa.
-  if (!r.ok && r.reason === "budget" && feature === ASSISTANT_SMART_FEATURE) {
+  if (!r.ok && r.reason === "budget" && feature === ASSISTANT_SMART_FEATURE && !hooks.evalRun) {
     feature = ASSISTANT_FEATURE;
     economy = r.budgetScope === "own";
     economyWhy = r.budgetReason ?? null;

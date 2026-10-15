@@ -306,6 +306,7 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   `tokens_estimated`). Modelo sem preço de armazenamento → só os tokens (custo 0). No cartão do
   custo estas linhas ficam à parte ("armazenamento da cache"): não contam nas chamadas, na latência
   nem no custo por pergunta, mas contam no gasto do mês.
+- **Eval do Multis** (plano MPV §8.2, F8): `assistant_eval` (sem interruptor próprio, teto próprio — fora do orçamento global; `AI_ASSISTANT_EVAL_BUDGET`). Só o `scripts/eval-multis.ts` o usa, sem BD (tira o `DATABASE_URL`), no nível de cada versão (v1-lite e mpv-lite: lite; mpv-argon: smart), sem conversa nem limite de pedidos (`ephemeral`), com as ferramentas de dados a responder com o que está gravado; o fornecedor é medido (`wrapAiProviders`) e o script pára aos 15 €. Formato e regras em `server/fixtures/multisEval/README.md`.
 - **2.ª cache do lite no piloto** (plano MPV F2, aceite): no piloto o Multis declara também `regras_em_vigor`, por isso quando desce para o lite (modo económico, ou o smart desligado) usa uma cache do lite à parte da do v1 (a chave inclui as ferramentas); só existe para quem está no piloto.
 - **Teto próprio** (plano MPV §5.3): o `assistant_smart` (Multis do piloto) tem
   `ai.assistantSmartBudget` (`{"eurPerDay": 10, "eurPerMonth": 150, "eurPerUserPerDay": 3}`; os

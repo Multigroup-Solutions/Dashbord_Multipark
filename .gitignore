@@ -125,3 +125,7 @@ temp/
 # pessoais (documentos de RH, fotos do ponto, faturas, trajetos GPS) — nunca
 # vão para o git. Em produção vivem no bucket S3 privado.
 uploads/
+
+# Eval do Multis (plano MPV F8): relatórios das corridas e rascunhos do conjunto A (perguntas reais, por rever)
+/eval-multis/
+server/fixtures/multisEval/rascunhoA/

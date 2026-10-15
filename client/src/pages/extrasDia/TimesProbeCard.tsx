@@ -5,7 +5,7 @@
  * somam-se; os percentis calculam-se no fim) e mostra as medidas do §11.0,
  * cada uma com o parâmetro que calibra. "Copiar resumo" copia o texto todo.
  */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, ClipboardCopy, Loader2, Play, Square, Stethoscope } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -65,7 +65,11 @@ function SectionCard({ s }: { s: ReportSection }) {
   );
 }
 
-export function TimesProbeCard({ city }: { city: ProbeCity }) {
+/**
+ * `onSummary` (plano MPV F8): o texto do "Copiar resumo" do que está à vista
+ * (null sem resultados), para a Verificação dos tempos o juntar ao relatório.
+ */
+export function TimesProbeCard({ city, onSummary }: { city: ProbeCity; onSummary?: (text: string | null) => void }) {
   const today = lisbonDayOf(Date.now());
   const [day, setDay] = useState(() => addDays(today, -PROBE_DEFAULT_OFFSET_DAYS));
   const [nDays, setNDays] = useState<number>(14);
@@ -116,6 +120,11 @@ export function TimesProbeCard({ city }: { city: ProbeCity }) {
     () => (shown ? buildSondaReport(shown, view === "all" && merged.cities.length > 1 ? merged.perCity : undefined) : []),
     [shown, view, merged],
   );
+
+  useEffect(() => {
+    if (!onSummary) return;
+    onSummary(shown && report.length ? sondaReportText(shown, report, { cities: shownLabel, ranAt: new Date().toISOString().slice(0, 16).replace("T", " ") }) : null);
+  }, [onSummary, shown, report, shownLabel]);
 
   const copy = async () => {
     if (!shown) return;
