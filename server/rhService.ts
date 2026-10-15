@@ -284,7 +284,12 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
   if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false, excluded: 0 };
   const { fixedScheduledStarts } = await import("../shared/workSchedule");
   const { NO_SHOW_SKIP_SETTING_KEY, noShowSkipFor } = await import("../shared/scheduleReview");
-  const skipList = (await (await import("./appSettings")).getSetting(NO_SHOW_SKIP_SETTING_KEY)) ?? [];
+  // Lida sem a cache. Se a leitura falhar, não se cria nenhuma possível falta (senão quem está na
+  // lista levava faltas falsas por um erro de leitura); uma lista gravada inválida = ninguém de fora
+  // (o ecrã "Horários por rever" avisa).
+  const skipRead = await (await import("./appSettings")).getSettingFresh(NO_SHOW_SKIP_SETTING_KEY);
+  if (!skipRead) throw new Error("lista \"Fora das faltas automáticas\" (rh.noShowSkip) não lida — possíveis faltas do horário fixo não criadas");
+  const skipList = skipRead.value ?? [];
   let excluded = 0;
   const { addDays } = await import("../shared/lisbonDay");
   const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
@@ -384,7 +389,7 @@ export async function confirmedOpenPoints(employeeId: number): Promise<number> {
   return Number(agg?.total ?? 0);
 }
 
-export async function reviewPenalty(id: number, decision: "confirmed" | "dismissed", reviewer: { id: number; role: string }, note?: string | null): Promise<{ points: number; blocked: boolean }> {
+export async function reviewPenalty(id: number, decision: "confirmed" | "dismissed", reviewer: { id: number; role: string }, note?: string | null, opts: { onlyIfPending?: boolean } = {}): Promise<{ points: number; blocked: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("DB indisponível");
   const [p] = await db.select().from(employeePenalties).where(eq(employeePenalties.id, id)).limit(1);
@@ -396,8 +401,13 @@ export async function reviewPenalty(id: number, decision: "confirmed" | "dismiss
   const { assertEmployeeAccess } = await import("./cityScope");
   await assertEmployeeAccess(p.employeeId);
   const reviewerId = reviewer.id;
-  await db.update(employeePenalties).set({ status: decision, reviewedById: reviewerId, reviewedAt: nowMysql(), notes: note ? `${p.notes ?? ""} · revisão: ${note}`.slice(0, 512) : p.notes, clearedAt: decision === "dismissed" ? nowMysql() : p.clearedAt, clearedById: decision === "dismissed" ? reviewerId : p.clearedById })
-    .where(eq(employeePenalties.id, id));
+  // Plano 63 (10a): `onlyIfPending` — só muda se ainda estiver por validar (gravação condicional:
+  // duas pessoas ao mesmo tempo → a segunda recebe "já foi revista" e nada muda).
+  const res = await db.update(employeePenalties).set({ status: decision, reviewedById: reviewerId, reviewedAt: nowMysql(), notes: note ? `${p.notes ?? ""} · revisão: ${note}`.slice(0, 512) : p.notes, clearedAt: decision === "dismissed" ? nowMysql() : p.clearedAt, clearedById: decision === "dismissed" ? reviewerId : p.clearedById })
+    .where(opts.onlyIfPending ? and(eq(employeePenalties.id, id), eq(employeePenalties.status, "pending")) : eq(employeePenalties.id, id));
+  if (opts.onlyIfPending && Number((Array.isArray(res) ? (res[0] as any) : (res as any))?.affectedRows ?? 0) === 0) {
+    throw new TRPCError({ code: "CONFLICT", message: "Esta possível falta já foi revista (por ti ou por outra pessoa). Atualiza a lista." });
+  }
   const points = await confirmedOpenPoints(p.employeeId);
   const shouldBlock = points >= 3;
   await db.update(employees).set({ blockedByPenalties: shouldBlock ? 1 : 0 }).where(eq(employees.id, p.employeeId));
@@ -412,7 +422,10 @@ export async function reviewPenalty(id: number, decision: "confirmed" | "dismiss
  * ausência aprovada desse dia (employee_leaves; a mesma regra de quem a
  * lança na ficha), para não voltar a aparecer e para sair das horas
  * esperadas. Nada se apaga. As regras de quem revê são as de reviewPenalty,
- * verificadas ANTES de criar a ausência.
+ * verificadas ANTES de criar a ausência. Ordem: 1.º fecha-se a possível falta
+ * com uma gravação condicional (só se ainda estiver por validar — duas pessoas
+ * ao mesmo tempo não criam duas ausências) e só depois se lança a ausência,
+ * se nenhuma cobrir já esse dia (relida nesse momento).
  */
 export async function dismissFixedNoShow(id: number, reason: import("../shared/scheduleReview").FixedNoShowDismissReason, reviewer: { id: number; role: string }, note?: string | null): Promise<{ points: number; blocked: boolean; day: string | null; leaveId: number | null; leaveType: string | null; leaveAlready: boolean }> {
   const db = await getDb();
@@ -430,13 +443,29 @@ export async function dismissFixedNoShow(id: number, reason: import("../shared/s
     : [];
   const plan = fixedNoShowDismissPlan(p as any, reason, { notePrefix: FIXED_NO_SHOW_NOTE_PREFIX, existingLeaves, extraNote: note });
   if (!plan.ok) throw new TRPCError({ code: "BAD_REQUEST", message: plan.error });
+  // 1.º a possível falta (condicional: se outra pessoa já a reviu, CONFLICT e nada se cria)
+  const r = await reviewPenalty(id, "dismissed", reviewer, plan.reviewNote, { onlyIfPending: true });
+  // 2.º a ausência desse dia, se nenhuma o cobrir (relida agora)
   let leaveId: number | null = null;
+  let leaveAlready = plan.leaveAlready;
   if (plan.leave) {
-    const ins = await db.insert(employeeLeaves).values({ employeeId: p.employeeId, ...plan.leave, createdById: reviewer.id });
-    leaveId = Number((ins as any)?.[0]?.insertId ?? 0) || null;
+    const day = plan.leave.fromDate;
+    const [covering] = await db.select({ fromDate: employeeLeaves.fromDate }).from(employeeLeaves)
+      .where(and(eq(employeeLeaves.employeeId, p.employeeId), lte(employeeLeaves.fromDate, day), gte(employeeLeaves.toDate, day))).limit(1);
+    if (covering) leaveAlready = true;
+    else {
+      try {
+        const ins = await db.insert(employeeLeaves).values({ employeeId: p.employeeId, ...plan.leave, createdById: reviewer.id });
+        leaveId = Number((ins as any)?.[0]?.insertId ?? 0) || null;
+      } catch (err) {
+        // a ausência não ficou: a possível falta volta a "por validar" como estava (nunca dispensada sem a ausência)
+        await db.update(employeePenalties).set({ status: "pending", reviewedById: p.reviewedById ?? null, reviewedAt: p.reviewedAt ?? null, notes: p.notes, clearedAt: p.clearedAt ?? null, clearedById: p.clearedById ?? null })
+          .where(and(eq(employeePenalties.id, id), eq(employeePenalties.status, "dismissed")));
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `A ausência não ficou gravada, por isso a possível falta continua por validar. Tenta de novo. (${String((err as Error)?.message ?? err).slice(0, 120)})` });
+      }
+    }
   }
-  const r = await reviewPenalty(id, "dismissed", reviewer, plan.reviewNote);
-  return { ...r, day: plan.day, leaveId, leaveType: plan.leave?.leaveType ?? null, leaveAlready: plan.leaveAlready };
+  return { ...r, day: plan.day, leaveId, leaveType: leaveId != null ? plan.leave?.leaveType ?? null : null, leaveAlready };
 }
 
 // ─── Ponto: revisão de registos suspeitos ───────────────────────────────────

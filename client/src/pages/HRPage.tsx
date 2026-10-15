@@ -86,6 +86,7 @@ import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
 import ScheduleReviewPage from "./ScheduleReviewPage";
 import { canonicalHhmm, scheduleDayToSave } from "@shared/scheduleReview";
+import { workRowOn } from "@shared/workSchedule";
 import UsersPage from "./UsersPage";
 import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
 import { checkoutSummaryLines } from "@shared/pdaSession";
@@ -1246,8 +1247,8 @@ function SchedulesTab({ employeeId }: { employeeId: number }) {
   useEffect(() => {
     const next: Record<number, ScheduleDraft> = {};
     for (let d = 0; d < 7; d++) {
-      // a mais antiga primeiro (a que a Avaliação e as faltas usam)
-      const s = schedules.find(x => x.weekday === d);
+      // a linha que conta (a de trabalho mais antiga — a da Avaliação, das faltas e da folha); só folgas → a 1.ª
+      const s = workRowOn(schedules, d) ?? schedules.find(x => x.weekday === d);
       next[d] = {
         startTime: s ? canonicalHhmm(s.startTime) ?? "" : "09:00",
         endTime: s ? canonicalHhmm(s.endTime) ?? "" : "18:00",

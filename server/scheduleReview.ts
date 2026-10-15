@@ -8,7 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import { getDb, logActivity } from "./db";
 import {
-  LOST_PUNCH_TAG, NO_CLOCK_IN_DAYS, NO_SHOW_SKIP_SETTING_KEY, noShowSkipEntrySchema, scheduleReview,
+  LOST_PUNCH_TAG, NO_CLOCK_IN_DAYS, NO_CLOCK_IN_LOOKBACK_DAYS, NO_SHOW_SKIP_SETTING_KEY, noShowSkipEntrySchema, scheduleReview,
   withNoShowSkip, withoutNoShowSkip, type NoShowSkipEntry,
 } from "../shared/scheduleReview";
 import { addDays, lisbonDayOf } from "../shared/lisbonDay";
@@ -40,11 +40,13 @@ export async function loadScheduleReview(now = Date.now()) {
   const schedules = ids.length ? rowsOf(await db.execute(sql`
     SELECT id, employeeId, weekday, startTime, endTime, isWorkDay FROM schedules
      WHERE employeeId IN (${idList(ids)}) ORDER BY id`)) : [];
+  // última entrada no ponto no último ano (pelo índice employeeId+recordedAt; sem limite lia o histórico todo)
   const lastIn = new Map<number, string>();
   if (ids.length) {
     for (const r of rowsOf(await db.execute(sql`
       SELECT employeeId, DATE_FORMAT(MAX(recordedAt), '%Y-%m-%d %H:%i:%s') AS lastAt FROM time_records
-       WHERE type = 'check_in' AND employeeId IN (${idList(ids)}) GROUP BY employeeId`))) {
+       WHERE employeeId IN (${idList(ids)}) AND recordedAt >= ${`${addDays(today, -NO_CLOCK_IN_LOOKBACK_DAYS)} 00:00:00`} AND type = 'check_in'
+       GROUP BY employeeId`))) {
       if (r.lastAt) lastIn.set(Number(r.employeeId), lisbonDayOf(String(r.lastAt)));
     }
   }

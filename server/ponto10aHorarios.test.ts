@@ -30,6 +30,8 @@ const state = vi.hoisted(() => ({
   before: [] as any[],
   logs: [] as any[],
   manageDenied: false,
+  skipReadFails: false,
+  leaveInsertFails: false,
 }));
 
 vi.mock("./db", async (original) => {
@@ -42,9 +44,13 @@ vi.mock("./db", async (original) => {
     if (table === timeRecords) return state.checkIns.has(Number(p[0])) ? [{ id: 1 }] : [];
     if (table === employeePenalties) {
       if (cols && "total" in cols) return [{ total: 0 }];
-      return state.inserted.filter((x) => x.id === Number(p[0]));
+      // cópias: a BD devolve o estado desse momento (duas pessoas ao mesmo tempo leem as duas "pendente")
+      return state.inserted.filter((x) => x.id === Number(p[0])).map((x) => ({ ...x }));
     }
-    if (table === employeeLeaves) return state.leaves.filter((l) => l.employeeId === Number(p[0]));
+    if (table === employeeLeaves) {
+      const day = p.length >= 3 ? String(p[1]) : null;
+      return state.leaves.filter((l) => l.employeeId === Number(p[0]) && (!day || (l.fromDate <= day && l.toDate >= day)));
+    }
     if (table === employees) return [];
     return [];
   };
@@ -75,6 +81,7 @@ vi.mock("./db", async (original) => {
           return [{ insertId: state.inserted.length }];
         }
         if (table === employeeLeaves) {
+          if (state.leaveInsertFails) throw new Error("ligação perdida");
           state.leaves.push({ ...v, id: 100 + state.leaves.length });
           return [{ insertId: 100 + state.leaves.length - 1 }];
         }
@@ -84,10 +91,13 @@ vi.mock("./db", async (original) => {
     update: (table: any) => ({
       set: (patch: any) => ({
         where: async (cond: any) => {
-          if (table !== employeePenalties) return;
-          const id = Number(params(cond)[0]);
-          const row = state.inserted.find((x) => x.id === id);
-          if (row) Object.assign(row, patch);
+          if (table !== employeePenalties) return [{ affectedRows: 0 }];
+          const ps = params(cond);
+          const row = state.inserted.find((x) => x.id === Number(ps[0]));
+          // gravação condicional (status = 'pending'): se já foi revista, não muda nada
+          if (!row || (ps.includes("pending") && row.status !== "pending")) return [{ affectedRows: 0 }];
+          Object.assign(row, patch);
+          return [{ affectedRows: 1 }];
         },
       }),
     }),
@@ -110,7 +120,7 @@ vi.mock("./appSettings", async (original) => {
   return {
     ...orig,
     getSetting: async (key: string) => (key === "rh.noShowSkip" ? state.skips : null),
-    getSettingFresh: async (key: string) => (key === "rh.noShowSkip" ? { value: state.skips, invalid: false, updatedAt: state.skipUpdatedAt, updatedByName: null } : null),
+    getSettingFresh: async (key: string) => (key === "rh.noShowSkip" && !state.skipReadFails ? { value: state.skips, invalid: false, updatedAt: state.skipUpdatedAt, updatedByName: null } : null),
     setSetting: async (key: string, value: unknown, userId: number, opts: any) => {
       if (state.conflict) throw new orig.SettingConflictError({ updatedAt: "2026-10-15 09:00:00", updatedByName: "Outra" });
       state.saved.push({ key, value, userId, opts });
@@ -138,8 +148,9 @@ vi.mock("./rhGuards", async (original) => ({
 import { detectFixedScheduleNoShows, dismissFixedNoShow, FIXED_NO_SHOW_NOTE_PREFIX } from "./rhService";
 import { changeNoShowSkip } from "./scheduleReview";
 import { appRouter } from "./routers";
-import { fixedScheduledStarts } from "../shared/workSchedule";
-import { expectedHoursFromSchedule } from "./payroll/compute";
+import { fixedScheduledStarts, workRowOn } from "../shared/workSchedule";
+import { computeEmployeeMonth, expectedHoursFromSchedule } from "./payroll/compute";
+import { pairShifts } from "./payroll/shifts";
 import {
   canonicalHhmm, fixedNoShowDay, fixedNoShowDismissPlan, isHhmm, LOST_PUNCH_TAG, noShowSkipFor, noShowSkipSchema, scheduleDayToSave,
   scheduleReview, withNoShowSkip, withoutNoShowSkip,
@@ -154,7 +165,7 @@ const allWeek = (employeeId: number) => [0, 1, 2, 3, 4, 5, 6].map((weekday) => (
 beforeEach(() => {
   Object.assign(state, {
     schedules: [], leaves: [], escala: [], checkIns: new Set(), inserted: [], skips: [], skipUpdatedAt: null, saved: [], conflict: false,
-    upserts: [], dayOffs: [], before: [], logs: [], manageDenied: false,
+    upserts: [], dayOffs: [], before: [], logs: [], manageDenied: false, skipReadFails: false, leaveInsertFails: false,
   });
 });
 
@@ -164,9 +175,9 @@ describe("Horários por rever (só leitura)", () => {
   const emp = (id: number, fullName: string, lastCheckInDay: string | null = "2026-10-14") => ({ id, fullName, projectId: 49, lastCheckInDay });
   const row = (id: number, employeeId: number, weekday: number, startTime = "09:00", endTime = "18:00", isWorkDay = 1) => ({ id, employeeId, weekday, startTime, endTime, isWorkDay });
 
-  it("sem horário → listado (sem linhas, ou só folgas)", () => {
+  it("sem horário → listado (sem linhas, ou só folgas — estes marcados, é quem a folha conta de outra maneira)", () => {
     const r = scheduleReview({ today, employees: [emp(1, "Ana"), emp(2, "Bruno"), emp(3, "Carla")], schedules: [row(1, 2, 1, "09:00", "18:00", 0), row(2, 3, 1)] });
-    expect(r.noSchedule.map((p) => p.fullName)).toEqual(["Ana", "Bruno"]);
+    expect(r.noSchedule.map((p) => [p.fullName, p.onlyDaysOff])).toEqual([["Ana", false], ["Bruno", true]]);
   });
   it("dia duplicado → listado, com a linha que a Avaliação e as faltas usam (a mais antiga)", () => {
     const r = scheduleReview({ today, employees: [emp(1, "Ana")], schedules: [row(9, 1, 3, "10:00", "19:00"), row(7, 1, 3, "09:00", "18:00"), row(8, 1, 1)] });
@@ -275,6 +286,87 @@ describe("Gravar o horário", () => {
   });
 });
 
+// ─── A linha que conta e a folha (dinheiro) ─────────────────────────────────
+describe("a linha que conta: a mesma na ficha, na Avaliação, nas faltas e na folha", () => {
+  it("workRowOn: entre as linhas de trabalho do dia, a de id mais baixo; só folgas → nenhuma", () => {
+    const r = (id: number | null, weekday: number, isWorkDay: number, startTime = "09:00") => ({ id, weekday, isWorkDay, startTime });
+    expect(workRowOn([r(9, 3, 1, "10:00"), r(7, 3, 1, "09:00")], 3)?.id).toBe(7);
+    // uma folga mais antiga não tapa o dia de trabalho (as consultas da Avaliação e das faltas filtram isWorkDay = 1)
+    expect(workRowOn([r(7, 3, 0), r(9, 3, 1)], 3)?.id).toBe(9);
+    expect(workRowOn([r(7, 3, 0), r(9, 3, 0)], 3)).toBeUndefined();
+    expect(workRowOn([r(null, 3, 1, "10:00"), r(null, 3, 1, "09:00")], 3)?.startTime).toBe("10:00");
+    expect(workRowOn([r(7, 2, 1)], 3)).toBeUndefined();
+    // a Avaliação e as faltas (fixedScheduledStarts) usam a mesma
+    const rows = [{ id: 7, employeeId: 1, weekday: 3, startTime: "09:00", endTime: "18:00", isWorkDay: 0 }, { id: 9, employeeId: 1, weekday: 3, startTime: "10:00", endTime: "19:00", isWorkDay: 1 }];
+    expect(fixedScheduledStarts("2026-11-04", "2026-11-04", rows).map((f) => f.startMs)).toEqual([Date.parse("2026-11-04T10:00:00Z")]);
+  });
+  it("a ficha → Horário mostra a linha que conta; a folha lê o horário por id", () => {
+    const hr = src("client/src/pages/HRPage.tsx");
+    expect(hr).toContain("const s = workRowOn(schedules, d) ?? schedules.find(x => x.weekday === d);");
+    expect(src("server/payroll/payrollData.ts")).toContain(".from(schedules).where(inArray(schedules.employeeId, empIds)).orderBy(schedules.id)");
+  });
+
+  // novembro de 2026: Lisboa = UTC; 1 nov é domingo; 1 100 € → 6,25 €/h
+  const shift = (day: string, from = "09:00", to = "17:00") => {
+    const { shifts } = pairShifts([{ id: 1, type: "check_in", recordedAt: `${day} ${from}:00` }, { id: 2, type: "check_out", recordedAt: `${day} ${to}:00`, hoursWorked: "8" }]);
+    return shifts[0];
+  };
+  const weekdays = [2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 23, 24, 25, 26, 27].map((d) => `2026-11-${String(d).padStart(2, "0")}`);
+  const ana = { id: 1, fullName: "Ana", position: "backoffice", extraLevel: null, isActive: 1, monthlySalary: 1100, mealAllowancePerDay: 0, contractStart: null, contractEnd: null };
+  const month = (schedules: any[]) => computeEmployeeMonth({ employee: ana, year: 2026, month: 11, shifts: weekdays.map((d) => shift(d)), leaves: [], schedules, extraRateByLevel: new Map(), extraRateByName: new Map() });
+
+  it("\"Pôr folga\" em todos os dias = apagar os dias: o mesmo dinheiro (176 h esperadas, 0 € de horas extra)", () => {
+    const apagado = month([]);
+    const folgas = month([0, 1, 2, 3, 4, 5, 6].map((weekday, i) => ({ id: i + 1, weekday, startTime: "09:00", endTime: "17:00", isWorkDay: 0 })));
+    expect(apagado).toMatchObject({ normalHours: 160, expectedHours: 176, overtimeHours: 0, overtimePayment: 0, baseSalary: 1100 });
+    expect(folgas).toMatchObject({ normalHours: 160, expectedHours: 176, overtimeHours: 0, overtimePayment: 0, baseSalary: 1100 });
+    expect(folgas.totalPayment).toBe(apagado.totalPayment);
+    expect(apagado.warnings.join(" ")).not.toContain("regra antiga");
+  });
+  it("um horário que JÁ estava só com folgas: a linha diz os dois valores (antes 0 h esperadas e 1 359,38 € de horas extra)", () => {
+    const r = month([{ id: 1, weekday: 0, startTime: "09:00", endTime: "17:00", isWorkDay: 0 }, { id: 2, weekday: 6, startTime: "09:00", endTime: "17:00", isWorkDay: 0 }]);
+    expect(r).toMatchObject({ expectedHours: 176, overtimePayment: 0 });
+    // antes: 20 h × 6,25 × 1,25 + 140 h × 6,25 × 1,375 = 156,25 + 1 203,13
+    expect(r.warnings).toContain("horário só com folgas: conta como sem horário — 176 h esperadas, 0,00 € de horas extra. Pela regra antiga eram 0 h esperadas e 1359,38 € — confirma o horário na ficha antes de fechar o mês");
+  });
+  it("dias duplicados com horas diferentes: conta a linha mais antiga (como a Avaliação e as faltas), venha a ordem que vier; a linha diz os dois valores", () => {
+    const semana = [1, 2, 4, 5].map((weekday, i) => ({ id: i + 1, weekday, startTime: "09:00", endTime: "17:00", isWorkDay: 1 }));
+    const qua7 = { id: 7, weekday: 3, startTime: "09:00", endTime: "13:00", isWorkDay: 1 };
+    const qua9 = { id: 9, weekday: 3, startTime: "10:00", endTime: "19:00", isWorkDay: 1 };
+    for (const order of [[...semana, qua9, qua7], [...semana, qua7, qua9]]) {
+      const r = month(order);
+      // 17 dias × 8 h + 4 quartas × 4 h = 152 h (antes: a última linha, 4 × 9 h → 172 h)
+      expect(r).toMatchObject({ expectedHours: 152, overtimeHours: 8, overtimePayment: 62.5 });
+      expect(r.warnings).toContain("horário com dias duplicados e horas diferentes: conta a linha mais antiga de cada dia (a da ficha, da Avaliação e das faltas) — 152 h esperadas, 62,50 € de horas extra. Pela regra antiga eram 172 h esperadas e 0,00 € — confirma o horário na ficha antes de fechar o mês");
+    }
+  });
+  it("uma hora gravada que não se lê (\"9h\"): o dinheiro fica como antes (sem horas extra) e a linha diz porquê", () => {
+    const semana = [1, 2, 4, 5].map((weekday, i) => ({ id: i + 1, weekday, startTime: "09:00", endTime: "17:00", isWorkDay: 1 }));
+    const r = month([...semana, { id: 7, weekday: 3, startTime: "9h", endTime: "17:00", isWorkDay: 1 }]);
+    expect(r.overtimePayment).toBe(0);
+    expect(r.warnings.some((w) => w.startsWith("horário da ficha com horas que não se leem"))).toBe(true);
+    expect(r.warnings.join(" ")).not.toContain("regra antiga");
+    // duplicado em que a mais antiga não se lê e a outra sim: muda o dinheiro → os dois valores
+    const d = month([...semana, { id: 7, weekday: 3, startTime: "9h", endTime: "17:00", isWorkDay: 1 }, { id: 9, weekday: 3, startTime: "09:00", endTime: "17:00", isWorkDay: 1 }]);
+    expect(d.warnings).toContain("horário com dias duplicados e horas diferentes: conta a linha mais antiga de cada dia (a da ficha, da Avaliação e das faltas) — horas que não se leem, 0,00 € de horas extra. Pela regra antiga eram 168 h esperadas e 0,00 € — confirma o horário na ficha antes de fechar o mês");
+  });
+  it("sem nada que mude o valor, a folha fica igual e sem aviso (horário normal, duplicados iguais, folga duplicada)", () => {
+    const semana = [1, 2, 3, 4, 5].map((weekday, i) => ({ id: i + 1, weekday, startTime: "09:00", endTime: "17:00", isWorkDay: 1 }));
+    const normal = month(semana);
+    expect(normal).toMatchObject({ expectedHours: 168, overtimeHours: 0, overtimePayment: 0 });
+    for (const extra of [
+      [{ id: 20, weekday: 3, startTime: "09:00", endTime: "17:00", isWorkDay: 1 }],
+      [{ id: 0, weekday: 3, startTime: "09:00", endTime: "18:00", isWorkDay: 0 }],
+      [{ id: 21, weekday: 6, startTime: "09:00", endTime: "17:00", isWorkDay: 0 }],
+    ]) {
+      const r = month([...semana, ...extra]);
+      expect(r.expectedHours).toBe(168);
+      expect(r.totalPayment).toBe(normal.totalPayment);
+      expect(r.warnings.join(" ")).not.toContain("regra antiga");
+    }
+  });
+});
+
 // ─── rh.noShowSkip ──────────────────────────────────────────────────────────
 describe("rh.noShowSkip (fora das faltas automáticas até uma data)", () => {
   it("definição em Pessoas, lista vazia por omissão; uma linha por pessoa (fica a última)", () => {
@@ -302,6 +394,12 @@ describe("rh.noShowSkip (fora das faltas automáticas até uma data)", () => {
     expect(await detectFixedScheduleNoShows("2026-11-01")).toMatchObject({ scanned: 0, created: 0 });
     expect(await detectFixedScheduleNoShows("2026-11-02")).toMatchObject({ scanned: 1, created: 1, excluded: 0 });
     expect(state.inserted).toEqual([expect.objectContaining({ employeeId: 4, points: 0, status: "pending", relatedId: 20261102 })]);
+  });
+  it("se a lista não se ler, não se cria nenhuma possível falta (o erro vê-se no registo da manutenção)", async () => {
+    state.schedules = allWeek(4);
+    state.skipReadFails = true;
+    await expect(detectFixedScheduleNoShows("2026-11-02")).rejects.toThrow(/não lida/);
+    expect(state.inserted).toEqual([]);
   });
   it("pôr e tirar: valida a data, grava com o updatedAt lido e fica no registo", async () => {
     const now = Date.parse("2026-10-15T10:00:00Z");
@@ -361,6 +459,34 @@ describe("Possíveis faltas (horário fixo): dispensa com motivo", () => {
     const r = await dismissFixedNoShow(c.id, "vacation", reviewer);
     expect(r).toMatchObject({ leaveId: null, leaveAlready: true });
     expect(state.leaves).toHaveLength(3);
+  });
+  it("duas pessoas a dispensar a mesma ao mesmo tempo: uma ganha, a outra recebe \"já foi revista\" e só há UMA ausência", async () => {
+    const p = await pendingOn("2026-11-02");
+    const rs = await Promise.allSettled([dismissFixedNoShow(p.id, "vacation", reviewer), dismissFixedNoShow(p.id, "sick", { id: 10, role: "admin" })]);
+    expect(rs.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+    const lost = rs.find((x) => x.status === "rejected") as PromiseRejectedResult;
+    // as duas leram "pendente": quem perde é travado pela gravação condicional (CONFLICT), antes de criar a ausência
+    expect(lost.reason).toMatchObject({ code: "CONFLICT", message: expect.stringMatching(/já foi revista/) });
+    expect(state.leaves).toHaveLength(1);
+    expect(state.inserted[0].status).toBe("dismissed");
+  });
+  it("se a ausência não ficar gravada, a possível falta volta a \"por validar\" (nunca dispensada sem a ausência)", async () => {
+    const p = await pendingOn("2026-11-02");
+    state.leaveInsertFails = true;
+    await expect(dismissFixedNoShow(p.id, "vacation", reviewer)).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: expect.stringMatching(/continua por validar/) });
+    expect(state.leaves).toEqual([]);
+    expect(state.inserted[0]).toMatchObject({ status: "pending", reviewedById: null, clearedAt: null });
+    expect(state.inserted[0].notes).not.toContain("Dispensada");
+    // e depois dá para dispensar outra vez
+    state.leaveInsertFails = false;
+    await dismissFixedNoShow(p.id, "vacation", reviewer);
+    expect(state.leaves).toHaveLength(1);
+  });
+  it("a ausência só se cria depois de a possível falta ficar dispensada (nunca uma ausência sem a dispensa)", () => {
+    const s = src("server/rhService.ts");
+    const fn = s.slice(s.indexOf("export async function dismissFixedNoShow"), s.indexOf("// ─── Ponto: revisão de registos suspeitos"));
+    expect(fn.indexOf("onlyIfPending: true")).toBeGreaterThan(0);
+    expect(fn.indexOf("onlyIfPending: true")).toBeLessThan(fn.indexOf("db.insert(employeeLeaves)"));
   });
   it("\"Picou noutro sistema / picagem perdida\" → só dispensa, marcada para a verificação do ponto (passo 0)", async () => {
     const p = await pendingOn("2026-11-02");
@@ -437,6 +563,13 @@ describe("ecrãs", () => {
     const tab = hr.slice(hr.indexOf("function SchedulesTab"), hr.indexOf("// ─── RESUMO DO MÊS"));
     expect(tab).toContain("Pôr folga");
     expect(tab).not.toContain("Trash2");
+  });
+  it("Definições: a lista \"Fora das faltas automáticas\" vê-se (só para ler) e muda-se em Horários por rever", () => {
+    const d = src("client/src/pages/DefinicoesPage.tsx");
+    expect(d).toContain("s.key === NO_SHOW_SKIP_SETTING_KEY ? <NoShowSkipSummary key={s.key} item={s} />");
+    const fn = d.slice(d.indexOf("function NoShowSkipSummary"), d.indexOf("function pct("));
+    expect(fn).toContain("Horários por rever");
+    expect(fn).not.toMatch(/save\.mutate|onSave/);
   });
   it("Possíveis faltas: Dispensar com motivo nas do horário fixo", () => {
     const d = src("client/src/pages/RhDashboardPage.tsx");

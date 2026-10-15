@@ -87,12 +87,15 @@ export default function ScheduleReviewPage({ onBack, onOpenEmployee }: { onBack:
           </div>
 
           <ReviewSection id="rever-noSchedule" title="Funcionários sem horário" count={d.noSchedule.length}
-            hint="Sem nenhum dia de trabalho no horário: para eles não há possível falta (nem atraso). Se trabalham com horário, preenche-o na ficha → Horário.">
-            {d.noSchedule.map((p) => <PersonRow key={p.employeeId} p={p} city={cityOf(p.projectId)} onOpen={onOpenEmployee} />)}
+            hint="Sem nenhum dia de trabalho no horário: para eles não há possível falta (nem atraso) e a folha de ordenados conta 176 h esperadas. Se trabalham com horário, preenche-o na ficha → Horário.">
+            {d.noSchedule.map((p) => (
+              <PersonRow key={p.employeeId} p={p} city={cityOf(p.projectId)} onOpen={onOpenEmployee}
+                detail={p.onlyDaysOff ? <span className="text-amber-700 dark:text-amber-400">Horário só com folgas: a folha passou a contá-lo como sem horário (176 h esperadas; antes contava 0 h e pagava as horas todas como extra). A linha da folha mostra os dois valores.</span> : undefined} />
+            ))}
           </ReviewSection>
 
           <ReviewSection id="rever-duplicates" title="Dias duplicados" count={d.duplicates.length}
-            hint="O mesmo dia da semana em mais de uma linha. A Avaliação e as faltas usam a linha mais antiga; a folha de ordenados, a última. Abre a ficha → Horário e carrega em Guardar nesse dia: as linhas ficam iguais (nenhuma se apaga).">
+            hint="O mesmo dia da semana em mais de uma linha. A ficha, a Avaliação, as faltas e a folha de ordenados usam a linha de trabalho mais antiga (antes, a folha usava a última: quando isso muda o valor, a linha da folha mostra os dois). Abre a ficha → Horário e carrega em Guardar nesse dia: as linhas ficam iguais (nenhuma se apaga).">
             {d.duplicates.map((x) => (
               <PersonRow key={`${x.employeeId}-${x.weekday}`} p={x} city={cityOf(x.projectId)} onOpen={onOpenEmployee}
                 detail={<>{WEEKDAY_LABELS[x.weekday]}: {x.rows.map((r) => r.label).join(" · ")}{x.differ ? <span className="ml-1 font-medium text-amber-700 dark:text-amber-400">(diferentes)</span> : null}</>} />
@@ -111,7 +114,7 @@ export default function ScheduleReviewPage({ onBack, onOpenEmployee }: { onBack:
             hint="Quase de certeza ainda picam na impressão digital (ou noutro sistema). Com as faltas automáticas ligadas, levavam uma possível falta por cada dia de trabalho. Tira-as das faltas até passarem a picar no nosso ponto.">
             {d.noClockIn.map((x) => (
               <PersonRow key={x.employeeId} p={x} city={cityOf(x.projectId)} onOpen={onOpenEmployee}
-                detail={x.lastCheckInDay ? `Última entrada no ponto: ${dayPt(x.lastCheckInDay)} (há ${x.daysSince} dias)` : "Nunca picou o ponto"}
+                detail={x.lastCheckInDay ? `Última entrada no ponto: ${dayPt(x.lastCheckInDay)} (há ${x.daysSince} dias)` : "Nenhuma entrada no ponto no último ano"}
                 action={<SkipControl employeeId={x.employeeId} today={d.today} until={x.skipUntil} reason={x.skipReason} defaultReason="Ainda pica na impressão digital" />} />
             ))}
           </ReviewSection>
@@ -240,7 +243,7 @@ function SkipsSection({ skips, withSchedule, today, cityOf, onOpen, invalid }: {
       <p className="px-3 pt-2 text-xs text-muted-foreground">
         Estas pessoas não levam possível falta pelo horário fixo até à data (inclusive). Serve para quem ainda pica noutro sistema, ou vai mudar de regime. O histórico fica em Definições → Parâmetros → Histórico.
       </p>
-      {invalid && <p className="px-3 pt-1 text-xs text-red-700">A lista gravada não é válida: até se gravar de novo, ninguém fica de fora.</p>}
+      {invalid && <p className="px-3 pt-1 text-xs text-red-700 dark:text-red-400">A lista gravada não é válida: até se gravar de novo, ninguém fica de fora.</p>}
       <div className="divide-y px-1">
         {skips.map((s) => (
           <PersonRow key={s.employeeId} p={s} city={cityOf(s.projectId)} onOpen={onOpen}

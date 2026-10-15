@@ -10,8 +10,9 @@
  *  - `rh.noShowSkip`: pessoas fora das faltas automáticas até uma data (com
  *    motivo). Uma por pessoa; o "até" conta (inclusive);
  *  - as horas do horário só "HH:MM" e a regra de quem conta nos dias
- *    duplicados (a linha de id mais baixo, como a BD devolve hoje à
- *    Avaliação e às faltas);
+ *    duplicados (a linha de TRABALHO de id mais baixo — `workRowOn` em
+ *    shared/workSchedule.ts, a mesma da ficha, da Avaliação, das faltas e
+ *    da folha);
  *  - a dispensa com motivo das "Possíveis faltas" (Férias, Baixa e
  *    Justificada criam a ausência aprovada desse dia; nada se apaga).
  */
@@ -112,6 +113,8 @@ export function withoutNoShowSkip(list: readonly NoShowSkipEntry[] | null | unde
 
 /** Sem entrada no ponto há este número de dias → "ainda pica noutro sistema?". */
 export const NO_CLOCK_IN_DAYS = 14;
+/** Até onde se procura a última entrada no ponto (null = nenhuma neste período). */
+export const NO_CLOCK_IN_LOOKBACK_DAYS = 366;
 
 export interface ReviewEmployee {
   id: number;
@@ -130,7 +133,8 @@ export interface ReviewScheduleRow {
 }
 export interface ReviewPerson { employeeId: number; fullName: string; projectId: number | null }
 export interface ScheduleReview {
-  noSchedule: ReviewPerson[];
+  /** `onlyDaysOff`: tem linhas, mas todas são folga (a folha conta-o como sem horário, 176 h — antes contava 0 h) */
+  noSchedule: Array<ReviewPerson & { onlyDaysOff: boolean }>;
   duplicates: Array<ReviewPerson & { weekday: number; rows: Array<{ id: number; label: string }>; differ: boolean; usedRowId: number | null }>;
   invalidTimes: Array<ReviewPerson & { weekday: number; rowId: number; startTime: string; endTime: string; problem: "invalid" | "same" }>;
   noClockIn: Array<ReviewPerson & { lastCheckInDay: string | null; daysSince: number | null; skipUntil: string | null; skipReason: string | null }>;
@@ -162,14 +166,14 @@ export function scheduleReview(input: {
     const who: ReviewPerson = { employeeId: e.id, fullName: e.fullName, projectId: e.projectId ?? null };
     const rows = [...(rowsOf.get(e.id) ?? [])].sort((a, b) => a.id - b.id);
     const work = rows.filter(isWork);
-    if (!work.length) { out.noSchedule.push(who); continue; }
+    if (!work.length) { out.noSchedule.push({ ...who, onlyDaysOff: rows.length > 0 }); continue; }
     // dias duplicados (a mesma pessoa e o mesmo dia da semana em mais de uma linha)
     const byWd = new Map<number, ReviewScheduleRow[]>();
     for (const r of rows) byWd.set(r.weekday, [...(byWd.get(r.weekday) ?? []), r]);
     for (const [weekday, list] of Array.from(byWd.entries()).sort((a, b) => a[0] - b[0])) {
       if (list.length < 2) continue;
       const labels = list.map((r) => ({ id: r.id, label: scheduleDayLabel(r) }));
-      // a Avaliação e as faltas ficam com a de id mais baixo entre as de trabalho
+      // a ficha, a Avaliação, as faltas e a folha ficam com a de id mais baixo entre as de trabalho (workRowOn)
       const used = list.find(isWork) ?? null;
       out.duplicates.push({ ...who, weekday, rows: labels, differ: new Set(labels.map((l) => l.label)).size > 1, usedRowId: used?.id ?? null });
     }

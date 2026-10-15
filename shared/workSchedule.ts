@@ -96,15 +96,21 @@ export function ptHolidayOf(day: string, city?: string | null): string | null {
 const weekdayOf = (day: string): number => new Date(`${day}T00:00:00Z`).getUTCDay();
 const within = (day: string, from?: string | null, to?: string | null) => (!from || day >= String(from).slice(0, 10)) && (!to || day <= String(to).slice(0, 10));
 
+const isWorkRow = (s: { isWorkDay?: boolean | number | null }) => !(s.isWorkDay === false || Number(s.isWorkDay) === 0);
+
 /**
- * A linha desse dia da semana. Nos dias duplicados (não há UNIQUE pessoa+dia
- * na tabela) fica a de id mais baixo — é o que a BD devolvia, na prática, à
- * Avaliação e às faltas; sem ids, a primeira da lista. PURA.
+ * A linha do horário fixo que CONTA num dia da semana — a regra única da
+ * Avaliação (atraso), das faltas, da folha de ordenados e do ecrã da ficha
+ * (plano 63, 10a). Não há UNIQUE pessoa+dia na tabela; nos dias duplicados
+ * conta, entre as linhas de TRABALHO desse dia, a de id mais baixo (é o que a
+ * Avaliação e as faltas já liam: as consultas filtram `isWorkDay = 1`); sem
+ * ids, a primeira da lista. O dia só é folga quando TODAS as linhas dele são
+ * folga (devolve undefined). PURA.
  */
-function firstOfWeekday(list: readonly FixedScheduleRow[], wd: number): FixedScheduleRow | undefined {
-  let best: FixedScheduleRow | undefined;
+export function workRowOn<T extends { id?: number | null; weekday: number; isWorkDay?: boolean | number | null }>(list: readonly T[], weekday: number): T | undefined {
+  let best: T | undefined;
   for (const x of list) {
-    if (Number(x.weekday) !== wd) continue;
+    if (Number(x.weekday) !== weekday || !isWorkRow(x)) continue;
     if (!best || (x.id != null && best.id != null && Number(x.id) < Number(best.id))) best = x;
   }
   return best;
@@ -130,7 +136,7 @@ export function fixedScheduledStarts(startDay: string, endDay: string, schedules
   for (let cal = addDays(startDay, -1); cal <= addDays(endDay, 1); cal = addDays(cal, 1)) {
     const wd = weekdayOf(cal);
     for (const [emp, list] of byEmp) {
-      const s = firstOfWeekday(list, wd);
+      const s = workRowOn(list, wd);
       if (!s) continue;
       const h = hoursOfHhmm(s.startTime);
       if (h == null) continue;

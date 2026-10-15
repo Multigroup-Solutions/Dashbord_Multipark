@@ -203,7 +203,8 @@ export function PendingNoShowsPanel({ defaultOpen = false, onlyFixed = false }: 
       refresh();
       toast.success(r.leaveId ? `Dispensada · ausência de ${r.day ?? "esse dia"} lançada na ficha` : r.leaveAlready ? "Dispensada · já havia ausência nesse dia" : "Dispensada");
     },
-    onError: (e) => toast.error(e.message),
+    // já revista por outra pessoa (CONFLICT) ou a ausência não ficou: a lista volta a ler-se
+    onError: (e) => { toast.error(e.message); refresh(); },
   });
   const reviewMany = trpc.rh.penalties.reviewMany.useMutation({
     onSuccess: (r, v) => {
