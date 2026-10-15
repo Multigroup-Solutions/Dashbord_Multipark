@@ -20,7 +20,9 @@ const h = vi.hoisted(() => {
   const emp = (id: number, projectId: number | null, o: Record<string, any> = {}) => ({
     employee: {
       id, fullName: `Pessoa ${id}`, email: `p${id}@x.pt`, projectId, isActive: 1, position: "driver", contractType: "permanent",
-      contractEnd: null, userId: null, deactivationReason: null, department: null, ...o,
+      contractEnd: null, userId: null, deactivationReason: null, department: null,
+      // dados de dinheiro e identidade: nenhum número novo os pode levar (auditoria)
+      monthlySalary: "1234.56", nib: "PT50000201231234567890154", nif: "123456789", ...o,
     },
     project: projectId != null ? { id: projectId, name: `Centro ${projectId}` } : null,
   });
@@ -37,7 +39,7 @@ const h = vi.hoisted(() => {
     emp(10, 65, { position: "extra", contractType: "extra" }),       // extra (os dois)
     emp(11, 50, { contractType: null }),                             // contrato vazio = sem termo
   ];
-  return { porto, access: porto as any, employees, docs: new Map<number, Array<{ docType: string; status: string }>>() };
+  return { porto, access: porto as any, employees, docs: new Map<number, Array<{ docType: string; status: string }>>(), me: null as any };
 });
 
 vi.mock("./cityAccess", async (original) => ({
@@ -56,7 +58,7 @@ vi.mock("./db", async (original) => ({
     { id: 65, name: "Parque Porto", level: "project", parentId: 50 },
   ],
   resolveProjectIds: async (id: number) => (id === 50 ? [50, 65] : [id]),
-  getEmployeeByUserId: async () => null,
+  getEmployeeByUserId: async () => h.me,
   getAllUsers: async () => [],
   seedExtraRates: async () => {},
   getAllEmployees: async (f: { isActive?: boolean; position?: string } = {}) => h.employees.filter((r) =>
@@ -71,13 +73,19 @@ import { employeeKind, extraRuleMismatch, hrCounts, isExtraEmployee } from "../s
 import { isExtraEmployee as financeIsExtra } from "./finance/rules";
 import { isExtraLike } from "../shared/pontoMode";
 import { isTerminalExtra } from "../shared/terminalSession";
-import { pairShifts, pontoMonthSummary, pontoMonthTotals, pontoMonthWindow, type TimeRecordLike } from "./payroll/shifts";
+import { countableShifts, pairShifts, pontoMonthSummary, pontoMonthTotals, pontoMonthWindow, type Shift, type TimeRecordLike } from "./payroll/shifts";
+import { readdirSync } from "node:fs";
+import { workedHours } from "../shared/dayWorkSummary";
+import { searchHelpSections } from "./assistant/helpTools";
+import { knowledgeTree } from "./assistant/knowledgeTree";
+import { pickHelpDocs } from "./_core/ai/chat/retrieval";
+import { staffHelpDocs } from "./assistant/service";
 import { addDays, lisbonDayRangeUtc, lisbonYesterday } from "../shared/lisbonDay";
 import { contractsExpiring, missingDocsTotals } from "../shared/peopleStats";
 import { docsSummary } from "../shared/employeeDocuments";
 
 const caller = (role = "admin") => appRouter.createCaller({ user: { id: 123, role }, req: { headers: {} }, res: {} } as any);
-beforeEach(() => { h.access = h.porto; h.docs = new Map(); });
+beforeEach(() => { h.access = h.porto; h.docs = new Map(); h.me = null; });
 
 describe("D0 — regra única: extra = posto ou contrato; funcionário = o resto (sem parceiros-empresa)", () => {
   it("employeeKind e isExtraEmployee", () => {
@@ -334,5 +342,285 @@ describe("D11 — relatório posto ≠ contrato (só leitura; a folha não muda)
     expect(p).toContain('const isExtra = e.position === "extra";');
     expect(p).not.toMatch(/employeeKind|extraRuleMismatch/);
     expect(src("server/payroll/compute.ts")).toContain('const isExtra = e.position === "extra";');
+  });
+});
+
+// ═══ Auditoria final do PR D (plano 64) ══════════════════════════════════════
+
+describe("Auditoria D — dinheiro: finanças, ponto e terminal decidem 'extra' exatamente como antes", () => {
+  // as três cópias que existiam antes do D0, tal e qual
+  const oldFinance = (e: { contractType?: string | null; position?: string | null }) => e.contractType === "extra" || e.position === "extra";
+  const oldPonto = (e: { position?: string | null; contractType?: string | null }) => e.position === "extra" || e.contractType === "extra";
+  const oldTerminal = (e: { position?: string | null; contractType?: string | null } | null | undefined) => !!e && (e.position === "extra" || e.contractType === "extra");
+
+  it("igual em todas as combinações de posto × contrato (também vazios, nulos e maiúsculas)", () => {
+    const positions = ["extra", "Extra", "EXTRA", "driver", "senior_driver", "team_leader", "supervisor", "backoffice", "frontoffice", "director", "", null, undefined];
+    const contracts = ["extra", "Extra", "permanent", "fixed_term", "partner_company", "", null, undefined];
+    let n = 0;
+    for (const position of positions) for (const contractType of contracts) {
+      const e = { position, contractType };
+      const tag = JSON.stringify(e);
+      expect(financeIsExtra(e), tag).toBe(oldFinance(e));
+      expect(isExtraLike(e), tag).toBe(oldPonto(e));
+      expect(isTerminalExtra(e), tag).toBe(oldTerminal(e));
+      n++;
+    }
+    expect(n).toBe(positions.length * contracts.length);
+    expect(isTerminalExtra(null)).toBe(false);
+    expect(isTerminalExtra(undefined)).toBe(false);
+  });
+
+  it("o motor da Faturação usa a mesma regra; a folha e o custo dos extras não foram tocados", () => {
+    expect(src("server/finance/engine.ts")).toContain("if (R.isExtraEmployee(e)) continue;");
+    // o custo dos extras da Faturação já era "contrato OU posto" em SQL (não muda)
+    expect(src("server/finance/extrasCost.ts")).toContain('or(eq(employees.contractType, "extra"), eq(employees.position, "extra"))');
+    for (const f of ["server/payroll/payrollData.ts", "server/payroll/compute.ts", "server/finance/extrasCost.ts", "server/finance/engine.ts"]) {
+      expect(src(f), f).not.toMatch(/employeeKind|hrCounts|extraRuleMismatch|split: false/);
+    }
+  });
+});
+
+describe("Auditoria D — pairShifts sem a divisão (split: false): as mesmas horas, estado e dia", () => {
+  const strip = ({ split: _s, daysTouched: _d, ...rest }: Shift) => rest;
+  // a conta do pontoMonthSummary ANTES (com a divisão), a partir dos turnos do caminho completo
+  const refSummary = (fullShifts: Shift[], firstDay: string, lastDay: string) => {
+    const month = fullShifts.filter((s) => s.day >= firstDay && s.day <= lastDay);
+    const countable = countableShifts(month);
+    const suspicious = month.filter((s) => s.status === "suspicious");
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    return {
+      totalHours: r2(countable.reduce((t, s) => t + s.hours, 0)), shifts: countable.length,
+      suspiciousHours: r2(suspicious.reduce((t, s) => t + s.hours, 0)), suspiciousShifts: suspicious.length,
+      openShifts: month.filter((s) => s.status === "open").length,
+    };
+  };
+  const same = (records: TimeRecordLike[]) => {
+    const full = pairShifts(records);
+    const fast = pairShifts(records, { split: false });
+    expect(fast.shifts.map(strip)).toEqual(full.shifts.map(strip));
+    expect(fast.orphans).toEqual(full.orphans);
+    return full;
+  };
+  const r = (id: number, type: "check_in" | "check_out", recordedAt: string, o: Partial<TimeRecordLike> = {}): TimeRecordLike =>
+    ({ id, type, recordedAt, hoursWorked: null, notes: null, reviewStatus: "ok", ...o });
+
+  it("fronteiras: mudança de hora em março e em outubro, meia-noite e viragem do mês em Lisboa", () => {
+    // março: 00:30 WET → 04:00 WEST (a hora 01h–02h não existe): 2,5 h reais, dia 29
+    expect(same([r(1, "check_in", "2026-03-29 00:30:00"), r(2, "check_out", "2026-03-29 03:00:00")]).shifts[0])
+      .toMatchObject({ hours: 2.5, day: "2026-03-29", status: "ok" });
+    // outubro: em UTC ainda é dia 24, em Lisboa já é dia 25 (00:30 WEST); a hora 01h repete-se
+    expect(same([r(1, "check_in", "2026-10-24 23:30:00"), r(2, "check_out", "2026-10-25 02:00:00")]).shifts[0])
+      .toMatchObject({ hours: 2.5, day: "2026-10-25" });
+    // 23:30 UTC de 30 set = 00:30 de 1 out em Lisboa (verão): o turno é de outubro
+    const sept = [r(1, "check_in", "2026-09-30 23:30:00"), r(2, "check_out", "2026-10-01 07:30:00")];
+    expect(same(sept).shifts[0]).toMatchObject({ hours: 8, day: "2026-10-01" });
+    expect(pontoMonthSummary(sept, "2026-10-01", "2026-10-31").totalHours).toBe(8);
+    expect(pontoMonthSummary(sept, "2026-09-01", "2026-09-30").totalHours).toBe(0);
+    // noite de 31 out → 1 nov (inverno, Lisboa = UTC): fica em outubro
+    expect(same([r(1, "check_in", "2026-10-31 22:00:00"), r(2, "check_out", "2026-11-01 06:00:00")]).shifts[0].day).toBe("2026-10-31");
+  });
+
+  it("sobrepostos, sem saída, saída sem entrada, suspeitos, rejeitados, aprovados, cortados a 12 h e 0 minutos", () => {
+    const recs = [
+      r(1, "check_out", "2026-10-05 07:00:00"),                                                   // saída sem entrada
+      r(2, "check_in", "2026-10-05 08:00:00"), r(3, "check_in", "2026-10-05 09:00:00"),            // entrada sobre entrada
+      r(4, "check_out", "2026-10-05 17:00:00", { notes: "[SUSPEITO] longe" }),
+      r(5, "check_in", "2026-10-06 08:00:00"), r(6, "check_out", "2026-10-06 12:00:00", { reviewStatus: "rejected" }),
+      r(7, "check_in", "2026-10-07 08:00:00"), r(8, "check_out", "2026-10-07 20:00:00", { reviewStatus: "approved", hoursWorked: "6.50" }),
+      r(9, "check_in", "2026-10-08 08:00:00", { reviewStatus: "approved", hoursWorked: "0" }), r(10, "check_out", "2026-10-08 12:00:00", { reviewStatus: null }),
+      r(11, "check_in", "2026-10-09 06:00:00"), r(12, "check_out", "2026-10-10 00:00:00", { hoursWorked: "12.00" }), // saída cortada a 12 h
+      r(13, "check_in", "2026-10-11 08:00:00"), r(14, "check_out", "2026-10-11 08:00:00"),          // 0 minutos
+      r(16, "check_in", "2026-10-12 08:00:00"), r(15, "check_out", "2026-10-12 08:00:00"),          // mesma hora: manda o id
+      r(17, "check_in", "2026-10-13 08:00:00"),                                                   // sem saída no fim
+    ];
+    const full = same(recs);
+    expect(full.orphans.map((o) => o.id)).toEqual([1, 15]);
+    expect(full.shifts.map((s) => [s.inId, s.status, s.hours])).toEqual([
+      [2, "open", 0], [3, "suspicious", 8], [5, "rejected", 4], [7, "approved", 6.5], [9, "approved", 0], [11, "ok", 12], [13, "ok", 0], [16, "open", 0], [17, "open", 0],
+    ]);
+    expect(pontoMonthSummary(recs, "2026-10-01", "2026-10-31")).toEqual(refSummary(full.shifts, "2026-10-01", "2026-10-31"));
+  });
+
+  it("propriedade: 300 sequências ao calhas à volta das mudanças de hora e das viragens do mês dão o mesmo", () => {
+    let seed = 64;
+    const rnd = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T,>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)];
+    const shuffle = <T,>(a: T[]): T[] => {
+      const out = [...a];
+      for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; }
+      return out;
+    };
+    const ANCHORS = ["2026-03-28 21:00:00", "2026-03-29 00:00:00", "2026-10-24 21:00:00", "2026-10-25 00:00:00", "2026-09-30 21:00:00", "2026-10-31 21:00:00", "2026-12-31 21:00:00", "2026-06-15 08:00:00"];
+    const GAPS_MIN = [0, 1, 7, 30, 59, 61, 180, 240, 480, 600, 719, 721, 960, 1000];
+    const STATUS = ["ok", "ok", "ok", "suspicious", "approved", "rejected", null, undefined] as const;
+    const NOTES = [null, null, null, "nota", "[SUSPEITO] fora da zona"];
+    const HOURS = [null, null, "", "0", "0.00", "3.25", "12.00", "25", 7];
+    const WINDOWS: Array<[string, string]> = [
+      ["2026-03-01", "2026-03-31"], ["2026-09-01", "2026-09-30"], ["2026-10-01", "2026-10-31"], ["2026-11-01", "2026-11-30"],
+      ["2026-12-01", "2026-12-31"], ["2026-03-29", "2026-03-29"], ["2026-10-25", "2026-10-25"],
+    ];
+    const seen: Record<string, number> = { ok: 0, open: 0, suspicious: 0, approved: 0, rejected: 0, orphans: 0, overnight: 0, dstDays: 0, ties: 0 };
+    for (let k = 0; k < 300; k++) {
+      let t = Date.parse(pick(ANCHORS).replace(" ", "T") + "Z") + Math.floor(rnd() * 6 * 60) * 60_000;
+      const n = 2 + Math.floor(rnd() * 9);
+      const ids = shuffle(Array.from({ length: n }, (_, i) => i + 1));
+      const recs: TimeRecordLike[] = [];
+      for (let i = 0; i < n; i++) {
+        const type = (i % 2 === 0) !== (rnd() < 0.15) ? "check_in" : "check_out";
+        recs.push({
+          id: ids[i], type, recordedAt: new Date(t).toISOString().slice(0, 19).replace("T", " "),
+          hoursWorked: pick(HOURS), notes: pick(NOTES), reviewStatus: pick(STATUS) as TimeRecordLike["reviewStatus"],
+          terminalStatus: pick([null, "terminal", "partial"]), terminalUntil: null,
+        });
+        const gap = pick(GAPS_MIN);
+        if (gap === 0) seen.ties++;
+        t += gap * 60_000 + (gap === 0 ? 0 : Math.floor(rnd() * 60) * 1000);
+      }
+      const input = shuffle(recs); // o emparelhamento ordena por hora e, no empate, pelo id
+      const full = same(input);
+      for (const [first, last] of WINDOWS) {
+        expect(pontoMonthSummary(input, first, last), `${k} ${first}`).toEqual(refSummary(full.shifts, first, last));
+      }
+      seen.orphans += full.orphans.length;
+      for (const s of full.shifts) {
+        seen[s.status]++;
+        if (s.outAt && s.daysTouched.length > 1) seen.overnight++;
+        if (s.day === "2026-03-29" || s.day === "2026-10-25") seen.dstDays++;
+      }
+    }
+    // o gerador passou mesmo pelos casos difíceis
+    for (const [k, v] of Object.entries(seen)) expect(v, k).toBeGreaterThan(0);
+  });
+
+  it("a folha continua no caminho com a divisão; só o resumo do mês usa o caminho rápido", () => {
+    // sábado 21h → domingo 05h em Lisboa (verão): 8 h de fim de semana
+    const recs = [r(1, "check_in", "2026-10-03 20:00:00"), r(2, "check_out", "2026-10-04 04:00:00")];
+    const full = pairShifts(recs).shifts[0];
+    expect(full.split).toEqual({ normal: 0, night: 0, weekend: 8 });
+    expect(full.daysTouched).toEqual(["2026-10-03", "2026-10-04"]);
+    // o caminho rápido salta mesmo a divisão (por isso não pode servir a folha)
+    expect(pairShifts(recs, { split: false }).shifts[0].split).toEqual({ normal: 0, night: 0, weekend: 0 });
+    // quem passa `split: false` no código: só o pontoMonthSummary
+    const users: string[] = [];
+    for (const dir of ["server", "shared"]) {
+      for (const f of readdirSync(resolve(__dirname, "..", dir), { recursive: true }) as string[]) {
+        if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
+        if (src(`${dir}/${f}`).includes("{ split: false }")) users.push(`${dir}/${f}`);
+      }
+    }
+    expect(users).toEqual(["server/payroll/shifts.ts"]);
+    const shifts = src("server/payroll/shifts.ts");
+    expect(shifts.match(/pairShifts\([^)]*\{ split: false \}\)/g)).toEqual(["pairShifts(records, { split: false })"]);
+    const summary = shifts.slice(shifts.indexOf("export function pontoMonthSummary"), shifts.indexOf("export function pontoMonthWindow"));
+    expect(summary).toContain("pairShifts(records, { split: false })");
+    expect(src("server/payroll/payrollData.ts")).toContain("pairShifts((recordsByEmp.get(employeeId) ?? []).map(toShiftLike)).shifts");
+  });
+});
+
+describe("Auditoria D — âmbito: ninguém vê fichas, contagens ou horas de outra cidade", () => {
+  const lisboa = { all: false, defaultCityId: 49, cityName: "Lisboa", cityIds: [49], projectIds: [49], missingCostCenter: false };
+
+  it("o projectId do topo nunca alarga: Lisboa a pedir o Porto → FORBIDDEN em todas as leituras do PR", async () => {
+    h.access = lisboa;
+    const sup = caller("supervisor");
+    await expect(sup.rh.list({ isActive: true, projectId: 50 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(sup.rh.stats({ projectId: 50 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(sup.rh.stats({ projectId: 65 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(sup.training.quizRanking({ projectId: 50 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(sup.training.careerExamAttempts({ projectId: 50 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // sem cidade no topo: só a dele (contagens e documentos)
+    expect((await sup.rh.stats()).totalActive).toBe(1);
+    expect(Object.keys(await sup.rh.documents.allStatus()).map(Number)).toEqual([1]);
+  });
+
+  it("o team leader só conta quem está abaixo dele no seu centro — as mesmas fichas da lista", async () => {
+    h.me = { employee: { id: 99, projectId: 50, position: "team_leader", isActive: 1 } };
+    const tl = caller("team_leader");
+    const list = await tl.rh.list({ isActive: true });
+    expect(list.map((x: any) => x.employee.id).sort((a: number, b: number) => a - b)).toEqual([2, 3, 4, 9, 10, 11]);
+    const s = await tl.rh.stats();
+    expect(s).toMatchObject({ totalActive: list.length, staff: 2, extras: 3, partners: 1 });
+    // documentos: ativas e não ativas abaixo dele (o backoffice 8 e Lisboa ficam de fora)
+    expect(Object.keys(await tl.rh.documents.allStatus()).map(Number).sort((a, b) => a - b)).toEqual([2, 3, 4, 5, 6, 9, 10, 11]);
+  });
+
+  it("o relatório posto ≠ contrato é só do super admin, no servidor", async () => {
+    for (const role of ["admin", "backoffice", "frontoffice", "supervisor", "team_leader", "user"]) {
+      await expect(caller(role).rh.extraMismatch(), role).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+  });
+
+  it("nada novo leva ordenados, IBAN ou NIF: só contagens, horas e resumos de documentos", async () => {
+    h.docs = new Map([[2, [{ docType: "photo", status: "validated" }]]]);
+    // valores e nomes de campos (o tipo de documento "nib_proof" é só o nome do documento em falta)
+    const leaks = (v: unknown) => /1234\.56|1234,56|PT5000|123456789|"monthlySalary"|"nib"|"nif"|"iban"/i.test(JSON.stringify(v));
+    for (const role of ["backoffice", "supervisor", "admin"]) {
+      const stats = await caller(role).rh.stats();
+      expect(Object.keys(stats).sort(), role).toEqual(
+        ["extras", "month", "monthlyHours", "monthlyHoursError", "monthlySuspiciousHours", "partners", "staff", "totalActive", "totalExtras", "totalPermanent"]);
+      expect(leaks(stats), role).toBe(false);
+      expect(leaks(await caller(role).rh.documents.allStatus()), role).toBe(false);
+    }
+    const mismatch = await caller("super_admin").rh.extraMismatch();
+    expect(mismatch.length).toBeGreaterThan(0);
+    expect(leaks(mismatch)).toBe(false);
+  });
+});
+
+describe("Auditoria D — Geral: o admin nacional vê o mesmo total de antes; só mudam o que o plano decidiu", () => {
+  it("sem cidade, todas as cidades e também as fichas sem centro; efetivos/extras pela regra única (P1)", async () => {
+    h.access = { all: true, defaultCityId: null, cityIds: [49, 50], projectIds: [48, 49, 50, 65], missingCostCenter: false };
+    const s = await caller("admin").rh.stats();
+    const active = h.employees.filter((x) => x.employee.isActive === 1).map((x) => x.employee);
+    // a conta antiga (getHRStats antes do D1): count(*) das fichas ativas, sem âmbito
+    expect(s.totalActive).toBe(active.length);
+    expect(s.totalActive).toBe(9);
+    // o que muda de propósito: extras = posto OU contrato; efetivos = funcionários (sem termo e a termo)
+    const oldExtras = active.filter((e) => e.position === "extra").length;
+    const oldPermanent = active.filter((e) => e.contractType === "permanent").length;
+    expect([oldExtras, oldPermanent]).toEqual([2, 4]);
+    expect([s.totalExtras, s.totalPermanent, s.partners]).toEqual([3, 5, 1]);
+    expect(s.totalPermanent + s.totalExtras + s.partners).toBe(s.totalActive);
+  });
+
+  it("quem não tem acesso nacional vê a sua cidade (o mesmo âmbito por omissão da lista)", async () => {
+    const s = await caller("supervisor").rh.stats();
+    const list = await caller("supervisor").rh.list({ isActive: true });
+    expect(s.totalActive).toBe(list.length);
+    expect(list.every((x: any) => [50, 65].includes(x.employee.projectId))).toBe(true);
+  });
+});
+
+describe("Auditoria D — D10 não mexe no custo dos extras nem no Parado", () => {
+  it("o custo da Atividade vem da escala; o ponto só escreve a coluna Ponto", () => {
+    const a = src("server/dayActivity.ts");
+    expect(a).toContain("else if (a.level) cost = hours * rateFor(rates, a.level);");
+    expect(a.match(/\.pontoHours\s*=/g)).toEqual([".pontoHours ="]);
+    expect(a).not.toMatch(/cost[^\n]*pontoHours|pontoHours[^\n]*cost/);
+    // o "Parado" do Resumo do dia é do GPS do turno (shiftDayDetail) ou do dia — nunca do ponto
+    expect(src("server/shiftDayDetail.ts")).not.toContain("pontoHours");
+    const w = src("shared/dayWorkSummary.ts");
+    expect(w.slice(w.indexOf("export function stoppedHours"), w.indexOf("export function fmtHours"))).not.toContain("pontoHours");
+  });
+
+  it("Resumo do dia: as horas trabalhadas são as da coluna Ponto; sem turnos que contem, o Zello (~) — e está na ajuda", () => {
+    expect(workedHours({ pontoHours: 8, hoursOnline: 9, hoursWorked: 5 })).toEqual({ hours: 8, source: "ponto" });
+    expect(workedHours({ pontoHours: null, hoursOnline: 9.04, hoursWorked: 5 })).toEqual({ hours: 9, source: "zello" });
+    expect(src("docs/ajuda/atividade-diaria.md")).toContain("pela regra da coluna Ponto da Atividade do Dia");
+  });
+});
+
+describe("Auditoria D — ajuda", () => {
+  it("'funcionários' leva à barra do RH; 'Como funciona isto?' continua na página aberta", () => {
+    const hits = searchHelpSections(knowledgeTree(), "funcionários", { max: 3 });
+    expect(hits[0]?.section.id).toBe("rh-ponto.md#barra-de-numeros-do-rh-total-ativos-funcionarios-extras-hora");
+    const docs = staffHelpDocs();
+    expect(pickHelpDocs(docs, "Como funciona isto?", { path: "/rh" }).map((d) => d.file)).toEqual(["rh-ponto.md"]);
+    expect(pickHelpDocs(docs, "Como funciona isto?", { path: "/pessoas-dashboard" }).map((d) => d.file)).toEqual(["dashboards.md"]);
   });
 });
