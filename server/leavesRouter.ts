@@ -21,7 +21,7 @@ import { assertCanManageEmployee, assertOwnOrScopedEmployee, employeeIdOfRecord 
 import { LEAVE_TYPES } from "../shared/leaves";
 import {
   approversForEmployee, assertMapOn, cancelLeave, decideLeave, feriasMapaOn, launchLeave, leaveMap, leaveMapForPdf, leavesForEmployee,
-  myLeaves, pendingForApprover, requestLeave, resolveLeaveViewer, vacationLaunchableIds,
+  leaveViewerSeesAllCities, myLeaves, pendingForApprover, requestLeave, resolveLeaveViewer, vacationLaunchableIds,
 } from "./leaves";
 
 const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida (AAAA-MM-DD).");
@@ -89,8 +89,9 @@ export const leavesRouter = router({
       enabled, mode: v.mode, employeeId: v.employeeId, isExtra: v.isExtra, isPartner: v.isPartner,
       canLaunch: canAccess(ctx.user, "rh", "manage"), canPrint: v.mode === "full" || v.mode === "supervisor",
       pendingCount, daysPerYear: v.settings.daysPerYear, city: v.city, fullName: v.fullName,
-      // a vista de supervisor sem âmbito de cidade (o administrador): todas as cidades
-      allCities: v.mode === "full" || (v.mode === "supervisor" && v.scopeProjectIds == null),
+      // a vista de supervisor sem âmbito de cidade (o administrador): todas as cidades. Este caminho é
+      // "pessoal" (sem o âmbito do pedido): o âmbito lê-se da conta — senão um supervisor de Lisboa lia "todas".
+      allCities: await leaveViewerSeesAllCities(v, ctx.user),
     };
   }),
   map: protectedProcedure

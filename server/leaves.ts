@@ -114,6 +114,28 @@ export async function resolveLeaveViewer(user: { id: number; role: string }): Pr
   };
 }
 
+/**
+ * Esta vista abrange todas as cidades? (só o texto do ecrã — o mapa filtra
+ * pelo âmbito do pedido). Quem vê tudo: sim. Vista de supervisor: o âmbito de
+ * cidade da conta. O `rh.leaves.status` é um caminho "pessoal" (corre sem o
+ * âmbito de cidade do pedido), por isso, sem âmbito no pedido, lê-se o da
+ * conta; se não der para o ler, "a tua área" (nunca promete mais do que vê).
+ */
+export async function leaveViewerSeesAllCities(v: LeaveViewer, user: { id: number; role: string }): Promise<boolean> {
+  if (v.mode === "full") return true;
+  if (v.mode !== "supervisor") return false;
+  const { cityScope } = await import("./cityScope");
+  const store = cityScope.getStore();
+  if (store) return v.scopeProjectIds == null;
+  try {
+    const { loadCityAccessParts } = await import("./cityAccess");
+    const { access } = await loadCityAccessParts(user.id, user.role);
+    return access.all === true && !access.missingCostCenter;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Linhas ──────────────────────────────────────────────────────────────────
 
 export interface LeaveDbRow {

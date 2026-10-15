@@ -83,7 +83,7 @@ vi.mock("./cityAccess", async (original) => ({ ...(await original<object>()), lo
 vi.mock("./terminalPay", () => ({ closedPayrollMonthKeys: async () => new Set<string>() }));
 vi.mock("./notify", () => ({ notify: async () => ({ recipients: [], emailed: 0, duplicates: 0, city: null }) }));
 
-import { assertCanLaunchApprovedVacation, awayForAutoProposal, launchLeave, leaveMap, resolveLeaveViewer, vacationLaunchableIds } from "./leaves";
+import { assertCanLaunchApprovedVacation, awayForAutoProposal, launchLeave, leaveMap, leaveViewerSeesAllCities, resolveLeaveViewer, vacationLaunchableIds } from "./leaves";
 import { cityScope } from "./cityScope";
 
 const root = resolve(import.meta.dirname, "..");
@@ -322,8 +322,26 @@ describe("5. o administrador (sem ser super admin nem estar nas listas) vê como
     expect(m.people.map((p) => p.fullName)).not.toContain("TL Porto");
   });
   it("o ecrã diz \"todas as cidades\" à vista de supervisor sem âmbito de cidade", () => {
-    expect(src("server/leavesRouter.ts")).toContain('allCities: v.mode === "full" || (v.mode === "supervisor" && v.scopeProjectIds == null),');
+    expect(src("server/leavesRouter.ts")).toContain("allCities: await leaveViewerSeesAllCities(v, ctx.user),");
     expect(src("client/src/pages/FeriasPage.tsx")).toContain('`Vês ${s.allCities ? "todas as cidades" : "a tua área"}.');
+  });
+  it("(auditoria) o estado corre sem o âmbito do pedido: o supervisor de Lisboa lê \"a tua área\", o administrador \"todas\"", async () => {
+    // rh.leaves.status é um caminho "pessoal" (cityAccess.ts): corre FORA do cityScope — antes o supervisor de Lisboa lia "todas as cidades"
+    state.cityAccess = new Map<number, any>([[4, { all: false, cityNames: ["Lisboa"], missingCostCenter: false }], [40, { all: true, missingCostCenter: false }]]);
+    const sup = await resolveLeaveViewer(U.supLx);
+    expect(sup.mode).toBe("supervisor");
+    expect(await leaveViewerSeesAllCities(sup, U.supLx)).toBe(false);
+    const adm = await resolveLeaveViewer(U.admin);
+    expect(await leaveViewerSeesAllCities(adm, U.admin)).toBe(true);
+    // sem centro de custos, ou sem conseguir ler o âmbito: "a tua área" (nunca promete mais do que vê)
+    state.cityAccess = new Map<number, any>([[40, { all: true, missingCostCenter: true }]]);
+    expect(await leaveViewerSeesAllCities(adm, U.admin)).toBe(false);
+    // dentro do âmbito do pedido (o mapa): o do pedido
+    expect(await cityScope.run(LISBOA, async () => leaveViewerSeesAllCities(await resolveLeaveViewer(U.supLx), U.supLx))).toBe(false);
+    expect(await cityScope.run(NATIONAL, async () => leaveViewerSeesAllCities(await resolveLeaveViewer(U.admin), U.admin))).toBe(true);
+    // quem vê tudo: sempre; colegas: nunca
+    expect(await leaveViewerSeesAllCities(await resolveLeaveViewer(U.rh), U.rh)).toBe(true);
+    expect(await leaveViewerSeesAllCities(await resolveLeaveViewer(U.ana), U.ana)).toBe(false);
   });
   it("com o mapa DESLIGADO o mapa não abre a ninguém (a ficha já mostrava as baixas como \"ausente\" a quem não vê tudo)", () => {
     const r = src("server/leavesRouter.ts");
