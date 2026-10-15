@@ -130,7 +130,7 @@ async function pool<T>(items: readonly T[], limit: number, fn: (x: T) => Promise
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
 }
 
-async function loadGps(requests: Array<{ zello: string; day: string }>, o: { deadlineAt: number }): Promise<Map<string, GpsFile>> {
+export async function loadGps(requests: Array<{ zello: string; day: string }>, o: { deadlineAt: number }): Promise<Map<string, GpsFile>> {
   const out = new Map<string, GpsFile>();
   const db = await getDb();
   if (!db || !requests.length) return out;

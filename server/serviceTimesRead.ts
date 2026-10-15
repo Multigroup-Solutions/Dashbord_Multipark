@@ -103,7 +103,28 @@ export const GRID_ROW_COLUMNS = [
   "terminalMs", "terminalStatus", "toFirstGarageMs", "p2Ms", "p2Status", "toParkedMs", "parkedStatus", "t2LateMs", "t2Status",
 ] as const;
 
-export interface ServiceRowsRead { rows: ServiceRow[]; truncated: boolean }
+export interface ServiceRowsRead {
+  rows: ServiceRow[];
+  truncated: boolean;
+  /** A leitura falhou (o motivo; ex.: passou do `maxExecutionMs` e o MySQL cancelou-a). Ausente = leu. */
+  error?: string;
+}
+
+/**
+ * Dica do MySQL para CANCELAR um SELECT que passe de `ms` (o servidor pára a
+ * consulta; o mesmo já se usa na pesquisa global). Só em SELECT. PURA.
+ */
+export function maxExecutionHint(ms: number | null | undefined) {
+  const n = Math.floor(Number(ms));
+  return Number.isFinite(n) && n > 0 ? sql.raw(`/*+ MAX_EXECUTION_TIME(${Math.min(n, 600_000)}) */ `) : sql``;
+}
+
+/** O erro é a consulta cancelada pelo MAX_EXECUTION_TIME (MySQL 3024)? PURA. */
+export function isQueryTimeoutError(err: unknown): boolean {
+  const e = err as any;
+  const code = e?.cause?.errno ?? e?.errno ?? e?.cause?.code ?? e?.code;
+  return code === 3024 || code === "ER_QUERY_TIMEOUT" || /maximum statement execution time exceeded|query execution was interrupted/i.test(String(e?.cause?.message ?? e?.message ?? e ?? ""));
+}
 
 /**
  * Linhas não anuladas da tabela nos dias operacionais [fromDay, toDay], nas
@@ -115,7 +136,11 @@ export interface ServiceRowsRead { rows: ServiceRow[]; truncated: boolean }
  * de hoje; as linhas voltam por ordem crescente e `truncated` diz se cortou
  * (o ecrã avisa).
  */
-export async function loadServiceRowsInfo(o: { fromDay: string; toDay: string; cityKeys: readonly string[] | null; kind?: "entrega" | "recolha"; bookingId?: string; limit?: number; columns?: readonly string[] }): Promise<ServiceRowsRead> {
+export async function loadServiceRowsInfo(o: {
+  fromDay: string; toDay: string; cityKeys: readonly string[] | null; kind?: "entrega" | "recolha"; bookingId?: string; limit?: number; columns?: readonly string[];
+  /** Prazo da consulta no servidor (MAX_EXECUTION_TIME): passado ele, o MySQL cancela-a e vem `error`. Omisso = sem prazo (como sempre). */
+  maxExecutionMs?: number;
+}): Promise<ServiceRowsRead> {
   const db = await getDb();
   if (!db) return { rows: [], truncated: false };
   if (o.cityKeys && !o.cityKeys.length) return { rows: [], truncated: false };
@@ -133,7 +158,7 @@ export async function loadServiceRowsInfo(o: { fromDay: string; toDay: string; c
   const limit = Math.max(1, Math.min(o.limit ?? SERVICE_ROWS_LIMIT, SERVICE_ROWS_LIMIT));
   try {
     // uma a mais para saber se cortou
-    const res = await db.execute(sql`SELECT ${cols} FROM service_times
+    const res = await db.execute(sql`SELECT ${maxExecutionHint(o.maxExecutionMs)}${cols} FROM service_times
       WHERE opDay >= ${o.fromDay} AND opDay <= ${o.toDay} AND voidedAt IS NULL ${cities} ${kind} ${booking}
       ORDER BY opDay DESC, id DESC LIMIT ${sql.raw(String(limit + 1))}`);
     const raw = rowsOf(res);
@@ -143,8 +168,9 @@ export async function loadServiceRowsInfo(o: { fromDay: string; toDay: string; c
     return { rows, truncated };
   } catch (err: any) {
     // tabela ainda por criar (arranque a meio da migração 0685): como se estivesse vazia
-    console.warn("[tempos] leitura da tabela:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
-    return { rows: [], truncated: false };
+    const msg = String(err?.cause?.message ?? err?.message ?? err).slice(0, 160);
+    console.warn("[tempos] leitura da tabela:", msg);
+    return { rows: [], truncated: false, error: isQueryTimeoutError(err) ? "prazo" : msg };
   }
 }
 

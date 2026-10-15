@@ -439,8 +439,18 @@ export function setAiProvidersForTests(p: Partial<Record<AiProviderId, AiProvide
   geminiClient = null;
 }
 
+let providerWrap: ((p: AiProvider) => AiProvider) | null = null;
+
+/**
+ * Avaliações (scripts/eval-multis.ts, plano MPV §8.2): embrulha o fornecedor
+ * para MEDIR cada pedido (custo, teto do eval) sem mudar o pedido nem a
+ * resposta. Nunca em produção. null repõe.
+ */
+export function wrapAiProviders(wrap: ((p: AiProvider) => AiProvider) | null): void {
+  providerWrap = wrap;
+}
+
 export function getProvider(id: AiProviderId, env: Env = process.env): AiProvider {
-  const t = testProviders?.[id];
-  if (t) return t;
-  return id === "gemini" ? createGeminiProvider(env) : createLegacyProvider();
+  const base = testProviders?.[id] ?? (id === "gemini" ? createGeminiProvider(env) : createLegacyProvider());
+  return providerWrap ? providerWrap(base) : base;
 }

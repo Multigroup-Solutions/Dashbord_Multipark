@@ -24,6 +24,7 @@
 import { AiBudgetExceededError, isAiError, aiUserMessage } from "../errors";
 import { selectProvider } from "../client";
 import type { AiFeature } from "../features";
+import type { AiTier } from "../models";
 import { createRedactionContext } from "../pii";
 import { checkRateLimit, type RateLimitRule } from "../rateLimit";
 import { runAi } from "../run";
@@ -115,6 +116,16 @@ export interface ChatTurnInput<Ctx> {
   finalReserveMs?: number;
   /** Versão do chamador (registo + resposta guardada), ex.: "v1". */
   variant?: string;
+  /**
+   * Nível pedido (omisso: o do catálogo da funcionalidade). Só o eval do
+   * Multis o usa (assistant_eval: lite ou smart, conforme a versão).
+   */
+  tier?: AiTier;
+  /**
+   * Avaliação (scripts/eval-multis.ts, plano MPV §8.2): sem conversa (não lê
+   * nem guarda), sem limite de pedidos. Nunca em produção.
+   */
+  ephemeral?: boolean;
 }
 
 export type ChatFailure = "empty" | "too_long" | "disabled" | "not_configured" | "budget" | "rate_limited" | "error";
@@ -143,6 +154,8 @@ export type ChatTurnResult =
       memory?: "saved" | "exists" | "rejected";
       /** Nível do modelo que respondeu (lite/fast/smart); ausente sem IA. */
       tier?: string;
+      /** O pedido à IA deste turno (modelo, custo, tempo, voltas) — para o eval e o registo. */
+      run?: { model: string; costEur: number; latencyMs: number; rounds: number; forcedFinal: boolean; finishReason: string | null; fallback: boolean };
     }
   | {
       ok: false; reason: ChatFailure; message: string; retryAfterSec?: number; conversationId?: number | null;
@@ -174,18 +187,23 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
     return { ok: false, reason, message: CHAT_MESSAGES[reason] };
   }
 
-  const rl = await checkRateLimit(input.rateKey, { perMinute: input.limits.perMinute, perDay: input.limits.perDay });
-  if (!rl.allowed) {
-    const when = rl.limitedBy === "day" ? "amanhã" : `daqui a ${rl.retryAfterSec} s`;
-    return { ok: false, reason: "rate_limited", retryAfterSec: rl.retryAfterSec, message: `Muitas perguntas seguidas. Tenta outra vez ${when}.` };
+  // O eval (ephemeral) não conta para o limite de pedidos nem guarda conversa.
+  if (!input.ephemeral) {
+    const rl = await checkRateLimit(input.rateKey, { perMinute: input.limits.perMinute, perDay: input.limits.perDay });
+    if (!rl.allowed) {
+      const when = rl.limitedBy === "day" ? "amanhã" : `daqui a ${rl.retryAfterSec} s`;
+      return { ok: false, reason: "rate_limited", retryAfterSec: rl.retryAfterSec, message: `Muitas perguntas seguidas. Tenta outra vez ${when}.` };
+    }
   }
 
   let conversationId: number | null = null;
-  try {
-    conversationId = await resolveConversation(input.channel, input.ownerKey, {
-      userId: input.userId ?? null, conversationId: input.conversationId ?? null, forceNew: input.newConversation,
-    });
-  } catch { conversationId = null; }
+  if (!input.ephemeral) {
+    try {
+      conversationId = await resolveConversation(input.channel, input.ownerKey, {
+        userId: input.userId ?? null, conversationId: input.conversationId ?? null, forceNew: input.newConversation,
+      });
+    } catch { conversationId = null; }
+  }
   const stored = conversationId ? await loadMessages(input.channel, input.ownerKey, conversationId, 40).catch(() => []) : [];
   // Um só contexto de redação no turno (histórico, pergunta e ferramentas continuam a numeração).
   const red = createRedactionContext();
@@ -255,6 +273,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
       history,
       input: blocks.join("\n\n"),
       maxTokens: input.maxOutputTokens ?? 700,
+      ...(input.tier ? { tier: input.tier } : {}),
       scaleMaxTokensForThinking: true,
       timeoutMs: input.timeoutMs ?? 40_000,
       ...(input.finalReserveMs != null ? { finalReserveMs: input.finalReserveMs } : {}),
@@ -299,6 +318,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
     }
     return {
       ok: true, answer, conversationId, messageId, toolsUsed: [...new Set(used)], helpFiles, toolErrors, tier: r.tier,
+      run: { model: r.model, costEur: r.costEur, latencyMs: r.latencyMs, rounds: r.rounds, forcedFinal: r.forcedFinal, finishReason: r.finishReason, fallback: r.fallback },
       ...(cited ? { citations: cited.used } : {}), ...(refused.length ? { toolsRefused: [...new Set(refused)] } : {}),
     };
   } catch (err) {
