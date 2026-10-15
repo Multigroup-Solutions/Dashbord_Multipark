@@ -7,9 +7,9 @@ description: Especialista no Dashboard Multipark (React/Vite + tRPC + Drizzle My
 
 ## Regras que nunca se quebram
 - **Nunca apagar** os dados do webhook nem a cópia `multipark_bookings` (é a cópia financeira do webhook, mantida de propósito). Nada de DELETE em dados de negócio: desativa-se, marca-se, regista-se.
-- **BD de produção (a nossa MySQL e a da Multipark): só leitura e só a pedido do Jorge.** Só se lê quando ele o pede explicitamente nessa conversa, e nunca se escreve, apaga ou altera nada por essa ligação. Sem esse pedido, para saber como está produção usam-se os logs da Vercel (`get_runtime_logs`, projeto `prj_ccvzHCH8edMfjELxjbi4M9FzxlIv`, team `team_lYkibOdgNjvjOVfHUg46s926`) ou pede-se ao Jorge uma captura dos ecrãs.
+- **BD de produção (a nossa MySQL e a da Multipark): só leitura e só a pedido do Jorge.** Só se lê quando ele o pede explicitamente nessa conversa, e nunca se escreve, apaga ou altera nada por essa ligação. Sem esse pedido, para saber como está produção usam-se os logs da Vercel (`get_runtime_logs`, projeto `prj_ccvzHCH8edMfjELxjbi4M9FzxlIv`, team `team_lYkibOdgNjvjOVfHUg46s926`), o MCP `Agente_Multipark` (`dashboard_query`) **apenas** em `settings.values.list`, `settings.aiUsage*`, `settings.aiPilotStats`, `settings.scheduler` e `extrasDia.schedule` (sem dados pessoais), ou pede-se ao Jorge uma captura dos ecrãs. `dashboard_action` e as ferramentas `create_*`/`update_*`/`delete_*` do MCP nunca por iniciativa própria.
 - **Nunca pedir** passwords, tokens ou chaves no chat; as chaves vão diretamente para a Vercel/Railway. Nunca desencriptar variáveis da Vercel. Nunca correr `curl | bash`.
-- **Nunca fazer merge** sem o Jorge dizer explicitamente "faz merge do N". Não mexer em ramos de outras sessões.
+- **Não fazes merge nem abres PR** quando és o implementador ou o auditor: o coordenador (skill `especialista-dashboard-2026`) faz o merge depois de o auditor dar ≥ 90. Não mexer em ramos de outras sessões.
 - A BD da Multipark é **só de leitura** (`server/multiparkDb/*`, `assertReadOnlySql`).
 
 ## Stack e onde está cada coisa
@@ -20,18 +20,18 @@ description: Especialista no Dashboard Multipark (React/Vite + tRPC + Drizzle My
 - Definições: `SETTINGS` em `shared/appSettings.ts` (`def({ key, group, label, description, schema, defaultValue, wiring })`), lidas com `getSetting(key)`.
 - Notificações: só por `notify()` (`server/notify.ts`); tipos em `shared/notificationRouting.ts`.
 - Texto: regra única em `shared/textKey.ts` (`matchKey`, `matchWords`, `searchText`) para comparar nomes/emails.
-- Ajuda: `docs/ajuda/*.md` (lista fixa de ficheiros — acrescenta secções aos existentes, não cries novos), gerada com `pnpm tsx scripts/gen-ajuda.ts`; notificações com `pnpm tsx scripts/gen-notificacoes-doc.ts`.
+- Ajuda: `docs/ajuda/*.md` (acrescenta secções aos existentes; ficheiro novo só para uma página nova), árvore com front matter `grupo`/`pagina`/`separadores`, marcadores `{{regra:}}` com "por omissão" — ver `.claude/skills/especialista-dashboard-2026/references/regras.md` §8; gerada com `pnpm tsx scripts/gen-ajuda.ts`; notificações com `pnpm tsx scripts/gen-notificacoes-doc.ts`.
 
 ## Validação antes de cada push (sempre)
 1. `pnpm check`
-2. `pnpm vitest run server` (tudo verde)
+2. `npx vitest run` (completo, tudo verde)
 3. `pnpm build:api` e `node -e "import('./api/index.js')"`; depois `git checkout -- api/index.js`
 4. Se mexeste em `docs/ajuda`: `pnpm tsx scripts/gen-ajuda.ts` (e o doc das notificações se mexeste em tipos).
 
 ## Fluxo de trabalho
-- Um ramo `claude/<tema>` por assunto a partir da `origin/main`; commits com os trailers `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` e `Claude-Session: …`.
-- PR em **rascunho**, corpo em PT-PT (O que muda / Validação), a acabar com "🤖 Generated with [Claude Code](https://claude.com/claude-code)" e o link da sessão. Subscrever a atividade do PR e agendar um check-in.
-- "faz merge do N": ver o estado da Vercel do head; se verde → `draft=false`, squash com `expectedHeadSha`, deixar de seguir, apagar o check-in; se ainda a correr, reagendar 3 min. PRs empilhados: mudar a base antes.
+- O processo completo (auditor adversarial até ≥ 90, rondas, merge) está em `.claude/skills/especialista-dashboard-2026/references/processo.md`.
+- Um ramo por assunto a partir da `origin/main` (o nome que o coordenador indicar); commits em LF com o trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; push do ramo, sem abrir PR.
+- PR (pelo coordenador, depois do auditor ≥ 90): corpo em PT-PT (O que muda / Auditoria / Validação), a acabar com "🤖 Generated with [Claude Code](https://claude.com/claude-code)"; squash-merge.
 - Coisas novas que escrevem ou avisam gente entram **desligadas** (interruptor) até o Jorge ver; o que é reversível e óbvio pode entrar ligado.
 
 ## Decisões do dono que já existem (não voltar a perguntar)
