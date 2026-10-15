@@ -96,7 +96,7 @@ vi.mock("./cityAccess", async (original) => ({ ...(await original<object>()), lo
 vi.mock("./terminalPay", () => ({ closedPayrollMonthKeys: async () => { if (state.closedFails) throw new Error("BD"); return state.closed; } }));
 vi.mock("./notify", () => ({ notify: async (i: any) => { state.notified.push(i); return { recipients: [], emailed: 0, duplicates: 0, city: null }; } }));
 
-import { cancelLeave, decideLeave, launchLeave, leaveMap, pendingForApprover, requestLeave, resolveLeaveViewer, assertPeriodOpen } from "./leaves";
+import { cancelLeave, decideLeave, launchLeave, leaveMap, leaveMapForPdf, pendingForApprover, requestLeave, resolveLeaveViewer, assertPeriodOpen } from "./leaves";
 import { cityScope } from "./cityScope";
 
 const U = { jorge: { id: 1, role: "super_admin" }, rh: { id: 3, role: "backoffice" }, supLx: { id: 4, role: "supervisor" }, ana: { id: 20, role: "frontoffice" }, rui: { id: 21, role: "condutor" }, ze: { id: 22, role: "extra" }, parceiro: { id: 24, role: "user" } };
@@ -295,6 +295,19 @@ describe("auditoria do passo 11", () => {
     // um pedido por aprovar também ocupa os dias
     await expect(launchLeave(U.rh, { employeeId: 10, leaveType: "sick", fromDate: "2026-12-24", toDate: "2026-12-26" }))
       .rejects.toThrow(/Férias, 21\/12 a 24\/12 \(por aprovar\)/);
+  });
+  it("PDF do ano: só férias aprovadas e os dias úteis DESSE ano (umas férias que atravessam o ano não somam os do seguinte)", async () => {
+    state.leaves.push({ id: 6, employeeId: 10, leaveType: "vacation", status: "approved", fromDate: "2026-12-28", toDate: "2027-01-08", hours: null, notes: null, decisionNote: null, approverUserIds: [3], requestedAt: null, createdAt: "2026-10-01 09:00:00" });
+    const pdf = await leaveMapForPdf(await viewer(U.rh), 2026, "lisbon");
+    const ana = pdf.rows.find((r) => r.fullName === "Ana Front")!;
+    // 28–31 dez = 4 dias úteis (o pedido de 21–24 dez ainda está por aprovar: não entra)
+    expect(ana.periods).toEqual([{ fromDate: "2026-12-28", toDate: "2027-01-08", workingDays: 4 }]);
+    expect(ana.total).toBe(4);
+    const next = await leaveMapForPdf(await viewer(U.rh), 2027, "lisbon");
+    // 2027: 1 jan é feriado; 4–8 jan = 5 dias úteis
+    expect(next.rows.find((r) => r.fullName === "Ana Front")!.total).toBe(5);
+    // nunca baixas
+    expect(pdf.rows.find((r) => r.fullName === "Rui Condutor")!.periods.map((x) => x.fromDate)).toEqual(["2026-12-21"]);
   });
   it("lançar: as próprias férias não (ninguém aprova as suas), também por outra conta da mesma ficha", async () => {
     state.logins.set(3, [3, 30]);

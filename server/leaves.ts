@@ -548,8 +548,10 @@ export async function leaveMapForPdf(v: LeaveViewer, year: number, cityKey: MapC
   return {
     year, cityKey: cityKey ?? "all",
     rows: people.map((p) => {
-      const periods = (byEmp.get(p.id) ?? []).sort((a, b) => a.fromDate.localeCompare(b.fromDate));
-      return { fullName: p.fullName, city: p.city, periods: periods.map((x) => ({ fromDate: x.fromDate, toDate: x.toDate, workingDays: x.workingDays })), total: periods.reduce((s, x) => s + x.workingDays, 0) };
+      const periods = (byEmp.get(p.id) ?? []).sort((a, b) => a.fromDate.localeCompare(b.fromDate))
+        // os dias úteis DESTE ano (umas férias de 28/12 a 04/01 não somam os de janeiro no mapa do ano anterior)
+        .map((x) => ({ fromDate: x.fromDate, toDate: x.toDate, workingDays: workingDaysIn(x.fromDate, x.toDate, p.city, `${year}-01-01`, `${year}-12-31`) }));
+      return { fullName: p.fullName, city: p.city, periods, total: periods.reduce((s, x) => s + x.workingDays, 0) };
     }),
   };
 }

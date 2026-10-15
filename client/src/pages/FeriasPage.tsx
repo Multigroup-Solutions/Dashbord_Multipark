@@ -456,7 +456,7 @@ function MineTab({ isExtra, daysPerYear, city, isSuperAdmin }: { isExtra: boolea
           <div className="space-y-1"><Label className="text-xs" htmlFor="m-from">De</Label><Input id="m-from" type="date" min={todayIso()} value={fromDate} onChange={(e) => { setFrom(e.target.value); if (!toDate || toDate < e.target.value) setTo(e.target.value); }} /></div>
           <div className="space-y-1"><Label className="text-xs" htmlFor="m-to">Até</Label><Input id="m-to" type="date" min={fromDate || todayIso()} value={toDate} onChange={(e) => setTo(e.target.value)} /></div>
         </div>
-        <div className="space-y-1"><Label className="text-xs" htmlFor="m-notes">Nota (opcional)</Label><Textarea id="m-notes" rows={2} maxLength={255} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+        <div className="space-y-1"><Label className="text-xs" htmlFor="m-notes">Nota (opcional — {isExtra ? "o supervisor e o RH veem-na" : "quem aprova, o supervisor e o RH veem-na"})</Label><Textarea id="m-notes" rows={2} maxLength={255} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
         {valid && !err && !isExtra && (
           <p className="text-xs"><b>{days}</b> dia(s) úteis{total != null ? <> · no ano: <b>{total}</b> de {daysPerYear}</> : null}</p>
         )}
