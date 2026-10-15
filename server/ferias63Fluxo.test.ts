@@ -96,7 +96,7 @@ vi.mock("./cityAccess", async (original) => ({ ...(await original<object>()), lo
 vi.mock("./terminalPay", () => ({ closedPayrollMonthKeys: async () => { if (state.closedFails) throw new Error("BD"); return state.closed; } }));
 vi.mock("./notify", () => ({ notify: async (i: any) => { state.notified.push(i); return { recipients: [], emailed: 0, duplicates: 0, city: null }; } }));
 
-import { cancelLeave, decideLeave, leaveMap, pendingForApprover, requestLeave, resolveLeaveViewer, assertPeriodOpen } from "./leaves";
+import { cancelLeave, decideLeave, launchLeave, leaveMap, pendingForApprover, requestLeave, resolveLeaveViewer, assertPeriodOpen } from "./leaves";
 import { cityScope } from "./cityScope";
 
 const U = { jorge: { id: 1, role: "super_admin" }, rh: { id: 3, role: "backoffice" }, supLx: { id: 4, role: "supervisor" }, ana: { id: 20, role: "frontoffice" }, rui: { id: 21, role: "condutor" }, ze: { id: 22, role: "extra" }, parceiro: { id: 24, role: "user" } };
@@ -169,7 +169,7 @@ describe("pedir", () => {
   it("recusas: parceiro-empresa, datas no passado, sobreposição com as suas, mês fechado, o fecho por ler", async () => {
     await expect(requestLeave(await viewer(U.parceiro), { fromDate: "2026-11-16", toDate: "2026-11-17" })).rejects.toThrow(/parceiros-empresa/);
     await expect(requestLeave(await viewer(U.ana), { fromDate: "2026-10-01", toDate: "2026-10-02" })).rejects.toThrow(/de hoje em diante/);
-    await expect(requestLeave(await viewer(U.ana), { fromDate: "2026-12-24", toDate: "2026-12-28" })).rejects.toThrow(/Já tens férias marcadas/);
+    await expect(requestLeave(await viewer(U.ana), { fromDate: "2026-12-24", toDate: "2026-12-28" })).rejects.toThrow(/Já tens nesses dias: Férias, 21\/12 a 24\/12 \(por aprovar\)/);
     await expect(requestLeave(await viewer(U.ana), { fromDate: "2026-11-20", toDate: "2026-11-16" })).rejects.toThrow(/antes da de início/);
     state.closed = new Set(["2026-11"]);
     await expect(requestLeave(await viewer(U.ana), { fromDate: "2026-11-16", toDate: "2026-11-17" })).rejects.toThrow("O mês de novembro de 2026 já está fechado");
@@ -268,5 +268,37 @@ describe("quem vê o quê no mapa (filtro do servidor)", () => {
     const m = await leaveMap(await viewer(U.rui), { year: 2026, canManageRh: false });
     expect(m.mode).toBe("full");
     expect(byName(m)).toContain("TL Porto:vacation:approved");
+  });
+});
+
+describe("auditoria do passo 11", () => {
+  it("aprovar e depois cancelar dentro da janela dos avisos: dois avisos com chaves diferentes (o segundo não fica calado)", async () => {
+    process.env.FERIAS_AVISOS = "on";
+    await decideLeave(await viewer(U.rh), { id: 4, approve: true });
+    await cancelLeave({ userId: 3, role: "backoffice", employeeId: 3 }, { id: 4, note: "operação" }, true);
+    const mine = state.notified.filter((n) => n.kind === "my_leave");
+    expect(mine.map((n) => `${n.entity.type}:${n.entity.id}`)).toEqual(["employee_leave:4:approved", "employee_leave:4:cancelled"]);
+    expect(mine[1]).toMatchObject({ targetUserIds: [20], title: "Férias canceladas: 21/12 a 24/12" });
+  });
+  it("lançar (RH): não sobrepõe uma ausência ativa da mesma pessoa; as canceladas não contam", async () => {
+    // Rui: baixa aprovada de 02/11 a 06/11
+    await expect(launchLeave(U.rh, { employeeId: 11, leaveType: "vacation", fromDate: "2026-11-05", toDate: "2026-11-10" }))
+      .rejects.toThrow(/já tem nesses dias: Baixa, 02\/11 a 06\/11 \(aprovado\)\. Cancela essa primeiro/);
+    expect(state.created).toEqual([]);
+    state.leaves.find((l) => l.id === 1).status = "cancelled";
+    const r = await launchLeave(U.rh, { employeeId: 11, leaveType: "vacation", fromDate: "2026-11-05", toDate: "2026-11-10" });
+    expect(r.id).toBeGreaterThan(0);
+    expect(state.created.at(-1)).toMatchObject({ employeeId: 11, leaveType: "vacation", status: "approved", decidedById: 3 });
+    // parte do dia por cima de férias também não
+    await expect(launchLeave(U.rh, { employeeId: 11, leaveType: "other", fromDate: "2026-11-10", toDate: "2026-11-10", hours: 2 }))
+      .rejects.toThrow(/Férias, 05\/11 a 10\/11/);
+    // um pedido por aprovar também ocupa os dias
+    await expect(launchLeave(U.rh, { employeeId: 10, leaveType: "sick", fromDate: "2026-12-24", toDate: "2026-12-26" }))
+      .rejects.toThrow(/Férias, 21\/12 a 24\/12 \(por aprovar\)/);
+  });
+  it("lançar: as próprias férias não (ninguém aprova as suas), também por outra conta da mesma ficha", async () => {
+    state.logins.set(3, [3, 30]);
+    await expect(launchLeave({ id: 30, role: "backoffice" }, { employeeId: 3, leaveType: "vacation", fromDate: "2026-11-16", toDate: "2026-11-20" }))
+      .rejects.toThrow(/ninguém aprova as suas/);
   });
 });

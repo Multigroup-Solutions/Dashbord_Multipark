@@ -16,7 +16,7 @@ import { sql } from "drizzle-orm";
 import { getDb, getEmployeeById, getEmployeeByUserId, logActivity } from "./db";
 import { scopedProjectIds } from "./cityScope";
 import {
-  DEFAULT_VACATION_APPROVALS, DEFAULT_VACATION_DAYS_PER_YEAR, FERIAS_AVISOS_FLAG, FERIAS_MAPA_FLAG, HR_PEOPLE_KEY, LEAVE_TYPE_LABELS,
+  DEFAULT_VACATION_APPROVALS, DEFAULT_VACATION_DAYS_PER_YEAR, FERIAS_AVISOS_FLAG, FERIAS_MAPA_FLAG, HR_PEOPLE_KEY, LEAVE_STATUS_LABELS, LEAVE_TYPE_LABELS,
   LEAVES_VIEW_ALL_KEY, PARTNER_COMPANY_CONTRACT, VACATION_APPROVALS_KEY, VACATION_DAYS_PER_YEAR_KEY,
   cancelLeaveError, closedMonthMessage, closedMonthOfPeriod, decideLeaveError, isActiveLeave, leaveForViewer, leaveInputError,
   leaveViewerMode, parseApproverIds, periodsOverlap, shortDayPt, vacationApproversFor, vacationDaysInYear, workingDaysIn,
@@ -225,6 +225,10 @@ export async function approversForEmployee(employeeId: number, settings?: LeaveS
 const period = (l: { fromDate: string; toDate: string; hours?: number | null }) =>
   l.fromDate === l.toDate ? `${shortDayPt(l.fromDate)}${l.hours ? ` (${String(l.hours).replace(".", ",")} h)` : ""}` : `${shortDayPt(l.fromDate)} a ${shortDayPt(l.toDate)}`;
 
+/** "Férias, 21/12 a 24/12 (por aprovar)" — a ausência que já ocupa esses dias. */
+const clashText = (l: { leaveType: LeaveType; status: string; fromDate: string; toDate: string; hours?: number | null }) =>
+  `${LEAVE_TYPE_LABELS[l.leaveType]}, ${period(l)} (${(LEAVE_STATUS_LABELS[l.status as keyof typeof LEAVE_STATUS_LABELS] ?? l.status).toLowerCase()})`;
+
 async function notifySafe(input: Parameters<typeof import("./notify").notify>[0]): Promise<void> {
   try {
     if (!(await feriasAvisosOn())) return;
@@ -382,7 +386,7 @@ export async function requestLeave(v: LeaveViewer, input: { fromDate: string; to
   await assertPeriodOpen(input);
   const mine = await leavesOf([v.employeeId], input.fromDate, input.toDate, ["requested", "approved"]);
   const clash = mine.find((l) => periodsOverlap(l, input));
-  if (clash) throw new TRPCError({ code: "CONFLICT", message: `Já tens ${LEAVE_TYPE_LABELS[clash.leaveType].toLowerCase()} marcadas nesses dias (${period(clash)}).` });
+  if (clash) throw new TRPCError({ code: "CONFLICT", message: `Já tens nesses dias: ${clashText(clash)}.` });
 
   const { createEmployeeLeave } = await import("./db");
   const notes = input.notes?.trim() ? input.notes.trim().slice(0, 255) : null;
@@ -423,7 +427,8 @@ export async function decideLeave(v: LeaveViewer, input: { id: number; approve: 
     kind: "my_leave", targetUserIds: requesterUserIds,
     title: input.approve ? `Férias aprovadas: ${period(leave)}` : `Férias recusadas: ${period(leave)}`,
     body: input.approve ? `As tuas férias de ${period(leave)} foram aprovadas.` : `O teu pedido de férias de ${period(leave)} foi recusado.\nMotivo: ${note}`,
-    link: "/ferias?tab=minhas", entity: { type: "employee_leave", id: leave.id },
+    // a chave inclui a decisão: aprovar e depois cancelar (dentro da janela de 30 min) são dois avisos, não um repetido
+    link: "/ferias?tab=minhas", entity: { type: "employee_leave", id: `${leave.id}:${input.approve ? "approved" : "rejected"}` },
   });
   return { id: leave.id, status: input.approve ? "approved" : "rejected" };
 }
@@ -447,7 +452,7 @@ export async function cancelLeave(actor: { userId: number; role: string; employe
       kind: "my_leave", targetUserIds: requesterUserIds,
       title: `Férias canceladas: ${period(leave)}`,
       body: `As tuas férias de ${period(leave)} foram canceladas.${note ? `\nMotivo: ${note}` : ""}`,
-      link: "/ferias?tab=minhas", entity: { type: "employee_leave", id: leave.id },
+      link: "/ferias?tab=minhas", entity: { type: "employee_leave", id: `${leave.id}:cancelled` },
     });
   }
   return { id: leave.id, status: "cancelled" as const };
@@ -476,6 +481,13 @@ export async function launchLeave(user: { id: number; role: string }, input: { e
     }
   }
   await assertPeriodOpen(input);
+  // Sobreposições: o mesmo dia não fica com duas ausências ativas (duas férias contavam a dobrar no total do
+  // ano e no PDF; uma baixa por cima de férias aprovadas deixava o mapa a mostrar "férias"). Cancela-se a
+  // outra primeiro (fica no histórico) — como no pedido.
+  const clash = (await leavesOf([input.employeeId], input.fromDate, input.toDate, ["requested", "approved"])).find((l) => periodsOverlap(l, input));
+  if (clash) {
+    throw new TRPCError({ code: "CONFLICT", message: `Essa pessoa já tem nesses dias: ${clashText(clash)}. Cancela essa primeiro (fica no histórico) ou escolhe outras datas.` });
+  }
   const { createEmployeeLeave } = await import("./db");
   const notes = input.notes?.trim() ? input.notes.trim().slice(0, 255) : null;
   const id = await createEmployeeLeave({ employeeId: input.employeeId, leaveType: input.leaveType, fromDate: input.fromDate, toDate: input.toDate, hours: input.hours ?? null, notes, createdById: user.id, status: "approved", decidedById: user.id });
