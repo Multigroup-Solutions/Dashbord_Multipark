@@ -115,7 +115,7 @@ export const leavesRouter = router({
     if (!db || !ap.userIds.length) return { names: [] as string[], auto: false };
     const res: any = await db.execute(sql`SELECT id, name, email FROM users WHERE id IN (${sql.join(ap.userIds.map((id) => sql`${id}`), sql`, `)})`);
     const rows = (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
-    return { names: rows.map((r) => String(r.name || r.email || `Conta ${r.id}`)).sort((a, b) => a.localeCompare(b, "pt")), auto: false };
+    return { names: rows.map((r) => String(r.name || r.email || "uma conta sem nome")).sort((a, b) => a.localeCompare(b, "pt")), auto: false };
   }),
   request: protectedProcedure
     .input(z.object({ fromDate: isoDay, toDate: isoDay, notes: z.string().max(255).optional() }))

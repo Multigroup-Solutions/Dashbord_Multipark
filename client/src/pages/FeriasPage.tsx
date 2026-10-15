@@ -260,7 +260,7 @@ function MapTab({ canLaunch, canPrint, mode }: { canLaunch: boolean; canPrint: b
             {monthLeaves.map((l) => (
               <li key={l.id} className="py-2 flex flex-wrap items-center gap-2 text-sm">
                 <span className={`h-3 w-3 rounded-sm shrink-0 ${cellTone(l.leaveType, l.status)}`} aria-hidden />
-                <span className="font-medium min-w-0 truncate">{nameOf.get(l.employeeId) ?? `#${l.employeeId}`}</span>
+                <span className="font-medium min-w-0 truncate">{nameOf.get(l.employeeId) ?? "—"}</span>
                 <span className="text-muted-foreground">{LEAVE_TYPE_LABELS[l.leaveType]} · {periodText(l)}{l.workingDays ? ` · ${l.workingDays} dia(s) úteis` : ""}</span>
                 <StatusBadge status={l.status} />
                 {(l.canApprove || l.canCancel) && <Button size="sm" variant="ghost" className="h-7 ml-auto" onClick={() => setDetail(l)}>Tratar</Button>}

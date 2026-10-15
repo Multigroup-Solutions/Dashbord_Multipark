@@ -72,8 +72,9 @@ export default function ProfilePage() {
     // Lote 46: a disponibilidade de cada um, à mão (os extras procuravam-na no Extras Dia).
     { icon: CalendarCheck, label: "A minha disponibilidade", note: "semana", action: () => navigate("/disponibilidade") },
     // Plano 63 (passo 11): as minhas férias (os extras: "quando não vou estar"); quem aprova vê os pedidos por aprovar.
-    ...(leaveStatus?.employeeId && !leaveStatus.isPartner
-      ? [{ icon: Palmtree, label: leaveStatus.isExtra ? "Quando não vou estar" : "As minhas férias", note: leaveStatus.pendingCount ? `${leaveStatus.pendingCount} por aprovar` : leaveStatus.isExtra ? "avisar" : "mapa", action: () => navigate(leaveStatus.pendingCount ? "/ferias?tab=aprovar" : "/ferias?tab=minhas") }]
+    // Quem aprova sem ficha (contas escolhidas nas Definições) também chega aos pedidos por aqui.
+    ...(leaveStatus && ((leaveStatus.employeeId && !leaveStatus.isPartner) || leaveStatus.pendingCount > 0)
+      ? [{ icon: Palmtree, label: leaveStatus.employeeId && !leaveStatus.isPartner ? (leaveStatus.isExtra ? "Quando não vou estar" : "As minhas férias") : "Férias por aprovar", note: leaveStatus.pendingCount ? `${leaveStatus.pendingCount} por aprovar` : leaveStatus.isExtra ? "avisar" : "mapa", action: () => navigate(leaveStatus.pendingCount ? "/ferias?tab=aprovar" : "/ferias?tab=minhas") }]
       : []),
     ...(can(user, "permissoes", "manage")
       ? [{ icon: Shield, label: "Roles e permissões", note: "granular", action: () => navigate("/permissoes") }]
