@@ -2614,7 +2614,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "extras-dia.md#notas"
        ],
        "container": false,
-       "chars": 3490
+       "chars": 3723
       },
       {
        "id": "extras-dia.md#quem-ve-o-que",
@@ -4006,7 +4006,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Interruptor Críticas 5★: publicar a resposta sozinho (6 h depois) em Definições → Automações: desligado por omissão, e só o super admin o liga.",
        "children": [],
        "container": false,
-       "chars": 3166
+       "chars": 3447
       },
       {
        "id": "criticas.md#limpeza",

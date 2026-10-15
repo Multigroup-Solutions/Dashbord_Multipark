@@ -16,7 +16,7 @@ import {
   DEFAULT_REMINDER_RECIPIENTS, REMINDER_CITIES, reminderAppliesOn, reminderMessage, reminderRecipientFilter, remindersDue,
   type ReminderCity, type ReminderRecipients,
 } from "../shared/extrasReminders";
-import { CITY_LABELS_PT, describeGap, fmtDayPt, lisbonNow } from "../shared/extrasSchedule";
+import { CITY_LABELS_PT, describeGap, effectiveManualEditMode, fmtDayPt, lisbonNow } from "../shared/extrasSchedule";
 import type { LoadedScheduleSettings, ScheduleAlertKind, ScheduleState } from "./extrasSchedule";
 
 export interface RemindersReport {
@@ -81,6 +81,8 @@ export async function runExtrasReminders(now: Date = new Date(), deps: Reminders
   if (!(await deps.flagOn("EXTRAS_REMINDERS"))) return { ...report, skipped: "off", reason: "Lembretes da escala desligados (EXTRAS_REMINDERS)" };
   const settings = await deps.loadSettings();
   const due = remindersDue(ln, settings);
+  // A regra do dia mexido à mão em vigor de facto (sem os avisos da escala, "não confirma e avisa" confirma).
+  const manualMode = due.length ? effectiveManualEditMode(settings.manualEditAtConfirm, await deps.flagOn("EXTRAS_SCHEDULE_ALERTS").catch(() => false)) : settings.manualEditAtConfirm;
   if (!due.length) return report;
   const rules = await deps.loadRules();
   for (const r of due) {
@@ -101,7 +103,7 @@ export async function runExtrasReminders(now: Date = new Date(), deps: Reminders
         const msg = reminderMessage({
           slot: r.slot, cityLabel: CITY_LABELS_PT[city], dayLabel: fmtDayPt(r.date), at: r.at,
           status: (state?.status ?? "none") as "none" | "proposing" | "proposed" | "confirmed" | "hold",
-          holdAuto: !!state?.holdAuto, manual: !!state?.manual, manualMode: settings.manualEditAtConfirm,
+          holdAuto: !!state?.holdAuto, manual: !!state?.manual, manualMode,
           proposed: counts.proposed, confirmed: counts.confirmed,
           gaps: (state?.gaps ?? []).map(describeGap), noAnswer, added,
         });

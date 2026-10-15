@@ -188,7 +188,7 @@ export function autoReplyRefusal(reply: string | null | undefined, ctx: { review
 // ─── Leitura na fonte antes de publicar ─────────────────────────────────────
 
 export type SourceRead =
-  | { ok: true; rating: number; text: string | null; hasReply: boolean }
+  | { ok: true; rating: number; text: string | null; hasReply: boolean; /** O texto da resposta que lá está (se houver). */ replyText?: string | null }
   | { ok: false; reason: string };
 
 /**

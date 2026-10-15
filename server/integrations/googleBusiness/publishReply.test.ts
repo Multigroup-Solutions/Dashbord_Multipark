@@ -110,9 +110,19 @@ describe('plano MPV F7 — caminho automático (5★): nunca por cima de uma res
       update: () => ({ set: (data: any) => ({ where: async (w: any) => { whereArg = w; updates.push(data); return [{ affectedRows: 1 }]; } }) }),
     };
     vi.mocked(database).mockResolvedValue(db);
-    await publishReply(5, 'Obrigado!', 42, { onlyIfNoReply: true });
+    const r = await publishReply(5, 'Obrigado!', 42, { onlyIfNoReply: true });
+    expect(r.stored).toBe(true);
     const { MySqlDialect } = await import('drizzle-orm/mysql-core');
     expect(new MySqlDialect().sqlToQuery(whereArg).sql).toMatch(/`googleReply` is null/);
+  });
+  it('perdeu a corrida (o UPDATE compare-and-set não mexeu em nada): stored = false', async () => {
+    const db: any = {
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [row] }) }) }),
+      update: () => ({ set: () => ({ where: async () => [{ affectedRows: 0 }] }) }),
+    };
+    vi.mocked(database).mockResolvedValue(db);
+    const r = await publishReply(5, 'Obrigado!', 42, { onlyIfNoReply: true });
+    expect(r.stored).toBe(false);
   });
   it('sem a opção (o "Aprovar e publicar" de uma pessoa): fica como sempre foi', async () => {
     row.googleReply = 'Resposta antiga';
