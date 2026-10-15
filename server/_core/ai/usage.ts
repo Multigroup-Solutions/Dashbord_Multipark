@@ -14,7 +14,7 @@
  *    pessoa por dia (`ownBudgetCheck`). O cartão do custo mostra-as na mesma.
  */
 import { sql } from "drizzle-orm";
-import { AI_ASSISTANT_SMART_DEFAULT_BUDGET, type AiAssistantSmartBudget, type AiPriceOverrides } from "../../../shared/appSettings";
+import { AI_ASSISTANT_EVAL_BUDGET, AI_ASSISTANT_SMART_DEFAULT_BUDGET, type AiAssistantSmartBudget, type AiPriceOverrides } from "../../../shared/appSettings";
 import { AiBudgetExceededError } from "./errors";
 import { AI_FEATURES, AI_OWN_BUDGET_FEATURES, hasOwnBudget, isAiFeature } from "../../../shared/aiFeatures";
 
@@ -185,8 +185,8 @@ export function ownBudgetNearCap(spend: OwnBudgetSpend, budget: AiAssistantSmart
 
 /** Teto em vigor de uma funcionalidade com teto próprio (Definições → omissão). Nunca lança. */
 export async function getOwnBudget(feature: string): Promise<AiAssistantSmartBudget> {
-  // Hoje só o assistant_smart tem teto próprio (ai.assistantSmartBudget).
-  void feature;
+  // O eval do Multis (F8) tem o seu, fixo (o script conta cada corrida); o assistant_smart, o das Definições.
+  if (feature === "assistant_eval") return { ...AI_ASSISTANT_EVAL_BUDGET };
   try {
     const { getSetting } = await import("../../appSettings");
     const v = await getSetting("ai.assistantSmartBudget");

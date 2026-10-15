@@ -34,6 +34,19 @@ export const timesProbeProcedures = {
    * semana, chamadas, GPS, botão, motivos, Zellos que não batem, zonas em
    * falta e garagens sem papel. Só contagens (a tabela dos tempos).
    */
+  /**
+   * Plano MPV (F8, §7) — "os tempos estão péssimos: é verdade?": cobertura do
+   * GPS por cidade e semana com o portão, uma amostra de 30 entregas
+   * comparada com a ficha da reserva e com o Zello, e as medianas por
+   * condutor com n. Só o super admin; só leitura (mutation só para não correr
+   * sozinho: lê a History da Multipark e os ficheiros do GPS).
+   */
+  timesVerification: superOnly
+    .input(z.object({ sampleDays: z.number().int().min(1).max(31).optional(), sampleSize: z.number().int().min(5).max(60).optional() }).optional())
+    .mutation(async ({ input }) => {
+      const [{ runTimesVerification, defaultVerifyDeps }, { scopedServiceCityKeys }, { operationalDayOf }] = await Promise.all([import("./timesVerification"), import("./serviceTimesRead"), import("../shared/lisbonDay")]);
+      return runTimesVerification({ today: operationalDayOf(Date.now()), cityKeys: await scopedServiceCityKeys(), sampleDays: input?.sampleDays, sampleSize: input?.sampleSize }, await defaultVerifyDeps());
+    }),
   serviceTimesCoverage: superOnly.query(async () => {
     const [{ getCoverageCard }, { scopedServiceCityKeys }, { operationalDayOf }] = await Promise.all([import("./serviceTimesViews"), import("./serviceTimesRead"), import("../shared/lisbonDay")]);
     return getCoverageCard({ today: operationalDayOf(Date.now()), cityKeys: await scopedServiceCityKeys() });
