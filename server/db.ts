@@ -97,6 +97,7 @@ import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcN
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
 import { ensureRecentSchema } from "./migrations/index";
 import { CITY_LABELS, cityKeyFromPlace } from "../shared/city";
+import { forgottenCheckoutAt } from "./payroll/shifts";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _schemaEnsure: Promise<void> | null = null;
@@ -4046,6 +4047,7 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   const db = await getDb();
   if (!db) return { closed: 0 };
   // Último registo de cada colaborador; se for check_in com >16h, fecha.
+  // Hora UTC dos dois lados (recordedAt está em UTC), seja qual for o fuso da sessão MySQL.
   const [rows] = await db.execute(sql`
     SELECT t.id, t.employeeId, t.recordedAt, t.terminalStatus
     FROM time_records t
@@ -4053,7 +4055,7 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
       SELECT employeeId, MAX(recordedAt) AS lastAt
       FROM time_records GROUP BY employeeId
     ) last ON last.employeeId = t.employeeId AND last.lastAt = t.recordedAt
-    WHERE t.type = 'check_in' AND t.recordedAt < DATE_SUB(NOW(), INTERVAL 16 HOUR)
+    WHERE t.type = 'check_in' AND t.recordedAt < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 16 HOUR)
   `) as any;
   // Terminal no ponto (interruptor PONTO_TERMINAL): a entrada aberta era de
   // terminal → a saída esquecida fica "por confirmar" (o trabalho diário tenta
@@ -4065,7 +4067,9 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   let pdaOn: boolean | null = null;
   let closed = 0;
   for (const r of rows as any[]) {
-    const outAt = new Date(new Date(r.recordedAt).getTime() + 12 * 3600000);
+    // recordedAt vem como texto UTC (o drizzle lê TIMESTAMP como texto): nunca
+    // `new Date(texto)`, que o lê na hora local do servidor (+1 h em Lisboa no verão).
+    const outAt = forgottenCheckoutAt(String(r.recordedAt));
     let terminalStatus: "pending" | null = null;
     if (r.terminalStatus === "start") {
       if (terminalOn === null) terminalOn = await (await import("./pontoTerminal")).pontoTerminalEnabled();

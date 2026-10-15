@@ -68,6 +68,14 @@ export const CHECKOUT_FORGOTTEN_AFTER_H = 16;
 export const CHECKOUT_FORGOTTEN_CAP_H = 12;
 
 /**
+ * Saída de uma entrada esquecida: 12 h depois da entrada (texto UTC da BD),
+ * seja dada na própria saída ou pelo fecho automático do trabalho diário.
+ */
+export function forgottenCheckoutAt(checkInAt: string): Date {
+  return new Date(parseDbDate(checkInAt).getTime() + CHECKOUT_FORGOTTEN_CAP_H * 3600000);
+}
+
+/**
  * Horas da saída do ponto a partir da entrada como está na BD (texto UTC).
  * Nunca `new Date("YYYY-MM-DD HH:MM:SS")`: isso lê a hora local do servidor
  * (em Lisboa, no verão, dava +1 h a cada turno).
@@ -77,7 +85,7 @@ export function checkoutHours(checkInAt: string, nowMs: number): { inAt: Date; o
   const inAt = parseDbDate(checkInAt);
   const diff = (nowMs - inAt.getTime()) / 3600000;
   if (diff > CHECKOUT_FORGOTTEN_AFTER_H) {
-    return { inAt, outAt: new Date(inAt.getTime() + CHECKOUT_FORGOTTEN_CAP_H * 3600000), hoursWorked: CHECKOUT_FORGOTTEN_CAP_H.toFixed(2), forgotten: true };
+    return { inAt, outAt: forgottenCheckoutAt(checkInAt), hoursWorked: CHECKOUT_FORGOTTEN_CAP_H.toFixed(2), forgotten: true };
   }
   return { inAt, outAt: new Date(nowMs), hoursWorked: diff.toFixed(2), forgotten: false };
 }
