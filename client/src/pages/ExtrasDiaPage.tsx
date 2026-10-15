@@ -52,6 +52,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
 import { TimesProbeCard } from "./extrasDia/TimesProbeCard";
 import { ServiceTimesCoverageCard } from "./extrasDia/ServiceTimesCoverageCard";
+import { TimesVerificationCard } from "./extrasDia/TimesVerificationCard";
 import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
 import { LicenceWarning } from "./extrasDia/LicenceWarning";
 import { AbsenceBadge, AbsenceWarning } from "@/components/ferias/FeriasBits";
@@ -159,6 +160,8 @@ export default function ExtrasDiaPage() {
   // ?dia=amanha|hoje|AAAA-MM-DD (pesquisa global): a escala mostrada é a de
   // baseDate + 1 (previsão do dia seguinte), por isso baseDate = dia − 1.
   const [baseDate, setBaseDate] = useState(() => baseDateFromUrl() ?? todayISO());
+  // O "Copiar resumo" do Diagnóstico dos tempos, para a Verificação dos tempos o juntar ao relatório (F8).
+  const [probeSummary, setProbeSummary] = useState<string | null>(null);
 
   const [tab, setTab] = usePersistedState<ExtrasDiaTab>("extrasdia.tab", "dia");
   // Plano MPV §3.1: o Multis sabe o separador aberto.
@@ -255,7 +258,9 @@ export default function ExtrasDiaPage() {
       {/* Plano 62, P0: diagnóstico dos tempos (calibração) — só o super admin. */}
       {/* 15 out 2026: "De onde vêm os tempos" (cobertura por cidade e semana) — só o super admin. */}
       {tab === "pressao" && user?.role === "super_admin" && <ServiceTimesCoverageCard />}
-      {tab === "pressao" && user?.role === "super_admin" && <TimesProbeCard city={city} />}
+      {tab === "pressao" && user?.role === "super_admin" && <TimesProbeCard city={city} onSummary={setProbeSummary} />}
+      {/* Plano MPV F8 (§7): "os tempos estão péssimos — é verdade?" — só o super admin. */}
+      {tab === "pressao" && user?.role === "super_admin" && <TimesVerificationCard probeSummary={probeSummary} />}
 
       {tab === "dia" && isLoading && (
         <div className="text-sm text-muted-foreground">A carregar previsão...</div>

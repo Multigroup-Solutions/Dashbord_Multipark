@@ -112,6 +112,10 @@ export const AI_FEATURES = {
   // no nível smart (AI_MODEL_SMART=gemini-4-argon). Teto € próprio (ai.assistantSmartBudget);
   // ao atingi-lo desce para `assistant` (lite) — "modo económico".
   assistant_smart: { label: "Multis do piloto (smart)", flag: "AI_ASSISTANT_SMART", tier: "smart", essential: false, ownBudget: true },
+  // Plano MPV §5.3/§8.2 (F8): a avaliação do Multis (scripts/eval-multis.ts), só quando o Jorge a
+  // lança com a chave. O nível vem de cada versão (v1-lite, mpv-lite: lite; mpv-argon: smart); teto
+  // próprio (15 € por corrida, contado pelo script; AI_ASSISTANT_EVAL_BUDGET) — nunca o das outras.
+  assistant_eval: { label: "Multis: avaliação (eval)", flag: null, tier: "lite", essential: false, ownBudget: true },
   // ── Automações internas (nenhuma é para clientes). Os NÚMEROS vêm sempre do
   // SQL/código; a IA só escreve o texto. Todas `lite` (regra do dono).
   ops_briefing: { label: "Briefing diário por cidade", flag: "AI_OPS_BRIEFING", tier: "lite", essential: false },

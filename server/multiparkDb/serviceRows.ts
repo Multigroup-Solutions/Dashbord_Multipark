@@ -99,6 +99,33 @@ export function buildServiceBookingHistorySql(bookingId: string, limit = 400): {
   return { sql, params: p.values };
 }
 
+/**
+ * A History de VÁRIAS reservas numa só leitura (plano MPV F8: a verificação
+ * dos tempos compara a amostra com a ficha de cada reserva) — as mesmas
+ * colunas e tipos, só dessas reservas, dentro da janela [from, to) UTC, com
+ * LIMIT. Uma leitura por relatório (a History não tem índices). PURA.
+ */
+export function buildServiceBookingsHistorySql(ids: readonly string[], o: { fromUtc: string; toUtc: string; limit?: number }): { sql: string; params: SqlParam[] } {
+  const p = new ParamList();
+  const list = (ids.length ? ids : [""]).slice(0, 200).map((id) => p.add(id)).join(", ");
+  const from = p.add(o.fromUtc), to = p.add(o.toUtc);
+  const types = SERVICE_HISTORY_TYPES.map((t) => p.add(t)).join(", ");
+  const statusLike = p.add('%"status"%');
+  const lim = p.add(Math.min(Math.max(Math.floor(o.limit ?? 6000), 1), 20_000));
+  const type = `upper(h."changeType"::text)`;
+  const sql = [
+    ...serviceHistoryColumns(type),
+    `  FROM "History" h`,
+    ` WHERE h."bookingId" IN (${list})`,
+    `   AND h."actionTime" >= ${from}::timestamp AND h."actionTime" < ${to}::timestamp`,
+    `   AND ${type} IN (${types})`,
+    `   AND (${type} <> 'UPDATE' OR h."modifiedFields"::text LIKE ${statusLike})`,
+    ` ORDER BY h."actionTime", h."id"`,
+    ` LIMIT ${lim}`,
+  ].join("\n");
+  return { sql, params: p.values };
+}
+
 /** Instante "YYYY-MM-DD HH:MM:SS(.mmm)" UTC (ou ISO) → ms. PURA. */
 export function utcTextMs(v: unknown): number | null {
   if (v == null || v === "") return null;
