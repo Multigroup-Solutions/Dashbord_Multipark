@@ -15,6 +15,8 @@
 import { addDays, lisbonWallTimeUtcMs, operationalDayOf } from "./lisbonDay";
 
 export interface FixedScheduleRow {
+  /** id da linha: nos dias duplicados (a mesma pessoa e dia da semana) conta a de id mais baixo (plano 63, 10a) */
+  id?: number | null;
   employeeId: number;
   /** 0 = domingo … 6 = sábado (como no RH e no processamento salarial) */
   weekday: number;
@@ -95,6 +97,20 @@ const weekdayOf = (day: string): number => new Date(`${day}T00:00:00Z`).getUTCDa
 const within = (day: string, from?: string | null, to?: string | null) => (!from || day >= String(from).slice(0, 10)) && (!to || day <= String(to).slice(0, 10));
 
 /**
+ * A linha desse dia da semana. Nos dias duplicados (não há UNIQUE pessoa+dia
+ * na tabela) fica a de id mais baixo — é o que a BD devolvia, na prática, à
+ * Avaliação e às faltas; sem ids, a primeira da lista. PURA.
+ */
+function firstOfWeekday(list: readonly FixedScheduleRow[], wd: number): FixedScheduleRow | undefined {
+  let best: FixedScheduleRow | undefined;
+  for (const x of list) {
+    if (Number(x.weekday) !== wd) continue;
+    if (!best || (x.id != null && best.id != null && Number(x.id) < Number(best.id))) best = x;
+  }
+  return best;
+}
+
+/**
  * Entradas do horário fixo cujo dia OPERACIONAL cai em [startDay, endDay]
  * (olha-se um dia de calendário para cada lado: uma entrada às 01:00 é ainda
  * do dia operacional anterior). Sem férias/baixas, fora do contrato nem
@@ -114,7 +130,7 @@ export function fixedScheduledStarts(startDay: string, endDay: string, schedules
   for (let cal = addDays(startDay, -1); cal <= addDays(endDay, 1); cal = addDays(cal, 1)) {
     const wd = weekdayOf(cal);
     for (const [emp, list] of byEmp) {
-      const s = list.find((x) => Number(x.weekday) === wd);
+      const s = firstOfWeekday(list, wd);
       if (!s) continue;
       const h = hoursOfHhmm(s.startTime);
       if (h == null) continue;

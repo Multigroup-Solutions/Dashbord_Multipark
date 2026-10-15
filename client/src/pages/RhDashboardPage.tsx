@@ -13,6 +13,9 @@ import {
 } from "lucide-react";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { toast } from "sonner";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "lucide-react";
+import { FIXED_NO_SHOW_DISMISS_LABELS, type FixedNoShowDismissReason } from "@shared/scheduleReview";
 
 const MONTH_NAMES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
@@ -168,16 +171,38 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
  * 41b: "Possíveis faltas por validar" — só contam pontos depois de
  * confirmadas. Fechado por omissão; marcar falta / libertar uma, as
  * escolhidas ou todas as da lista (a mesma regra de cada uma no servidor).
+ *
+ * Plano 63 (10a): as do HORÁRIO FIXO dispensam-se com motivo — "picou noutro
+ * sistema / picagem perdida" (fica para a verificação do ponto), Férias,
+ * Baixa ou Falta justificada (criam a ausência aprovada desse dia). Nada se
+ * apaga. Também em RH → Horários por rever (só as do horário fixo).
  */
-function PendingNoShowsPanel() {
+const FIXED_PREFIX = "[FALTA HORÁRIO]";
+const isFixed = (p: { reason?: string | null; notes?: string | null }) => p.reason === "other" && String(p.notes ?? "").startsWith(FIXED_PREFIX);
+const DISMISS_MENU: Array<{ reason: FixedNoShowDismissReason; hint?: string }> = [
+  { reason: "lost_punch", hint: "fica para a verificação do ponto" },
+  { reason: "vacation", hint: "cria a ausência desse dia" },
+  { reason: "sick", hint: "cria a ausência desse dia" },
+  { reason: "justified", hint: "consulta, funeral… — cria a ausência desse dia" },
+];
+
+export function PendingNoShowsPanel({ defaultOpen = false, onlyFixed = false }: { defaultOpen?: boolean; onlyFixed?: boolean } = {}) {
   const utils = trpc.useUtils();
   const q = trpc.rh.penalties.pending.useQuery();
-  const items = (q.data?.items ?? []) as any[];
-  const total = q.data?.total ?? 0;
+  const all = (q.data?.items ?? []) as any[];
+  const items = onlyFixed ? all.filter((row) => isFixed(row.penalty)) : all;
+  const total = onlyFixed ? items.length : q.data?.total ?? 0;
   const [picked, setPicked] = useState<Set<number>>(new Set());
-  const refresh = () => { utils.rh.penalties.pending.invalidate(); utils.rh.dashboard.invalidate(); };
+  const refresh = () => { utils.rh.penalties.pending.invalidate(); utils.rh.dashboard.invalidate(); utils.rh.schedules.review.invalidate(); };
   const reviewOne = trpc.rh.penalties.review.useMutation({
     onSuccess: (r) => { refresh(); toast.success(`Registado · ${r.points} ponto(s) confirmados${r.blocked ? " · acesso bloqueado" : ""}`); },
+    onError: (e) => toast.error(e.message),
+  });
+  const dismissFixed = trpc.rh.penalties.dismissFixed.useMutation({
+    onSuccess: (r) => {
+      refresh();
+      toast.success(r.leaveId ? `Dispensada · ausência de ${r.day ?? "esse dia"} lançada na ficha` : r.leaveAlready ? "Dispensada · já havia ausência nesse dia" : "Dispensada");
+    },
     onError: (e) => toast.error(e.message),
   });
   const reviewMany = trpc.rh.penalties.reviewMany.useMutation({
@@ -193,36 +218,57 @@ function PendingNoShowsPanel() {
   const scope = picked.size ? `as ${picked.size} escolhidas` : `todas (${items.length})`;
   const bulk = (decision: "confirmed" | "dismissed") => {
     const verb = decision === "confirmed" ? "Marcar falta a" : "Libertar";
-    if (!confirm(`${verb} ${scope}?${decision === "confirmed" ? " Cada falta confirmada conta 1 ponto; com 3 pontos o acesso fica bloqueado." : " Deixam de contar."}`)) return;
+    if (!confirm(`${verb} ${scope}?${decision === "confirmed" ? " Cada falta confirmada a um extra conta 1 ponto; com 3 pontos o acesso fica bloqueado (as do horário fixo não contam pontos)." : " Deixam de contar."}`)) return;
     reviewMany.mutate({ ids: ids.slice(0, 200), decision });
   };
   const toggle = (id: number) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const busy = reviewOne.isPending || reviewMany.isPending;
+  const busy = reviewOne.isPending || reviewMany.isPending || dismissFixed.isPending;
   return (
-    <details className="rounded-md border border-amber-200 bg-amber-50/30 text-xs">
-      <summary className="cursor-pointer select-none px-3 py-2 font-medium text-amber-900">
-        Possíveis faltas por validar ({total}){total > items.length ? ` · a mostrar as ${items.length} mais recentes` : ""}
+    <details className="rounded-md border border-amber-200 bg-amber-50/30 text-xs dark:border-amber-900/60 dark:bg-amber-950/20" open={defaultOpen || undefined}>
+      <summary className="cursor-pointer select-none px-3 py-2 font-medium text-amber-900 dark:text-amber-200">
+        {onlyFixed ? <>Possíveis faltas (horário fixo) por validar ({total})</> : <>Possíveis faltas por validar ({total}){total > items.length ? ` · a mostrar as ${items.length} mais recentes` : ""}</>}
       </summary>
       <div className="space-y-2 px-3 pb-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy || !ids.length} onClick={() => bulk("confirmed")}>Marcar falta a {scope}</Button>
-          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy || !ids.length} onClick={() => bulk("dismissed")}>Libertar {scope}</Button>
+          <Button size="sm" variant="outline" className="h-7 rounded-[10px] text-xs" disabled={busy || !ids.length} onClick={() => bulk("confirmed")}>Marcar falta a {scope}</Button>
+          <Button size="sm" variant="outline" className="h-7 rounded-[10px] text-xs" disabled={busy || !ids.length} onClick={() => bulk("dismissed")}>Libertar {scope}</Button>
           {picked.size > 0 && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setPicked(new Set())}>Limpar escolha</Button>}
         </div>
-        <div className="max-h-72 overflow-y-auto divide-y rounded border bg-background">
+        <div className="max-h-72 overflow-y-auto divide-y rounded-[10px] border bg-background">
           {items.map((row) => {
             const id = Number(row.penalty.id);
+            const fixed = isFixed(row.penalty);
             return (
-              <div key={id} className="flex items-start gap-2 px-2 py-1.5">
+              <div key={id} className="flex flex-wrap items-start gap-2 px-2 py-1.5 sm:flex-nowrap">
                 <input type="checkbox" className="mt-0.5" checked={picked.has(id)} onChange={() => toggle(id)} aria-label={`Escolher ${row.employee?.fullName ?? id}`} />
                 <div className="min-w-0 flex-1">
                   <span className="font-medium">{row.employee?.fullName ?? `#${row.penalty.employeeId}`}</span>
-                  <span className="ml-1 tabular-nums text-amber-800">{Number(row.penalty.points).toLocaleString("pt-PT")} pt</span>
-                  <p className="text-muted-foreground line-clamp-1 break-words" title={row.penalty.notes ?? undefined}>{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : row.penalty.reason === "other" && String(row.penalty.notes ?? "").startsWith("[FALTA HORÁRIO]") ? "Falta (horário fixo)" : row.penalty.reason}{row.penalty.notes ? ` · ${String(row.penalty.notes).replace(/^\[FALTA HORÁRIO\]\s*/, "")}` : ""}</p>
+                  <span className="ml-1 tabular-nums text-amber-800 dark:text-amber-300">{Number(row.penalty.points).toLocaleString("pt-PT")} pt</span>
+                  <p className="text-muted-foreground line-clamp-2 break-words sm:line-clamp-1" title={row.penalty.notes ?? undefined}>{row.penalty.reason === "no_show_extra_dia" ? "Falta a extra" : fixed ? "Falta (horário fixo)" : row.penalty.reason}{row.penalty.notes ? ` · ${String(row.penalty.notes).replace(/^\[FALTA HORÁRIO\]\s*/, "")}` : ""}</p>
                 </div>
-                <div className="flex shrink-0 gap-1">
-                  <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={busy} onClick={() => reviewOne.mutate({ id, decision: "confirmed" })}>Falta</Button>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy} onClick={() => reviewOne.mutate({ id, decision: "dismissed" })}>Libertar</Button>
+                <div className="ml-auto flex shrink-0 gap-1">
+                  <Button size="sm" variant="outline" className="h-6 rounded-[10px] px-2 text-[11px]" disabled={busy} onClick={() => reviewOne.mutate({ id, decision: "confirmed" })}>Falta</Button>
+                  {fixed ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy}>Dispensar <ChevronDown className="ml-0.5 h-3 w-3" /></Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-72">
+                        {DISMISS_MENU.map((m) => (
+                          <DropdownMenuItem key={m.reason} onClick={() => dismissFixed.mutate({ id, reason: m.reason })} className="flex flex-col items-start gap-0">
+                            <span className="text-xs font-medium">{FIXED_NO_SHOW_DISMISS_LABELS[m.reason]}</span>
+                            {m.hint && <span className="text-[11px] text-muted-foreground">{m.hint}</span>}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => reviewOne.mutate({ id, decision: "dismissed" })}>
+                          <span className="text-xs">{FIXED_NO_SHOW_DISMISS_LABELS.none}</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : (
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busy} onClick={() => reviewOne.mutate({ id, decision: "dismissed" })}>Libertar</Button>
+                  )}
                 </div>
               </div>
             );

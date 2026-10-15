@@ -111,9 +111,14 @@ export function contractDaysInMonth(e: EmployeeMonthInput["employee"], year: num
   return { days: d, from, to };
 }
 
-/** Horas esperadas do mês a partir do horário semanal (dias de calendário do vínculo). */
+/**
+ * Horas esperadas do mês a partir do horário semanal (dias de calendário do vínculo).
+ * Plano 63 (10a): "apagar" um dia do horário passa a folga (isWorkDay = 0) em vez de
+ * apagar a linha — um horário só com folgas conta como SEM horário (null → as 176 h),
+ * como contava quando os dias apagados desapareciam.
+ */
 export function expectedHoursFromSchedule(schedules: ScheduleLike[] | undefined, from: string, to: string): number | null {
-  if (!schedules || schedules.length === 0) return null;
+  if (!schedules || !schedules.some((s) => s.isWorkDay)) return null;
   const byWeekday = new Map<number, number>();
   for (const s of schedules) {
     if (!s.isWorkDay) continue;

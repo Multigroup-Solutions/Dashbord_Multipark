@@ -37,6 +37,7 @@ import {
   SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT,
 } from "./serviceTimes";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, isIsoDay } from "./evaluationClose";
+import { NO_SHOW_SKIP_SETTING_KEY, noShowSkipSchema } from "./scheduleReview";
 import { operationalDayOf } from "./lisbonDay";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
@@ -981,6 +982,17 @@ export const SETTINGS = {
     defaultValue: [],
     wiring: "live",
   }),
+  // Plano 63, passo 10a: antes de ligar RH_FALTAS_HORARIO, quem ainda pica noutro sistema (impressão
+  // digital) ou vai para isenção/reformado fica fora das faltas automáticas até uma data.
+  [NO_SHOW_SKIP_SETTING_KEY]: def({
+    key: NO_SHOW_SKIP_SETTING_KEY,
+    group: "pessoas",
+    label: "Fora das faltas automáticas (horário fixo)",
+    description: "Pessoas que ficam fora das possíveis faltas automáticas de quem tem horário fixo (interruptor \"RH: possíveis faltas de quem tem horário fixo\") até uma data, inclusive, com o motivo (ex.: \"ainda pica na impressão digital\"). Uma linha por pessoa. Edita-se em RH → Horários por rever (quem gere a ficha da pessoa); o histórico fica aqui. Vazio = ninguém de fora.",
+    schema: noShowSkipSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -1111,7 +1123,7 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "GBP_WINDSOR_REPLY", label: "Críticas: publicar respostas no Google pela Windsor", description: "Quando a Google não está ligada diretamente, o \"Aprovar e publicar\" das Críticas publica a resposta pela Windsor (ação reply_to_review — tem de estar ativa na equipa da Windsor). A resposta é pública e substitui a anterior. Desligado: publica-se no perfil Google e marca-se \"Já publiquei\". Desligado por omissão.", defaultEnabled: false },
   // Jorge (14 out 2026): "porque é que os 141 não dão aviso nenhum?" — avisa gente → desligado por omissão.
   // Tarefa 62 (Q8, Jorge: "não vem: marca-se falta"): as faltas de quem tem horário fixo, como as dos extras.
-  { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar. Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas, dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro) e quem mexeu em carros na Multipark. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), só para ONTEM, quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar (com motivo: Férias, Baixa e Justificada criam a ausência desse dia). Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas, dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro), quem mexeu em carros na Multipark e quem está na lista \"Fora das faltas automáticas\". Antes de ligar, vê RH → Horários por rever. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   { name: "GPS_SPEED_ALERTS", label: "Avisos de excesso de velocidade (GPS do Zello)", description: "Na recolha do GPS do Zello (a provisória das 23h e a final de D-2), cada excesso de velocidade (Definições → Parâmetros → Limite de velocidade) fica registado e avisa no sino o team leader e o supervisor da cidade da pessoa (\"Excesso de velocidade\"): um aviso por pessoa e recolha, com quantos excessos e a velocidade máxima (a final de D-2 só volta a avisar se trouxer excessos que a provisória não tinha; só para dias dos últimos 3; um dia antigo recolhido à mão não avisa). Também o aviso da verificação manual de velocidade (\"verificar agora\", pela API) só sai com isto ligado. Os pontos da Avaliação (−10 por dia acima do limite) contam sempre, com ou sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.

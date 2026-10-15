@@ -13,7 +13,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { getDb, getDocumentChecklistForEmployee, getPayrollData, toMysqlDateTime } from "./db";
-import { employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
+import { employeeLeaves, employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
 import { manualBlockReason } from "../shared/suspendSuggest";
 
 const nowMysql = () => toMysqlDateTime(new Date());
@@ -237,7 +237,8 @@ export const FIXED_NO_SHOW_NOTE_PREFIX = "[FALTA HORÁRIO]";
 export const fixedNoShowRelatedId = (day: string): number => Number(day.split("-").join(""));
 
 export type FixedNoShowSkip = "escala" | "check_in" | "multipark";
-export interface FixedNoShowReport { scanned: number; created: number; alreadyPending: number; skipped: Record<FixedNoShowSkip, number>; multiparkRead: boolean }
+/** `excluded`: quantas ficaram de fora pela lista "Fora das faltas automáticas" (rh.noShowSkip, plano 63 10a). */
+export interface FixedNoShowReport { scanned: number; created: number; alreadyPending: number; skipped: Record<FixedNoShowSkip, number>; multiparkRead: boolean; excluded: number }
 
 /**
  * Quem tinha horário fixo (RH → Horário; funcionários — os extras regem-se
@@ -248,26 +249,32 @@ export interface FixedNoShowReport { scanned: number; created: number; alreadyPe
  * não soma para o bloqueio das 3 faltas dos extras). Como nos extras: fora quem está na escala
  * do Extras-Dia nesse dia (tem a sua regra), as férias/baixas, os dias livres,
  * fora do contrato, os feriados (nacionais e o municipal da cidade da ficha) e
- * quem mexeu em carros na Multipark (trabalhou sem picar).
+ * quem mexeu em carros na Multipark (trabalhou sem picar) e (plano 63, 10a)
+ * quem está na lista "Fora das faltas automáticas" (`rh.noShowSkip`) até essa
+ * data — ex.: quem ainda só pica na impressão digital.
  * Idempotente. Só corre com o interruptor RH_FALTAS_HORARIO ligado.
  */
 export async function detectFixedScheduleNoShows(dateStr: string): Promise<FixedNoShowReport> {
   const skipped: Record<FixedNoShowSkip, number> = { escala: 0, check_in: 0, multipark: 0 };
   const db = await getDb();
-  if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false };
+  if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false, excluded: 0 };
   const { fixedScheduledStarts } = await import("../shared/workSchedule");
+  const { NO_SHOW_SKIP_SETTING_KEY, noShowSkipFor } = await import("../shared/scheduleReview");
+  const skipList = (await (await import("./appSettings")).getSetting(NO_SHOW_SKIP_SETTING_KEY)) ?? [];
+  let excluded = 0;
   const { addDays } = await import("../shared/lisbonDay");
   const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
   const scheduleRows = rowsOf(await db.execute(sql`
-    SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
+    SELECT s.id, s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
            DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
       FROM schedules s JOIN employees e ON e.id = s.employeeId
      WHERE e.isActive = 1 AND s.isWorkDay = 1
-       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'
+     ORDER BY s.id`));
   // a cidade da ficha só serve para o feriado municipal (os nacionais ficam sempre fora)
   const cityOf: (projectId: number | null) => string | null = scheduleRows.length ? await (await import("./aiOps/cities")).projectCityResolver(db) : () => null;
   const schedules = scheduleRows.map((r) => ({
-    employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
+    id: r.id != null ? Number(r.id) : null, employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
     isWorkDay: true, contractStart: r.contractStart ?? null, contractEnd: r.contractEnd ?? null,
     city: cityOf(r.projectId != null ? Number(r.projectId) : null),
   }));
@@ -279,6 +286,7 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), isNotNull(extrasDiaAssignments.employeeId)))).map((r) => Number(r.employeeId)));
   const candidates: typeof starts = [];
   for (const f of starts) {
+    if (noShowSkipFor(skipList, f.employeeId, dateStr)) { excluded++; continue; }
     if (escala.has(f.employeeId)) { skipped.escala++; continue; }
     const from = new Date(f.startMs - 2 * 3_600_000), to = new Date((f.endMs ?? f.startMs + 9 * 3_600_000) + 3_600_000);
     const [ci] = await db.select({ id: timeRecords.id }).from(timeRecords)
@@ -324,7 +332,7 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
       throw err;
     }
   }
-  return { scanned: starts.length, created, alreadyPending, skipped, multiparkRead };
+  return { scanned: starts.length, created, alreadyPending, skipped, multiparkRead, excluded };
 }
 
 /**
@@ -371,6 +379,40 @@ export async function reviewPenalty(id: number, decision: "confirmed" | "dismiss
   await db.update(employees).set({ blockedByPenalties: shouldBlock ? 1 : 0 }).where(eq(employees.id, p.employeeId));
   const r = await recomputeLoginBlocked(p.employeeId);
   return { points, blocked: r.blocked };
+}
+
+/**
+ * Plano 63 (10a): dispensar uma possível falta do HORÁRIO FIXO com motivo.
+ * "Picou noutro sistema / picagem perdida" fica marcada para a verificação
+ * do ponto (passo 0); "Férias", "Baixa" e "Falta justificada" criam a
+ * ausência aprovada desse dia (employee_leaves; a mesma regra de quem a
+ * lança na ficha), para não voltar a aparecer e para sair das horas
+ * esperadas. Nada se apaga. As regras de quem revê são as de reviewPenalty,
+ * verificadas ANTES de criar a ausência.
+ */
+export async function dismissFixedNoShow(id: number, reason: import("../shared/scheduleReview").FixedNoShowDismissReason, reviewer: { id: number; role: string }, note?: string | null): Promise<{ points: number; blocked: boolean; day: string | null; leaveId: number | null; leaveType: string | null; leaveAlready: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB indisponível");
+  const [p] = await db.select().from(employeePenalties).where(eq(employeePenalties.id, id)).limit(1);
+  if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Possível falta não encontrada." });
+  const { penaltyReviewError } = await import("./rhAccess");
+  const denied = penaltyReviewError({ reviewer, proposedById: (p as any).proposedById ?? null, decision: "dismissed" });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
+  const { assertEmployeeAccess } = await import("./cityScope");
+  await assertEmployeeAccess(p.employeeId);
+  const { FIXED_NO_SHOW_DISMISS_LEAVE, fixedNoShowDismissPlan } = await import("../shared/scheduleReview");
+  const existingLeaves = FIXED_NO_SHOW_DISMISS_LEAVE[reason]
+    ? await db.select({ fromDate: employeeLeaves.fromDate, toDate: employeeLeaves.toDate }).from(employeeLeaves).where(eq(employeeLeaves.employeeId, p.employeeId))
+    : [];
+  const plan = fixedNoShowDismissPlan(p as any, reason, { notePrefix: FIXED_NO_SHOW_NOTE_PREFIX, existingLeaves, extraNote: note });
+  if (!plan.ok) throw new TRPCError({ code: "BAD_REQUEST", message: plan.error });
+  let leaveId: number | null = null;
+  if (plan.leave) {
+    const ins = await db.insert(employeeLeaves).values({ employeeId: p.employeeId, ...plan.leave, createdById: reviewer.id });
+    leaveId = Number((ins as any)?.[0]?.insertId ?? 0) || null;
+  }
+  const r = await reviewPenalty(id, "dismissed", reviewer, plan.reviewNote);
+  return { ...r, day: plan.day, leaveId, leaveType: plan.leave?.leaveType ?? null, leaveAlready: plan.leaveAlready };
 }
 
 // ─── Ponto: revisão de registos suspeitos ───────────────────────────────────

@@ -578,6 +578,7 @@ function ParametersCard() {
       if (s.key === "marketing.webAnalytics") continue; // cartão próprio (Integrações → Web & SEO)
       if (s.key === "knowledge.config") continue; // cartão próprio (Formação → Base de conhecimento)
       if (s.key === "services.taskRules") continue; // cartão próprio (Serviços → tarefas, acima)
+      if (s.key === "rh.noShowSkip") continue; // plano 63 (10a): edita-se em RH → Horários por rever (o histórico fica aqui em baixo)
       if (!m.has(s.group)) m.set(s.group, []);
       m.get(s.group)!.push(s);
     }

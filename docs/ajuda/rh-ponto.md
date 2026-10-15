@@ -196,7 +196,12 @@ Em **RH → Dashboard** (super admin).
 **Possíveis faltas por validar** (no fim da página, fechado; abre-se ao carregar)
 - Todas as noites (e no botão **Processar faltas (ontem)**) cada extra escalado sem ponto no turno fica como **possível falta**, que não conta pontos enquanto não for confirmada.
 - **Não** fica como possível falta: o turno só **proposto** (escala automática por confirmar), quem foi **mandado para casa** e quem **mexeu em carros na Multipark** nesse dia (trabalhou sem picar o ponto). Se a Multipark não responder, a nota diz "movimentos da Multipark não lidos".
-- **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **"RH: possíveis faltas de quem tem horário fixo"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Fora: quem estava na escala do Extras-Dia nesse dia, férias e baixas, dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro) e quem mexeu em carros na Multipark. Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).
+- **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **"RH: possíveis faltas de quem tem horário fixo"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Corre de madrugada, **só para ontem**. Fora: quem estava na escala do Extras-Dia nesse dia (mesmo só proposta), férias e baixas, dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro), quem mexeu em carros na Multipark e quem está na lista **Fora das faltas automáticas** (ver "Horários por rever"). Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).
+- Nas **Falta (horário fixo)**, em vez de **Libertar** há **Dispensar ▾**, com o motivo:
+  - **Não foi falta: picou noutro sistema / picagem perdida** — fica dispensada e marcada; aparece em "Horários por rever" como prova para a verificação do ponto. Se o turno tem de contar, acrescenta-o no ponto da ficha.
+  - **Férias**, **Baixa** ou **Falta justificada** (consulta, funeral…) — lança na ficha a **ausência desse dia** (férias, baixa ou "outra"), para não voltar a aparecer e para sair das horas esperadas. Só quem gere a ficha (como lançar uma ausência). Se já houver ausência nesse dia, não cria outra.
+  - **Libertar sem motivo** — como antes.
+  - Nada se apaga: a possível falta fica dispensada, com o motivo e quem dispensou.
 - O número entre parênteses é o **total real** das tuas cidades; a lista mostra as 200 mais recentes.
 - **Falta** / **Libertar** em cada linha, ou em massa: **Marcar falta a todas** / **Libertar todas** (as da lista), ou escolhe algumas e os botões passam a "as N escolhidas". Cada falta confirmada vale 1 ponto e com 3 pontos o acesso fica bloqueado. As que não der para rever (ex.: foste tu a propor) ficam e vêm contadas.
 
@@ -204,6 +209,27 @@ Em **RH → Dashboard** (super admin).
 - **Horas mês**: as do ponto; sem ponto, aparecem as da escala dos Extras, a cinzento, com "(escala)".
 - **Movimentos (Multipark)**: ações na Multipark no mês, até ontem (vêm da avaliação diária, recalculada todas as noites). Passa o rato para ver recolhas, entregas, movimentos e dias com ações. Todas as colunas ordenam.
 
+
+## Horários por rever (antes de ligar as faltas automáticas)
+
+Em **Pessoas → Recursos Humanos → ⋮ → Horários por rever** (quem gere o RH: supervisor da cidade, back office, administrador e super admin; cada um vê as suas cidades). **Só leitura**: diz o que está mal e onde se corrige. Vê-o antes de o super admin ligar **"RH: possíveis faltas de quem tem horário fixo"**.
+
+- No topo, se as **faltas automáticas** estão **ligadas** ou **desligadas**. Ao ligar não acontece nada logo: na madrugada seguinte correm só para ontem, com 0 pontos e sem bloquear ninguém.
+- **Funcionários sem horário**: sem nenhum dia de trabalho no horário. Para eles não há possível falta nem atraso. Se trabalham com horário, preenche-o na ficha → **Horário**.
+- **Dias duplicados**: o mesmo dia da semana em mais de uma linha. A Avaliação e as faltas usam a linha mais antiga; a folha de ordenados, a última. Abre a ficha → Horário e carrega em **Guardar** nesse dia: as linhas ficam iguais (nenhuma se apaga).
+- **Horas inválidas**: horas que não são HH:MM (ex.: "9h") ou entrada igual à saída. Corrige na ficha → Horário.
+- **Com horário e sem picar há 14 dias** (ou nunca): quase de certeza ainda picam na **impressão digital** ou noutro sistema. Com as faltas ligadas levavam uma possível falta por cada dia de trabalho. **Tirar das faltas até…**: escolhe a data (por omissão, o fim do mês seguinte) e o motivo.
+- **Sábado ou domingo no horário fixo**: o fim de semana roda. Enquanto não houver os fins de semana de serviço por data, quem tem o sábado ou o domingo no horário fixo e não está de serviço leva uma possível falta: dispensa-a, ou tira o dia do horário se não for fixo.
+- **Fora das faltas automáticas**: a lista de quem não leva possível falta pelo horário fixo até à data (inclusive), com o motivo e quem a pôs. **Mudar**, **Tirar da lista** ou **+ Pôr outra pessoa com horário**. Só quem gere a ficha da pessoa. O histórico fica em Definições → Parâmetros → Histórico de alterações e nos Logs.
+- **Férias deste mês**: quantas ausências estão lançadas. Quem está de férias sem a ausência lançada leva uma possível falta por dia: dispensa-a com **Férias**.
+- **Dispensadas como picagem perdida (60 dias)**: as possíveis faltas dispensadas com "picou noutro sistema / picagem perdida" — a prova para a verificação das horas que desapareceram.
+- Em baixo, as **possíveis faltas do horário fixo por validar**, com **Falta** e **Dispensar ▾** (ver acima).
+
+**Ficha → Horário**
+- Cada dia: **Trabalha/Folga**, entrada e saída (HH:MM) e **Guardar**. Uma saída antes da entrada é no dia seguinte (ex.: 23:00–07:00). Não grava horas que não sejam HH:MM, nem entrada igual à saída.
+- **Pôr folga** deixa o dia como folga — já não se apaga a linha. Na folha de ordenados, um horário só com folgas conta como sem horário, como antes.
+- Se o dia estiver em mais de uma linha ou tiver uma hora gravada que não se lê, aparece o aviso por baixo; **Guardar** acerta todas as linhas desse dia.
+- Cada mudança fica no **registo de atividade** (Logs), com o antes e o depois (ex.: "Horário Qua: 09:00–18:00 → 08:00–17:00").
 ## Ligações (fichas, contas de login e agentes da Multipark)
 
 Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas, as contas de login e os agentes da Multipark. A ligação automática corre de hora a hora; aqui ficam os casos para decidir à mão. Para ligar ou procurar, só contam letras e números: acentos, maiúsculas, apóstrofos e traços não contam ("João d'Almeida-Sá" = "JOAO DALMEIDA SA").

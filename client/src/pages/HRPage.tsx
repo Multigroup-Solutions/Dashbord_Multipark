@@ -76,7 +76,7 @@ import {
   Upload, Trash2, Eye, ChevronLeft, Camera, MapPin,
   Euro, Building2, Phone, Mail, CreditCard, Shield,
   CheckCircle2, XCircle, AlertTriangle, Image, FolderOpen, Plus, Pencil, Save, X,
-  Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3, NotebookPen, Plane
+  Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3, NotebookPen, Plane, CalendarCheck, CalendarOff
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { TERMINAL_STATUS_LABELS, lisbonClock, terminalStatusLabel } from "@shared/pontoTerminal";
@@ -84,6 +84,8 @@ import { TerminalShiftSessions, sessionsInShift, useTerminalRh } from "@/compone
 import { ContactActions } from "@/components/ContactActions";
 import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
+import ScheduleReviewPage from "./ScheduleReviewPage";
+import { canonicalHhmm, scheduleDayToSave } from "@shared/scheduleReview";
 import UsersPage from "./UsersPage";
 import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
 import { checkoutSummaryLines } from "@shared/pdaSession";
@@ -1219,15 +1221,21 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
 // ─── SCHEDULES TAB ────────────────────────────────────────────────────────────
 type ScheduleDraft = { startTime: string; endTime: string; isWorkDay: boolean };
 
+/**
+ * Horário fixo da ficha (um dia da semana por linha). Plano 63 (10a): só
+ * "HH:MM" (e entrada ≠ saída) nos dias de trabalho; "Pôr folga" deixa o dia
+ * como folga (nada se apaga); gravar um dia muda todas as linhas desse dia
+ * (acerta os duplicados); cada mudança fica no registo de atividade.
+ */
 function SchedulesTab({ employeeId }: { employeeId: number }) {
   const utils = trpc.useUtils();
   const { data: schedules = [] } = trpc.rh.schedules.list.useQuery({ employeeId });
   const upsert = trpc.rh.schedules.upsert.useMutation({
-    onSuccess: () => { utils.rh.schedules.list.invalidate({ employeeId }); toast.success("Horário guardado!"); },
+    onSuccess: (r) => { utils.rh.schedules.list.invalidate({ employeeId }); toast.success(r.rows > 1 ? `Horário guardado (${r.rows} linhas desse dia acertadas)` : "Horário guardado!"); },
     onError: (e) => toast.error(e.message),
   });
-  const deleteSchedule = trpc.rh.schedules.delete.useMutation({
-    onSuccess: () => { utils.rh.schedules.list.invalidate({ employeeId }); toast.success("Horário removido"); },
+  const dayOff = trpc.rh.schedules.delete.useMutation({
+    onSuccess: () => { utils.rh.schedules.list.invalidate({ employeeId }); toast.success("Dia passou a folga"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -1238,10 +1246,11 @@ function SchedulesTab({ employeeId }: { employeeId: number }) {
   useEffect(() => {
     const next: Record<number, ScheduleDraft> = {};
     for (let d = 0; d < 7; d++) {
+      // a mais antiga primeiro (a que a Avaliação e as faltas usam)
       const s = schedules.find(x => x.weekday === d);
       next[d] = {
-        startTime: s?.startTime ?? "09:00",
-        endTime: s?.endTime ?? "18:00",
+        startTime: s ? canonicalHhmm(s.startTime) ?? "" : "09:00",
+        endTime: s ? canonicalHhmm(s.endTime) ?? "" : "18:00",
         isWorkDay: s ? Boolean(s.isWorkDay) : (d !== 0 && d !== 6),
       };
     }
@@ -1251,58 +1260,74 @@ function SchedulesTab({ employeeId }: { employeeId: number }) {
   const setDraft = (weekday: number, patch: Partial<ScheduleDraft>) =>
     setDrafts(d => ({ ...d, [weekday]: { ...d[weekday], ...patch } }));
 
+  const save = (weekday: number, d: ScheduleDraft) => {
+    const check = scheduleDayToSave(d);
+    if (!check.ok) { toast.error(check.error); return; }
+    upsert.mutate({ employeeId, weekday, startTime: d.startTime, endTime: d.endTime, isWorkDay: d.isWorkDay });
+  };
+
   return (
     <div className="space-y-3">
       {DAYS.map((day, idx) => {
         const d = drafts[idx] ?? { startTime: "09:00", endTime: "18:00", isWorkDay: true };
+        const rows = schedules.filter(s => s.weekday === idx);
+        const savedWork = rows.some(s => Boolean(s.isWorkDay));
+        const badTimes = rows.filter(s => Boolean(s.isWorkDay) && (canonicalHhmm(s.startTime) == null || canonicalHhmm(s.endTime) == null));
         return (
-          <div key={idx} className={`flex items-center gap-3 flex-wrap p-3 border rounded-lg ${d.isWorkDay ? "" : "bg-muted/30"}`}>
-            <div className="w-10 text-sm font-medium text-muted-foreground">{day}</div>
-            <Button
-              size="sm"
-              variant={d.isWorkDay ? "selected" : "outline"}
-              className="w-20"
-              onClick={() => setDraft(idx, { isWorkDay: !d.isWorkDay })}
-            >
-              {d.isWorkDay ? "Trabalha" : "Folga"}
-            </Button>
-            <Input
-              type="time"
-              value={d.startTime}
-              disabled={!d.isWorkDay}
-              onChange={e => setDraft(idx, { startTime: e.target.value })}
-              className="w-28"
-            />
-            <span className="text-muted-foreground">—</span>
-            <Input
-              type="time"
-              value={d.endTime}
-              disabled={!d.isWorkDay}
-              onChange={e => setDraft(idx, { endTime: e.target.value })}
-              className="w-28"
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => upsert.mutate({
-                employeeId,
-                weekday: idx,
-                startTime: d.startTime,
-                endTime: d.endTime,
-                isWorkDay: d.isWorkDay,
-              })}
-            >
-              Guardar
-            </Button>
-            {schedules.some(s => s.weekday === idx) && (
+          <div key={idx} className={`p-3 border rounded-lg ${d.isWorkDay ? "" : "bg-muted/30"}`}>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="w-10 text-sm font-medium text-muted-foreground">{day}</div>
               <Button
                 size="sm"
-                variant="ghost"
-                className="text-destructive"
-                onClick={() => deleteSchedule.mutate({ employeeId, weekday: idx })}
+                variant={d.isWorkDay ? "selected" : "outline"}
+                className="w-20"
+                onClick={() => setDraft(idx, { isWorkDay: !d.isWorkDay })}
               >
-                <Trash2 className="w-3 h-3" />
+                {d.isWorkDay ? "Trabalha" : "Folga"}
               </Button>
+              <Input
+                type="time"
+                value={d.startTime}
+                disabled={!d.isWorkDay}
+                onChange={e => setDraft(idx, { startTime: e.target.value })}
+                className="w-28"
+                aria-label={`${day}: entrada`}
+              />
+              <span className="text-muted-foreground">—</span>
+              <Input
+                type="time"
+                value={d.endTime}
+                disabled={!d.isWorkDay}
+                onChange={e => setDraft(idx, { endTime: e.target.value })}
+                className="w-28"
+                aria-label={`${day}: saída`}
+              />
+              <Button size="sm" variant="outline" disabled={upsert.isPending} onClick={() => save(idx, d)}>
+                Guardar
+              </Button>
+              {savedWork && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground"
+                  title="Pôr folga neste dia (não apaga nada; fica no registo)"
+                  aria-label={`${day}: pôr folga`}
+                  disabled={dayOff.isPending}
+                  onClick={() => dayOff.mutate({ employeeId, weekday: idx })}
+                >
+                  <CalendarOff className="w-3.5 h-3.5 mr-1" /> Pôr folga
+                </Button>
+              )}
+            </div>
+            {rows.length > 1 && (
+              <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-400">
+                Este dia está em {rows.length} linhas ({Array.from(new Set(rows.map(s => Boolean(s.isWorkDay) ? `${s.startTime}–${s.endTime}` : "folga"))).join(" · ")}). Guardar acerta todas.
+              </p>
+            )}
+            {badTimes.length > 0 && (
+              <p className="mt-1.5 text-xs text-red-700 dark:text-red-400">
+                Hora gravada que não se lê ({badTimes.map(s => `“${s.startTime}”–“${s.endTime}”`).join(", ")}): escreve as horas e carrega em Guardar.
+              </p>
             )}
           </div>
         );
@@ -2643,6 +2668,8 @@ export default function HRPage() {
   const canRequestDocs = can(user as any, "rh", "edit");
   const [showImport, setShowImport] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
+  // Plano 63 (10a): RH → Horários por rever (quem gere o RH)
+  const [showScheduleReview, setShowScheduleReview] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
 
   useEffect(() => {
@@ -2653,6 +2680,7 @@ export default function HRPage() {
     setShowUsers(false);
     setShowPayroll(false);
     setShowDashboard(false);
+    setShowScheduleReview(false);
   }, [queryString, isExtra, setSelectedId]);
 
   // Filtro GLOBAL de cidade/centro (topo da app) aplicado também ao RH
@@ -2709,6 +2737,10 @@ export default function HRPage() {
 
   if (showDashboard) {
     return <RhDashboardPage onBack={() => setShowDashboard(false)} />;
+  }
+
+  if (showScheduleReview) {
+    return <ScheduleReviewPage onBack={() => setShowScheduleReview(false)} onOpenEmployee={(id) => { setShowScheduleReview(false); setSelectedId(id); }} />;
   }
 
   if (showUsers) {
@@ -2901,6 +2933,11 @@ export default function HRPage() {
               {userRole === "super_admin" && (
                 <DropdownMenuItem onClick={() => setShowDashboard(true)}>
                   <BarChart3 className="w-4 h-4 mr-2" /> Dashboard de RH
+                </DropdownMenuItem>
+              )}
+              {canManageRh && (
+                <DropdownMenuItem onClick={() => setShowScheduleReview(true)}>
+                  <CalendarCheck className="w-4 h-4 mr-2" /> Horários por rever
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onClick={exportEmployeesCSV}>
