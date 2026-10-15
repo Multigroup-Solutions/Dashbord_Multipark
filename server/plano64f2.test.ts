@@ -112,9 +112,10 @@ describe("F2.1 — Web & SEO: as reservas do Painel do Marketing (com o Marketpl
     expect(sum(air, "siteBookings")).toBe(1);
   });
 
-  it("o valor é o do Marketing: parques de terceiros pela nossa comissão", async () => {
+  it("o valor é o TOTAL da reserva (o que o cliente paga), também nos parques de terceiros — não a comissão do Marketing (Jorge, 15 out)", async () => {
     const all = await bookingsByDay(FROM, TO, null);
-    expect(all.get("2026-10-14")).toMatchObject({ siteRevenue: 20, revenue: 80 }); // 20 (comissão) + 60 (nossa, preço)
+    expect(all.get("2026-10-14")).toMatchObject({ siteRevenue: 100, revenue: 160 }); // terceiros 100 (não a comissão de 20) + nossa 60
+    expect(all.get("2026-10-15")).toMatchObject({ siteRevenue: 80, revenue: 80 });   // sem cidade: 80 (não 16)
     expect(all.get("2026-10-13")).toMatchObject({ siteRevenue: 50, revenue: 90 });
   });
 
@@ -193,8 +194,10 @@ describe("F2 — vista geral do Web & SEO", () => {
     expect(o.series.map((r: any) => [r.day, r.partial, r.sessions])).toEqual([["2026-10-13", false, 100], ["2026-10-14", false, 200], ["2026-10-15", true, null]]);
     // as reservas de hoje contam (parciais); a conversão de hoje fica sem taxa (sem sessões)
     expect(o.series[2]).toMatchObject({ siteBookings: 1, conversionRate: null });
-    expect(o.business.totals).toMatchObject({ siteBookings: 3, sessions: 300 });
-    expect(o.business.totals.conversionRate).toBeCloseTo(3 / 300, 10);
+    // as reservas de hoje contam no total (bate com o Painel), mas não na taxa: as sessões só vão até ontem (auditoria)
+    expect(o.business.totals).toMatchObject({ siteBookings: 3, sessions: 300, daysWithoutSessions: 1 });
+    expect(o.business.totals.conversionRate).toBeCloseTo(2 / 300, 10);
+    expect(o.business.totals.revenuePerSession).toBeCloseTo((50 + 100) / 300, 10);
   });
 
   it("eventos-chave por evento (o que o GA4 conta) e os eventos que o site envia", async () => {
@@ -214,6 +217,15 @@ describe("F2 — vista geral do Web & SEO", () => {
     expect(o.funnelEvents).toEqual(["view_item", "begin_checkout", "add_payment_info", "purchase"]);
     expect(o.funnelMissing).toEqual(["view_item", "begin_checkout", "add_payment_info"]);
     expect(funnelMissing(["a", "b", "c"], new Set(["b"]))).toEqual(["a", "c"]);
+  });
+
+  it("funil: um passo que o site envia (está em todos os eventos) não é dado como em falta", async () => {
+    const base = h.dimCompare.getMockImplementation()!;
+    h.dimCompare.mockImplementation(async (i: any) => (i.dim === "allEvents"
+      ? { rows: [dimRow("begin_checkout", { keyEvents: 0, events: 40 }), dimRow("purchase", { keyEvents: 12, events: 12 })], total: 2 }
+      : base(i)));
+    const o: any = await run();
+    expect(o.funnelMissing).toEqual(["view_item", "add_payment_info"]);
   });
 
   it("antes da 1.ª recolha dos eventos: lista vazia e allEventsCollected = false", async () => {

@@ -276,9 +276,6 @@ export function webBrandOfBooking(b: Pick<MarketingBooking, "projectId" | "marke
 
 export interface BookingDayAgg { bookings: number; siteBookings: number; revenue: number; siteRevenue: number }
 
-/** Valor da reserva para o Marketing (shared/viaNet.ts: terceiros = só a nossa comissão); sem ele, o preço. */
-const valueOf = (b: { value?: number; total: number }) => b.value ?? b.total;
-
 /**
  * Reservas por dia (todas e as feitas no site) para o Web & SEO — plano 64,
  * F2: a MESMA leitura do Painel do Marketing (getMarketingStats):
@@ -287,7 +284,12 @@ const valueOf = (b: { value?: number; total: number }) => b.value ?? b.total;
  * filtro de cidade — as sessões do GA4 não são por cidade) e a mesma regra de
  * "feita no site" (isSiteBooking). Antes lia só os parques nossos, sem o
  * Marketplace: na marca Multipark davam 0 reservas no site.
- * O valor (`revenue`/`siteRevenue`) é o do Marketing (terceiros pela comissão).
+ * O valor (`revenue`/`siteRevenue`) é o VALOR TOTAL da reserva — o que o
+ * cliente paga, c/ IVA: `total` = COALESCE(SUM(BookingPricing.total),
+ * Booking.price) (server/multiparkDb/marketingBookings.ts) —, em TODAS as
+ * reservas, também nos parques de terceiros (Jorge, 15 out 2026). NÃO é o
+ * `value` do Marketing (terceiros só pela comissão), por isso a receita por
+ * sessão não bate com o valor via net/ROAS do Painel; as CONTAGENS batem.
  */
 export async function bookingsByDay(from: string, to: string, brand: string | null): Promise<Map<string, BookingDayAgg>> {
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no dia, sem canceladas.
@@ -299,8 +301,8 @@ export async function bookingsByDay(from: string, to: string, brand: string | nu
   for (const b of bookings) {
     if (brandOf && webBrandOfBooking(b, brandOf) !== brand) continue;
     const e = out.get(b.day) ?? { bookings: 0, siteBookings: 0, revenue: 0, siteRevenue: 0 };
-    e.bookings++; e.revenue += valueOf(b);
-    if (isSiteBooking(b.origin)) { e.siteBookings++; e.siteRevenue += valueOf(b); }
+    e.bookings++; e.revenue += b.total;
+    if (isSiteBooking(b.origin)) { e.siteBookings++; e.siteRevenue += b.total; }
     out.set(b.day, e);
   }
   return out;

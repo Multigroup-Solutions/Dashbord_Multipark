@@ -505,12 +505,14 @@ describe("ligação ao negócio e períodos", () => {
     });
     expect(r.rows[0]).toMatchObject({ conversionRate: 0.02, revenuePerSession: 1 });
     expect(r.rows[2].conversionRate).toBeNull(); // sem sessões → sem taxa (não infinito)
-    expect(r.totals).toMatchObject({ sessions: 1500, bookings: 35, siteBookings: 25, siteRevenue: 1250, spend: 225 });
-    expect(r.totals.conversionRate).toBeCloseTo(25 / 1500, 10);
-    expect(r.totals.revenuePerSession).toBeCloseTo(1250 / 1500, 10);
+    // os totais contam todos os dias (batem com o Painel do Marketing)…
+    expect(r.totals).toMatchObject({ sessions: 1500, bookings: 35, siteBookings: 25, siteRevenue: 1250, spend: 225, daysWithoutSessions: 1 });
+    // …mas os rácios por sessão só os dias com GA4 (o dia 3 ainda não tem GA4 — plano 64, F2, auditoria)
+    expect(r.totals.conversionRate).toBeCloseTo(20 / 1500, 10);
+    expect(r.totals.revenuePerSession).toBeCloseTo(1000 / 1500, 10);
     expect(r.totals.spendPerSession).toBeCloseTo(0.15, 10);
     expect(r.totals.spendPerSiteBooking).toBe(9);
-    expect(r.totals.bookingsPerSession).toBeCloseTo(35 / 1500, 10);
+    expect(r.totals.bookingsPerSession).toBeCloseTo(30 / 1500, 10);
   });
 
   it("marca da árvore de projetos ↔ id", () => {

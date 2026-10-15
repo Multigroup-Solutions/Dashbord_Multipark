@@ -120,7 +120,9 @@ export async function webOverview(i: OverviewInput) {
     funnel,
     /** Plano 64 (F2): passos do funil das Definições e os que não chegaram ao GA4 no período. */
     funnelEvents: cfg.funnelEvents,
-    funnelMissing: funnelMissing(cfg.funnelEvents, events.filter((e) => (e.cur.events ?? 0) > 0).map((e) => e.value)),
+    // Auditoria F2: um passo que o site envia (está em "todos os eventos") não é dado como em falta — o aviso diz
+    // "o site não envia"; pode só faltar na parte do funil (ex.: passo acrescentado nas Definições depois da recolha).
+    funnelMissing: funnelMissing(cfg.funnelEvents, [...events.filter((e) => (e.cur.events ?? 0) > 0).map((e) => e.value), ...siteEvents]),
     /** Plano 64 (F2): eventos que o GA4 conta como eventos-chave (os do KPI) e todos os que o site envia; allEventsCollected = já há dados desta parte. */
     keyEventsByName,
     siteEvents,

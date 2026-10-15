@@ -242,6 +242,9 @@ export default function MarketingWebPanel() {
   const channelTotal = (data?.channels ?? []).reduce((t, c) => t + (c.cur.sessions ?? 0), 0);
   const gaSources = (data?.sources ?? []).filter((x) => x.source === "ga").length;
   const keyTotal = (data?.keyEventsByName ?? []).reduce((t, e) => t + e.keyEvents, 0);
+  // Auditoria F2: os rácios por sessão só usam os dias com GA4 (hoje e os dias por recolher ficam de fora da taxa).
+  const gaGap = g?.hasData ? b?.totals.daysWithoutSessions ?? 0 : 0;
+  const rateGap = gaGap <= 0 ? "" : hasToday && gaGap === 1 ? " · taxa sem hoje (GA4 até ontem)" : ` · taxa sem ${gaGap} dias ainda sem GA4`;
 
   return (
     <div className="space-y-4">
@@ -365,7 +368,7 @@ export default function MarketingWebPanel() {
             <Kpi icon={Globe} label="Impressões" value={num(s?.cur.impressions)} cur={s?.cur.impressions} prev={s?.prev.impressions} hint={`CTR ${pctOf(s?.cur.ctr)}`} />
             <Kpi icon={Search} label="Posição média" value={posFmt(s?.cur.position)} cur={s?.cur.position} prev={s?.prev.position} invert abs={(d) => `${d > 0 ? "+" : "−"}${posFmt(Math.abs(d))}`} hint="menor é melhor" />
             <Kpi icon={ShoppingCart} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate}
-              hint={b?.bookingsError ? "reservas da Multipark indisponíveis" : `${num(b?.totals.siteBookings)} reservas no site`} tip="Reservas feitas no site (as mesmas do Painel do Marketing, com o Marketplace) ÷ sessões do GA4. Indicador, não atribuição." />
+              hint={b?.bookingsError ? "reservas da Multipark indisponíveis" : `${num(b?.totals.siteBookings)} reservas no site${rateGap}`} tip="Reservas feitas no site (as mesmas do Painel do Marketing, com o Marketplace) ÷ sessões do GA4, só nos dias que já têm GA4 (hoje fica de fora da taxa). Indicador, não atribuição." />
           </div>
 
           <Tabs value={section} onValueChange={setSection}>
@@ -536,10 +539,11 @@ export default function MarketingWebPanel() {
             <TabsContent value="negocio" className={`mt-4 space-y-4 ${SERIES}`}>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 <Kpi icon={ShoppingCart} label="Reservas feitas no site" value={b?.bookingsError ? "—" : num(b?.totals.siteBookings)} cur={b?.bookingsError ? null : b?.totals.siteBookings} prev={b?.bookingsError ? null : b?.prevTotals.siteBookings} hint={b?.bookingsError ? "indisponíveis (BD da Multipark não respondeu)" : `de ${num(b?.totals.bookings)} no total (com o Marketplace)`}
-                  tip="As mesmas reservas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; «no site» = origem site/formulário (a mesma regra do Painel)." />
-                <Kpi icon={TrendingUp} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate} hint={b?.bookingsError ? "reservas indisponíveis" : "reservas no site ÷ sessões"} />
+                  tip="As mesmas reservas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; «no site» = origem API ou formulário (a mesma regra do Painel). As de origem Marketplace (multipark.pt) contam no total, não como «no site»." />
+                <Kpi icon={TrendingUp} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate} hint={b?.bookingsError ? "reservas indisponíveis" : `reservas no site ÷ sessões${rateGap}`} />
                 <Kpi icon={TrendingUp} label="Receita por sessão" value={b?.bookingsError ? "—" : eur(b?.totals.revenuePerSession, 2)} cur={b?.bookingsError ? null : b?.totals.revenuePerSession} prev={b?.bookingsError ? null : b?.prevTotals.revenuePerSession}
-                  hint={b?.bookingsError ? "reservas indisponíveis" : "valor das reservas do site (c/ IVA) ÷ sessões"} tip="Parques nossos pelo preço; parques de terceiros (Marketplace) só pela nossa comissão — o valor do Marketing." />
+                  hint={b?.bookingsError ? "reservas indisponíveis" : `valor total das reservas do site (c/ IVA) ÷ sessões${rateGap}`}
+                  tip="Valor total das reservas feitas no site (o que o cliente paga, com IVA, incluindo parques de terceiros) ÷ sessões do GA4. Por isso não bate com o valor via net nem com o ROAS do Painel do Marketing, que nos parques de terceiros contam só a nossa comissão." />
                 <Kpi icon={MousePointerClick} label="Gasto em anúncios por sessão" value={eur(b?.totals.spendPerSession, 2)} cur={b?.totals.spendPerSession} prev={b?.prevTotals.spendPerSession} invert
                   hint={b?.adSpendError ? `erro a ler o gasto dos anúncios: ${b.adSpendError}` : b?.adSpendAvailable ? `${eurCompact(b?.totals.spend ?? 0)} gastos · ${eur(b?.totals.spendPerSiteBooking, 2)}/reserva no site` : "sem dados de anúncios no período"} />
               </div>

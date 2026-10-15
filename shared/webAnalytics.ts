@@ -691,45 +691,70 @@ const fmtSec = (ms: number) => `${(ms / 1000).toFixed(1).replace(".", ",")} s`;
 export interface BusinessDayInput { sessions: number; bookings: number; siteBookings: number; revenue: number; siteRevenue: number; spend: number }
 export interface BusinessRow extends BusinessDayInput { day: string; conversionRate: number | null; revenuePerSession: number | null }
 export interface BusinessTotals extends BusinessDayInput {
-  /** Reservas feitas no site ÷ sessões. */
+  /** Reservas feitas no site ÷ sessões (só os dias com GA4 — ver `daysWithoutSessions`). */
   conversionRate: number | null;
-  /** Todas as reservas ÷ sessões (indicador, inclui telefone/parceiros). */
+  /** Todas as reservas ÷ sessões (indicador, inclui telefone/parceiros; só os dias com GA4). */
   bookingsPerSession: number | null;
-  /** Valor das reservas do site ÷ sessões (terceiros: só a nossa comissão, como no Marketing). */
+  /** Valor TOTAL das reservas do site (o que o cliente paga, c/ IVA, também nos parques de terceiros) ÷ sessões (só os dias com GA4). */
   revenuePerSession: number | null;
-  /** Gasto em anúncios ÷ sessões. */
+  /** Gasto em anúncios ÷ sessões (só os dias com GA4). */
   spendPerSession: number | null;
-  /** Gasto ÷ reservas do site. */
+  /** Gasto ÷ reservas do site (todos os dias). */
   spendPerSiteBooking: number | null;
+  /**
+   * Dias do período ainda sem GA4 (hoje e os que a recolha ainda não trouxe):
+   * as reservas desses dias contam nos totais, mas NÃO nos rácios por sessão.
+   */
+  daysWithoutSessions: number;
 }
 
 const ratio = (a: number, b: number) => (b > 0 ? a / b : null);
 
-/** Junta sessões (GA4), reservas/receita (Multipark) e gasto (anúncios) por dia. PURA. */
+/**
+ * Junta sessões (GA4), reservas/receita (Multipark) e gasto (anúncios) por
+ * dia. PURA.
+ *
+ * Plano 64 (F2, auditoria): um dia SEM linha do GA4 (hoje — o GA4 é recolhido
+ * até ontem — ou um dia ainda por recolher) não é um dia com 0 sessões. Os
+ * totais (reservas, valor, gasto) contam todos os dias — batem com o Painel do
+ * Marketing —, mas os rácios por sessão só usam os dias que têm GA4; antes as
+ * reservas de hoje entravam sobre as sessões só até ontem e a conversão do mês
+ * em curso saía inflacionada (no dia 2, o dobro).
+ */
 export function businessJoin(days: readonly string[], byDay: {
   sessions: ReadonlyMap<string, number>;
   bookings: ReadonlyMap<string, { bookings: number; siteBookings: number; revenue: number; siteRevenue: number }>;
   spend: ReadonlyMap<string, number>;
 }): { rows: BusinessRow[]; totals: BusinessTotals } {
-  const t: BusinessDayInput = { sessions: 0, bookings: 0, siteBookings: 0, revenue: 0, siteRevenue: 0, spend: 0 };
+  const zero = (): BusinessDayInput => ({ sessions: 0, bookings: 0, siteBookings: 0, revenue: 0, siteRevenue: 0, spend: 0 });
+  const t = zero();
+  /** Só os dias com GA4 (para os rácios por sessão). */
+  const withGa = zero();
+  let daysWithoutSessions = 0;
   const rows = days.map((day) => {
     const b = byDay.bookings.get(day);
     const r: BusinessDayInput = {
       sessions: byDay.sessions.get(day) ?? 0, bookings: b?.bookings ?? 0, siteBookings: b?.siteBookings ?? 0,
       revenue: b?.revenue ?? 0, siteRevenue: b?.siteRevenue ?? 0, spend: byDay.spend.get(day) ?? 0,
     };
-    for (const k of Object.keys(t) as Array<keyof BusinessDayInput>) t[k] += r[k];
+    const hasGa = byDay.sessions.has(day);
+    if (!hasGa) daysWithoutSessions++;
+    for (const k of Object.keys(t) as Array<keyof BusinessDayInput>) {
+      t[k] += r[k];
+      if (hasGa) withGa[k] += r[k];
+    }
     return { day, ...r, conversionRate: ratio(r.siteBookings, r.sessions), revenuePerSession: ratio(r.siteRevenue, r.sessions) };
   });
   return {
     rows,
     totals: {
       ...t,
-      conversionRate: ratio(t.siteBookings, t.sessions),
-      bookingsPerSession: ratio(t.bookings, t.sessions),
-      revenuePerSession: ratio(t.siteRevenue, t.sessions),
-      spendPerSession: ratio(t.spend, t.sessions),
+      conversionRate: ratio(withGa.siteBookings, withGa.sessions),
+      bookingsPerSession: ratio(withGa.bookings, withGa.sessions),
+      revenuePerSession: ratio(withGa.siteRevenue, withGa.sessions),
+      spendPerSession: ratio(withGa.spend, withGa.sessions),
       spendPerSiteBooking: ratio(t.spend, t.siteBookings),
+      daysWithoutSessions,
     },
   };
 }
