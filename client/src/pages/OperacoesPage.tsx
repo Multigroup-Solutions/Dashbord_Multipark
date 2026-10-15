@@ -348,7 +348,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string, range: { from: s
 
       <p className="text-xs text-muted-foreground flex items-center gap-1">
         <Activity className="w-3 h-3" />
-        Só parques nossos e sem as compras online por acabar. Clica num cartão para abrir a lista no mesmo período (até {OPS_LIST_MAX_DAYS} dias); a lista mostra também os parques Marketplace e diz quantas são dos nossos.
+        Todos os parques das tuas cidades (nossos + Marketplace), com as compras online por pagar — o mesmo que as listas. Clica num cartão para abrir a lista no mesmo período (até {OPS_LIST_MAX_DAYS} dias).
       </p>
     </div>
   );

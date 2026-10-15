@@ -455,14 +455,15 @@ export const rhRouter = router({
   // mesma por omissão que a lista (scopeCityQuery). Contagens pela regra única
   // (funcionários / extras / parceiros-empresa) e "Horas este mês" pela regra
   // do ponto (#390).
+  // Plano 64 (B8): `skipHours` — o Geral só mostra as contagens e poupa a leitura das horas.
   stats: protectedProcedure
-    .input(z.object({ projectId: z.number().nullish() }).optional())
+    .input(z.object({ projectId: z.number().nullish(), skipHours: z.boolean().optional() }).optional())
     .query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "rh", "view");
       await seedExtraRates();
       const { scopedEmployeeRows } = await import("./rhEmployeeScope");
       const { rows } = await scopedEmployeeRows(await rhViewer(ctx.user), { projectId: input?.projectId ?? undefined });
-      return getHRStats(rows);
+      return getHRStats(rows, Date.now(), { skipHours: input?.skipHours });
     }),
 
   // Plano 64 (D11): relatório SÓ DE LEITURA (super admin) — fichas ativas em que

@@ -20,6 +20,7 @@ import {
   type OpsListKind, type OpsListRow,
 } from "@shared/opsLists";
 import { AlertTriangle, ChevronLeft, ChevronRight, Download, RefreshCw, Search } from "lucide-react";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 
 /** Cores do distintivo do canal (as mesmas das Reservas do dia). */
 const CHANNEL_BADGE: Record<BookingChannel, string> = {
@@ -92,6 +93,8 @@ function Kpi({ label, value, sub, className, children }: { label: string; value:
  */
 export default function OpsList({ kind, shared, onShared }: { kind: OpsListKind; shared: OpsListShared; onShared: (patch: Partial<OpsListShared>) => void }) {
   const utils = trpc.useUtils();
+  // Plano 64 (B16): a cidade/marca do topo, como o Resumo da mesma página e o Geral.
+  const globalFilters = useGlobalFilters();
   const [state, setState] = useState<string>("all");
   const [page, setPage] = useState(0);
   const [searchInput, setSearchInput] = useState(shared.search);
@@ -108,6 +111,7 @@ export default function OpsList({ kind, shared, onShared }: { kind: OpsListKind;
   }, [searchInput]);
 
   const input = {
+    ...(globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}),
     kind, from: shared.from, to: shared.to,
     parkId: shared.parkId || undefined,
     channel: shared.channel,
@@ -256,14 +260,12 @@ export default function OpsList({ kind, shared, onShared }: { kind: OpsListKind;
               {fmtN(s.approx)} de {fmtN(s.total)} sem registo de cancelamento na Multipark — datadas pela última alteração da reserva (aproximado, assinaladas com ≈).
             </p>
           )}
-          {unfiltered && s.ours - s.oursApprox !== s.total && (
+          {/* Plano 64: o Dashboard das Operações e o Geral contam o MESMO que esta lista (todos os parques). */}
+          {unfiltered && (
             <p className="text-xs text-muted-foreground">
-              No Dashboard das Operações: <b className="text-foreground">{fmtN(s.ours - s.oursApprox)}</b> (só parques nossos
-              {s.oursApprox > 0 ? ", sem as de data aproximada" : ""}). Aqui entram também{" "}
-              {[
-                s.total > s.ours ? `${fmtN(s.total - s.ours)} de parques Marketplace` : null,
-                s.oursApprox > 0 ? `${fmtN(s.oursApprox)} de parques nossos com data aproximada` : null,
-              ].filter(Boolean).join(" e ")}.
+              No Dashboard das Operações e no Geral conta-se como aqui: todos os parques
+              {kind === "reservas" ? <> (nos cartões, só as <b className="text-foreground">{fmtN(s.active)}</b> não canceladas)</> : null}.
+              Desta lista, <b className="text-foreground">{fmtN(s.ours)}</b> são de parques nossos e <b className="text-foreground">{fmtN(s.total - s.ours)}</b> de parques do Marketplace.
             </p>
           )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">

@@ -51,8 +51,10 @@ describe("contagens de reservas ao vivo (Painel e Operações)", () => {
     const s = summarizeBookingStats(rows, { total: 999, today: "2026-09-29", monthStart: "2026-09-01", periodFrom: "2026-09-01", periodTo: "2026-09-29", parkInfo });
     expect(s).toMatchObject({ total: 999, reservasHoje: 4, checkinHoje: 3, checkoutHoje: 5, canceladosHoje: 0, reservasMes: 5, checkinMes: 5, canceladosMes: 0, receitaHoje: 90, receitaMes: 130, receitaPeriodo: 130 });
     expect(s.byCity).toEqual([{ name: "Lisboa", bookings: 4, revenue: 200 }, { name: "Porto", bookings: 1, revenue: 20 }]);
-    expect(s.byDay.map((d) => d.date)).toEqual(["2026-09-10", "2026-09-29"]);
-    expect(s.byDay[1]).toMatchObject({ reservas: 4, checkins: 3, checkouts: 5 });
+    // Plano 64 (B12): o "por dia" leva todos os dias do período (os vazios a 0).
+    expect(s.byDay).toHaveLength(29);
+    expect(s.byDay.filter((d) => d.reservas > 0).map((d) => d.date)).toEqual(["2026-09-10", "2026-09-29"]);
+    expect(s.byDay.find((d) => d.date === "2026-09-29")).toMatchObject({ reservas: 4, checkins: 3, checkouts: 5 });
   });
 });
 

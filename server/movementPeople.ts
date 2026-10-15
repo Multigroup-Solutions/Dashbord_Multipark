@@ -81,18 +81,27 @@ export async function loadMovementPeople(opts: { from: string; to: string; citie
 }
 
 /**
- * 42b: a marca escolhida no topo → os parques dela. Cidade ou nada → undefined
- * (a cidade já vem pelo âmbito do pedido).
+ * O filtro do topo é uma marca ou um parque (nó brand/project; um id negativo
+ * é a marca em todas as cidades)? Uma cidade (ou nada) → false: a cidade já
+ * vem pelo âmbito do pedido. A mesma regra para os condutores (42b) e para as
+ * contagens e listas das Operações (plano 64, B0/B16).
+ */
+export async function isBrandFilterNode(projectId: number | null | undefined): Promise<boolean> {
+  if (!projectId) return false;
+  if (projectId < 0) return true;
+  const { getDb } = await import("./db");
+  const db = await getDb();
+  if (!db) return false;
+  const level = String(rowsOf(await db.execute(sql`SELECT level FROM projects WHERE id = ${projectId} LIMIT 1`))[0]?.level ?? "");
+  return level === "brand" || level === "project";
+}
+
+/**
+ * 42b: a marca escolhida no topo → os parques (nossos) dela. Cidade ou nada →
+ * undefined (a cidade já vem pelo âmbito do pedido).
  */
 export async function brandParkIdsFor(projectId: number | undefined): Promise<string[] | undefined> {
-  if (!projectId) return undefined;
-  if (projectId > 0) {
-    const { getDb } = await import("./db");
-    const db = await getDb();
-    if (!db) return undefined;
-    const level = String(rowsOf(await db.execute(sql`SELECT level FROM projects WHERE id = ${projectId} LIMIT 1`))[0]?.level ?? "");
-    if (level !== "brand" && level !== "project") return undefined;
-  }
+  if (!(await isBrandFilterNode(projectId))) return undefined;
   const { liveParkScope } = await import("./opsStatsLive");
   return (await liveParkScope(projectId)).parkIds;
 }

@@ -34,7 +34,8 @@ describe("22a — compras por pagar nas contas operacionais (D6)", () => {
   it("as rotas operacionais pedem as por pagar; o Financeiro e o MCP não", () => {
     const r = src("server/routers.ts");
     expect(r).toMatch(/getMultiparkOpsList\(\{ \.\.\.input, state, includePending: true \}/);
-    expect(r).toMatch(/getOperationsSummary\(input, \{ includePending: true \}\)/);
+    // Plano 64 (B14): o Resumo de /operacoes conta todos os parques (os das listas da mesma página).
+    expect(r).toMatch(/getOperationsSummary\(input, \{ includePending: true, parks: "all" \}\)/);
     expect(src("server/mcpApi.ts")).not.toContain("includePending");
   });
 });
