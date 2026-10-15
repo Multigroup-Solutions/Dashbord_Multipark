@@ -169,6 +169,8 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       SELECT employeeId, fromDate, toDate FROM employee_leaves
        WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
   } catch { /* sem horários: só a escala (como antes) */ }
+  // Plano 63, passo 10b: exceções por data (fins de semana, folgas) — só com FINS_DE_SEMANA ligado; senão [].
+  const scheduleOverrides = await (await import("./scheduleOverrides")).loadActiveOverridesForReaders(db, addDays(startDay, -1), addDays(endDay, 1));
   const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
     ? await (await import("./aiOps/cities")).projectCityResolver(db)
     : () => null;
@@ -272,12 +274,13 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       driverPenaltyPoints: Number(r.driverPoints ?? 0),
     })),
     fixedSchedules: fixedSchedules.map((r) => ({
-      // plano 63 (10a): nos dias duplicados conta a linha de id mais baixo
+      // plano 63 (10a): nos dias duplicados conta a linha de TRABALHO de id mais baixo (workRowOn)
       id: r.id != null ? Number(r.id) : null, employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
       isWorkDay: Number(r.isWorkDay) === 1, contractStart: r.contractStart ? String(r.contractStart).slice(0, 10) : null, contractEnd: r.contractEnd ? String(r.contractEnd).slice(0, 10) : null,
       city: cityOfProjectId(r.projectId != null ? Number(r.projectId) : null),
     })),
     leaves: leaveRows.map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) })),
+    scheduleOverrides,
     gpsDays: gpsRows.map((r) => ({
       employeeId: Number(r.employeeId), day: typeof r.day === "string" ? r.day.slice(0, 10) : r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day ?? "").slice(0, 10),
       maxSpeed: Number(r.maxSpeed ?? 0), collectedThresholdKmh: r.speedThresholdKmh != null ? Number(r.speedThresholdKmh) : null,

@@ -120,7 +120,7 @@ export default function ScheduleReviewPage({ onBack, onOpenEmployee }: { onBack:
           </ReviewSection>
 
           <ReviewSection id="rever-weekend" title="Sábado ou domingo no horário fixo" count={d.weekendFixed.length}
-            hint="O fim de semana roda. Até haver as exceções por data (fins de semana de serviço), quem tem o sábado ou o domingo no horário fixo e não está de serviço leva uma possível falta: dispensa-a, ou tira o dia do horário se não for fixo.">
+            hint="O fim de semana roda. Quem tem o sábado ou o domingo no horário fixo e não está de serviço leva uma possível falta. Com &quot;RH: fins de semana e exceções por data&quot; ligado, marca-o em RH → Fins de semana (Folga: não é a vez); senão dispensa-a, ou tira o dia do horário se não for fixo.">
             {d.weekendFixed.map((x) => (
               <PersonRow key={x.employeeId} p={x} city={cityOf(x.projectId)} onOpen={onOpenEmployee}
                 detail={`${x.weekdays.map((w) => WEEKDAY_LABELS[w]).join(" e ")} no horário${x.skipUntil ? ` · fora das faltas até ${dayPt(x.skipUntil)}` : ""}`} />
