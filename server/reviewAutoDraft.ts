@@ -47,6 +47,8 @@ export async function autoDraftReview(reviewId: number, opts: { timeoutMs?: numb
   if (!db) return { ok: false, error: "db" };
   const [r] = await db.select().from(googleReviews).where(eq(googleReviews.id, reviewId)).limit(1);
   if (!r) return { ok: false, error: "not_found" };
+  // Plano MPV F6b: marcada como não-crítica ou repetida → sem rascunho automático.
+  if (Number(r.notAReview ?? 0) === 1 || r.duplicateOf != null) return { ok: false, error: "marked" };
   const sentiment = reviewSentiment(r.rating, r.reviewText);
   try {
     const { draftReviewReply } = await import("./_core/ai/reviewReply");
@@ -125,6 +127,9 @@ export async function draftPendingReviewReplies(opts: { limit?: number; deadline
       isNull(googleReviews.aiResponse),
       isNull(googleReviews.googleReply),
       isNull(googleReviews.aiDraftAttemptedAt),
+      // Plano MPV F6b: as que não são críticas e as repetidas nunca têm rascunho automático.
+      eq(googleReviews.notAReview, 0),
+      isNull(googleReviews.duplicateOf),
       sql`${googleReviews.status} IN ('pending_response', 'converted_complaint')`,
       // = COALESCE(reviewDate, sourceEmailDate, createdAt) >= corte, sem a
       // função à volta das colunas (forma pronta para índices; hoje não há

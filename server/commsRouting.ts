@@ -371,13 +371,20 @@ const QUOTED_SEP = "§§§CITADO§§§";
  * como contexto (cortados), e os dados pessoais tapados. O MESMO pedido serve
  * a sincronização, o varrimento e o "Testar a triagem".
  */
-export async function classifyEmailWithAi(msg: EmailRoutingMessage, fromLabel: string): Promise<ClassifiedEmail> {
+export async function classifyEmailWithAi(
+  msg: EmailRoutingMessage,
+  fromLabel: string,
+  // Plano MPV F6b (T1): só a avaliação (scripts/eval-mail-triage.ts --thinking) compara os níveis.
+  opts: { thinkingLevel?: import("../shared/aiFeatures").AiThinkingLevel; thinkingFromCaller?: boolean } = {},
+): Promise<ClassifiedEmail> {
   const { runAi } = await import("./_core/ai/run");
   const { mailRoutingSchema } = await import("./_core/ai/prompts/comms");
   const req = await mailRoutingRequest(msg, fromLabel);
   const r = await runAi({
     feature: "mail_routing", system: req.system, schema: mailRoutingSchema, input: req.input,
     maxTokens: 700, timeoutMs: 15_000, retries: 1, entity: "mail_thread", entityId: msg.threadId || null,
+    ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
+    ...(opts.thinkingFromCaller ? { thinkingFromCaller: true } : {}),
   });
   return { output: r.output, restore: req.restore, model: r.model };
 }
@@ -585,7 +592,7 @@ export async function loadStoredTriageMessage(messageId: number, mode: "sync" | 
   const d = await database();
   const r = rowsOf(await d.execute(sql`SELECT m.id, m.threadId, m.subject, m.bodyText, m.snippet, m.fromName, m.fromEmail, m.attachmentsJson,
       CASE WHEN m.bodyText IS NULL OR m.bodyText = '' THEN m.bodyHtml END AS bodyHtml,
-      m.direction, m.automated, m.pipeline, DATE_FORMAT(m.sentAt, '%Y-%m-%d %H:%i:%s') AS sentAt,
+      m.direction, m.automated, m.pipeline, m.pipelineStatus, DATE_FORMAT(m.sentAt, '%Y-%m-%d %H:%i:%s') AS sentAt,
       t.mailboxKey, t.routedBy, t.projectId, t.ownerUserId, t.status AS threadStatus, t.archivedAt,
       (SELECT MIN(x.id) FROM mail_messages x WHERE x.threadId = m.threadId AND x.direction = 'in') AS firstInId,
       ${strongCaseLinkSql(sql`m.threadId`)} AS hasCase,
@@ -611,7 +618,8 @@ export async function loadStoredTriageMessage(messageId: number, mode: "sync" | 
     || (mode === "sweep" && r.threadStatus === "resolvido");
   const pre: PreTriageFacts = {
     outbound: r.direction === "out", personal: r.mailboxKey == null && r.ownerUserId != null, systemMail: automated === 3, automated,
-    mailboxKey: r.mailboxKey ?? null, pipeline: r.pipeline ?? box?.pipeline ?? null, fromEmail: r.fromEmail ?? null, text,
+    // R2 (plano MPV F6b): entrou pelas Críticas mas não era crítica → tria-se como numa caixa sem pipeline.
+    mailboxKey: r.mailboxKey ?? null, pipeline: r.pipelineStatus === "not_review" ? null : r.pipeline ?? box?.pipeline ?? null, fromEmail: r.fromEmail ?? null, text,
     senderIsCompany: senderKind === "company", createdCase: false,
     threadHasCase: Number(r.hasCase) === 1 || intake === "created" || intake === "linked" || intake === "creating" || intake === "suggested",
     humanTouched,
@@ -661,6 +669,21 @@ export async function triageStoredMessage(
   }
   if (!(await deps.enabled())) return { status: "off" };
   return classifyAndApply(stored.msg, deps);
+}
+
+/**
+ * Um email que o pipeline da caixa largou (R2, plano MPV F6b: entrou pelas
+ * Críticas e não era crítica) passa pela triagem normal: pré-triagem → regra
+ * ou IA (uma leitura; sem leitura nesta corrida fica "pending" e o varrimento
+ * apanha-o). Usado pela nova tentativa dos casos (retryPipelineMessage).
+ */
+export async function triageReleasedMessage(messageId: number, deps: EmailRoutingDeps = dbEmailRoutingDeps): Promise<EmailRoutingResult | null> {
+  const stored = await loadStoredTriageMessage(messageId, "sync");
+  if (!stored) return null;
+  const pre = preTriageMail(stored.pre);
+  if (pre.action === "skip") return null;
+  if (pre.action === "rule") return applyRuleTriage(stored.msg, pre, deps);
+  return routeEmailMessage(stored.msg, deps, { left: 1 });
 }
 
 /**

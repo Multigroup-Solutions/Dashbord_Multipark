@@ -44,7 +44,7 @@ describe("WhatsApp: em que caixa fica a conversa", () => {
   it("a regra corre a cada mensagem e a IA aplica a caixa na triagem (só conversas novas, 49f)", () => {
     expect(src("server/whatsappInbound.ts")).toContain("await assignBoxByRule(w.conversationId);");
     const t = src("server/whatsappTriage.ts");
-    expect(t).toContain("await routeAfterTriage(conversationId, { intent, confidence: normalizeConfidence(r.output.confidence), reason: r.output.reason ?? null });");
+    expect(t).toContain("await routeAfterTriage(conversationId, { intent, confidence: r.confidence, reason: r.reason });");
     // Jorge (8 out 2026): conversa que já tem caixa fica onde está (nem à mão nem pela IA muda sozinha).
     expect(src("server/commsRouting.ts")).toContain("WHERE id = ${conversationId} AND boxKey IS NULL AND boxSource IS NULL");
   });

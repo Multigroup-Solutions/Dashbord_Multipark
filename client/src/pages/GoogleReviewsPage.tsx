@@ -31,6 +31,7 @@ import {
 import BookingSearchField from "@/components/BookingSearchField";
 import ClientHistoryCard from "@/components/ClientHistoryCard";
 import { useMultisPage } from "@/components/assistant/useMultisPage";
+import ReviewCleanupPanel from "@/components/ReviewCleanupPanel";
 
 const RATING_COLORS: Record<number, string> = {
   1: "text-red-500",
@@ -78,6 +79,7 @@ export default function GoogleReviewsPage() {
   // dashboard, ranking nem agentes (isso é da equipa).
   const beyondOwn = seesBeyondOwn(user as any, "criticas");
   const canEdit = can(user as any, "criticas", "edit");
+  const isAdmin = roleRank((user as any)?.role) >= roleRank("admin");
   const [tab, setTab] = useState(() => (beyondOwn ? "dashboard" : "list"));
   // Plano MPV §3.1: o Multis sabe o separador aberto.
   useMultisPage({ tab });
@@ -100,12 +102,15 @@ export default function GoogleReviewsPage() {
           <TabsList className="max-w-full justify-start overflow-x-auto">
             {beyondOwn && <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" /> Dashboard</TabsTrigger>}
             <TabsTrigger value="list"><MessageSquare className="w-4 h-4 mr-1" /> Reviews</TabsTrigger>
+            {isAdmin && <TabsTrigger value="cleanup"><Undo2 className="w-4 h-4 mr-1" /> Limpeza</TabsTrigger>}
           </TabsList>
 
           {beyondOwn && <TabsContent value="dashboard" className="mt-4"><ReviewsDashboard /></TabsContent>}
           <TabsContent value="list" className="mt-4">
             <ReviewsList onSelect={setSelectedId} />
           </TabsContent>
+          {/* Plano MPV F6b (R2/R3): as que não são críticas e as repetidas — pré-visualizar, aplicar, desfazer. */}
+          {isAdmin && <TabsContent value="cleanup" className="mt-4"><ReviewCleanupPanel onOpen={setSelectedId} /></TabsContent>}
         </Tabs>
       </div>
 
@@ -578,6 +583,9 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             <Stars rating={review.rating} size="w-5 h-5" />
             <span className="break-words min-w-0">{review.reviewerName}</span>
             <Badge className={STATUS_LABELS[review.status]?.color}>{STATUS_LABELS[review.status]?.label}</Badge>
+            {/* Plano MPV F6b: marcas da Limpeza (desfazem-se lá). */}
+            {Number((review as any).notAReview ?? 0) === 1 && <Badge variant="outline">Não é crítica</Badge>}
+            {(review as any).duplicateOf != null && <Badge variant="outline">Repetida de #{(review as any).duplicateOf}</Badge>}
           </DialogTitle>
         </DialogHeader>
 

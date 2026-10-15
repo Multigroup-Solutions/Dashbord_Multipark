@@ -41,6 +41,12 @@ export interface LiveValueEntry {
    * (como a Pressão, que só devolve as cidades do âmbito de quem pergunta).
    */
   perCity?: true;
+  /**
+   * Valor global de um ecrã que só abre com uma cidade em âmbito (o
+   * extrasDia.schedule faz assertCityInScope): sem nenhuma cidade, não sai.
+   * As entradas `perCity` também ficam de fora sem cidades.
+   */
+  needsCity?: true;
 }
 
 export const RULES_LIVE_WHITELIST: Readonly<Record<RuleModuleId, readonly LiveValueEntry[]>> = {
@@ -52,15 +58,17 @@ export const RULES_LIVE_WHITELIST: Readonly<Record<RuleModuleId, readonly LiveVa
   ],
   extras_dia: [
     // A página do Extras Dia mostra "Proposta automática às … · confirmação e avisos automáticos às …" (extrasDia.schedule → settings).
-    { kind: "setting", key: "extras.autoProposeAt", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.autoProposeAt)" } },
-    { kind: "setting", key: "extras.autoProposeDaysAhead", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.daysAhead)" } },
-    { kind: "setting", key: "extras.autoConfirm", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.autoConfirm)" } },
-    { kind: "setting", key: "extras.autoConfirmAt", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.autoConfirmAt)" } },
-    // A Pressão devolve, por cidade, o percentil, as faixas da tabela e se usa os tempos medidos; a janela começa em extras.timesSince.
+    { kind: "setting", key: "extras.autoProposeAt", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.autoProposeAt)" }, needsCity: true },
+    { kind: "setting", key: "extras.autoProposeDaysAhead", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.daysAhead)" }, needsCity: true },
+    { kind: "setting", key: "extras.autoConfirm", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.autoConfirm)" }, needsCity: true },
+    { kind: "setting", key: "extras.autoConfirmAt", visibleTo: { module: "extras_dia", seenIn: "extrasDia.schedule (settings.autoConfirmAt)" }, needsCity: true },
+    // A Pressão devolve, por cidade, o percentil, as faixas da tabela e se usa os tempos medidos.
     { kind: "setting", key: "extras.timesPercentile", visibleTo: { module: "extras_dia", seenIn: "extrasDia.pressure (cities[].percentile)" }, perCity: true },
     { kind: "setting", key: "extras.useMeasuredTimes", visibleTo: { module: "extras_dia", seenIn: "extrasDia.pressure (cities[].useMeasured)" }, perCity: true },
     { kind: "setting", key: "extras.crewRules", visibleTo: { module: "extras_dia", seenIn: "extrasDia.pressure (cities[].bands)" }, perCity: true },
-    { kind: "setting", key: "extras.timesSince", visibleTo: { module: "extras_dia", seenIn: "extrasDia.pressure (windowStart)" } },
+    // Só admin: a Pressão mostra o windowStart (o 1.º dia da janela da ÚLTIMA corrida do trabalho), que nem sempre é
+    // o valor gravado de extras.timesSince (muda-se a definição e a janela só acompanha na corrida seguinte).
+    { kind: "setting", key: "extras.timesSince", visibleTo: "admin" },
     { kind: "setting", key: "extras.tightUsesQueue", visibleTo: { module: "extras_dia", seenIn: "extrasDia.pressure (times.cities[].tightUsesQueue)" }, perCity: true },
     { kind: "setting", key: "extras.pairPickups", visibleTo: "admin", perCity: true },
     { kind: "flag", key: "EXTRAS_AUTOMATION", visibleTo: "admin" },
