@@ -24,8 +24,16 @@ import {
   whatsappTriagePlan,
 } from "../shared/commsAi";
 import { isStopAiError } from "./complaintTriage";
-import { isStaffWhatsappConversation, whatsappTriageGate, whatsappUrgentByWords } from "../shared/commsAi";
+import { isStaffWhatsappConversation, whatsappTriageGate, whatsappUrgentByWords, type WhatsappTriageGate } from "../shared/commsAi";
 import type { AiThinkingLevel } from "../shared/aiFeatures";
+
+/**
+ * Urgência marcada por regra, sem IA (seguimento F6b): só na resposta de
+ * disponibilidade que a IA dela já leu, e só com as palavras fortes. PURA.
+ */
+export function urgencyByRule(gate: WhatsappTriageGate, body: string | null | undefined): boolean {
+  return !gate.triage && gate.why === "availability_ai" && whatsappUrgentByWords(body, { strongOnly: true });
+}
 
 /** WA_TRIAGE_SKIP_STAFF (Definições → Automações), lido fresco. Nunca lança (falha → desligado = como até aqui). */
 async function skipStaffOn(): Promise<boolean> {
@@ -74,8 +82,9 @@ export async function noteInboundForTriage(
       intent: c.aiIntent, lastTriagedAt: c.aiTriagedAt, nowMs, availabilityAiRead: opts.availabilityAiRead,
     });
     if (!gate.triage) {
-      // A resposta de disponibilidade já foi lida pela IA dela: a urgência por palavras marca-se sem 2.ª leitura.
-      if (urgentWords && c.aiUrgency !== "urgente") {
+      // A resposta de disponibilidade já foi lida pela IA dela: a urgência por palavras marca-se sem 2.ª leitura —
+      // só com as palavras FORTES ("obrigado pela ajuda" não é urgência).
+      if (urgencyByRule(gate, opts.body) && c.aiUrgency !== "urgente") {
         await db.update(whatsappConversations).set({ aiUrgency: "urgente" }).where(eq(whatsappConversations.id, conversationId))
           .catch((e: any) => console.warn("[WhatsApp triagem] urgência por regra:", String(e?.message ?? e).slice(0, 120)));
       }

@@ -49,6 +49,7 @@ import {
 import type { WhatsappIntent } from "../shared/commsAi";
 import type { FirstContactInput, FirstContactResult } from "./recruitmentFirstContact";
 import type { MailRoutingOutput } from "./_core/ai/prompts/comms";
+import { mailReadCacheGet, mailReadCacheKey, mailReadCacheSet } from "./mailReadCache";
 import type { IntakeResult, IntakeVerdict } from "./complaintMailIntake";
 
 const nowStr = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
@@ -380,14 +381,24 @@ export async function classifyEmailWithAi(
   const { runAi } = await import("./_core/ai/run");
   const { mailRoutingSchema } = await import("./_core/ai/prompts/comms");
   const req = await mailRoutingRequest(msg, fromLabel);
+  // Seguimento F6b: o MESMO email sincronizado por duas contas (info@ por 2,
+  // jorgetabuada@ por 3) dava duas leituras. O pedido igual (sistema + texto,
+  // já tapado) reaproveita a 1.ª leitura deste processo. A avaliação nunca usa a cache.
+  const cacheKey = opts.thinkingFromCaller ? null : mailReadCacheKey(req.system, req.input);
+  const hit = cacheKey ? mailReadCacheGet(cacheKey) : null;
+  if (hit) return { output: hit.output, restore: req.restore, model: hit.model };
   const r = await runAi({
     feature: "mail_routing", system: req.system, schema: mailRoutingSchema, input: req.input,
     maxTokens: 700, timeoutMs: 15_000, retries: 1, entity: "mail_thread", entityId: msg.threadId || null,
     ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
     ...(opts.thinkingFromCaller ? { thinkingFromCaller: true } : {}),
   });
+  if (cacheKey) mailReadCacheSet(cacheKey, { output: r.output, model: r.model });
   return { output: r.output, restore: req.restore, model: r.model };
 }
+
+// A mesma leitura para o mesmo pedido (seguimento F6b): server/mailReadCache.ts.
+export { clearMailReadCache, mailReadCacheGet, mailReadCacheKey, mailReadCacheSet, MAIL_READ_CACHE_TTL_MS } from "./mailReadCache";
 
 /**
  * O pedido EXATO que vai à IA (sistema + utilizador), já com os dados
