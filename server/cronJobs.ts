@@ -497,7 +497,7 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         await ensureFeatureFlagOverrides();
         if (isFeatureEnabled(FIXED_SCHEDULE_NO_SHOWS_FLAG, { defaultEnabled: automationFlagDefault(FIXED_SCHEDULE_NO_SHOWS_FLAG) })) {
           const f = await detectFixedScheduleNoShows(yesterday);
-          console.log(`[daily-ops] RH: possíveis faltas (horário fixo) ${yesterday}: ${f.created} novas de ${f.scanned} com horário (${f.alreadyPending} já registadas; fora: ${f.skipped.escala} na escala, ${f.skipped.check_in} com entrada, ${f.skipped.multipark} com movimentos na Multipark${f.multiparkRead ? "" : " — Multipark não lida"})`);
+          console.log(`[daily-ops] RH: possíveis faltas (horário fixo) ${yesterday}: ${f.created} novas de ${f.scanned} com horário (${f.alreadyPending} já registadas; fora: ${f.skipped.escala} na escala, ${f.skipped.check_in} com entrada, ${f.skipped.multipark} com movimentos na Multipark, ${f.excluded} na lista "Fora das faltas automáticas"${f.multiparkRead ? "" : " — Multipark não lida"})`);
         }
       });
       // Retenções, em lotes e com prazo curto — o resto fica para o dia seguinte.
