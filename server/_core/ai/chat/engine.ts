@@ -76,8 +76,10 @@ export interface ChatTurnInput<Ctx> {
    * secções da ajuda) e os ids das secções (`refs`, guardados como os
    * ficheiros da ajuda). Vai fora da cache, na MESMA redação que a pergunta,
    * e substitui o <ajuda> das palavras-chave (`helpDocs` fica sem efeito).
+   * F5: pode ser uma função (calcula-se depois do limite de pedidos, em
+   * paralelo com `knowledge`); uma falha → sem bloco.
    */
-  pageKnowledge?: { block: string; refs: string[] };
+  pageKnowledge?: { block: string; refs: string[] } | (() => Promise<{ block: string; refs: string[] } | null>);
   tools?: ChatTool<Ctx>[];
   /**
    * Plano MPV §3.7/§5.4: declara TODAS as ferramentas (a mesma lista para toda
@@ -193,14 +195,21 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
   // Sem onde guardar a versão com marcadores (BD antes da 0695) → colegas só pelo 1.º nome.
   const maskPeople = maskedHistoryAvailable();
 
-  // Base de conhecimento (uma só consulta: manuais + ajuda pelo significado).
+  // Base de conhecimento (uma só consulta: manuais + ajuda pelo significado). MPV (F5):
+  // o bloco da página pode vir por calcular — corre AQUI (depois do limite de pedidos) e
+  // EM PARALELO com a base (as duas partes vetoriais ao mesmo tempo).
   let kb: ChatKnowledge | null = null;
+  const pkInput = input.pageKnowledge;
+  const pkPromise = typeof pkInput === "function"
+    ? Promise.resolve().then(() => pkInput()).catch(() => null)
+    : null;
   if (input.knowledge) {
     try { kb = await input.knowledge(question); } catch { kb = null; }
   }
+  const pkResolved = pkPromise ? await pkPromise : (pkInput as { block: string; refs: string[] } | undefined);
   const helpHits = kb?.helpHits ?? [];
   if (kb && !kb.block.trim()) kb = null;
-  const pageKnowledge = input.pageKnowledge?.block.trim() ? input.pageKnowledge : null;
+  const pageKnowledge = pkResolved?.block.trim() ? pkResolved : null;
   const useHelpDocs = !pageKnowledge && !!input.helpDocs?.length;
   const keywordHelp = useHelpDocs ? pickHelpDocs(input.helpDocs!, question, { path: input.path }) : [];
   const help = useHelpDocs ? combineHelpDocs(input.helpDocs!, keywordHelp, helpHits, { question }) : [];

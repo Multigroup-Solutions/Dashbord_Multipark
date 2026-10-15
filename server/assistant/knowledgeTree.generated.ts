@@ -5971,7 +5971,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "No piloto, o Multis sabe em que página e em que separador estás: junta à pergunta a parte da ajuda desse separador (por exemplo, a do separador Pressão do…",
        "children": [],
        "container": false,
-       "chars": 1093
+       "chars": 1286
       },
       {
        "id": "multis.md#dados-que-o-multis-le-piloto",
