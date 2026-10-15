@@ -57,11 +57,19 @@ export function liveEntriesFor(user: StaffUser, module: RuleModuleId): LiveValue
 const CITY_KEY: Record<string, "lisbon" | "porto" | "faro"> = { lisboa: "lisbon", lisbon: "lisbon", porto: "porto", oporto: "porto", faro: "faro" };
 const norm = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
-/** As cidades (lisbon/porto/faro) da pessoa; null = todas. PURA. */
+/** As cidades (lisbon/porto/faro) da pessoa; null = todas; sem âmbito (ou sem centro de custos) = nenhuma. PURA. */
 export function cityKeysOf(access: CityAccess | undefined): Set<string> | null {
-  if (access?.all) return null;
-  const names = access?.cityNames ?? (access?.cityName ? [access.cityName] : []);
+  if (!access || access.missingCostCenter) return new Set();
+  if (access.all) return null;
+  const names = access.cityNames ?? (access.cityName ? [access.cityName] : []);
   return new Set(names.map((n) => CITY_KEY[norm(n)]).filter(Boolean));
+}
+
+/** Tira as entradas que precisam de uma cidade em âmbito quando a pessoa não tem nenhuma (como o assertCityInScope do ecrã). PURA. */
+export function withCityScope(entries: readonly LiveValueEntry[], access: CityAccess | undefined): LiveValueEntry[] {
+  const cities = cityKeysOf(access);
+  if (cities == null || cities.size > 0) return [...entries];
+  return entries.filter((e) => !e.needsCity && !e.perCity);
 }
 
 /** Um valor por cidade só com as cidades da pessoa. PURA. */
@@ -72,8 +80,10 @@ export function onlyCities(value: unknown, cities: Set<string> | null): unknown 
 
 /** Leitura dos valores vivos (injetável nos testes). */
 export interface LiveReaders {
-  /** Valor gravado (null = nada gravado → vale a omissão). Lança se não deu para ler. */
+  /** Valor gravado (null = nada gravado, ou não deu para ler → vale a omissão). */
   setting(key: SettingKey): Promise<unknown>;
+  /** As definições deram para ler? (distingue "nada gravado" de "sem BD"; omisso = sim). */
+  settingsReadable?(): Promise<boolean>;
   flag(name: string): Promise<boolean>;
 }
 
@@ -81,6 +91,10 @@ export const defaultLiveReaders: LiveReaders = {
   async setting(key) {
     const { getSetting } = await import("../appSettings");
     return getSetting(key);
+  },
+  async settingsReadable() {
+    const { settingsReadable } = await import("../appSettings");
+    return settingsReadable();
   },
   async flag(name) {
     const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("../_core/featureFlags");
@@ -94,13 +108,21 @@ export interface LiveValueOut {
   nome: string;
   tipo: "definição" | "interruptor";
   valor: unknown;
-  /** "gravado" (Definições) | "omissão" (nada gravado) | "indisponível" (não deu para ler). */
-  estado: "gravado" | "omissão" | "indisponível" | "em uso";
+  /**
+   * Definições: "gravado" (Definições) | "omissão" (nada gravado) | "omissão (sem BD)" (não deu para ler as
+   * Definições: vale a omissão por recurso) | "indisponível". Interruptores: "em uso" | "indisponível".
+   */
+  estado: "gravado" | "omissão" | "omissão (sem BD)" | "indisponível" | "em uso";
 }
 
 /** Os valores vivos de uma lista de entradas (nunca lança). */
 export async function readLiveValues(entries: readonly LiveValueEntry[], access: CityAccess | undefined, readers: LiveReaders = defaultLiveReaders): Promise<LiveValueOut[]> {
   const cities = cityKeysOf(access);
+  let readable: boolean | null = null;
+  const settingsOk = async () => {
+    if (readable == null) readable = readers.settingsReadable ? await readers.settingsReadable().catch(() => false) : true;
+    return readable;
+  };
   return Promise.all(entries.map(async (e): Promise<LiveValueOut> => {
     const nome = liveEntryRegistry(e).label;
     if (e.kind === "flag") {
@@ -114,7 +136,8 @@ export async function readLiveValues(entries: readonly LiveValueEntry[], access:
     try {
       const stored = await readers.setting(key);
       const raw = stored ?? SETTINGS[key].defaultValue;
-      return { chave: e.key, nome, tipo: "definição", valor: e.perCity ? onlyCities(raw, cities) : raw, estado: stored == null ? "omissão" : "gravado" };
+      const estado = stored != null ? "gravado" : (await settingsOk()) ? "omissão" : "omissão (sem BD)";
+      return { chave: e.key, nome, tipo: "definição", valor: e.perCity ? onlyCities(raw, cities) : raw, estado };
     } catch {
       return { chave: e.key, nome, tipo: "definição", valor: null, estado: "indisponível" };
     }
@@ -129,7 +152,7 @@ export async function runRulesInForce(args: Record<string, unknown>, ctx: StaffT
   if (!isRuleModuleId(wanted)) return { error: "Módulo de regras desconhecido.", modulos: mine };
   if (!mine.includes(wanted)) throw new ToolUserError(`Sem acesso às regras de «${RULE_MODULE_BY_ID[wanted].label}».`);
   const doc = RULES_DOCS[wanted];
-  const valores = await readLiveValues(liveEntriesFor(ctx.user, wanted), ctx.access, readers);
+  const valores = await readLiveValues(withCityScope(liveEntriesFor(ctx.user, wanted), ctx.access), ctx.access, readers);
   return {
     modulo: wanted,
     titulo: doc.label,

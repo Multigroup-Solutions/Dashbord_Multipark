@@ -306,6 +306,7 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   `tokens_estimated`). Modelo sem preço de armazenamento → só os tokens (custo 0). No cartão do
   custo estas linhas ficam à parte ("armazenamento da cache"): não contam nas chamadas, na latência
   nem no custo por pergunta, mas contam no gasto do mês.
+- **2.ª cache do lite no piloto** (plano MPV F2, aceite): no piloto o Multis declara também `regras_em_vigor`, por isso quando desce para o lite (modo económico, ou o smart desligado) usa uma cache do lite à parte da do v1 (a chave inclui as ferramentas); só existe para quem está no piloto.
 - **Teto próprio** (plano MPV §5.3): o `assistant_smart` (Multis do piloto) tem
   `ai.assistantSmartBudget` (`{"eurPerDay": 10, "eurPerMonth": 150, "eurPerUserPerDay": 3}`; os
   três têm de ser > 0 — não há "sem teto"; o dia é o **dia de Lisboa**, como no resto da app; o mês

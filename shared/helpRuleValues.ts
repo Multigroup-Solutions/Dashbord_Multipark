@@ -13,13 +13,13 @@
  * "por omissão" ao lado do número.
  */
 import { ROLE_LABELS, type Role } from "./access";
-import { DEFAULT_TIMES_PERCENTILE, SETTINGS } from "./appSettings";
+import { DEFAULT_TIGHT_USES_QUEUE, DEFAULT_TIMES_PERCENTILE, SETTINGS, automationFlagDefault } from "./appSettings";
 import {
   COMPLAINT_LIST_DEFAULT_DAYS, COMPLAINT_PHOTO_MAX_BYTES, COMPLAINT_SLA_RUNNING, DEDUPE_WINDOW_MS, DEFAULT_INCIDENT_SLA_HOURS, DEFAULT_LOST_SLA_DAYS,
 } from "./caseRules";
 import { COMPLAINT_STATUS_FILTER_LABELS } from "./complaintFilters";
 import { CREDIT_NOTE_STATES, CREDIT_NOTE_STATE_HELP, CREDIT_NOTE_STATE_LABELS } from "./creditNotes";
-import { ACCIDENTS_FROM_DAY, EVALUATION_POINTS, EVALUATION_RULES_VERSION, LATE_ARRIVAL_FROM_MINUTES, MAX_LATE_ARRIVALS_PER_DAY, RECOMPUTE_WINDOW_DAYS } from "./evaluationRules";
+import { ACCIDENTS_FROM_DAY, EVALUATION_POINTS, EVALUATION_RULES_VERSION, LATE_ARRIVAL_FROM_MINUTES, MAX_GPS_SPEEDING_PER_DAY, MAX_LATE_ARRIVALS_PER_DAY, RECOMPUTE_WINDOW_DAYS } from "./evaluationRules";
 import { PAID_ON_CREATE_ROLES } from "./expenseCreatePayment";
 import { CREW_MEASURE_MIN_SAMPLES, CYCLE_PERCENTILES, MAX_CYCLE_MINUTES, MIN_SAMPLE, PRESSURE_SINCE_DEFAULT, RUSH_HOURS, TIGHT_TOP_SHARE } from "./extrasPressure";
 import {
@@ -68,7 +68,13 @@ const dec = (n: number) => String(n).replace(".", ",");
 /** 7 → "07h" (hora de Lisboa). */
 const hh = (h: number) => `${String(h % 24).padStart(2, "0")}h`;
 const garagesWith = (role: GarageRole) => joinPt(DEFAULT_GARAGE_ROLES.filter((g) => g.role === role).map((g) => g.garage));
-const roleNames = (roles: readonly string[]) => joinPt(roles.map((r) => ROLE_LABELS[r as Role] ?? r));
+const CITY_PT: Record<string, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
+/** { lisbon: true, porto: false } → "ligado em Lisboa" / "desligado em todas as cidades". */
+const onCities = (map: Readonly<Record<string, boolean>>) => {
+  const on = Object.keys(CITY_PT).filter((c) => map[c] === true).map((c) => CITY_PT[c]);
+  return on.length ? `ligado em ${joinPt(on)}` : "desligado em todas as cidades";
+};
+const roleNames =(roles: readonly string[]) => joinPt(roles.map((r) => ROLE_LABELS[r as Role] ?? r));
 
 /** Os marcadores conhecidos. Acrescentar aqui antes de usar na ajuda. */
 export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
@@ -104,6 +110,7 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   // ── Plano MPV F2: "regras em vigor" (shared/rulesInForce.ts) — a MESMA fonte para a ajuda e para as regras ──
   "evaluation.accidentsFromDay": v(ptDay(ACCIDENTS_FROM_DAY), "shared/evaluationRules.ts:ACCIDENTS_FROM_DAY"),
   "evaluation.rulesVersion": v(EVALUATION_RULES_VERSION, "shared/evaluationRules.ts:EVALUATION_RULES_VERSION"),
+  "evaluation.maxGpsSpeedingPerDay": v(MAX_GPS_SPEEDING_PER_DAY, "shared/evaluationRules.ts:MAX_GPS_SPEEDING_PER_DAY"),
   // Velocidade (Definições → Parâmetros → gps.speedRule; os limites do GPS são do código)
   "speed.limitKmh": d(DEFAULT_SPEED_RULE.limitKmh, "shared/speedRules.ts:DEFAULT_SPEED_RULE"),
   "speed.tolerancePercent": d(DEFAULT_SPEED_RULE.tolerancePercent, "shared/speedRules.ts:DEFAULT_SPEED_RULE"),
@@ -121,6 +128,7 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   "extras.rushHours": v(joinPt(RUSH_HOURS.map(([a, b]) => `${hh(a)}–${hh(b)}`)), "shared/extrasPressure.ts:RUSH_HOURS"),
   "extras.crewMeasureMinSamples": v(CREW_MEASURE_MIN_SAMPLES, "shared/extrasPressure.ts:CREW_MEASURE_MIN_SAMPLES"),
   "extras.tightTopSharePct": v(Math.round(TIGHT_TOP_SHARE * 100), "shared/extrasPressure.ts:TIGHT_TOP_SHARE"),
+  "extras.tightUsesQueue": d(onCities(DEFAULT_TIGHT_USES_QUEUE), "shared/appSettings.ts:DEFAULT_TIGHT_USES_QUEUE"),
   // Extras Dia → escala automática
   "extras.minShiftHours": v(MIN_SHIFT_HOURS, "shared/extrasSchedule.ts:MIN_SHIFT_HOURS"),
   "extras.maxShiftHours": v(MAX_SHIFT_HOURS, "shared/extrasSchedule.ts:MAX_SHIFT_HOURS"),
@@ -137,7 +145,8 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   // Tempos de serviço (parâmetros do cálculo)
   "serviceTimes.callWindowBeforeMin": v(CALL_WINDOW_BEFORE_MIN, "shared/serviceTimes.ts:CALL_WINDOW_BEFORE_MIN"),
   "serviceTimes.callWindowAfterMin": v(CALL_WINDOW_AFTER_MIN, "shared/serviceTimes.ts:CALL_WINDOW_AFTER_MIN"),
-  "serviceTimes.callsSince": v(ptDay(SERVICE_CALLS_SINCE), "shared/serviceTimes.ts:SERVICE_CALLS_SINCE"),
+  "serviceTimes.useCalls": d(SETTINGS["serviceTimes.useCalls"].defaultValue ? "ligado" : "desligado", "shared/appSettings.ts:SETTINGS[serviceTimes.useCalls]"),
+  "serviceTimes.callsSince":v(ptDay(SERVICE_CALLS_SINCE), "shared/serviceTimes.ts:SERVICE_CALLS_SINCE"),
   "serviceTimes.sharedPhoneMinBookings": v(SHARED_PHONE_MIN_BOOKINGS, "shared/serviceTimes.ts:SHARED_PHONE_MIN_BOOKINGS"),
   "serviceTimes.dispatchMinMinutes": v(DISPATCH_MIN_MINUTES, "shared/serviceTimes.ts:DISPATCH_MIN_MINUTES"),
   "serviceTimes.maxQueueMin": v(MAX_QUEUE_MIN, "shared/serviceTimes.ts:MAX_QUEUE_MIN"),
@@ -161,7 +170,8 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   "cases.complaintSlaRunning": v(joinPt(COMPLAINT_SLA_RUNNING.map((s) => `«${COMPLAINT_STATUS_FILTER_LABELS[s as keyof typeof COMPLAINT_STATUS_FILTER_LABELS] ?? s}»`)), "shared/caseRules.ts:COMPLAINT_SLA_RUNNING"),
   // Críticas
   "reviews.complaintSlaHours": v(REVIEW_COMPLAINT_SLA_HOURS, "shared/reviewRules.ts:REVIEW_COMPLAINT_SLA_HOURS"),
-  "reviews.autoDraftMaxAgeDays": v(REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, "shared/reviewRules.ts:REVIEW_AUTO_DRAFT_MAX_AGE_DAYS"),
+  "reviews.autoDraftsFlag": d(automationFlagDefault("AI_REVIEW_AUTO_DRAFTS") ? "ligado" : "desligado", "shared/appSettings.ts:AUTOMATION_FLAGS[AI_REVIEW_AUTO_DRAFTS]"),
+  "reviews.autoDraftMaxAgeDays":v(REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, "shared/reviewRules.ts:REVIEW_AUTO_DRAFT_MAX_AGE_DAYS"),
 };
 
 export class HelpRuleMarkerError extends Error {

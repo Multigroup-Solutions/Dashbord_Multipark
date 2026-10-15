@@ -34,10 +34,13 @@ import { HELP_RULE_VALUES, HelpRuleMarkerError, ruleMarkersIn } from "../../shar
 import { RULE_MODULES, RULE_MODULE_IDS, renderRuleModules, ruleSources, type RuleModuleDef, type RuleModuleId } from "../../shared/rulesInForce";
 import { RULES_LIVE_WHITELIST, liveEntryForbiddenReason, type LiveValueEntry } from "../../shared/rulesLiveWhitelist";
 import { MODULE_IDS } from "../../shared/access";
+import { MAX_GPS_SPEEDING_PER_DAY, speedingWithGpsDay } from "../../shared/evaluationRules";
+import { PARTNER_TYPE_BY_ID } from "../../shared/partnerTypes";
+import { partnerFeeForPeriod } from "../../shared/partnerRules";
 import { renderRulesDocs } from "../../scripts/gen-regras";
 import { RULES_DOCS } from "./rulesDocs.generated";
 import {
-  RULES_IN_FORCE_TOOL, RULES_TOOL_NAME, cityKeysOf, liveEntriesFor, liveEntryRegistry, onlyCities, readLiveValues, ruleModulesFor, runRulesInForce, type LiveReaders,
+  RULES_IN_FORCE_TOOL, RULES_TOOL_NAME, cityKeysOf, liveEntriesFor, liveEntryRegistry, onlyCities, readLiveValues, ruleModulesFor, runRulesInForce, withCityScope, type LiveReaders,
 } from "./rulesTool";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS, staffToolsFor, type StaffToolCtx } from "./tools";
 import { askAssistant, staffHelpDocs, type AssistantMode } from "./service";
@@ -110,7 +113,9 @@ describe("regras geradas do código (rulesDocs.generated.ts)", () => {
       expect(existsSync(resolve(ROOT, m![1])), s).toBe(true);
       const name = m![2];
       const setting = /^SETTINGS\[(.+)\]$/.exec(name);
+      const flag = /^AUTOMATION_FLAGS\[(.+)\]$/.exec(name);
       if (setting) expect(isSettingKey(setting[1]), s).toBe(true);
+      else if (flag) expect(AUTOMATION_FLAGS.some((f) => f.name === flag[1]), s).toBe(true);
       else expect(src(m![1]), s).toMatch(new RegExp(`export (const|function|async function) ${name}\\b`));
     }
   });
@@ -126,6 +131,36 @@ describe("regras geradas do código (rulesDocs.generated.ts)", () => {
       }
     }
     expect(checked).toBeGreaterThan(5);
+  });
+
+  it("velocidade: o GPS do Zello dá no máximo 1 excesso por dia e nunca a dobrar — a frase e o código usam a mesma regra", () => {
+    expect(RULES_DOCS.avaliacao.block).toContain(`o GPS do Zello dá no máximo ${MAX_GPS_SPEEDING_PER_DAY} excesso (${HELP_RULE_VALUES["evaluation.points.speeding"].value}) por pessoa e dia`);
+    expect(RULES_DOCS.avaliacao.block).toMatch(/alerta ou uma penalização RH de velocidade no mesmo dia de calendário/);
+    expect(RULES_DOCS.avaliacao.block).toContain("server/evaluationCore.ts:computeEmployeeDays");
+    expect(speedingWithGpsDay(0, false)).toBe(MAX_GPS_SPEEDING_PER_DAY);
+    expect(speedingWithGpsDay(0, true)).toBe(0);
+    expect(speedingWithGpsDay(2, false)).toBe(2);
+    expect(src("server/evaluationCore.ts")).toMatch(/speedingWithGpsDay\(m\.speedingEvents/);
+  });
+
+  it("parcerias: a avença anual é €/mês faturada por períodos (nunca «uma vez por ano»), na origem e nas regras", () => {
+    for (const r of RULES_DOCS.parcerias.rules) expect(r.text, r.text).not.toMatch(/uma vez por ano|fatura anual/i);
+    expect(PARTNER_TYPE_BY_ID.avenca_anual.description).toMatch(/€\/mês/);
+    expect(PARTNER_TYPE_BY_ID.avenca_anual.description).not.toMatch(/uma vez por ano/);
+    expect(src("shared/partnerTypes.ts")).not.toMatch(/÷ 12/);
+    // a mesma conta do partnerFeeForPeriod: 100 €/mês × 3 meses = 300 (anual ou mensal)
+    expect(partnerFeeForPeriod("avenca_anual", 100, "2026-01-01", "2026-03-31")).toBe(300);
+    expect(partnerFeeForPeriod("avenca_mensal", 100, "2026-01-01", "2026-03-31")).toBe(300);
+  });
+
+  it("tempos, hora apertada e críticas: as condições e as omissões estão escritas", () => {
+    expect(RULES_DOCS.tempos.block).toMatch(/contar desde a chamada» ligado por omissão/);
+    expect(RULES_DOCS.tempos.block).toMatch(/mais cedo entre a chamada do cliente e o «em recolha»/);
+    expect(RULES_DOCS.extras_dia.block).toMatch(/Hora apertada pela Fila» ligado na cidade \(desligado em todas as cidades por omissão\), o p75 da Fila/);
+    const cr = RULES_DOCS.criticas.block;
+    expect(cr).toMatch(/IA: rascunho automático para cada crítica nova», ligado por omissão/);
+    expect(cr).toMatch(/sem nenhuma, a da entrada cá/);
+    expect(cr).toMatch(/«não é crítica» ou como repetidas nunca levam rascunho automático/);
   });
 
   const fake = (rules: RuleModuleDef["rules"]): RuleModuleDef[] => [{ id: "avaliacao", label: "Teste", access: ["avaliacao"], rules }];
@@ -284,8 +319,20 @@ describe("o que cada papel vê", () => {
     expect(omissao[0]).toMatchObject({ valor: SETTINGS["extras.autoConfirmAt"].defaultValue, estado: "omissão" });
     const falha = await readLiveValues([{ kind: "flag", key: "CASE_REMINDERS", visibleTo: "admin" }], TODAS, { setting: async () => { throw new Error("x"); }, flag: async () => { throw new Error("x"); } });
     expect(falha[0]).toMatchObject({ valor: null, estado: "indisponível" });
+    const semBd = await readLiveValues([{ kind: "setting", key: "extras.autoConfirmAt", visibleTo: "admin" }], TODAS, { setting: async () => null, settingsReadable: async () => false, flag: async () => false });
+    expect(semBd[0]).toMatchObject({ valor: SETTINGS["extras.autoConfirmAt"].defaultValue, estado: "omissão (sem BD)" });
     expect(cityKeysOf(TODAS)).toBeNull();
+    expect(cityKeysOf(undefined)).toEqual(new Set());
     expect(onlyCities({ lisbon: 1, porto: 2 }, new Set(["porto"]))).toEqual({ porto: 2 });
+  });
+
+  it("Extras Dia sem nenhuma cidade em âmbito (como o assertCityInScope do ecrã) → sem os valores do schedule nem os por cidade", async () => {
+    const SEM: CityAccess = { all: false, defaultCityId: null, cityNames: [], cityIds: [], projectIds: [], missingCostCenter: true };
+    const out = await runRulesInForce({ modulo: "extras_dia" }, ctxFor("team_leader", SEM), fakeReaders());
+    expect(out.valoresEmVigor).toEqual([]);
+    const lisboa = await runRulesInForce({ modulo: "extras_dia" }, ctxFor("team_leader", LISBOA), fakeReaders());
+    expect((lisboa.valoresEmVigor as any[]).map((v) => v.chave)).toContain("extras.autoProposeAt");
+    expect(withCityScope(RULES_LIVE_WHITELIST.casos, SEM).map((e) => e.key)).toEqual(RULES_LIVE_WHITELIST.casos.map((e) => e.key));
   });
 
   it("sem módulos de regras (utilizador) → a ferramenta nem está disponível", () => {
