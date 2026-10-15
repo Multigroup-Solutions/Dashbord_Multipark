@@ -52,7 +52,7 @@ import { runKnowledgeSync, syncHelpSections } from "../knowledge/sync";
 import { HELP_FILES } from "./helpDocs.generated";
 import { HELP_NAV_TOOLS, canSeeHelpPage, excerptSection, searchHelpSections } from "./helpTools";
 import { KNOWLEDGE_INDEX, knowledgeTree } from "./knowledgeTree";
-import { MPV_HELP_MAX_CHARS, mpvSuggestions, mpvSystemPrompt, mpvTools, mpvTurnKnowledge } from "./mpv";
+import { MPV_HELP_MAX_CHARS, mpvSuggestions, mpvSystemPrompt, mpvTools, mpvTurnBudget, mpvTurnKnowledge } from "./mpv";
 import { askAssistant, helpFileOfRef, staffHelpDocs, staffSystemPrompt, turnContext } from "./service";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS, staffToolsFor, type StaffToolCtx } from "./tools";
 
@@ -243,6 +243,77 @@ describe("sistema do MPV (bloco estável)", () => {
     expect(mpvTools()).toBe(MPV_STAFF_TOOLS);
     expect(staffToolsFor({ pilot: true })).toBe(MPV_STAFF_TOOLS);
     expect(staffToolsFor({ pilot: false })).toBe(STAFF_TOOLS);
+  });
+});
+
+// ─── Orçamentos por versão (§3.6) ───────────────────────────────────────────
+
+describe("orçamentos do turno por versão (§3.6)", () => {
+  /** O modelo pede sempre mais uma ferramenta; sem ferramentas (chamada final), responde. */
+  const greedy = (model: string, onCall?: (req: any) => void) => createFakeProvider("gemini", [async (req: any) => {
+    onCall?.(req);
+    if (req.tools?.length) return { ...okResponse("", model), toolCalls: [{ name: "ajuda_procurar", args: { texto: "caixa" } }], raw: { parts: [] } };
+    return okResponse("Resposta final.", model);
+  }]);
+  const run = async (userId: number, smart: boolean, model: string, onCall?: (req: any) => void) => {
+    pilotOn([7]);
+    if (!smart) delete process.env.AI_ASSISTANT_SMART;
+    const p = greedy(model, onCall);
+    setAiProvidersForTests({ gemini: p });
+    const r = await askAssistant({ question: "Como fecho a caixa?", path: "/caixa" }, ctxFor("supervisor", userId), NO_HOOKS);
+    const withTools = p.calls.filter((c) => c.tools?.length).length;
+    const final = p.calls.at(-1)!;
+    // Voltas executadas = as que a chamada final leva no histórico (a que pede uma a mais já não corre).
+    return { r, withTools, rounds: (final.toolRounds ?? []).length, final, first: p.calls[0] };
+  };
+
+  it("valores: 35 s com 8 s para a chamada final; Argon 4 voltas, lite (e económico) 3", () => {
+    expect(mpvTurnBudget("assistant_smart")).toEqual({ timeoutMs: 35_000, finalReserveMs: 8_000, maxToolRounds: 4 });
+    expect(mpvTurnBudget("assistant")).toEqual({ timeoutMs: 35_000, finalReserveMs: 8_000, maxToolRounds: 3 });
+  });
+
+  it("MPV-Argon: até 4 voltas com ferramentas e depois a chamada final sem ferramentas; as voltas param aos 27 s", async () => {
+    const a = await run(7, true, "gemini-4-argon");
+    expect(a.r).toMatchObject({ ok: true, answer: "Resposta final.", feature: "assistant_smart" });
+    expect(a.rounds).toBe(4); // 4 voltas executadas; o pedido de uma 5.ª leva à chamada final
+    expect(a.withTools).toBe(5);
+    expect(a.final.tools).toBeUndefined();
+    expect(a.first.timeoutMs).toBeLessThanOrEqual(27_000);
+    expect(a.first.timeoutMs).toBeGreaterThan(26_000);
+  });
+
+  it("MPV-lite (piloto com o smart desligado): até 3 voltas, a mesma regra do prazo", async () => {
+    const l = await run(7, false, "gemini-3.1-flash-lite");
+    expect(l.r).toMatchObject({ ok: true, answer: "Resposta final.", feature: "assistant" });
+    expect(l.rounds).toBe(3);
+    expect(l.withTools).toBe(4);
+    expect(l.first.timeoutMs).toBeLessThanOrEqual(27_000);
+    expect(l.first.timeoutMs).toBeGreaterThan(26_000);
+  });
+
+  it("v1 sem alterações: 3 voltas e o prazo de sempre (40 s − 8 s de reserva)", async () => {
+    const v = await run(99, true, "gemini-3.1-flash-lite");
+    expect(v.r).toMatchObject({ ok: true, feature: "assistant" });
+    expect(v.rounds).toBe(3);
+    expect(v.withTools).toBe(4);
+    expect(v.first.timeoutMs).toBeGreaterThan(31_000);
+    expect(v.first.timeoutMs).toBeLessThanOrEqual(32_000);
+    expect(v.first.tools?.map((t: any) => t.name)).toContain("abrir_ajuda");
+  });
+
+  it("voltas lentas (9 s cada): param aos 27 s e a chamada final ainda cabe nos 8 s guardados — e responde", async () => {
+    let now = Date.now();
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const s = await run(7, true, "gemini-4-argon", (req) => { now += req.tools?.length ? 9_000 : 1_000; });
+      expect(s.r).toMatchObject({ ok: true, answer: "Resposta final.", feature: "assistant_smart" });
+      expect(s.rounds).toBe(3); // a 4.ª volta já não cabia antes dos 27 s
+      expect(s.withTools).toBe(3);
+      expect(s.final.tools).toBeUndefined();
+      expect(s.final.timeoutMs).toBe(8_000);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

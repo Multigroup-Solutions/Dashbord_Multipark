@@ -452,8 +452,22 @@ teto de saída base 2 048); senão o `assistant` de sempre. Teto próprio atingi
 pedido) ou gasto que não se consegue medir → `assistant` com `economy: true` e a nota "Modo
 económico" no widget, com o motivo (teto da pessoa, do dia, do mês, ou "não consegui confirmar"). O
 `assistant.status` devolve a funcionalidade **efetiva** da pessoa (`feature`, `tier`, `pilot`,
-`economy`, `economyNote`) e os limites dela. As respostas guardam `variant` (`v1` — o conteúdo do
-MPV chega no F1+) e `tier`.
+`economy`, `economyNote`) e os limites dela. As respostas guardam `variant` (`mpv` no piloto,
+também no modo económico; `v1` fora dele) e `tier`.
+
+**Conteúdo do MPV (plano MPV F3, só no piloto; o v1 fica igual)**: sistema com o índice da árvore
+(`assistantMpvSystemPrompt(KNOWLEDGE_INDEX)`, igual para toda a gente) e as mesmas ferramentas
+declaradas a todos (`declareAllTools`; as permitidas vão no `<contexto>`) → uma cache por modelo.
+Por pergunta (`server/assistant/mpv.ts`): `<pagina_atual>` com o perfil da página
+(`shared/multisProfiles.ts`) + a secção do separador aberto (ou a introdução da página) + até 2
+secções da pesquisa lexical por secção, no máx. 5 000 car. `ajuda_abrir(id)` /
+`ajuda_procurar(texto)` (`server/assistant/helpTools.ts`) no lugar do `abrir_ajuda`. Orçamento do
+turno: 35 s com 8 s guardados para a chamada final (as voltas param aos 27 s); 4 voltas no Argon,
+3 no lite; até 4 chamadas por volta. **Visibilidade da ajuda (decisão do Jorge, 15 out 2026)**: no
+MPV, a página da ajuda de um módulo do mapa de acessos só aparece a quem pode ver esse módulo (nas
+ferramentas e no bloco da pergunta); módulos fora do mapa (`multis`, `ia`) e a entrada ficam para
+todos — o v1 não filtra. As secções sincronizam também na Base de conhecimento (fonte `help_sec`,
+`help:<ficheiro>.md#<secção>`, só com o `MPV` ligado), fora de todas as consultas que não as pedem.
 
 **Contexto da página (plano MPV §3.1)**: as páginas com separadores ou registo chamam
 `useMultisPage({ tab, entity })` (Extras-Dia, Atividade diária, Avaliação, Despesas, Parcerias,

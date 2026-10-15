@@ -97,6 +97,13 @@ export interface ChatTurnInput<Ctx> {
    */
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /** Máximo de voltas com ferramentas (omissão 3; MPV-Argon 4 — plano §3.6). */
+  maxToolRounds?: number;
+  /**
+   * Tempo guardado para a chamada final sem ferramentas (omisso = o do runAi,
+   * 8 s). As voltas com ferramentas param quando sobra menos (plano §3.6).
+   */
+  finalReserveMs?: number;
   /** Versão do chamador (registo + resposta guardada), ex.: "v1". */
   variant?: string;
 }
@@ -231,6 +238,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
       maxTokens: input.maxOutputTokens ?? 700,
       scaleMaxTokensForThinking: true,
       timeoutMs: input.timeoutMs ?? 40_000,
+      ...(input.finalReserveMs != null ? { finalReserveMs: input.finalReserveMs } : {}),
       variant: input.variant ?? null,
       temperature: 0.2,
       userId: input.userId ?? null,
@@ -240,7 +248,7 @@ export async function runChatTurn<Ctx>(input: ChatTurnInput<Ctx>): Promise<ChatT
         ? {
             tools: {
               declarations: toolDeclarations(tools),
-              maxRounds: 3,
+              maxRounds: input.maxToolRounds ?? 3,
               execute: makeToolExecutor(tools, input.toolCtx as Ctx, {
                 onCall: async (name, args) => {
                   used.push(name);

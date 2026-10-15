@@ -40,7 +40,7 @@ import { userKey } from "../_core/ai/rateLimit";
 import { assistantSystemPrompt } from "../_core/ai/prompts/assistant";
 import { HELP_FILES } from "./helpDocs.generated";
 import { staffToolsFor, type StaffToolCtx } from "./tools";
-import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnKnowledge } from "./mpv";
+import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnBudget, mpvTurnKnowledge } from "./mpv";
 import type { CityAccess } from "../cityAccess";
 
 /** Quantos trechos da ajuda a base devolve por pergunta (dão até 3 ficheiros). */
@@ -316,6 +316,8 @@ export async function askAssistant(
     // A versão do conteúdo (v1 | mpv) fica no registo e na resposta guardada; o nível também.
     variant: mpv ? MPV_VARIANT : "v1",
     ...(feature === ASSISTANT_SMART_FEATURE ? { maxOutputTokens: ASSISTANT_SMART_MAX_OUTPUT_TOKENS } : {}),
+    // MPV §3.6: prazo 35 s (8 s para a chamada final), 4 voltas no Argon e 3 no lite; o v1 fica como está.
+    ...(mpv ? mpvTurnBudget(feature) : {}),
     context,
     memory,
     ...(pageKnowledge ? { pageKnowledge: { block: pageKnowledge.block, refs: pageKnowledge.refs } } : { helpDocs: toolCtx.helpDocs }),

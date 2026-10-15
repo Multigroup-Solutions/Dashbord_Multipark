@@ -40,6 +40,19 @@ export function mpvTools(): ChatTool<StaffToolCtx>[] {
   return MPV_STAFF_TOOLS;
 }
 
+/**
+ * Orçamento do turno por versão (plano MPV §3.6): prazo total 35 s com 8 s
+ * guardados para a chamada final sem cache (as voltas com ferramentas param
+ * aos 27 s); MPV-Argon (assistant_smart) até 4 voltas, MPV-lite (assistant,
+ * também no modo económico) até 3. Até 4 chamadas por volta (o runAi:
+ * MAX_TOOL_CALLS_PER_ROUND). O v1 não usa isto (fica com os 40 s e 3 voltas).
+ */
+export const MPV_TURN_TIMEOUT_MS = 35_000;
+export const MPV_FINAL_RESERVE_MS = 8_000;
+export function mpvTurnBudget(feature: "assistant" | "assistant_smart"): { timeoutMs: number; finalReserveMs: number; maxToolRounds: number } {
+  return { timeoutMs: MPV_TURN_TIMEOUT_MS, finalReserveMs: MPV_FINAL_RESERVE_MS, maxToolRounds: feature === "assistant_smart" ? 4 : 3 };
+}
+
 /** Os nomes das ferramentas que esta pessoa pode usar (vão no <contexto>). */
 export function mpvAllowedToolNames(ctx: StaffToolCtx, tools: ChatTool<StaffToolCtx>[] = mpvTools()): string[] {
   return tools.filter((t) => { try { return t.available(ctx); } catch { return false; } }).map((t) => t.name);
