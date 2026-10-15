@@ -707,6 +707,9 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
   const [userSel, setUserSel] = useState<number[]>([]);
   const usersQ = trpc.users.list.useQuery(undefined, { enabled: isUserList || isReminderRecipients, staleTime: 5 * 60_000, retry: false });
   const [reminders, setReminders] = useState<ReminderRecipients>(DEFAULT_REMINDER_RECIPIENTS);
+  // F7 (seguimento): "não confirma e avisa" com os avisos da escala desligados → ninguém seria avisado (o servidor confirma na mesma).
+  const flagsQ = trpc.settings.flags.list.useQuery(undefined, { enabled: isManualEditMode, staleTime: 60_000, retry: false });
+  const scheduleAlertsOn = (flagsQ.data as Array<{ name: string; effective: boolean }> | undefined)?.find((f) => f.name === "EXTRAS_SCHEDULE_ALERTS")?.effective;
   const userById = useMemo(() => new Map(((usersQ.data ?? []) as Array<{ id: number; name?: string | null; email?: string | null }>).map((u) => [Number(u.id), u])), [usersQ.data]);
   const [speed, setSpeed] = useState<{ limitKmh: string; tolerancePercent: string; minPoints: string }>({ limitKmh: "", tolerancePercent: "", minPoints: "" });
   const [zonesDraft, setZonesDraft] = useState<ParkZonesDraft>(() => parkZonesToDraft(null));
@@ -747,7 +750,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
         return [c.id, { roles: [...(r.roles ?? [])], days: [...(r.days ?? [])], userIds: [...(r.userIds ?? [])].map(Number) }];
       })) as ReminderRecipients);
     }
-    else if (isManualEditMode) setText(String(current ?? "skip_notify"));
+    else if (isManualEditMode) setText(String(current ?? "confirm"));
     else if (isSpeedRule) {
       const c = (current ?? {}) as Record<string, unknown>;
       const txt = (v: unknown) => (v == null ? "" : String(v).replace(".", ","));
@@ -1098,12 +1101,19 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
           })}
         </div>
       ) : isManualEditMode ? (
-        <Select value={text || "skip_notify"} onValueChange={setText} disabled={locked}>
+        <div className="space-y-1">
+        <Select value={text || "confirm"} onValueChange={setText} disabled={locked}>
           <SelectTrigger className="w-full max-w-md min-w-0 *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate" aria-label={item.label}><SelectValue /></SelectTrigger>
           <SelectContent>
             {MANUAL_EDIT_AT_CONFIRM_MODES.map((m) => <SelectItem key={m} value={m}>{MANUAL_EDIT_AT_CONFIRM_LABELS[m]}</SelectItem>)}
           </SelectContent>
         </Select>
+        {(text || "confirm") === "skip_notify" && scheduleAlertsOn === false && (
+          <p className="text-xs text-amber-800 dark:text-amber-300 max-w-md">
+            <AlertTriangle className="inline h-3 w-3 mr-1" />Com os avisos da escala desligados (Definições → Automações → «Extras-dia: avisos da escala»), ninguém é avisado — por isso, enquanto estiverem desligados, o dia mexido à mão é confirmado na mesma.
+          </p>
+        )}
+        </div>
       ) : isParkList ? (
         <ParkPicker selected={parkSel} onChange={setParkSel} />
       ) : isSpeedRule ? (

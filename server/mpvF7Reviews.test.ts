@@ -120,7 +120,7 @@ describe("leitura na fonte (readReviewAtSource) — transportes falsos", () => {
     const googleGet = vi.fn(async () => g());
     const windsorList = vi.fn(async () => []);
     const r = await readReviewAtSource(review(), { oauthConnected: async () => true, windsorConfigured: () => true, googleGet, windsorList });
-    expect(r).toEqual({ ok: true, rating: 5, text: review().reviewText, hasReply: false });
+    expect(r).toEqual({ ok: true, rating: 5, text: review().reviewText, hasReply: false, replyText: null });
     expect(googleGet).toHaveBeenCalledWith("accounts/1/locations/2/reviews/abc", expect.any(Number));
     expect(windsorList).not.toHaveBeenCalled();
   });
@@ -132,7 +132,7 @@ describe("leitura na fonte (readReviewAtSource) — transportes falsos", () => {
     // Uma crítica de há 10 dias, lida hoje: a janela vai até hoje (a data de atualização pode ser recente).
     const { windsorWindowAround } = await import("./integrations/googleBusiness/sourceRead");
     expect(windsorWindowAround("2026-10-12 09:00:00", NOW)).toEqual({ dateFrom: "2026-10-11", dateTo: "2026-10-22" });
-    expect(r).toEqual({ ok: true, rating: 4, text: review().reviewText, hasReply: true });
+    expect(r).toEqual({ ok: true, rating: 4, text: review().reviewText, hasReply: true, replyText: "Obrigado" });
   });
   it("não consegue ler → ok:false (nunca lança)", async () => {
     const { readReviewAtSource } = await import("./integrations/googleBusiness/sourceRead");
@@ -155,7 +155,7 @@ describe("leitura na fonte (readReviewAtSource) — transportes falsos", () => {
 
 type Q = QueueRow & { reason?: string | null; publishedAtMs?: number; verifiedAt?: string | null; alertedAt?: string | null; channel?: string | null };
 
-function harness(o: { flag?: boolean | (() => boolean); source?: (r: ReviewRow) => SourceRead; publishFails?: boolean | "answered"; reviews?: ReviewRow[]; publishedLast24h?: number; channel?: "google" | "windsor" | "none"; ai?: boolean } = {}) {
+function harness(o: { flag?: boolean | (() => boolean); source?: (r: ReviewRow) => SourceRead; publishFails?: boolean | "answered"; lostRace?: boolean; reviews?: ReviewRow[]; publishedLast24h?: number; channel?: "google" | "windsor" | "none"; ai?: boolean } = {}) {
   const H = {
     now: NOW,
     state: { ...EMPTY_AUTO_PUBLISH_STATE } as AutoPublishState,
@@ -195,6 +195,7 @@ function harness(o: { flag?: boolean | (() => boolean); source?: (r: ReviewRow) 
     publish: async (reviewId, text) => {
       if (o.publishFails === "answered") { const e = new Error("A crítica já tem resposta — a automática não a substitui."); e.name = "ReplyAlreadyThereError"; throw e; }
       if (o.publishFails) throw new Error("A Google recusou (500)");
+      if (o.lostRace) { H.published.push({ reviewId, text }); return { channel: "google", stored: false }; }
       H.published.push({ reviewId, text });
       const r = H.reviews.get(reviewId)!;
       H.reviews.set(reviewId, { ...r, googleReply: text, status: "manually_responded" });
@@ -480,6 +481,60 @@ describe("auditoria da F7: pontos baixos das 5★", () => {
     const alerts = H.notified.filter((n) => n.title.includes("não deu para a confirmar"));
     expect(alerts.length).toBe(1);
     expect(alerts[0].body).toContain("Há 2 dias seguidos");
+  });
+});
+
+describe("F7 seguimento", () => {
+  it("presa em «a publicar» e a resposta na fonte é o texto que enviámos (mesmo sem a cópia de cá) → publicada", async () => {
+    const { H, run } = harness({ source: () => ({ ok: true, rating: 5, text: review().reviewText ?? null, hasReply: true, replyText: GOOD_REPLY }) });
+    await run();
+    Object.assign(H.queue[0], { status: "publishing", stuck: true });
+    await run();
+    expect(H.queue[0].status).toBe("published");
+    expect(H.queue[0].reason).toMatch(/a resposta na fonte é a nossa/);
+    expect(H.published).toEqual([]);
+  });
+  it("presa e na fonte está outra resposta → não publicada", async () => {
+    const { H, run } = harness({ source: () => ({ ok: true, rating: 5, text: review().reviewText ?? null, hasReply: true, replyText: "Obrigado! (pessoa)" }) });
+    await run();
+    Object.assign(H.queue[0], { status: "publishing", stuck: true });
+    await run();
+    expect(H.queue[0].status).toBe("skipped");
+  });
+  it("marca sentAt antes de enviar", async () => {
+    const { H, deps, run } = harness();
+    await run();
+    H.now = NOW + 6 * 3_600_000;
+    const realPublish = deps.publish;
+    let sentAtWhenPublishing: string | undefined;
+    deps.publish = async (id, text) => { sentAtWhenPublishing = (H.queue[0] as any).sentAt; return realPublish(id, text); };
+    await run();
+    expect(sentAtWhenPublishing).toBe("2026-10-22 16:00:00");
+    expect(H.queue[0].status).toBe("published");
+  });
+  it("perdeu a corrida para uma pessoa depois do envio (compare-and-set): regista e avisa o super admin", async () => {
+    const { H, run } = harness({ lostRace: true });
+    await run();
+    H.now = NOW + 6 * 3_600_000;
+    const r = await run();
+    expect(H.queue[0]).toMatchObject({ status: "published" });
+    expect(H.queue[0].reason).toMatch(/uma pessoa respondeu cá ao mesmo tempo/);
+    expect(H.logs[0].details).toMatch(/uma pessoa respondeu ao mesmo tempo/);
+    const n = H.notified.find((x) => x.title.includes("cruzou-se"));
+    expect(n).toBeTruthy();
+    expect(n.recipientFilter({ id: 1, role: "super_admin" })).toBe(true);
+    expect(n.recipientFilter({ id: 2, role: "admin" })).toBe(false);
+    expect(r.alerts).toBe(1);
+  });
+  it("migração 0715: as colunas novas também numa BD criada pela 1.ª versão da 0705, e registada", async () => {
+    const { MIGRATION_0715_STATEMENTS, IDEMPOTENT_ERROR_CODES_0715 } = await import("./migrations/migration_0715");
+    const all = MIGRATION_0715_STATEMENTS.join("\n");
+    for (const col of ["`released`", "`attempts`", "`reviewTextAtPrepare`", "`verifyFailures`", "`sentAt`"]) expect(all).toContain(col);
+    expect(all).toContain("MODIFY COLUMN `recipients` INT NULL");
+    expect(MIGRATION_0715_STATEMENTS.every((x) => /^ALTER TABLE/.test(x))).toBe(true);
+    expect(IDEMPOTENT_ERROR_CODES_0715.has("ER_DUP_FIELDNAME")).toBe(true);
+    const { SCHEMA_MIGRATION_IDS } = await import("./migrations/index");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0715");
   });
 });
 

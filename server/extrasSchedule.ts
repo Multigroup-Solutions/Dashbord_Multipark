@@ -62,6 +62,8 @@ import {
   NOTIFY_SENDING_STALE_MIN,
   MANUAL_EDIT_SETTLE_MIN,
   MANUAL_HOLD_REPEAT_AT_MIN,
+  MANUAL_HOLD_REPEAT_MIN_GAP_MIN,
+  effectiveManualEditMode,
   settlesAfterLastRun,
   autoConfirmDecision,
   fmtDayPt,
@@ -1108,7 +1110,11 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
     availableCount: cands.filter((c) => candidateWindows(c).length > 0).length,
     notifications,
-    settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead, manualEditAtConfirm: settings.manualEditAtConfirm, alertsOn: await scheduleFlagOn(SCHEDULE_ALERTS_FLAG).catch(() => false) },
+    settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead, ...(await (async () => {
+      // A opção em vigor de facto ("não confirma e avisa" sem os avisos → confirma) — o cartão diz o que vai acontecer.
+      const alertsOn = await scheduleFlagOn(SCHEDULE_ALERTS_FLAG).catch(() => false);
+      return { manualEditAtConfirm: effectiveManualEditMode(settings.manualEditAtConfirm, alertsOn), alertsOn };
+    })()) },
   };
 }
 
@@ -1167,6 +1173,17 @@ export async function releaseScheduleAlert(a: AlertRef): Promise<void> {
     if (!db) return;
     await db.execute(sql`UPDATE extras_dia_alerts SET released = 1 WHERE ${alertWhere(a)}`);
   } catch { /* na pior, não se repete */ }
+}
+
+/** Quando saiu (ms) um aviso já reservado e não libertado; null = nunca saiu. Nunca lança. */
+export async function scheduleAlertSentAt(a: AlertRef): Promise<number | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const r = rowsOf(await db.execute(sql`SELECT UNIX_TIMESTAMP(createdAt) AS at FROM extras_dia_alerts WHERE ${alertWhere(a)} AND released = 0 LIMIT 1`))[0];
+    const at = r?.at == null ? NaN : Number(r.at);
+    return Number.isFinite(at) && at > 0 ? at * 1000 : null;
+  } catch { return null; }
 }
 
 /** Quem foi avisado depois de reservado (para o registo). Nunca lança. */
@@ -1349,6 +1366,8 @@ export interface ScheduleAutomationDeps {
   coverage(date: string, city: ScheduleCity): Promise<{ coverage: number; gaps: Gap[] } | null>;
   claimAlert(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string; detail?: string | null }): Promise<boolean>;
   releaseAlert(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }): Promise<void>;
+  /** Quando saiu (ms) o aviso reservado (null = nunca). */
+  alertSentAt(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }): Promise<number | null>;
   alert(input: import("./notify").NotifyInput): Promise<{ recipients: number[]; duplicates?: number }>;
   adminIds(): Promise<number[]>;
   noteRecipients(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }, recipients: number): Promise<void>;
@@ -1366,6 +1385,7 @@ export const realScheduleDeps: ScheduleAutomationDeps = {
   coverage: loadScheduleCoverage,
   claimAlert: claimScheduleAlert,
   releaseAlert: releaseScheduleAlert,
+  alertSentAt: scheduleAlertSentAt,
   alert: async (input) => (await import("./notify")).notify(input),
   adminIds: loadAdminUserIds,
   noteRecipients: noteAlertRecipients,
@@ -1485,7 +1505,8 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
   for (const date of due.confirmDates) {
     for (const city of SCHEDULE_CITIES) {
       const state = await deps.getState(date, city);
-      const decision = autoConfirmDecision(state, settings.manualEditAtConfirm, now.getTime());
+      // "Não confirma e avisa" com os avisos desligados deixava o dia por confirmar sem ninguém saber → confirma.
+      const decision = autoConfirmDecision(state, effectiveManualEditMode(settings.manualEditAtConfirm, alertsOn), now.getTime());
       if (decision.action === "skip") continue;
       const who = state?.manual?.byName ? ` por ${state.manual.byName}` : "";
       const what = state?.manual?.what ? ` (${state.manual.what})` : "";
@@ -1505,8 +1526,9 @@ export async function runScheduleAutomation(now: Date = new Date(), deps: Schedu
         report.skipped.push(`confirm:${date}:${city} (${decision.reason})`);
         const body = `O dia foi mexido à mão${who}${what}, por isso às ${settings.autoConfirmAt} não foi confirmado nem os extras foram avisados. Confirma tu em Extras-dia → Dia → "Confirmar escala" (avisa cada extra por WhatsApp e email).`;
         const first = await alertOnce({ date, city, kind: "manual_hold", title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}) por confirmar: mexida à mão`, body });
-        // Continua por confirmar às 18:00 → o aviso repete-se (uma vez; não no mesmo instante do 1.º).
-        if (!first && ln.minutes >= MANUAL_HOLD_REPEAT_AT_MIN) {
+        // Continua por confirmar às 18:00 → o aviso repete-se (uma vez), só se o 1.º saiu há pelo menos 1 h.
+        const firstAt = first || ln.minutes < MANUAL_HOLD_REPEAT_AT_MIN ? null : await deps.alertSentAt({ date, city, kind: "manual_hold" }).catch(() => null);
+        if (firstAt != null && now.getTime() - firstAt >= MANUAL_HOLD_REPEAT_MIN_GAP_MIN * 60_000) {
           await alertOnce({ date, city, kind: "manual_hold", key: "repeat", title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}) AINDA por confirmar`, body: `Continua por confirmar: ninguém foi avisado para amanhã. ${body}` });
         }
         continue;

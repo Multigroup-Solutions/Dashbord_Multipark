@@ -282,7 +282,7 @@ function world(opts: {
     confirms: [] as Array<{ at: number; city: string }>,
     alerts: [] as Array<{ at: number; kind: string; title: string; body: string; city: string | null; recipients: number }>,
     reminders: [] as Array<{ at: number; title: string; body: string; city: string; alsoUserIds?: readonly unknown[] }>,
-    claims: new Map<string, { released: boolean; attempts: number }>(),
+    claims: new Map<string, { released: boolean; attempts: number; at: number }>(),
   };
   const key = (date: string, city: string) => `${date}:${city}`;
   const confirmAt = opts.confirmAt ?? "15:00";
@@ -312,8 +312,8 @@ function world(opts: {
   const claimAlert = async (a: { date: string; city: string; kind: string; key?: string }) => {
     const k = `${a.date}|${a.city}|${a.kind}|${a.key ?? ""}`;
     const c = W.claims.get(k);
-    if (!c) { W.claims.set(k, { released: false, attempts: 1 }); return true; }
-    if (c.released && c.attempts < 3) { c.released = false; c.attempts++; return true; }
+    if (!c) { W.claims.set(k, { released: false, attempts: 1, at: W.now }); return true; }
+    if (c.released && c.attempts < 3) { c.released = false; c.attempts++; c.at = W.now; return true; }
     return false;
   };
   const scheduleDeps = {
@@ -356,6 +356,10 @@ function world(opts: {
       return { recipients, duplicates: 0 };
     },
     adminIds: async () => opts.admins ?? [],
+    alertSentAt: async (a: { date: string; city: string; kind: string; key?: string }) => {
+      const c = W.claims.get(`${a.date}|${a.city}|${a.kind}|${a.key ?? ""}`);
+      return c && !c.released ? c.at : null;
+    },
     noteRecipients: async () => {},
   };
   const reminderDeps = {
@@ -431,11 +435,16 @@ describe("relógio simulado das 10:00 às 18:30 (Lisboa)", () => {
     expect(lxAlert.body).toContain("não chegou por nenhum canal");
   });
 
-  it("avisos da escala desligados (EXTRAS_SCHEDULE_ALERTS, omissão): a mesma falha não avisa ninguém (nem email)", async () => {
+  it("avisos da escala desligados (EXTRAS_SCHEDULE_ALERTS, omissão): ninguém é avisado (nem email) e 'não confirma e avisa' passa a confirmar", async () => {
     const w = world({ mode: "skip_notify", manualAt: Date.parse("2026-10-21T13:50:00Z"), whatsappUpAt: null, alertsOn: false });
-    const reports = await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
+    await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
     expect(w.W.alerts).toEqual([]);
-    expect(reports.some((r) => r.sched.skipped.some((s: string) => s.includes("EXTRAS_SCHEDULE_ALERTS desligado")))).toBe(true);
+    // Sem avisos, o dia mexido à mão ficava por confirmar sem ninguém saber → confirma na mesma às 15:00.
+    expect(lx(w.W.confirms.find((c) => c.city === "lisbon")!.at)).toBe("15:00");
+    const { effectiveManualEditMode } = await import("../shared/extrasSchedule");
+    expect(effectiveManualEditMode("skip_notify", false)).toBe("confirm");
+    expect(effectiveManualEditMode("skip_notify", true)).toBe("skip_notify");
+    expect(effectiveManualEditMode("if_older_30m", false)).toBe("if_older_30m");
   });
 
   it("a Meta volta às 16:00: a tentativa das 16:30 já passa e não há aviso", async () => {
@@ -490,6 +499,13 @@ describe("relógio simulado das 10:00 às 18:30 (Lisboa)", () => {
       expect(at1515.sched.skipped.join(" ")).toMatch(/mexido à mão há 25 min/);
       expect(w.W.alerts).toEqual([]);
     });
+  });
+
+  it("skip_notify: a repetição das 18:00 só sai se o 1.º aviso tiver sido há pelo menos 1 h (confirmação às 17:30 → repete às 18:30)", async () => {
+    const w = world({ mode: "skip_notify", confirmAt: "17:30", manualAt: Date.parse("2026-10-21T13:50:00Z"), whatsappUpAt: 0 });
+    await runClock(w, "2026-10-21T09:00:00Z", "2026-10-21T17:30:00Z");
+    const hold = w.W.alerts.filter((a) => a.kind === "manual_hold" && a.city === "lisbon");
+    expect(hold.map((a) => lx(a.at))).toEqual(["17:30", "18:30"]);
   });
 
   describe("if_older_30m perto do fim do dia (confirmação às 23:30)", () => {
