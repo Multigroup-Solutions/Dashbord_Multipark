@@ -13,6 +13,7 @@ import { complaints, googleReviews } from "../drizzle/schema";
 import { getDb } from "./db";
 import { COMPLAINT_TYPE_LABEL_PT, reviewSentiment, type ComplaintType } from "../shared/commsAi";
 import { isStopAiError } from "./complaintTriage";
+import { REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, reviewAutoDraftEligible } from "../shared/reviewRules";
 
 const nowStr = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
@@ -70,11 +71,15 @@ export async function autoDraftReview(reviewId: number, opts: { timeoutMs?: numb
 }
 
 /**
- * Críticas novas (últimos 14 dias) sem resposta nem rascunho → rascunho, no
- * máximo `limit` por corrida e dentro do prazo. Chamado no fim do sync do
- * Google Business Profile (cron a cada 10 min) e do leitor de email.
+ * Críticas novas (escritas nos últimos 14 dias — data da PRÓPRIA crítica, não
+ * da importação; MPV R1) sem resposta nem rascunho → rascunho, no máximo
+ * `limit` por corrida e dentro do prazo. Chamado no fim do sync do Google
+ * Business Profile (cron a cada 10 min) e do leitor de email. As críticas
+ * entradas numa 1.ª importação de um perfil já vêm marcadas
+ * (`aiDraftAttemptedAt`, ver `importReview`) e nunca chegam aqui. O botão
+ * "Gerar/Regenerar" de cada crítica continua a funcionar para as antigas.
  */
-export async function draftPendingReviewReplies(opts: { limit?: number; deadlineAt?: number } = {}): Promise<{ drafted: number; skipped?: string; errors: number }> {
+export async function draftPendingReviewReplies(opts: { limit?: number; deadlineAt?: number; nowMs?: number } = {}): Promise<{ drafted: number; skipped?: string; errors: number }> {
   const out = { drafted: 0, errors: 0 } as { drafted: number; skipped?: string; errors: number };
   const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
   if (!(await aiFeatureAvailableFresh("review_auto_draft"))) return { ...out, skipped: "disabled" };
@@ -82,13 +87,19 @@ export async function draftPendingReviewReplies(opts: { limit?: number; deadline
   if (!db) return out;
   const limit = Math.max(1, Math.min(10, opts.limit ?? 5));
   const deadlineAt = opts.deadlineAt ?? Date.now() + 30_000;
-  const ids = (await db.select({ id: googleReviews.id }).from(googleReviews).where(and(
-    isNull(googleReviews.aiResponse),
-    isNull(googleReviews.googleReply),
-    isNull(googleReviews.aiDraftAttemptedAt),
-    sql`${googleReviews.status} IN ('pending_response', 'converted_complaint')`,
-    sql`${googleReviews.createdAt} >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 14 DAY)`,
-  )).orderBy(sql`${googleReviews.id} DESC`).limit(limit)).map((r) => r.id);
+  const cutoff = sql`DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${REVIEW_AUTO_DRAFT_MAX_AGE_DAYS} DAY)`;
+  const rows = await db.select({ id: googleReviews.id, reviewDate: googleReviews.reviewDate, createdAt: googleReviews.createdAt })
+    .from(googleReviews).where(and(
+      isNull(googleReviews.aiResponse),
+      isNull(googleReviews.googleReply),
+      isNull(googleReviews.aiDraftAttemptedAt),
+      sql`${googleReviews.status} IN ('pending_response', 'converted_complaint')`,
+      // = COALESCE(reviewDate, createdAt) >= corte, escrito para usar índices.
+      sql`(${googleReviews.reviewDate} >= ${cutoff} OR (${googleReviews.reviewDate} IS NULL AND ${googleReviews.createdAt} >= ${cutoff}))`,
+    )).orderBy(sql`${googleReviews.id} DESC`).limit(limit);
+  // Segunda verificação (a mesma regra, pura): nunca um rascunho automático
+  // para uma crítica antiga, mesmo que o SQL mude.
+  const ids = rows.filter((r) => reviewAutoDraftEligible(r, opts.nowMs ?? Date.now())).map((r) => r.id);
   for (const id of ids) {
     if (Date.now() + 17_000 > deadlineAt) { out.skipped = "deadline"; break; }
     // Reserva atómica: duas corridas em paralelo nunca pagam a mesma crítica.

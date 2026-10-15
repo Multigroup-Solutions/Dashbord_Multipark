@@ -114,6 +114,13 @@ describe('durable review imports', () => {
     expect(await importReview(1, { ...payload, reviewId: 'recente', updateTime: '2026-09-22T12:00:00Z' }, 10, undefined, { firstImport: true, nowMs })).toBe('created');
     expect(complaintRows).toHaveLength(1);
   });
+  it('MPV R1: 1.ª importação marca a crítica como já tentada (sem rascunho automático); sync normal não', async () => {
+    const nowMs = Date.parse('2026-09-24T12:00:00Z');
+    await importReview(1, { ...payload, reviewId: 'historico', updateTime: '2026-09-22T12:00:00Z' }, 10, undefined, { firstImport: true, nowMs });
+    expect(reviewRows[0].aiDraftAttemptedAt).toEqual(expect.stringMatching(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/));
+    await importReview(1, { ...payload, reviewId: 'nova', updateTime: '2026-09-23T12:00:00Z' }, 10, undefined, { nowMs });
+    expect(reviewRows[1].aiDraftAttemptedAt ?? null).toBeNull();
+  });
   it('does not bind a manually selected review from a different park', async () => {
     reviewRows.push({ id: 7, googleReviewKey: null, projectId: 20 });
     await expect(importReview(1, payload, 10, { existingId: 7 })).rejects.toThrow(/outro parque/);

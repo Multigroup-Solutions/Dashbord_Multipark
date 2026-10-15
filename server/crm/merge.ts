@@ -470,11 +470,21 @@ async function loadSharedCounts(db: any, pairs: [IdentitySide, IdentitySide][]):
 export const AI_MERGE_MIN_CONFIDENCE = 85;
 /** Teto de pares que vão à IA por corrida (custo) e por pedido. */
 export const AI_PAIRS_PER_RUN = 60;
-const AI_PAIRS_PER_CALL = 15;
+/**
+ * Pares por chamada (MPV K1): 10 (era 15). Cada resposta leva ~80–90 tokens
+ * (id, veredicto, certeza, razão de até 15 palavras); 15 pares encostavam ao
+ * teto de 1200 e o fim da lista perdia-se. Com 10 fica ~900, com folga, sem
+ * subir o teto (e uma falha perde menos pares).
+ */
+export const AI_PAIRS_PER_CALL = 10;
+/** Razão gravada nos pares que a IA omitiu (ficam "não sei"). */
+export const AI_OMITTED_REASON = "A IA não respondeu a este par.";
 
 export interface AutoMergeResult {
   checked: number; merged: number; mergedByAi: number; aiChecked: number; skipped: number; errors: number;
   stoppedAtDeadline: boolean; aiError?: string;
+  /** MPV K1: pares enviados que a IA não devolveu (gravados como "não sei"). */
+  aiOmitted?: number;
 }
 
 /**
@@ -580,6 +590,15 @@ export async function autoMergeConfident(db: any, o: { deadlineAt: number; userI
       if (verdict === "same" && conf >= AI_MERGE_MIN_CONFIDENCE && !gone.has(d.a.id) && !gone.has(d.b.id)) {
         if (await doMerge(d.id, d.a, d.b, "ai", `IA (${conf} %): ${reason || "a mesma pessoa"}`)) { out.mergedByAi++; out.skipped--; }
       }
+    }
+    // MPV K1: os pares que a IA deixou sem resposta ficam "não sei" (com aiAt),
+    // senão voltavam a ser pedidos em todas as corridas. Ficam em Rever fichas
+    // como qualquer dúvida; se a ficha mudar (reasons/signals), o aiAt é
+    // limpo pelo upsert e o par volta a ir à IA.
+    for (const d of byId.values()) {
+      out.aiOmitted = (out.aiOmitted ?? 0) + 1;
+      await db.execute(sql`UPDATE crm_merge_suggestions SET aiVerdict = ${"unsure"}, aiConfidence = ${null}, aiReason = ${AI_OMITTED_REASON}, aiAt = UTC_TIMESTAMP()
+        WHERE id = ${d.id} AND status = 'pending'`);
     }
   }
   return out;

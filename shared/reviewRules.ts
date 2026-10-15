@@ -87,3 +87,27 @@ export function reviewUpdatePatch(prev: ReviewState, input: ReviewUpdateInput, a
 export function draftStatusAfterGenerate(prevStatus: string): ReviewStatus | undefined {
   return prevStatus === "pending_response" || prevStatus === "ai_responded" ? "ai_responded" : undefined;
 }
+
+/**
+ * Rascunho AUTOMÁTICO só para críticas recentes (MPV R1, out 2026): conta a
+ * data da própria crítica (`reviewDate`; sem ela, a da entrada cá —
+ * `createdAt`), nunca a da importação. Uma importação de anos de histórico
+ * (Windsor, 6–7 out) já não gera milhares de rascunhos para críticas de
+ * 2021–2025. Sem data legível → não (na dúvida não se gasta). O botão
+ * "Gerar/Regenerar" de cada crítica não passa por aqui. PURA.
+ */
+export const REVIEW_AUTO_DRAFT_MAX_AGE_DAYS = 14;
+
+function utcMs(v: unknown): number {
+  if (v instanceof Date) return v.getTime();
+  const s = String(v ?? "").trim();
+  if (!s) return NaN;
+  const iso = s.includes("T") ? s : s.replace(" ", "T");
+  return Date.parse(/(Z|[+-]\d\d:?\d\d)$/i.test(iso) ? iso : `${iso}Z`);
+}
+
+export function reviewAutoDraftEligible(r: { reviewDate?: unknown; createdAt?: unknown }, nowMs: number = Date.now()): boolean {
+  const t = utcMs(r.reviewDate ?? r.createdAt);
+  if (!Number.isFinite(t)) return false;
+  return nowMs - t <= REVIEW_AUTO_DRAFT_MAX_AGE_DAYS * 86_400_000;
+}
