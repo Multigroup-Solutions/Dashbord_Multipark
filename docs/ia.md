@@ -485,6 +485,14 @@ depois pelo módulo **só se for único**, depois pelo título; módulo com vár
 candidatos (ficheiro, título, resumo). O índice da ajuda mostra o ficheiro quando o módulo se
 repete. Antes devolvia sempre a 1.ª ajuda do módulo (definicoes.md, marketing.md, integracoes.md…).
 
+**Leituras lentas das ferramentas do piloto (plano MPV F4, `server/assistant/slowCallCache.ts`)**:
+prazo de 12 s por leitura, uma só leitura igual de cada vez por pessoa, e o resultado que chega
+depois do prazo fica até 5 min (no máx. 20) para a pergunta seguinte, com «lidoAs» (a hora de
+Lisboa em que a leitura começou). Só as mutations da própria pessoa limpam (salvo as técnicas de
+`mutationClearsSlowCalls`, aprovadas em `mpvF4CacheList.test.ts`): **as alterações feitas por outra
+pessoa ou por um cron não limpam a cache de quem perguntou**, que pode ver dados com até 5 min — por
+isso o resultado leva sempre o «lidoAs».
+
 ## 8. Preparação para o chat público (multipark.app)
 
 O núcleo do chat (`server/_core/ai/chat/`) não depende da equipa: conversas,

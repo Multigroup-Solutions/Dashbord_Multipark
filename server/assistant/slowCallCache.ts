@@ -88,26 +88,43 @@ function remember(key: string, userId: number, value: unknown, startedAt: number
  *    mutation), a memória, o 👍/👎 e apagar conversas;
  *  - batimentos e presença: `googleAccount.sync.*` (heartbeat de 5 em 5 min),
  *    `operational.personalDevices.*` (que telemóvel é este), os PDAs ao
- *    entrar/sair (`claimOnLogin`/`releaseOnLogout`);
- *  - marcar como lido: notificações, `*.markRead`, `*.markAllRead`, `*.markUnread`;
+ *    entrar/sair (`claimOnLogin`/`releaseOnLogout`) e a leitura do aparelho
+ *    (`operational.pdas.deviceInfo`);
+ *  - marcar como lido: `*.markRead`, `*.markAllRead`, `*.markUnread` (as
+ *    notificações incluídas; as preferências e o push delas limpam);
  *  - mutations que só leem: `knowledge.open`, `googleDrive.sheets.readCsv`,
- *    as pré-visualizações `*Preview`. PURA.
+ *    as pré-visualizações `*Preview`;
+ *  - `training.markItem` com `completed: false` (abriu um vídeo ou manual: só
+ *    regista "visto"); com `completed: true` muda o progresso → limpa. O
+ *    gancho (server/_core/trpc.ts) passa o input em bruto da chamada; sem ele
+ *    (input desconhecido) limpa — o lado seguro.
+ *
+ * As entradas que acabam em "." são prefixos; as outras, caminhos exatos.
+ * A lista das mutations do appRouter apanhadas por isto está aprovada num
+ * teste (mpvF4CacheList.test.ts): uma nova falha o teste até ser revista. PURA.
+ *
+ * Limite conhecido: só as mutações da PRÓPRIA pessoa limpam. O que outra
+ * pessoa ou um cron mude não limpa a cache de quem perguntou — por isso um
+ * resultado guardado tem no máximo SLOW_CALL_LATE_CACHE_MS e leva sempre a
+ * hora da leitura («lidoAs»).
  */
-const SKIP_PREFIXES: readonly string[] = [
+const SKIP_PATHS: readonly string[] = [
   "assistant.",
   "googleAccount.sync.",
   "operational.personalDevices.",
   "operational.pdas.claimOnLogin",
   "operational.pdas.releaseOnLogout",
-  "notifications.",
+  "operational.pdas.deviceInfo",
+  // As notificações só pelo nome (markRead/markAllRead, em SKIP_LEAF): as preferências e o push limpam (o lado seguro).
   "knowledge.open",
   "googleDrive.sheets.readCsv",
 ];
 const SKIP_LEAF = /^(heartbeat|seen|markRead|markAllRead|markUnread|[a-zA-Z]*Preview)$/;
-export function mutationClearsSlowCalls(path: string | null | undefined): boolean {
+export function mutationClearsSlowCalls(path: string | null | undefined, input?: unknown): boolean {
   const p = String(path ?? "");
   if (!p) return true;
-  if (SKIP_PREFIXES.some((s) => p === s || p.startsWith(s))) return false;
+  if (SKIP_PATHS.some((s) => (s.endsWith(".") ? p.startsWith(s) : p === s))) return false;
+  if (p === "training.markItem") return !(input && typeof input === "object" && (input as { completed?: unknown }).completed === false);
   return !SKIP_LEAF.test(p.split(".").pop() ?? "");
 }
 

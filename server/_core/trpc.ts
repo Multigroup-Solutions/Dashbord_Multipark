@@ -33,7 +33,8 @@ const storageLinks = t.middleware(async (opts) => {
   if (opts.type === "mutation" && opts.ctx.user?.id != null) {
     try {
       const { forgetSlowCallsOf, mutationClearsSlowCalls } = await import("../assistant/slowCallCache");
-      if (mutationClearsSlowCalls(opts.path)) forgetSlowCallsOf(opts.ctx.user.id);
+      // O input em bruto da chamada (ex.: training.markItem com completed:false só regista "visto").
+      if (mutationClearsSlowCalls(opts.path, clean)) forgetSlowCallsOf(opts.ctx.user.id);
     } catch { /* só a cache */ }
   }
   if (!result.ok) return result;

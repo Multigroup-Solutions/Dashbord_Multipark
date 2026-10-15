@@ -77,3 +77,4 @@ No piloto, o Multis lê também estes dados, sempre como tu (as tuas cidades e p
 - **Críticas por responder**: quantas faltam e as 10 mais recentes, com o texto curto (sem as que não são críticas nem as repetidas).
 - **Formação**: o que te falta acabar e, a quem acompanha a equipa, quem está mais atrasado.
 - **Situação do Extras Dia**: cobertura face à previsão, faltas, sobras, horas apertadas, quem respondeu disponível e ainda não está escalado, e quantos não responderam (os mesmos números do ecrã).
+Quando uma leitura demora, o Multis guarda o resultado até 5 min e diz a hora em que o leu («lido às HH:MM»). Só as alterações que tu fazes limpam essa leitura guardada: as que outra pessoa ou um trabalho automático façam entretanto não, por isso podes ver dados com até 5 min.
