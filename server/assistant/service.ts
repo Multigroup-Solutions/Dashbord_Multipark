@@ -183,6 +183,8 @@ export async function askAssistant(
     rateKey: `assistant:${userKey(user.id)}`,
     system: staffSystemPrompt(),
     cacheSystem: true,
+    // Plano MPV: o Multis de hoje é o "v1" (registo de uso + resposta guardada).
+    variant: "v1",
     context: turnContext({ today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn }),
     memory,
     helpDocs: toolCtx.helpDocs,

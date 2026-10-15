@@ -110,7 +110,7 @@ export async function appendExchange(
   conversationId: number,
   question: string,
   answer: string,
-  opts: { tools?: string[]; helpFiles?: string[]; path?: string | null; now?: number } = {},
+  opts: { tools?: string[]; helpFiles?: string[]; path?: string | null; variant?: string | null; tier?: string | null; now?: number } = {},
 ): Promise<{ answerId: number | null }> {
   const d = await db();
   if (!d) return { answerId: null };
@@ -123,16 +123,27 @@ export async function appendExchange(
   await d.execute(sql`
     INSERT INTO ai_chat_messages (conversationId, role, content, tools, createdAt)
     VALUES (${conversationId}, 'user', ${question}, NULL, ${t1})`);
+  const variant = opts.variant ? String(opts.variant).slice(0, 16) : null;
+  const tier = opts.tier ? String(opts.tier).slice(0, 16) : null;
+  const badField = (err: any) => (err?.code ?? err?.cause?.code) === "ER_BAD_FIELD_ERROR";
   let res: unknown;
   try {
     res = await d.execute(sql`
-      INSERT INTO ai_chat_messages (conversationId, role, content, tools, helpFiles, path, createdAt)
-      VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${helpFiles}, ${path}, ${t2})`);
+      INSERT INTO ai_chat_messages (conversationId, role, content, tools, helpFiles, path, variant, tier, createdAt)
+      VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${helpFiles}, ${path}, ${variant}, ${tier}, ${t2})`);
   } catch (err: any) {
-    if ((err?.code ?? err?.cause?.code) !== "ER_BAD_FIELD_ERROR") throw err;
-    res = await d.execute(sql`
-      INSERT INTO ai_chat_messages (conversationId, role, content, tools, createdAt)
-      VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${t2})`);
+    if (!badField(err)) throw err;
+    // Antes da 0690 (sem variant/tier) e, mais atrás, da 0605 (sem helpFiles/path).
+    try {
+      res = await d.execute(sql`
+        INSERT INTO ai_chat_messages (conversationId, role, content, tools, helpFiles, path, createdAt)
+        VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${helpFiles}, ${path}, ${t2})`);
+    } catch (err2: any) {
+      if (!badField(err2)) throw err2;
+      res = await d.execute(sql`
+        INSERT INTO ai_chat_messages (conversationId, role, content, tools, createdAt)
+        VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${t2})`);
+    }
   }
   const title = question.replace(/\s+/g, " ").trim().slice(0, 120);
   await d.execute(sql`

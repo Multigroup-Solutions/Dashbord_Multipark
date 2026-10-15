@@ -60,17 +60,18 @@ import { conversationAlerts } from "../shared/whatsappConversation";
 import { triageComplaint, decideComplaintSuggestion } from "./complaintTriage";
 import { noteInboundForTriage, triageConversation, triageTranscript } from "./whatsappTriage";
 import { computeMatchesFor } from "./lostFoundMatch";
-import { draftPendingReviewReplies } from "./reviewAutoDraft";
+import { autoDraftEmailReview, draftPendingReviewReplies } from "./reviewAutoDraft";
 
 const dialect = new MySqlDialect();
 
-interface Log { updates: { table: string; data: any }[]; executes: { sql: string; params: unknown[] }[] }
+interface Log { updates: { table: string; data: any }[]; executes: { sql: string; params: unknown[] }[]; wheres: { table: string; cond: any }[] }
 
 function fakeDb(): { log: Log } & Record<string, any> {
-  const log: Log = { updates: [], executes: [] };
+  const log: Log = { updates: [], executes: [], wheres: [] };
   const chain = () => {
     const c: any = { table: "" };
-    for (const m of ["where", "limit", "orderBy", "leftJoin", "for"]) c[m] = () => c;
+    for (const m of ["limit", "orderBy", "leftJoin", "for"]) c[m] = () => c;
+    c.where = (cond: any) => { log.wheres.push({ table: c.table, cond }); return c; };
     c.from = (t: any) => { c.table = getTableName(t); return c; };
     c.then = (res: any, rej: any) => Promise.resolve(h.selectRows(c.table)).then(res, rej);
     return c;
@@ -430,11 +431,109 @@ describe("correspondências dos Perdidos", () => {
 
 describe("rascunho automático das críticas", () => {
   const review = { id: 5, rating: 2, reviewerName: "Joana Costa", reviewText: "Esperei 1 hora. joana@x.pt", complaintId: 77, vehiclePlate: null, createdAt: "2026-09-24 09:00:00" };
+  const NOW_MS = Date.parse("2026-09-25T12:00:00Z");
+
+  it("MPV R1: crítica antiga importada hoje (reviewDate de 2023) → sem rascunho automático nem reserva", async () => {
+    const old = { ...review, reviewDate: "2023-05-10 10:00:00", createdAt: "2026-09-25 11:00:00" };
+    h.selectRows = (t) => (t === "google_reviews" ? [old] : []);
+    const r = await draftPendingReviewReplies({ limit: 3, nowMs: NOW_MS });
+    expect(r.drafted).toBe(0);
+    expect(h.runAi).not.toHaveBeenCalled();
+    expect(h.db.log.updates.filter((u: any) => u.table === "google_reviews")).toHaveLength(0);
+    // O SQL filtra pela data da própria crítica (reviewDate), com createdAt só sem ela.
+    const where = dialect.sqlToQuery(h.db.log.wheres.find((w: any) => w.table === "google_reviews").cond);
+    expect(where.sql).toMatch(/`reviewDate` >= DATE_SUB\(UTC_TIMESTAMP\(\), INTERVAL \? DAY\)/);
+    expect(where.sql).toMatch(/`reviewDate` IS NULL AND `google_reviews`\.`sourceEmailDate` >=/);
+    expect(where.sql).toMatch(/`sourceEmailDate` IS NULL AND `google_reviews`\.`createdAt` >=/);
+    expect(where.params).toContain(14);
+  });
+
+  it("MPV R1: crítica nova (reviewDate de ontem) → rascunho automático", async () => {
+    const fresh = { ...review, reviewDate: "2026-09-24 18:00:00", createdAt: "2026-09-25 11:00:00" };
+    h.selectRows = (t) => (t === "google_reviews" ? [fresh] : t === "complaints" ? [{ t: "delay", s: "analyzing", ref: "MP1" }] : []);
+    h.runAi.mockResolvedValue(aiResult("Olá Joana, lamentamos a espera."));
+    const r = await draftPendingReviewReplies({ limit: 3, nowMs: NOW_MS });
+    expect(r.drafted).toBe(1);
+    expect(h.runAi).toHaveBeenCalledTimes(1);
+  });
+
+  it("MPV R1: o botão Gerar/Regenerar (reviews.generateResponse) continua a funcionar para críticas antigas", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "routers.ts"), "utf8");
+    const block = src.split("generateResponse: protectedProcedure")[1].split("publishReply: protectedProcedure")[0];
+    expect(block).toContain("draftReviewReply(review");
+    expect(block).not.toMatch(/reviewAutoDraftEligible|aiDraftAttemptedAt|INTERVAL|reviewDate/);
+  });
+
+  it("MPV R1: regra pura — data da crítica primeiro, createdAt só sem ela; sem data → não", async () => {
+    const { reviewAutoDraftEligible } = await import("../shared/reviewRules");
+    expect(reviewAutoDraftEligible({ reviewDate: "2023-05-10 10:00:00", createdAt: "2026-09-25 11:00:00" }, NOW_MS)).toBe(false);
+    expect(reviewAutoDraftEligible({ reviewDate: null, createdAt: "2026-09-20 11:00:00" }, NOW_MS)).toBe(true);
+    expect(reviewAutoDraftEligible({ reviewDate: "2026-09-11 13:00:00" }, NOW_MS)).toBe(true); // 13 d 23 h
+    expect(reviewAutoDraftEligible({ reviewDate: "2026-09-11 11:00:00" }, NOW_MS)).toBe(false); // 14 d 1 h
+    expect(reviewAutoDraftEligible({ reviewDate: new Date(NOW_MS - 3_600_000) }, NOW_MS)).toBe(true);
+    expect(reviewAutoDraftEligible({}, NOW_MS)).toBe(false);
+    expect(reviewAutoDraftEligible({ reviewDate: "lixo" }, NOW_MS)).toBe(false);
+  });
+
+  it("MPV R1 (seguimento): crítica por email com data antiga → sem rascunho e marcada (o cron também não a apanha)", async () => {
+    h.selectRows = (t) => (t === "google_reviews" ? [review] : []);
+    const r = await autoDraftEmailReview(5, "2026-08-01 10:00:00", { nowMs: NOW_MS });
+    expect(r).toEqual({ drafted: false, skipped: "old" });
+    expect(h.runAi).not.toHaveBeenCalled();
+    const marks = h.db.log.updates.filter((u: any) => u.table === "google_reviews");
+    expect(marks).toHaveLength(1);
+    expect(marks[0].data.aiDraftAttemptedAt).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+  });
+
+  it("MPV R1 (seguimento): crítica por email com a IA desligada → nada é marcado (fica para o cron quando ligar)", async () => {
+    process.env.AI_REVIEW_AUTO_DRAFTS = "off";
+    h.selectRows = (t) => (t === "google_reviews" ? [review] : []);
+    const r = await autoDraftEmailReview(5, "2026-09-25 09:00:00", { nowMs: NOW_MS });
+    expect(r).toEqual({ drafted: false, skipped: "disabled" });
+    expect(h.runAi).not.toHaveBeenCalled();
+    expect(h.db.log.updates.filter((u: any) => u.table === "google_reviews")).toHaveLength(0);
+  });
+
+  it("MPV R1 (seguimento): cron — sem reviewDate conta a data do email (antes do createdAt)", async () => {
+    const { reviewAutoDraftEligible } = await import("../shared/reviewRules");
+    expect(reviewAutoDraftEligible({ reviewDate: null, sourceEmailDate: "2026-08-01 10:00:00", createdAt: "2026-09-25 11:00:00" }, NOW_MS)).toBe(false);
+    expect(reviewAutoDraftEligible({ reviewDate: null, sourceEmailDate: "2026-09-24 10:00:00", createdAt: "2026-09-25 11:00:00" }, NOW_MS)).toBe(true);
+    const viaEmail = { ...review, reviewDate: null, sourceEmailDate: "2026-08-01 10:00:00", createdAt: "2026-09-25 11:00:00" };
+    h.selectRows = (t) => (t === "google_reviews" ? [viaEmail] : []);
+    const r = await draftPendingReviewReplies({ limit: 3, nowMs: NOW_MS });
+    expect(r.drafted).toBe(0);
+    expect(h.runAi).not.toHaveBeenCalled();
+  });
+
+  it("MPV R1 (seguimento): crítica por email recente (ou sem data → agora) → rascunho", async () => {
+    h.selectRows = (t) => (t === "google_reviews" ? [review] : t === "complaints" ? [{ t: "delay", s: "analyzing", ref: "MP1" }] : []);
+    h.runAi.mockResolvedValue(aiResult("Olá Joana, lamentamos a espera."));
+    expect(await autoDraftEmailReview(5, "2026-09-25 09:00:00", { nowMs: NOW_MS })).toEqual({ drafted: true });
+    expect(await autoDraftEmailReview(5, null, { nowMs: NOW_MS })).toEqual({ drafted: true });
+    expect(h.runAi).toHaveBeenCalledTimes(2);
+  });
+
+  it("MPV R1 (seguimento): o leitor de email usa a regra dos 14 dias com a data do email", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "jobs/emailInboundSync.ts"), "utf8");
+    const block = src.split('if (alias === "criticas")')[1].split('return { targetModule: "review"')[0];
+    expect(block).toContain("autoDraftEmailReview(id, sourceEmailDate");
+    expect(block).toContain("sourceEmailDate = sqlUtcOrNull(ctx.receivedAt)");
+    expect(block).not.toContain("autoDraftReview(id");
+    const { sqlUtcOrNull } = await import("../shared/reviewRules");
+    expect(sqlUtcOrNull("2026-09-25T10:00:00+01:00")).toBe("2026-09-25 09:00:00");
+    expect(sqlUtcOrNull("2026-09-25 10:00:00")).toBe("2026-09-25 10:00:00");
+    expect(sqlUtcOrNull("lixo")).toBeNull();
+    expect(sqlUtcOrNull(null)).toBeNull();
+  });
 
   it("fica por aprovar (aiResponseApproved = 0), com sentimento e contexto; nunca publica", async () => {
     h.selectRows = (t) => (t === "google_reviews" ? [review] : t === "complaints" ? [{ t: "delay", s: "analyzing", ref: "MP1" }] : []);
     h.runAi.mockResolvedValue(aiResult("Olá Joana, lamentamos a espera. A equipa vai analisar."));
-    const r = await draftPendingReviewReplies({ limit: 3 });
+    const r = await draftPendingReviewReplies({ limit: 3, nowMs: NOW_MS });
     expect(r.drafted).toBe(1);
     const call = h.runAi.mock.calls[0][0];
     expect(call.feature).toBe("review_auto_draft");

@@ -196,6 +196,19 @@ const HANDLERS: H[] = [
     for (const r of db.rows("crm_merge_suggestions", (x) => x.id === Number(p[3]) && x.status === "pending")) Object.assign(r, { aiVerdict: p[0], aiConfidence: p[1], aiReason: p[2], aiAt: "agora" });
     return {};
   }],
+  // ── sugestões da madrugada (suggestionUpsertSql): a mesma semântica do MySQL, por ordem ──
+  [/^INSERT INTO crm_merge_suggestions \(clientA, clientB, score, reasons, verdict, signals, seenAt\) VALUES \(\?, \?, \?, \?, \?, \?, UTC_TIMESTAMP\(\)\)(?:, \(\?, \?, \?, \?, \?, \?, UTC_TIMESTAMP\(\)\))* ON DUPLICATE KEY UPDATE aiAt = IF\(reasons <=> VALUES\(reasons\) AND signals <=> VALUES\(signals\), aiAt, NULL\), aiVerdict = IF\(aiAt IS NULL, NULL, aiVerdict\), aiConfidence = IF\(aiAt IS NULL, NULL, aiConfidence\), aiReason = IF\(aiAt IS NULL, NULL, aiReason\), score = VALUES\(score\), reasons = VALUES\(reasons\), verdict = VALUES\(verdict\), signals = VALUES\(signals\), seenAt = VALUES\(seenAt\), status = IF\(status = 'obsolete', 'pending', status\)$/, (db, _m, p) => {
+    const eq = (x: any, y: any) => (x ?? null) === (y ?? null);
+    while (p.length) {
+      const [a, b, score, reasons, verdict, signals] = cut(p, 6);
+      const [cur] = db.rows("crm_merge_suggestions", (r) => r.clientA === Number(a) && r.clientB === Number(b));
+      if (!cur) { db.insert("crm_merge_suggestions", { clientA: Number(a), clientB: Number(b), score: Number(score), reasons, verdict, signals, seenAt: "agora", status: "pending" }); continue; }
+      cur.aiAt = eq(cur.reasons, reasons) && eq(cur.signals, signals) ? cur.aiAt : null;
+      if (isNull(cur.aiAt)) Object.assign(cur, { aiVerdict: null, aiConfidence: null, aiReason: null });
+      Object.assign(cur, { score: Number(score), reasons, verdict, signals, seenAt: "agora", status: cur.status === "obsolete" ? "pending" : cur.status });
+    }
+    return {};
+  }],
   // ── email de balcão → o verdadeiro (21c) ──
   [/^SELECT id, email FROM crm_client_emails WHERE clientId = \? AND generic = 1 FOR UPDATE$/, (db, _m, p) => db.rows("crm_client_emails", (r) => r.clientId === Number(p[0]) && !!r.generic).map((r) => ({ id: r.id, email: r.email }))],
   [/^UPDATE crm_client_emails SET isPrimary = 0 WHERE clientId = \?$/, (db, _m, p) => { for (const r of db.rows("crm_client_emails", (x) => x.clientId === Number(p[0]))) r.isPrimary = 0; return {}; }],

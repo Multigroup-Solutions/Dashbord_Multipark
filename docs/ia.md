@@ -81,6 +81,31 @@ A precedência é: Definições, depois env, depois o código.
 Os Gemini 3.x correm com `thinkingLevel: low`, para gastar menos tokens de
 raciocínio. A env `AI_THINKING_LEVEL` muda este valor (`off` usa o do modelo).
 
+**Raciocínio por funcionalidade** (plano MPV, F0a): em Definições → Parâmetros →
+**Raciocínio da IA por funcionalidade** (`ai.thinkingLevels`), por exemplo
+`{"mail_routing": "minimal", "assistant": "low"}`. Níveis: `minimal`, `low`,
+`medium`, `high` ou `default` (não manda o nível: fica o do modelo). Ordem:
+Definições → o ponto de chamada (`runAi({ thinkingLevel })`) → env
+`AI_THINKING_LEVEL` → `low`. Vazio = como até aqui. Só vale nos modelos que
+aceitam o nível (Gemini 3.x). O raciocínio paga-se como saída e gasta do mesmo
+teto (`maxTokens`): quem pede `scaleMaxTokensForThinking` (o Multis) sobe o teto
+ao mínimo do nível (`maxTokensFor`: low 900, medium 4 096, high 8 192); o Multis
+v1 passa assim de 700 para 900.
+
+**Function calling** (`runAi` com `tools`): todas as chamadas pedidas numa volta
+recebem resposta (acima de 4 recebem "limite de chamadas nesta ronda"). No
+máximo de voltas, ou quando o prazo deixa só a reserva (`finalReserveMs`,
+omissão 8 s), faz-se uma chamada final **sem cache e sem ferramentas** ("responde
+com o que tens"). Se a API recusar o histórico com ferramentas sem as declarar
+(400), os resultados vão resumidos em texto. Se nem assim houver texto, a pessoa
+recebe "Não consegui juntar tudo a tempo…" — nunca um erro depois de pagas as
+voltas. Teste manual contra a API real (não corre no CI):
+`pnpm tsx scripts/check-final-call.ts`.
+
+**Registo** (`ai_usage_log`, migração 0690): além do custo, `finishReason`,
+`rounds`, `variant` (`v1` no Multis de hoje) e `forcedFinal`; o portão "só
+Vertex AI na UE" do RH deixa uma linha `blocked` / `eu_only` (sem conteúdo).
+
 Os modelos da Google mudam depressa. Confirma os modelos em
 <https://ai.google.dev/gemini-api/docs/models> e na página de
 [descontinuações](https://ai.google.dev/gemini-api/docs/deprecations).
