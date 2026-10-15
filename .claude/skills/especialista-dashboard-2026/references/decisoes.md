@@ -34,11 +34,11 @@ Antes de lhe perguntar alguma coisa, vê aqui. As já tomadas **não se voltam a
 - Team leaders nas listas = só quem tem permissões de TL.
 - Despesas: pagar/dar como paga só admin e super admin; centros de custo Multipark, Lisboa, Porto, Faro e Marketplace; escolher funcionário só TL para cima; categorias com acentos certos (inclui sinistros).
 - Centro de custos é obrigatório para todos (mesmo admin); sem ele só se vê o próprio. Valores globais sem cidade (faturas, avenças) numa consulta por cidade: "Indisponível", nunca 0 nem atribuídos à cidade; cidades fora do alcance não aparecem (`docs/CIDADES-E-FICHA-2026-09-15.md`).
-- Avaliação: velocidade conta acima de 120 km/h, sem tolerância (`DEFAULT_SPEED_RULE`); atraso ≥ 5 min = −5 para quem tem horário (escala do Extras-Dia ou horário fixo), máx. 1 por dia; o GPS conta no máximo 1 excesso por dia (−10).
+- Avaliação: velocidade conta acima de 120 km/h, sem tolerância, por omissão (definição `gps.speedRule`, muda-se nas Definições); atraso ≥ 5 min = −5 para quem tem horário (escala do Extras-Dia ou horário fixo), máx. 1 por dia; o GPS conta no máximo 1 excesso por dia (−10).
 
 **Ponto e férias (plano 63; PRs #392, #395, #397, #416)**
 - Modo do ponto por pessoa (horário fixo, isenção, sempre em serviço), com histórico "a partir de" e motivo interno (atrás de `PONTO_MODOS`, desligado).
-- No horário (ativo, sem interruptor): "Pôr folga" em vez de apagar; dispensar uma possível falta pede motivo e cria a ausência; possível falta no Extras-Dia de um funcionário (não extra) = 0 pontos para o bloqueio das 3 faltas, o extra continua com 1 (`extraDiaNoShowPoints`); horário só com folgas = sem horário (176 h) na folha.
+- No horário (ativo, sem interruptor): "Pôr folga" em vez de apagar; dispensar uma possível falta de horário fixo pede motivo e cria a ausência (essas faltas só existem com `RH_FALTAS_HORARIO`, desligado); possível falta no Extras-Dia de um funcionário (não extra) = 0 pontos para o bloqueio das 3 faltas, o extra continua com 1 (`extraDiaNoShowPoints`); horário só com folgas = sem horário (176 h) na folha.
 - Fins de semana por rotação, com exceções por data e folga de compensação (atrás de `FINS_DE_SEMANA`, desligado); nunca mexe no passado.
 - Férias: basta uma aprovação, recusa sempre com motivo, ninguém aprova as suas, as do super admin aprovam-se sozinhas; extras avisam "Não vou estar" sem aprovação; os leitores (folha, avaliação, faltas) só contam ausências aprovadas; mês fechado não muda (atrás de `FERIAS_MAPA`, desligado).
 
