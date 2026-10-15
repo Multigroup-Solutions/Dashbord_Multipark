@@ -60,7 +60,7 @@ export function keywordScore(question: string, text: string): number {
   return q.filter((w) => t.has(w)).length / q.length;
 }
 
-interface CandidateRow {
+export interface CandidateRow {
   id: number; docId: number; section: string | null; text: string; embedding: string | null;
   title: string; webViewLink: string | null; source: KbSource; visibilityRoles: unknown; visibilityCities: unknown; ft: number;
   ref?: string | null;
@@ -75,15 +75,24 @@ function toRow(r: any): CandidateRow {
   };
 }
 
-/** Candidatos visíveis (FULLTEXT → LIKE). */
-export async function candidateChunks(d: Db, question: string, viewer: KbViewer, opts: { excludeSources?: KbSource[]; onlySources?: KbSource[]; docIds?: number[] } = {}): Promise<{ rows: CandidateRow[]; mode: "fulltext" | "keywords" }> {
+type SourceOpts = { excludeSources?: KbSource[]; onlySources?: KbSource[]; docIds?: number[] };
+
+/** As condições de sempre sobre o documento: não apagado, sincronizado, VISÍVEL para quem pergunta, fontes. */
+function baseConds(viewer: KbViewer, opts: SourceOpts): SQL[] {
   const base: SQL[] = [sql`d.deletedAt IS NULL`, sql`d.status = 'synced'`, kbVisibilitySql(viewer)];
   if (opts.excludeSources?.length) base.push(sql`d.source NOT IN (${sql.join(opts.excludeSources.map((x) => sql`${x}`), sql`, `)})`);
   if (opts.onlySources?.length) base.push(sql`d.source IN (${sql.join(opts.onlySources.map((x) => sql`${x}`), sql`, `)})`);
   // As secções da ajuda (MPV) só entram quando pedidas (repetem o texto da ajuda por ficheiro).
   if (!opts.onlySources?.includes(KB_HELP_SECTION_SOURCE)) base.push(sql`d.source <> 'help_sec'`);
   if (opts.docIds?.length) base.push(sql`d.id IN (${sql.join(opts.docIds.map((x) => sql`${x}`), sql`, `)})`);
-  const cols = sql`c.id, c.docId, c.section, c.text, c.embedding, d.title, d.webViewLink, d.source, d.visibilityRoles, d.visibilityCities, d.driveFileId`;
+  return base;
+}
+const CANDIDATE_COLS = sql`c.id, c.docId, c.section, c.text, c.embedding, d.title, d.webViewLink, d.source, d.visibilityRoles, d.visibilityCities, d.driveFileId`;
+
+/** Candidatos visíveis (FULLTEXT → LIKE). */
+export async function candidateChunks(d: Db, question: string, viewer: KbViewer, opts: SourceOpts = {}): Promise<{ rows: CandidateRow[]; mode: "fulltext" | "keywords" }> {
+  const base = baseConds(viewer, opts);
+  const cols = CANDIDATE_COLS;
   const ftq = fulltextQuery(question);
   if (ftq) {
     try {
@@ -104,28 +113,130 @@ export async function candidateChunks(d: Db, question: string, viewer: KbViewer,
   return { rows, mode: "keywords" };
 }
 
+/**
+ * Plano MPV (F5): os trechos `ids` (os vizinhos por vetor escolhidos em
+ * memória) confirmados na BD com as MESMAS condições dos candidatos —
+ * visibilidade de quem pergunta (`kbVisibilitySql`), sincronizado, não
+ * apagado, fontes — e depois `canSeeKbDoc` em código. `ft` = 0 (não vieram do
+ * FULLTEXT). Lança se a BD falhar (quem chama fica com a lexical).
+ */
+export async function chunksByIds(d: Db, ids: readonly number[], viewer: KbViewer, opts: SourceOpts = {}): Promise<CandidateRow[]> {
+  const clean = [...new Set(ids.filter((x) => Number.isInteger(x) && x > 0))].slice(0, 100);
+  if (!clean.length) return [];
+  const base = baseConds(viewer, opts);
+  const rows = rowsOf(await d.execute(sql`SELECT /*+ MAX_EXECUTION_TIME(2000) */ ${CANDIDATE_COLS}, 0 AS ft
+    FROM kb_chunks c JOIN kb_documents d ON d.id = c.docId
+    WHERE ${sql.join(base, sql` AND `)} AND c.id IN (${sql.join(clean.map((x) => sql`${x}`), sql`, `)})
+    LIMIT ${clean.length}`)).map(toRow);
+  return rows.filter((r) => canSeeKbDoc(parseVisibility(r.visibilityRoles, r.visibilityCities), viewer));
+}
+
+/** MPV (F5): quem entra SÓ pelo vetor precisa de pelo menos isto… */
+export const VECTOR_ONLY_MIN_COSINE = 0.7;
+/** …e de não ficar mais do que isto abaixo do melhor cosseno da pergunta. */
+export const VECTOR_ONLY_BELOW_BEST = 0.08;
+/** Limiar de quem entra só pelo vetor: max(0,7; melhor − 0,08). PURA. */
+export const vectorOnlyThreshold = (best: number): number => Math.max(VECTOR_ONLY_MIN_COSINE, best - VECTOR_ONLY_BELOW_BEST);
+
+/**
+ * Regista os cossenos de quem tentou entrar só pelo vetor (aceites e
+ * rejeitados), para calibrar o limiar no piloto. SÓ números (nunca texto, ids
+ * ou títulos); no máx. 10 de cada.
+ */
+export function logVectorGate(scope: string, threshold: number, accepted: readonly number[], rejected: readonly number[]): void {
+  const fmt = (xs: readonly number[]) => `[${[...xs].sort((a, b) => b - a).slice(0, 10).map((x) => x.toFixed(3)).join(",")}]`;
+  console.info(`[knowledge] vetor ${scope === "kb" ? "kb" : "help_sec"}: limiar ${threshold.toFixed(3)} aceites ${fmt(accepted)} rejeitados ${fmt(rejected)}`);
+}
+
+/** Quantos vizinhos por vetor entram nos candidatos (plano MPV §3.4: FULLTEXT top 40 ∪ vetor top 20). */
+export const VECTOR_NEIGHBORS = 20;
+/** Prazo da parte vetorial (vetor da pergunta + memória + confirmação na BD); passado isto, fica a lexical. */
+export const VECTOR_PART_DEADLINE_MS = 3_000;
+
+/** `p` ou null se demorar mais de `ms` ou falhar (nunca lança; o que chega tarde é ignorado). */
+export async function withinMs<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, ms));
+    (timer as any)?.unref?.();
+  });
+  try {
+    return await Promise.race([p.catch(() => null), late]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Um vetor por TEXTO no pedido (plano MPV F5: a pergunta vetoriza-se UMA vez,
+ * partilhada pelo bloco da ajuda e pela base de conhecimento; um texto
+ * diferente — o do `ajuda_procurar` — tem o seu, também uma só vez). Falhas
+ * dão null (e não se repetem no mesmo pedido).
+ */
+export function onceQueryEmbed(base: QueryEmbedFn): QueryEmbedFn {
+  const memo = new Map<string, Promise<number[] | null>>();
+  return (text: string) => {
+    const key = String(text ?? "").trim().slice(0, 1000);
+    let p = memo.get(key);
+    if (!p) {
+      p = Promise.resolve().then(() => base(key)).catch(() => null);
+      memo.set(key, p);
+    }
+    return p;
+  };
+}
+
+/**
+ * O vetorizador da pergunta para o Multis do piloto: null se os vetores
+ * estiverem desligados (definição da base de conhecimento ou IA indisponível);
+ * senão o de sempre (`knowledge_embed`, sem dados pessoais), uma vez por texto.
+ */
+export async function mpvQueryEmbedder(): Promise<QueryEmbedFn | null> {
+  try {
+    const { embeddingsWanted, loadKnowledgeConfig } = await import("./sync");
+    return (await embeddingsWanted(await loadKnowledgeConfig())) ? onceQueryEmbed(defaultQueryEmbed) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Ordena os candidatos (palavras-chave, e cosseno se houver vetor da pergunta). PURA (salvo decodificar vetores). */
-export async function rankCandidates(question: string, rows: CandidateRow[], queryVector: number[] | null, topK: number): Promise<{ hits: KbHit[]; usedEmbeddings: boolean }> {
+export async function rankCandidates(question: string, rows: CandidateRow[], queryVector: number[] | null, topK: number,
+  /**
+   * MPV (F5): quem passa SÓ pelo vetor (sem passar nas palavras nem no
+   * FULLTEXT) precisa de `cos ≥ max(0,7; melhor − 0,08)` (vectorOnlyThreshold),
+   * e os cossenos aceites/rejeitados ficam no registo (só números). Omisso = como sempre (0,6).
+   */
+  opts: { strictVector?: { scope: string } } = {}): Promise<{ hits: KbHit[]; usedEmbeddings: boolean }> {
   const { cosine, decodeVector } = await import("../_core/ai/embed");
   const maxFt = Math.max(0, ...rows.map((r) => r.ft));
   let usedEmbeddings = false;
-  const scored = rows.map((r) => {
+  const cosOf = (r: CandidateRow): number | null => {
+    if (!queryVector?.length) return null;
+    const v = decodeVector(r.embedding);
+    return v && v.length === queryVector.length ? cosine(queryVector, v) : null;
+  };
+  const strict = opts.strictVector ? { cos: rows.map(cosOf) } : null;
+  const threshold = strict ? vectorOnlyThreshold(Math.max(0, ...strict.cos.map((c) => c ?? 0))) : 0.6;
+  const gate = { accepted: [] as number[], rejected: [] as number[] };
+  const scored = rows.map((r, i) => {
     const kw = keywordScore(question, `${r.title} ${r.section ?? ""} ${r.text}`);
     const ft = maxFt > 0 ? r.ft / maxFt : 0;
     const base = 0.7 * kw + 0.3 * ft;
     let score = base;
     let pass = kw >= 0.25 || ft >= 0.6;
     if (queryVector?.length) {
-      const v = decodeVector(r.embedding);
-      if (v && v.length === queryVector.length) {
+      const cos = strict ? strict.cos[i] : cosOf(r);
+      if (cos != null) {
         usedEmbeddings = true;
-        const cos = cosine(queryVector, v);
         score = 0.65 * cos + 0.35 * base;
-        pass = pass || cos >= 0.6;
+        if (!pass && strict) (cos >= threshold ? gate.accepted : gate.rejected).push(cos);
+        pass = pass || cos >= threshold;
       }
     }
     return { r, score, pass };
   }).filter((x) => x.pass).sort((a, b) => b.score - a.score);
+  if (strict && (gate.accepted.length || gate.rejected.length)) logVectorGate(opts.strictVector!.scope, threshold, gate.accepted, gate.rejected);
   const hits: KbHit[] = [];
   const perDoc = new Map<number, number>();
   for (const x of scored) {
@@ -180,6 +291,11 @@ export async function retrieveKnowledge(input: {
   d?: Db;
   /** null = sem embeddings; omisso = decide pela configuração. */
   embedQuery?: QueryEmbedFn | null;
+  /**
+   * Plano MPV (F5, só o Multis do piloto): junta aos candidatos os 20 vizinhos
+   * por vetor (memória, vectorIndex.ts), confirmados na BD. Omisso = como sempre.
+   */
+  vectorNeighbors?: boolean;
 }): Promise<KbRetrieval> {
   const empty: KbRetrieval = { hits: [], citations: [], mode: "none" };
   const question = String(input.question ?? "").trim().slice(0, 1000);
@@ -195,25 +311,38 @@ export async function retrieveKnowledge(input: {
     const { rows, mode } = await candidateChunks(d, question, input.viewer, { excludeSources: input.excludeSources, docIds: input.docIds });
     // Segunda barreira: a mesma regra em código (nunca um trecho restrito num prompt).
     const canSee = (r: CandidateRow) => canSeeKbDoc(parseVisibility(r.visibilityRoles, r.visibilityCities), input.viewer);
-    const visible = rows.filter(canSee);
+    let visible = rows.filter(canSee);
     const helpTopK = Math.max(0, Math.min(8, Math.floor(input.helpTopK ?? 0)));
     let helpRows: CandidateRow[] = [];
     if (helpTopK > 0) {
       // A ajuda falhar não estraga os manuais (fica só com as palavras-chave).
       try { helpRows = (await candidateChunks(d, question, input.viewer, { onlySources: ["help"] })).rows.filter(canSee); } catch { helpRows = []; }
     }
-    if (!visible.length && !helpRows.length) return { ...empty, mode, ...(helpTopK > 0 ? { helpHits: [] } : {}) };
-    const withVectors = [...visible, ...helpRows].some((r) => r.embedding);
-    let embedQuery = input.embedQuery;
-    if (embedQuery === undefined) {
-      const { embeddingsWanted, loadKnowledgeConfig } = await import("./sync");
-      embedQuery = withVectors && (await embeddingsWanted(await loadKnowledgeConfig())) ? defaultQueryEmbed : null;
-    }
     let qv: number[] | null = null;
-    if (embedQuery && withVectors) {
-      try { qv = await embedQuery(question); } catch { qv = null; }
+    if (input.vectorNeighbors) {
+      // Plano MPV (F5): candidatos = FULLTEXT top 40 ∪ vizinhos por vetor top 20 (memória),
+      // confirmados na BD; sem a parte vetorial em ≤ 3 s, fica a lexical (sem erro).
+      const extra = await withinMs(vectorPart(d, question, input, visible), VECTOR_PART_DEADLINE_MS);
+      if (extra) {
+        qv = extra.qv;
+        visible = [...visible, ...extra.rows];
+      }
     }
-    const main = visible.length ? await rankCandidates(question, visible, qv, Math.max(1, Math.min(8, input.topK ?? 4))) : { hits: [] as KbHit[], usedEmbeddings: false };
+    if (!visible.length && !helpRows.length) return { ...empty, mode, ...(helpTopK > 0 ? { helpHits: [] } : {}) };
+    if (!input.vectorNeighbors) {
+      const withVectors = [...visible, ...helpRows].some((r) => r.embedding);
+      let embedQuery = input.embedQuery;
+      if (embedQuery === undefined) {
+        const { embeddingsWanted, loadKnowledgeConfig } = await import("./sync");
+        embedQuery = withVectors && (await embeddingsWanted(await loadKnowledgeConfig())) ? defaultQueryEmbed : null;
+      }
+      if (embedQuery && withVectors) {
+        try { qv = await embedQuery(question); } catch { qv = null; }
+      }
+    }
+    const main = visible.length
+      ? await rankCandidates(question, visible, qv, Math.max(1, Math.min(8, input.topK ?? 4)), input.vectorNeighbors ? { strictVector: { scope: "kb" } } : {})
+      : { hits: [] as KbHit[], usedEmbeddings: false };
     const help = helpRows.length ? await rankCandidates(question, helpRows, qv, helpTopK) : { hits: [] as KbHit[], usedEmbeddings: false };
     return {
       hits: main.hits,
@@ -225,6 +354,30 @@ export async function retrieveKnowledge(input: {
     console.warn("[knowledge] recuperação falhou:", String((err as any)?.code ?? (err as any)?.name ?? "erro"));
     return { ...empty, failed: true };
   }
+}
+
+/**
+ * A parte vetorial dos manuais (MPV F5): o vetor da pergunta e os vizinhos
+ * por vetor que ainda não estão nos candidatos, confirmados na BD. null = sem
+ * vetores (desligados, sem índice, IA em baixo). Lança se a BD falhar.
+ */
+async function vectorPart(d: Db, question: string, input: { viewer: KbViewer; excludeSources?: KbSource[]; docIds?: number[]; embedQuery?: QueryEmbedFn | null },
+  have: readonly CandidateRow[]): Promise<{ qv: number[]; rows: CandidateRow[] } | null> {
+  const { getVectorIndex, nearestNeighbors } = await import("./vectorIndex");
+  const index = await getVectorIndex(d, "kb");
+  if (!index?.size && !have.some((r) => r.embedding)) return null;
+  const embed = input.embedQuery === undefined ? await mpvQueryEmbedder() : input.embedQuery;
+  if (!embed) return null;
+  const qv = await embed(question);
+  if (!qv?.length) return null;
+  if (!index?.size) return { qv, rows: [] };
+  const seen = new Set(have.map((r) => r.id));
+  const docs = input.docIds?.length ? new Set(input.docIds) : null;
+  const near = nearestNeighbors(index, qv, VECTOR_NEIGHBORS, {
+    accept: (e) => !seen.has(e.chunkId) && (!docs || docs.has(e.docId)) && (!e.visibility || canSeeKbDoc(e.visibility, input.viewer)),
+  });
+  const rows = await chunksByIds(d, near.map((n) => n.chunkId), input.viewer, { excludeSources: input.excludeSources, docIds: input.docIds });
+  return { qv, rows };
 }
 
 /** Quem pergunta, a partir do papel e do âmbito de cidade do pedido. */

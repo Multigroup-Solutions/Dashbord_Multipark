@@ -1636,6 +1636,8 @@ export const reviewAutoPublish = mysqlTable("review_auto_publish", {
 	cancelledAt: datetime({ mode: 'string' }),
 	verifiedAt: datetime({ mode: 'string' }),
 	verifyFailures: int().default(0).notNull(),
+	// 0715: marcador gravado antes de enviar (presas em «a publicar» com o nosso texto na fonte → publicadas).
+	sentAt: datetime({ mode: 'string' }),
 	alertedAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),

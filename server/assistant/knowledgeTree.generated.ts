@@ -2638,7 +2638,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "extras-dia.md#notas"
        ],
        "container": false,
-       "chars": 3490
+       "chars": 3723
       },
       {
        "id": "extras-dia.md#quem-ve-o-que",
@@ -4030,7 +4030,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Interruptor Críticas 5★: publicar a resposta sozinho (6 h depois) em Definições → Automações: desligado por omissão, e só o super admin o liga.",
        "children": [],
        "container": false,
-       "chars": 3166
+       "chars": 3447
       },
       {
        "id": "criticas.md#limpeza",
@@ -5995,7 +5995,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "No piloto, o Multis sabe em que página e em que separador estás: junta à pergunta a parte da ajuda desse separador (por exemplo, a do separador Pressão do…",
        "children": [],
        "container": false,
-       "chars": 1093
+       "chars": 1286
       },
       {
        "id": "multis.md#dados-que-o-multis-le-piloto",
@@ -6006,7 +6006,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "No piloto, o Multis lê também estes dados, sempre como tu (as tuas cidades e permissões), só para ler e sem usar IA para os ir buscar.",
        "children": [],
        "container": false,
-       "chars": 1475
+       "chars": 1753
       }
      ]
     },
