@@ -1,5 +1,7 @@
 ---
 modulo: definicoes
+grupo: Sistema
+pagina: definicoes.agendador
 titulo: Agendador (tarefas automáticas)
 rotas: /definicoes
 palavras: gps-resplit-backfill, re-dividir os últimos 31 dias, agendador, tarefas automáticas, cron, crons, cron-job.org, tick, api/cron/tick, cron_secret, automático, sincronização automática, parado, falhou, a meio, retoma, próxima corrida, github actions, recolha diária, zello, gps, services-tasks, serviços, tarefas dos serviços, cash-sweep, cash-close, ops-presence, sem pda, zello desligado, terminal-watch, ainda estás no terminal, cash-external, invoicexpress, stripe, correção de caixa, varredura da caixa, tempos de entrega, tempos de recolha, service-times, reprocessar, fila, trânsito
@@ -42,6 +44,7 @@ Pronto. Não é preciso mais nada no GitHub.
 | Terminal: "Ainda estás no terminal?" (GPS do Zello de quem está no terminal; pergunta e liberta o lugar sem resposta). Só com o interruptor "Terminal no ponto (aeroporto)" ligado; desligado não lê nada (trabalho `terminal-watch`) | de 5 em 5 min |
 | Caixa: varredura do dinheiro (lê ao vivo da BD da Multipark as reservas dos nossos parques alteradas, as que estão dentro e as que saíram nas últimas 48 h; guarda um retrato quando o dinheiro muda e abre, atualiza ou resolve os casos da **Correção de caixa**). À mão: `/api/cron/cash-sweep` (trabalho `cash-sweep`) | de 3 em 3 horas (a caixa só se confere depois); se ficar a meio continua 5 min depois; o fecho das 06:15 revê as saídas de ontem e anteontem |
 | Caixa: fecho do dia (todas as saídas de ontem e anteontem, com as mesmas regras). À mão: `/api/cron/cash-close` (trabalho `cash-close`) | diário, a partir das 06:15 |
+| Caixa: reler os dias confirmados — os dias da **Confirmação da caixa** já fechados (fechado, a aprovar ou aprovado) dos últimos 45 dias voltam a ser comparados com a Multipark; se o dinheiro de uma reserva selada mudou, se uma reserva entrou ou saiu do dia ou se as contas do dia mudaram, o dia **reabre sozinho** e é avisado (trabalho `cash-confirm-recheck`) | de hora a hora |
 | Caixa: confirmar os pagamentos das saídas de ontem e anteontem: pago online tem o pagamento Stripe na Multipark (sempre); com os interruptores ligados, também Stripe, Viva Wallet (multibanco) e InvoiceExpress. À mão: `/api/cron/cash-external` (trabalho `cash-external`) | diário, a partir das 07:00 |
 | Google Tarefas/Calendário/Contactos/Drive — sincronização completa (rede de segurança; o resto é em tempo real, ver Ajuda → Google em tempo real) | de 4 em 4 horas |
 | Google: renovar os canais de notificação (Calendário e Drive) | 1×/dia a partir das 03:40 |

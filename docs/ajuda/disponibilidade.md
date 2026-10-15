@@ -1,5 +1,7 @@
 ---
 modulo: disponibilidade
+grupo: Operações
+pagina: disponibilidade
 titulo: Disponibilidade
 rotas: /disponibilidade
 palavras: quadrados de estado, sem resposta, indisponíveis, filtros ligados, disponível em, sem mensagem nas últimas 24h, selecionados, filtrados, para quem vai, enviar email, enviar whatsapp, testar primeiro, dias livres habituais, dias habituais, habitual, esboço da escala, terças à tarde, fins de semana, dias úteis, todos os dias, tenho livre, costumo estar livre, a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade, voltei, quero trabalhar, bem-vindo de volta, inativo, liga a tua conta
@@ -8,7 +10,7 @@ palavras: quadrados de estado, sem resposta, indisponíveis, filtros ligados, di
 
 Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para escalar no Extras-Dia.
 
-**Os teus dias livres habituais** (extras, candidatos e quem volta)
+## Os teus dias livres habituais (extras, candidatos e quem volta)
 Um esboço da tua escala: não são datas, são os dias e as alturas em que **costumas** estar livre (ex.: "terças à tarde, quartas de manhã e todos os fins de semana").
 1. Abre **A minha disponibilidade**. O cartão **Os meus dias livres habituais** está no topo.
 2. Toca nas casas da grelha: um dia (Seg a Dom) × **Manhã** (até às 12h), **Tarde** (12h–19h) ou **Noite** (depois das 19h). Tocar outra vez desmarca.
@@ -19,7 +21,7 @@ Um esboço da tua escala: não são datas, são os dias e as alturas em que **co
 - É só uma **ajuda para a gestão**: não marca a disponibilidade de nenhuma semana nem te põe em nenhuma escala. A disponibilidade de cada semana continua a marcar-se por baixo, como sempre.
 - Fica registado quem mudou e o que estava antes.
 
-**Marcar a tua disponibilidade** (extras)
+## Marcar a tua disponibilidade (extras)
 1. Menu **Operações → A minha disponibilidade** (ou **Perfil → A minha disponibilidade**, ou o link que recebes por WhatsApp/email). A disponibilidade **não** se marca no Extras Dia: essa página é a escala da gestão; se a abrires, aparece "Sem acesso" com o botão **Abrir a minha disponibilidade**.
 2. A página abre na **próxima semana** (segunda a domingo, dias de Lisboa). O link do email ou do WhatsApp abre a semana desse pedido.
 3. Para cada dia marca **Manhã (03h–15h)** e/ou **Noite (15h–03h)**. Podes também indicar horas e uma nota.
@@ -36,7 +38,7 @@ Um esboço da tua escala: não são datas, são os dias e as alturas em que **co
 - Na ficha (RH), o cartão **Disponibilidade** mostra também os **dias livres habituais** (resumo, nota e quando foram atualizados). A própria pessoa e quem gere a disponibilidade dos extras (team leader e supervisor na sua cidade, front office, back office, administradores) carregam em **Mudar** / **Indicar** para os alterar; quem só vê a ficha não mexe.
 - Se a leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**.
 
-**Gestão** (backoffice e acima)
+## Gestão (backoffice e acima)
 - A mesma página mostra a matriz das disponibilidades **só dos extras** (função "extra"), por cidade. Os funcionários não aparecem aqui.
 - O ecrã tem quatro blocos, de cima para baixo:
   1. **A semana** (setas ◀ ▶ ou **Próxima semana**) e quatro quadrados: **Todos**, **Disponíveis**, **Indisponíveis** e **Sem resposta**, cada um com o número. Carregar num quadrado mostra só esse estado; carregar outra vez volta a **Todos**. Por baixo, **Disponíveis por dia**: quantos podem de manhã (☀) e à noite (☾) em cada dia.
@@ -59,7 +61,7 @@ Um esboço da tua escala: não são datas, são os dias e as alturas em que **co
 - No Extras-Dia, "Preencher com disponíveis" usa estas marcações.
 - Na matriz, um dia com horas mostra as **horas reais** (ex.: "18h–01h" de um slot do site) em vez do sol/lua. O filtro "disponível das X às Y", a proposta automática e o Extras-Dia leem as marcações da mesma forma (pelo calendário): quem marcou a madrugada de terça conta para a noite de segunda.
 
-**Métricas dos extras** (por baixo, na gestão)
+## Métricas dos extras (por baixo, na gestão)
 - O que quer dizer cada número também está no ecrã, em **O que quer dizer cada número?** (e ao passar o rato num quadrado).
 - **Responderam (próxima semana):** dos extras ativos das tuas cidades, quantos já responderam ao pedido de disponibilidade da próxima semana.
 - **Custo previsto (escala):** horas escaladas no Extras Dia no período × tarifa do nível. Os team leaders não contam (o salário já os paga). Inclui o dia de hoje e as escalas por confirmar.

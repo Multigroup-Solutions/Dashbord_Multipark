@@ -1,5 +1,7 @@
 ---
 modulo: comunicacao
+grupo: Comunicação
+pagina: comunicacao.aliases
 titulo: Email por alias (encaminhamento, Por classificar e envio)
 rotas: /definicoes, /comunicacao
 palavras: alias, aliases, encaminhamento, tabela de aliases, domínios, domínios alternativos, alias domains, workspace, multibags, multivalet, skypark, redpark, escala, driver, airparkfaro, multibacks, marca, destino, pipeline, responsável, equipa, etiqueta, por classificar, bcc, triagem, atribuir caixa, reencaminhamentos, smtp, imap, gmail api, remetente, emails de sistema, push, mail_push, pub/sub
@@ -8,7 +10,7 @@ palavras: alias, aliases, encaminhamento, tabela de aliases, domínios, domínio
 
 Todo o email passa pela **API do Gmail** — não há SMTP nem IMAP. Há duas caixas reais (**reservas@multipark.pt** e **info@multipark.pt**) e cada uma recebe muitos endereços (aliases) de todas as marcas e domínios. O dashboard separa cada email pelo alias a que foi enviado.
 
-**O Workspace real** (multipark.pt, set 2026)
+## O Workspace real (multipark.pt, set 2026)
 - Duas contas partilhadas: **reservas@multipark.pt** (aliases reclamacoes@, perdidos@, criticas@, recursos-humanos@, escala@) e **info@multipark.pt** (aliases redpark@, airpark@, skypark@, airparkfaro@, driver@). admin@, odoo@ e bags@ não têm aliases e não entram no encaminhamento.
 - **Domínios alternativos**: skypark.pt, redpark.pt, multibags.pt, multivalet.pt, multibags.app e multipark.app. Neles, **todos** os endereços de multipark.pt funcionam sozinhos — um email para reclamacoes@skypark.pt chega à conta dona de reclamacoes@multipark.pt sem configurar nada. O dashboard faz o mesmo: se o endereço não está na tabela mas o mesmo nome existe noutro domínio do Workspace, conta como esse alias (caixa, destino, responsável, cidade e etiqueta do alias); a **marca** vem do domínio para onde o email foi enviado (reclamacoes@skypark.pt → Skypark; multivalet.pt conta como Multipark). Um endereço escrito na tabela ganha sempre, e um alias posto **inativo** não volta a encaminhar por outro domínio. A lista está em Definições → Parâmetros → **Domínios alternativos do Google Workspace** (vazia = desligado).
 - airpark.pt e multidriver.pt ainda **não** estão no Workspace — emails para esses domínios não chegam.
@@ -34,7 +36,7 @@ Todos @multipark.pt (e, pelos domínios alternativos, também @skypark.pt, @redp
 - Por esta ordem: **Delivered-To → X-Original-To → To → Cc** (nos enviados, o From). Ganha o primeiro endereço que está na tabela.
 - O Delivered-To igual à própria caixa (reservas@ / info@) é ignorado — no Google Workspace é sempre o endereço principal; o alias vem no To/Cc.
 
-**Preencher a tabela** (Definições → Comunicação → **Encaminhamento por alias**; admin e super admin)
+## Preencher a tabela (Definições → Comunicação → **Encaminhamento por alias**; admin e super admin)
 1. **+ Alias** e escreve o endereço completo (qualquer domínio: reservas@skypark.pt, info@multibacks.app…).
 2. **Caixa**: onde a conversa aparece (quem a vê é a regra da caixa).
 3. **Marca** e **Cidade** (a conversa fica dessa cidade: quem só vê a sua cidade só a vê se for a dela; os avisos vão para essa cidade).
@@ -43,13 +45,13 @@ Todos @multipark.pt (e, pelos domínios alternativos, também @skypark.pt, @redp
 6. **Etiqueta** (aparece na conversa) e **Ativo**. **Guardar**.
 Um endereço só pode estar numa caixa. Um alias inativo deixa de encaminhar.
 
-**Depois do alias: a triagem da IA** (14 out 2026)
+## Depois do alias: a triagem da IA (14 out 2026)
 - O alias decide a caixa onde o email **entra**. Depois disso, nos emails recebidos de pessoas nas caixas partilhadas, a IA lê e decide pelo sentido (ver Ajuda → Comunicação): reclamações e perdidos vão para os módulos e para a caixa do caso; críticas e avisos de ocorrência para a caixa deles, lidos; o resto para a caixa do tema.
 - **reclamacoes@** e **perdidos@** criam sempre o caso (o destino deles). A IA só impede o caso quando tem a certeza de que é lixo e o interruptor **"IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@"** está ligado (desligado por omissão).
 - Envios em massa reconhecem-se pelos **cabeçalhos** (List-Unsubscribe, List-Id, Precedence, Auto-Submitted) — nunca pelas palavras. Um **Grupo Google da empresa** que distribui um alias (List-Id de um domínio nosso) não conta como envio em massa: é o cliente a escrever.
 - O assunto já **não** manda emails para o pipeline das Ocorrências (antes, "ocorrência" no assunto bastava). Os avisos da app Multipark reconhecem-se pelo formulário.
 
-**Por classificar** (Comunicação → caixa **Por classificar**, só admin e super admin)
+## Por classificar (Comunicação → caixa **Por classificar**, só admin e super admin)
 - Emails que chegaram por um endereço fora da tabela (ex.: em **Bcc**, ou um alias novo por configurar). Automáticos (notificações de reserva, emails do próprio dashboard) nunca vão para aqui.
 - Abre a conversa → **Atribuir à caixa** (opcional: um alias da tabela, e **Acrescentar este endereço à tabela** para os próximos já chegarem classificados). Se o destino criar registos, são criados nesse momento.
 

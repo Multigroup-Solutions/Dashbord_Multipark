@@ -1,11 +1,15 @@
 ---
 modulo: reservas_operacoes
+grupo: Operações
+pagina: operacoes
 titulo: Reservas do dia (entradas e saídas)
+separadores: dia=Reservas do dia
 rotas: /operacoes
 palavras: por cidade, por hora, o que entra, o que sai, marketplace, travelparking, boardingpark, parques não operados, não operado, parques que não operamos, top parking, check-in park, lista de reservas, lista do dia, entradas e saídas, movimentos do dia, entradas, saídas, recolhas, entregas, check-in, check-out, parque, parques, airpark, redpark, skypark, outros parques, parques que a operação não faz, excluir parque, firebaseBrand, voo, eta, lugar, garagem, cancelada, pendente, compra por acabar, multipark
 ---
 # Reservas do dia
 
+## Reservas do dia (o separador)
 Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **um dia**. Os dados vêm **em tempo real** da base de dados da Multipark: não se copia nada e não é preciso sincronizar.
 
 **Onde**
@@ -19,7 +23,7 @@ Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **u
 
 **Cada linha**
 - É um movimento: **Entrada** (seta para baixo, a verde) ou **Saída** (seta para cima, a laranja), com a hora. Uma reserva que entra e sai no mesmo dia aparece duas vezes.
-- Mostra o n.º da reserva, o cliente, a matrícula e o carro, o estado (Reservada, A dar entrada, Estacionada, Em movimento, A preparar saída, A entregar, Entregue, Cancelada), o voo com a hora prevista (**ETA**) quando existe, o tipo de entrega, os extras, a garagem e o lugar, e o valor (com o que falta pagar).
+- Mostra o n.º da reserva, o cliente, a matrícula e o carro, o estado da Multipark (Pendente, Reservada, A dar entrada, Estacionada, Em movimento, A preparar saída, A entregar, Entregue, Cancelada) e, por baixo, a **fase ao vivo** das que estão em curso — a mesma regra do estado ao vivo da Passagem de turno: **Em recolha (cliente a caminho)** (o cliente ligou para entregar o carro), **Na fila** (o cliente pediu o carro e ainda ninguém pegou nele), **Em entrega** (o condutor já pegou no carro: a caminho do terminal ou lá à espera do cliente) e **No terminal** (só quando o condutor carregou em "Cheguei" nesta entrega), com a etiqueta **à espera das malas** quando é deste pedido; o voo com a hora prevista (**ETA**) quando existe, o tipo de entrega, os extras, a garagem e o lugar, e o valor (com o que falta pagar).
 - Clicar numa linha abre a ficha da reserva.
 
 **Que parques aparecem**

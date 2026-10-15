@@ -1,5 +1,8 @@
 ---
 modulo: api_keys
+grupo: Sistema
+pagina: api-keys
+separadores: keys=Criar e gerir as chaves, docs=Documentação API
 titulo: API Keys (chaves para o site, o MCP e os dispositivos)
 rotas: /api-keys
 palavras: criador inativo, conta desativada, api key, api keys, chave, chaves, x-api-key, capacidades, permissões da chave, revogar, revogada, expirada, validade, mcp, claude, site, formulário, gps, zilo, rádio, gmail import, relatórios, dados pessoais, 403, 429, limite de pedidos
@@ -7,6 +10,8 @@ palavras: criador inativo, conta desativada, api key, api keys, chave, chaves, x
 # API Keys
 
 Página **API Keys** (menu Sistema, **só super admin**): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades), o MCP do Claude (relatórios) e os dispositivos (GPS, rádios). A antiga importação do Gmail foi desligada: as críticas chegam pela sincronização do Gmail.
+
+## Criar e gerir as chaves
 
 **Cada chave diz o que pode fazer** (desde out 2026). Ao criar, marca só o necessário:
 - **Formulários do site** — candidaturas "Be a Driver", disponibilidades dos extras, formulário de disponibilidades.
@@ -39,5 +44,7 @@ Sem a capacidade, o pedido recebe **403** e não faz nada.
 **Erros**: quando algo corre mal do nosso lado, quem chama recebe "Erro interno (ref …)" — o detalhe fica nos registos do servidor com essa referência (nunca SQL nem nomes de tabelas para fora).
 
 **Áudio de rádio** (`/api/external/radio-upload`): o endereço do áudio tem de ser `http(s)` e público; endereços internos são recusados.
+
+## Documentação API
 
 **Documentação API** (segundo separador): exemplos de cada rota e a capacidade que pede. Para o MCP do Claude: `mcp-server/README.md` (sem instalar nada; só o Node 18+).

@@ -1,5 +1,7 @@
 ---
 modulo: whatsapp
+grupo: Comunicação
+pagina: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
 palavras: whatsapp, movido pela ia, geral, sem cidade, cidade de cima, conversa nova, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
@@ -29,7 +31,7 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 4. **Janela de 24 h**: só podes escrever texto livre até 24 h depois da última mensagem do contacto. Com a janela fechada, usa **Enviar template**; o texto livre só volta quando o contacto responder.
 5. **Sugerir resposta com IA** põe uma sugestão na caixa de texto — revê sempre antes de enviar. A IA nunca envia.
 
-**Estado de cada mensagem enviada** (o ícone ao lado da hora; passa o rato para ver o nome)
+## Estado de cada mensagem enviada (o ícone ao lado da hora; passa o rato para ver o nome)
 - 🕓 **A enviar** → ✓ esbatido **Aceite** (a Meta aceitou o pedido, mas ainda não avisou que saiu) → ✓ **Enviado** → ✓✓ **Entregue** → ✓✓ azul **Lido**. Ou ✗ **Falhou**.
 - "Aceite" não é "Enviado": se ficar muito tempo em Aceite, a Meta ainda não confirmou que a mensagem saiu.
 

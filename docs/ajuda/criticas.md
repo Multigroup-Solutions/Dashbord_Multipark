@@ -1,6 +1,9 @@
 ---
 modulo: criticas
+grupo: Suporte
+pagina: criticas
 titulo: Críticas Google
+separadores: dashboard=Dashboard, list=Reviews
 rotas: /criticas
 palavras: lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---
@@ -15,7 +18,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - Entram **sozinhas** por estes caminhos: no topo já não há "Sincronizar Gmail" nem "Importar Review" (não faziam nada).
 - Os **avisos de avaliação que chegam a outras caixas** (info@, reservas@…) e os elogios de clientes por email **não criam** críticas aqui (já entram pelos caminhos acima). Com o interruptor **"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas"** (desligado por omissão) vão para a caixa **Críticas** da Comunicação e ficam **lidos**. Uma opinião negativa de um cliente que quer resposta é tratada como **reclamação**.
 
-**Parque, marca ou lixo** (já não há "Sem parque")
+## Parque, marca ou lixo (já não há "Sem parque")
 - Cada crítica fica no **parque** dela.
 - Sem parque, procura-se a **marca** no nome do perfil Google e, se não estiver lá, no texto da crítica. Fica no grupo **"<Marca> (marca)"**.
 - Sem parque nem marca vai para o **Lixo**: um separador à parte, no fim. Não conta nas "por responder" nem na média. Não se apaga e continua a poder ser aberta.

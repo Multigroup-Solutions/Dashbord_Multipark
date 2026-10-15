@@ -1,5 +1,7 @@
 ---
 modulo: ia
+grupo: Sistema
+pagina: definicoes.ia
 titulo: Onde é que a IA trabalha no dashboard
 rotas: /definicoes
 palavras: teto do piloto, gasto do piloto, orçamento do piloto, uso da ia por dia, leituras repetidas, custo da ia, gasto da ia, só ue bloqueada, raciocínio da ia, resumir agora, resumo desatualizado, vertex ai, vertex ai na ue, gemini na ue, rgpd, ia na ue, só corre com a ia em vertex, quem pede o resumo ia, condutor não vê a explicação, onde corre a ia, onde está a ia, o que faz a ia, ia automática, ia sozinha, resumo da ia, resumos da ia, resumo ia, rascunho ia, rascunho com ia, gerar com ia, interruptores da ia, desligar a ia, ligar a ia, dados pessoais na ia, quem vê o resumo, inteligência artificial
@@ -44,7 +46,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 11. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.
 12. **FAQs da formação** (se ligares o interruptor semanal): à segunda-feira, até 3 FAQs novas a partir da base de conhecimento, publicadas e marcadas "IA". Arquivar uma é dizer "esta não": não volta.
 
-**Começam desligadas** (só um administrador as liga):
+## Começam desligadas (só um administrador as liga)
 - ler os documentos do RH para preencher a ficha (o IBAN fica sempre como pedido ao RH, exceto para quem o pode mudar na hora);
 - ler os CV dos emails do RH;
   - estas duas mandam o ficheiro inteiro, por isso **só correm com a IA em Vertex AI na UE**. Sem isso não correm, mesmo ligadas. Em **Definições → Automações**, ao lado do interruptor, aparece "Só corre com a IA em Vertex AI na UE (hoje: …)". O sítio onde a IA está vê-se também no cartão **IA — custo do mês** ("Gemini (Vertex AI)" ou "Gemini");
