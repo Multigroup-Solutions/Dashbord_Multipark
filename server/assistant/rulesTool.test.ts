@@ -43,6 +43,7 @@ import {
   RULES_IN_FORCE_TOOL, RULES_TOOL_NAME, cityKeysOf, liveEntriesFor, liveEntryRegistry, onlyCities, readLiveValues, ruleModulesFor, runRulesInForce, withCityScope, type LiveReaders,
 } from "./rulesTool";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS, staffToolsFor, type StaffToolCtx } from "./tools";
+import { MPV_DATA_TOOL_NAMES } from "./mpvDataTools";
 import { askAssistant, staffHelpDocs, type AssistantMode } from "./service";
 
 const ROOT = resolve(__dirname, "../..");
@@ -367,8 +368,10 @@ describe("regras_em_vigor só no modo MPV (piloto)", () => {
   it("o conjunto de ferramentas: v1 sem, MPV com (o resto igual)", () => {
     expect(staffToolsFor({ pilot: false })).toBe(STAFF_TOOLS);
     expect(STAFF_TOOLS.map((t) => t.name)).not.toContain(RULES_TOOL_NAME);
-    // F3: no MPV, ajuda_abrir/ajuda_procurar no lugar do abrir_ajuda (o resto igual).
-    expect(staffToolsFor({ pilot: true }).map((t) => t.name)).toEqual(["ajuda_abrir", "ajuda_procurar", ...STAFF_TOOLS.map((t) => t.name).filter((n) => n !== "abrir_ajuda"), RULES_TOOL_NAME]);
+    // F3: no MPV, ajuda_abrir/ajuda_procurar no lugar do abrir_ajuda; F4: a avaliacao_minha no lugar da minha_avaliacao e as de dados no fim.
+    expect(staffToolsFor({ pilot: true }).map((t) => t.name)).toEqual([
+      "ajuda_abrir", "ajuda_procurar", ...STAFF_TOOLS.map((t) => t.name).filter((n) => n !== "abrir_ajuda" && n !== "minha_avaliacao"), RULES_TOOL_NAME, ...MPV_DATA_TOOL_NAMES,
+    ]);
     expect(MPV_STAFF_TOOLS).toContain(RULES_IN_FORCE_TOOL);
   });
 

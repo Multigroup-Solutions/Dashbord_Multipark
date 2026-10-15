@@ -55,6 +55,7 @@ import { KNOWLEDGE_INDEX, knowledgeTree } from "./knowledgeTree";
 import { MPV_HELP_MAX_CHARS, mpvSuggestions, mpvSystemPrompt, mpvTools, mpvTurnBudget, mpvTurnKnowledge } from "./mpv";
 import { ASSISTANT_REQUEST_MAX_MS, askAssistant, helpFileOfRef, staffHelpDocs, staffSystemPrompt, turnContext, type AssistantMode } from "./service";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS, staffToolsFor, type StaffToolCtx } from "./tools";
+import { MPV_DATA_TOOL_NAMES } from "./mpvDataTools";
 
 const KEYS = ["GEMINI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY", "AI_ENABLED", "AI_ASSISTANT", "AI_ASSISTANT_SMART", "MPV", "AI_MODEL_SMART",
   "AI_MONTHLY_BUDGET_EUR", "AI_PROVIDER", "AI_ASSISTANT_MEMORY"];
@@ -263,7 +264,8 @@ describe("sistema do MPV (bloco estável)", () => {
     expect(names.slice(0, 2)).toEqual(["ajuda_abrir", "ajuda_procurar"]);
     expect(names).not.toContain("abrir_ajuda");
     expect(STAFF_TOOLS.map((t) => t.name)).toContain("abrir_ajuda");
-    expect(names.slice(2)).toEqual([...STAFF_TOOLS.map((t) => t.name).filter((n) => n !== "abrir_ajuda"), "regras_em_vigor"]);
+    // F4: a avaliacao_minha (alarga a minha_avaliacao) e as ferramentas de dados do piloto no fim.
+    expect(names.slice(2)).toEqual([...STAFF_TOOLS.map((t) => t.name).filter((n) => n !== "abrir_ajuda" && n !== "minha_avaliacao"), "regras_em_vigor", ...MPV_DATA_TOOL_NAMES]);
     // Registadas no MESMO sítio que a F2 (tools.ts → MPV_STAFF_TOOLS / staffToolsFor).
     expect(mpvTools()).toBe(MPV_STAFF_TOOLS);
     expect(staffToolsFor({ pilot: true })).toBe(MPV_STAFF_TOOLS);
@@ -597,14 +599,18 @@ describe("perfis por página (shared/multisProfiles.ts)", () => {
     expect(checked).toBeGreaterThan(50);
     // Os casos da auditoria.
     const adm = ctxFor("super_admin");
-    expect(mpvSuggestions("/criticas", null, adm)).not.toContain("Quantas críticas estão por responder?");
-    expect(mpvSuggestions("/formacao", null, adm)).not.toContain("O que me falta para acabar a formação?");
+    // F4: as ferramentas entraram → as perguntas das Críticas e da Formação voltam (pelo `needs`), só a quem as pode usar.
+    expect(mpvSuggestions("/criticas", null, adm)).toContain("Quantas críticas estão por responder?");
+    expect(mpvSuggestions("/formacao", null, adm)).toContain("O que me falta para acabar a formação?");
+    expect(mpvSuggestions("/formacao", null, ctxFor("extra"))).toContain("O que me falta para acabar a formação?");
+    expect(mpvSuggestions("/criticas", null, ctxFor("extra")) ?? []).not.toContain("Quantas críticas estão por responder?");
     const money = "Qual foi o valor das reservas este mês?";
     expect(mpvSuggestions("/faturacao", null, { ...adm, financeAllowed: false } as StaffToolCtx)).not.toContain(money);
     expect(mpvSuggestions("/faturacao", null, { ...adm, financeAllowed: true } as StaffToolCtx)).toContain(money);
     // Sem saber as ferramentas da pessoa → só as que não precisam de nenhuma.
     expect(questionVisible({ text: "x", needs: "extras_escala" }, { role: "admin" } as any)).toBe(false);
-    expect(profileQuestions(multisProfileFor({ page: "formacao" }), { role: "admin" } as any, () => true)).not.toContain("O que me falta para acabar a formação?");
+    expect(profileQuestions(multisProfileFor({ page: "formacao" }), { role: "admin" } as any)).not.toContain("O que me falta para acabar a formação?");
+    expect(profileQuestions(multisProfileFor({ page: "formacao" }), { role: "admin" } as any, () => true)).toContain("O que me falta para acabar a formação?");
   });
 
   it("assistant.status: só no piloto as perguntas vêm do perfil (com o separador validado); o widget mostra-as como sempre", () => {

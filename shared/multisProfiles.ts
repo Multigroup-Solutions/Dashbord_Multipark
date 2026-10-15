@@ -10,8 +10,8 @@
  *    devolve-as no `assistant.status`); as que dependem de um módulo só a
  *    quem o pode ver (como as sugestões do v1, shared/assistant.ts).
  *  - As ferramentas preferidas podem citar ferramentas que ainda não existem
- *    (PLANNED_TOOLS — F4): no prompt só entram as que existem E que a
- *    pessoa pode usar. Teste: cada nome existe ou está em PLANNED_TOOLS.
+ *    (PLANNED_TOOLS; as da F4 já entraram): no prompt só entram as que existem
+ *    E que a pessoa pode usar. Teste: cada nome existe ou está em PLANNED_TOOLS.
  *
  * Resolução: página + separador → página → grupo → por omissão. PURO.
  */
@@ -46,15 +46,7 @@ export interface MultisProfile {
  * já existir — não fica lixo).
  */
 export const PLANNED_TOOLS: readonly string[] = [
-  // F4 — ferramentas novas (plano §3.7).
-  "parcerias_resumo",
-  "despesas_resumo",
-  "pressao_explicar",
-  "tempos_resumo",
-  "avaliacao_minha",
-  "criticas_por_responder",
-  "formacao_progresso",
-  "extras_dia_situacao",
+  // F4 (plano §3.7): já entraram todas (server/assistant/mpvDataTools.ts).
 ];
 
 const q = (text: string, opts: { needs?: string; module?: AssistantSuggestion["module"] } = {}): MultisQuestion => ({ text, ...opts });
@@ -171,11 +163,11 @@ export const MULTIS_PROFILE_RULES: readonly ProfileRule[] = [
     pages: ["parcerias"],
     profile: {
       key: "parcerias",
-      role: "Ajudas com as Parcerias: tipos de parceiro, modelos de cobrança (comissão, descontos, Pró e avenças) e como passar um parceiro de um tipo ou modelo para outro. Sobre um parceiro concreto, explicas onde ver os dados dele na página: ainda não tens ferramenta para os ler. Se a regra depender de uma decisão do administrador, dizes quem decide.",
+      role: "Ajudas com as Parcerias: tipos de parceiro, modelos de cobrança (comissão, descontos, Pró e avenças) e como passar um parceiro de um tipo ou modelo para outro. Sobre um parceiro concreto, usas os dados reais (parcerias_resumo): tipo, modelo de cobrança e reservas, e as taxas por marca e cidade só a quem vê os totais financeiros. Se a regra depender de uma decisão do administrador, dizes quem decide.",
       questions: [
         q("Que tipos de parceiro existem e como se cobra cada um?"),
         q("Como passo um parceiro de comissão para Pró?"),
-        q("Como funcionam os descontos por marca?"),
+        q("Quantos parceiros temos por modelo de cobrança?", { needs: "parcerias_resumo" }),
         q("Como faço o fecho do mês de um parceiro?"),
       ],
       tools: ["parcerias_resumo", "regras_em_vigor", "ajuda_abrir"],
@@ -186,7 +178,7 @@ export const MULTIS_PROFILE_RULES: readonly ProfileRule[] = [
     pages: ["formacao"],
     profile: {
       key: "formacao",
-      role: "Aqui és o tutor da formação: explicas os conteúdos passo a passo, com exemplos do dia a dia da operação, e no fim verificas se a pessoa percebeu com uma pergunta curta. Não dás as respostas dos quizzes nem dos exames: ajudas a chegar lá. Para o progresso da pessoa, indicas onde o ver (Fazer a tua formação): ainda não tens ferramenta para o ler.",
+      role: "Aqui és o tutor da formação: explicas os conteúdos passo a passo, com exemplos do dia a dia da operação, e no fim verificas se a pessoa percebeu com uma pergunta curta. Não dás as respostas dos quizzes nem dos exames: ajudas a chegar lá. Para o progresso, usas os dados reais (formacao_progresso): o que falta à pessoa e, a quem acompanha a equipa, quem está atrasado.",
       questions: [
         q("Como faço a minha formação obrigatória?"),
         q("Explica-me a recolha de um carro, passo a passo."),
@@ -202,12 +194,12 @@ export const MULTIS_PROFILE_RULES: readonly ProfileRule[] = [
       key: "avaliacao",
       role: "Tiras dúvidas sobre a avaliação: como funcionam as regras em vigor (pontos por serviço, atrasos, excessos de velocidade, reclamações) e porque é que a pessoa tem estes pontos. Explicas com os dados reais dela e as regras tal como estão em vigor, nunca de memória. Se a pessoa discordar de um ponto, explicas como abrir uma contestação.",
       questions: [
-        q("Porque é que tenho estes pontos este mês?", { needs: "minha_avaliacao" }),
+        q("Porque é que tenho estes pontos este mês?", { needs: "avaliacao_minha" }),
         q("Como contam os atrasos na avaliação?"),
         q("Como abro uma contestação?"),
         q("O que é uma mudança de lugar e porque não conta como movimento?"),
       ],
-      tools: ["minha_avaliacao", "avaliacao_minha", "regras_em_vigor", "ajuda_abrir"],
+      tools: ["avaliacao_minha", "regras_em_vigor", "ajuda_abrir"],
     },
   },
   // ─── Suporte ──────────────────────────────────────────────────────────────
@@ -233,7 +225,7 @@ export const MULTIS_PROFILE_RULES: readonly ProfileRule[] = [
       role: "Nesta página explicas os números: de onde vem cada valor (que dados, que período, que cidades) e o que o fez mudar. Nunca inventas valores: usas só os das ferramentas e o que a ajuda diz sobre cada cartão. Se um número não bater certo com o de outra página, explicas a diferença de regra (ex.: data de criação ou de check-in) em vez de adivinhar.",
       questions: [
         q("De onde vem o número de reservas deste dashboard?"),
-        q("Porque é que este valor mudou face à semana passada?"),
+        q("Porque é que este valor mudou face à semana passada?", { needs: "reservas_resumo" }),
         q("Quantos check-ins e check-outs há hoje?", { needs: "reservas_resumo" }),
         q("Qual a diferença entre reservas criadas e check-ins?"),
       ],
