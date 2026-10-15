@@ -33,7 +33,7 @@ import { helpIndex, parseHelpDoc, type HelpDoc, type HelpHit } from "../_core/ai
 import { userKey } from "../_core/ai/rateLimit";
 import { assistantSystemPrompt } from "../_core/ai/prompts/assistant";
 import { HELP_FILES } from "./helpDocs.generated";
-import { STAFF_TOOLS, type StaffToolCtx } from "./tools";
+import { staffToolsFor, type StaffToolCtx } from "./tools";
 import type { CityAccess } from "../cityAccess";
 
 /** Quantos trechos da ajuda a base devolve por pergunta (dão até 3 ficheiros). */
@@ -297,7 +297,8 @@ export async function askAssistant(
     memory,
     helpDocs: toolCtx.helpDocs,
     path: input.path,
-    tools: STAFF_TOOLS,
+    // Plano MPV (F2): no piloto também regras_em_vigor; fora dele, o de sempre.
+    tools: staffToolsFor(mode),
     toolCtx,
     knowledge: hooks.knowledge === null ? undefined : (hooks.knowledge ?? ((q) => assistantKnowledge(q, user.role, toolCtx.access))),
     onToolCall: async (name, args, cid) => {

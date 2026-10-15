@@ -16,6 +16,7 @@ import type { CityAccess } from "../cityAccess";
 import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/ai/chat/tools";
 import { excerptHelp, type HelpDoc } from "../_core/ai/chat/retrieval";
 import { lateArrivalsOf } from "../../shared/evaluationRules";
+import { RULES_IN_FORCE_TOOL } from "./rulesTool";
 
 export interface StaffUser {
   id: number;
@@ -351,3 +352,13 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     },
   },
 ];
+
+/**
+ * Plano MPV (F2): no modo MPV (piloto) o Multis tem também `regras_em_vigor`
+ * (./rulesTool.ts); fora dele, o conjunto de sempre (princípio 1: o Multis não
+ * muda para quem não está no piloto).
+ */
+export const MPV_STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [...STAFF_TOOLS, RULES_IN_FORCE_TOOL];
+export function staffToolsFor(mode: { pilot: boolean }): ChatTool<StaffToolCtx>[] {
+  return mode.pilot ? MPV_STAFF_TOOLS : STAFF_TOOLS;
+}
