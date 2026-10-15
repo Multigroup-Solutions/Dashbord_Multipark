@@ -24,6 +24,11 @@
  * ferramentas declaradas iguais para todos (+ a lista das permitidas no
  * <contexto>), `ajuda_abrir`/`ajuda_procurar` em vez do `abrir_ajuda`, e por
  * pergunta o perfil da página + as secções da ajuda (mpv.ts).
+ *
+ * Plano MPV (F5, só no piloto): as 2 secções a mais, o `ajuda_procurar` e os
+ * manuais procuram-se também pelo significado (lexical/FULLTEXT ∪ vizinhos por
+ * vetor em memória — helpSearch.ts, knowledge/vectorIndex.ts), com o vetor da
+ * pergunta calculado UMA vez no pedido; sem vetores (ou > 3 s), a lexical.
  */
 import {
   AI_ASSISTANT_DEFAULT_LIMITS, AI_ASSISTANT_SMART_DEFAULT_LIMITS, automationFlagDefault, type AiAssistantLimits,
@@ -40,7 +45,9 @@ import { userKey } from "../_core/ai/rateLimit";
 import { assistantSystemPrompt } from "../_core/ai/prompts/assistant";
 import { HELP_FILES } from "./helpDocs.generated";
 import { staffToolsFor, type StaffToolCtx } from "./tools";
-import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnBudget, mpvTurnKnowledge } from "./mpv";
+import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnBudget, mpvTurnKnowledgeAsync } from "./mpv";
+import { makeSectionSearch } from "./helpSearch";
+import { kbViewerFrom, onceQueryEmbed, type QueryEmbedFn } from "../knowledge/retrieve";
 import type { CityAccess } from "../cityAccess";
 
 /** Quantos trechos da ajuda a base devolve por pergunta (dão até 3 ficheiros). */
@@ -62,13 +69,19 @@ export function helpFileOfRef(ref: string | null | undefined): string | null {
  */
 export async function assistantKnowledge(
   question: string, role: string, access: CityAccess | undefined,
-  /** MPV: a ajuda vem da árvore (mpv.ts) → sem trechos da ajuda da base (helpTopK 0). */
-  opts: { helpTopK?: number } = {},
+  /**
+   * MPV: a ajuda vem da árvore (mpv.ts) → sem trechos da ajuda da base (helpTopK 0);
+   * F5: + os vizinhos por vetor, com o vetor da pergunta do pedido (`embedQuery`).
+   */
+  opts: { helpTopK?: number; vectorNeighbors?: boolean; embedQuery?: QueryEmbedFn | null } = {},
 ): Promise<ChatKnowledge | null> {
   const { loadKnowledgeConfig } = await import("../knowledge/sync");
   if (!(await loadKnowledgeConfig()).useInAssistant) return null;
   const { retrieveKnowledge, knowledgeBlock, kbViewerFrom } = await import("../knowledge/retrieve");
-  const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, access), topK: 4, excludeSources: ["help"], helpTopK: opts.helpTopK ?? HELP_KB_TOP_K });
+  const r = await retrieveKnowledge({
+    question, viewer: kbViewerFrom(role, access), topK: 4, excludeSources: ["help"], helpTopK: opts.helpTopK ?? HELP_KB_TOP_K,
+    ...(opts.vectorNeighbors ? { vectorNeighbors: true, embedQuery: opts.embedQuery ?? null } : {}),
+  });
   // 18d: a consulta falhou → o assistente diz que não conseguiu consultar (não
   // que os manuais não falam disso).
   if (r.failed) return { block: KB_UNAVAILABLE_BLOCK, citations: [] };
@@ -79,6 +92,12 @@ export async function assistantKnowledge(
   }
   if (!r.hits.length && !helpHits.length) return null;
   return { block: r.hits.length ? knowledgeBlock(r.hits) : "", citations: r.citations, helpHits };
+}
+
+/** O vetorizador do piloto (null se os vetores estiverem desligados). Nunca lança. */
+async function mpvQueryEmbedderLazy(): Promise<QueryEmbedFn | null> {
+  const { mpvQueryEmbedder } = await import("../knowledge/retrieve");
+  return mpvQueryEmbedder();
 }
 
 /** Aviso para o modelo quando a base de conhecimento não respondeu (18d). */
@@ -279,6 +298,8 @@ export async function askAssistant(
     memoryEnabled?: boolean;
     /** Versão desta pessoa (omisso = assistantModeFor). */
     mode?: AssistantMode;
+    /** MPV (F5): o vetorizador da pergunta (omisso = o real, se os vetores estiverem ligados; null = sem vetores). */
+    embedQuery?: QueryEmbedFn | null;
   } = {},
 ): Promise<AssistantTurnResult> {
   const startedAt = Date.now();
@@ -303,8 +324,15 @@ export async function askAssistant(
     today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn, tab: page.tab, entity: page.entity,
     ...(mpv ? { tools: mpvAllowedToolNames(toolCtx, tools) } : {}),
   });
-  const pageKnowledge = mpv ? mpvTurnKnowledge({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx }) : null;
-  const knowledgeFor = (q: string) => assistantKnowledge(q, user.role, toolCtx.access, mpv ? { helpTopK: 0 } : {});
+  // Plano MPV (F5): no piloto a ajuda e os manuais procuram-se também pelo significado. O vetor
+  // da pergunta calcula-se UMA vez no pedido (partilhado pelo bloco da ajuda, pela base de
+  // conhecimento e pela descida smart → lite); sem vetores, a lexical de sempre.
+  const rawEmbed = mpv ? (hooks.embedQuery !== undefined ? hooks.embedQuery : await mpvQueryEmbedderLazy()) : null;
+  const embedQuery = rawEmbed ? onceQueryEmbed(rawEmbed) : null;
+  const sectionSearch = mpv && embedQuery ? makeSectionSearch({ viewer: kbViewerFrom(user.role, toolCtx.access), embedQuery }) : null;
+  const turnCtx: StaffToolCtx = sectionSearch ? { ...toolCtx, sectionSearch } : toolCtx;
+  const pageKnowledge = mpv ? await mpvTurnKnowledgeAsync({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx }, sectionSearch) : null;
+  const knowledgeFor = (q: string) => assistantKnowledge(q, user.role, toolCtx.access, mpv ? { helpTopK: 0, vectorNeighbors: true, embedQuery } : {});
   const kbSource = hooks.knowledge === null ? undefined : (hooks.knowledge ?? knowledgeFor);
   // A base de conhecimento consulta-se UMA vez por pedido (a descida smart → lite reaproveita-a).
   let kbOnce: Promise<ChatKnowledge | null> | null = null;
@@ -336,7 +364,7 @@ export async function askAssistant(
     tools,
     // MPV: as mesmas ferramentas declaradas a toda a gente (uma cache por modelo, §5.4).
     ...(mpv ? { declareAllTools: true } : {}),
-    toolCtx,
+    toolCtx: turnCtx,
     knowledge,
     onToolCall: async (name, args, cid) => {
       await hooks.logToolCall?.(name, args, cid);
