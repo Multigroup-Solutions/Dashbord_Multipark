@@ -351,7 +351,8 @@ export async function runMultisEval(opts: EvalOptions, inputs: EvalInputs, deps:
     const r = await store.run(meter, () => askAssistant(
       { question: q.pergunta, path: q.pagina, tab: q.separador ?? null, entity: q.registo ?? null, newConversation: true },
       ctx,
-      { mode, knowledge: null, memoryEnabled: true, evalRun: { feature: "assistant_eval", tier: def.tier, wrapTools } },
+      // Sem vetores (F5): o eval mede a ajuda pela pesquisa lexical da árvore — reprodutível e sem embed por medir.
+      { mode, knowledge: null, memoryEnabled: true, embedQuery: null, evalRun: { feature: "assistant_eval", tier: def.tier, wrapTools } },
     )).catch((err: any) => ({ ok: false as const, reason: "error" as const, message: String(err?.message ?? err).slice(0, 200) }));
     const latencyMs = now() - t0;
     for (const m of meter.models) models.add(m);

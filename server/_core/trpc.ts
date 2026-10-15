@@ -27,6 +27,16 @@ const storageLinks = t.middleware(async (opts) => {
   const raw = await opts.getRawInput();
   const clean = canonicalStorageUrlsDeep(raw);
   const result = clean !== raw ? await opts.next({ getRawInput: async () => clean }) : await opts.next();
+  // Plano MPV F4: a pessoa mudou alguma coisa → as leituras lentas guardadas do Multis dela deixam de servir
+  // (só apaga entradas em memória; nunca parte o pedido). As mutations técnicas (a própria pergunta ao
+  // Multis, batimentos, "visto", marcar como lido…) não contam: mutationClearsSlowCalls, server/assistant/slowCallCache.ts.
+  if (opts.type === "mutation" && opts.ctx.user?.id != null) {
+    try {
+      const { forgetSlowCallsOf, mutationClearsSlowCalls } = await import("../assistant/slowCallCache");
+      // O input em bruto da chamada (ex.: training.markItem com completed:false só regista "visto").
+      if (mutationClearsSlowCalls(opts.path, clean)) forgetSlowCallsOf(opts.ctx.user.id);
+    } catch { /* só a cache */ }
+  }
   if (!result.ok) return result;
   const { makeViewerSigner } = await import("../fileRoute");
   const data = await signStorageUrlsDeep(result.data, { canSign: makeViewerSigner(opts.ctx.user as any) });

@@ -17,7 +17,7 @@ import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/a
 import { excerptHelp, type HelpDoc } from "../_core/ai/chat/retrieval";
 import { lateArrivalsOf } from "../../shared/evaluationRules";
 import { RULES_IN_FORCE_TOOL } from "./rulesTool";
-import { HELP_NAV_TOOLS } from "./helpTools";
+import { HELP_NAV_TOOLS, type SectionSearchFn } from "./helpTools";
 import { CITY_NAMES, addDays, dayArg, extrasCityArg, num, rangeArgs, resolveCityArg } from "./toolArgs";
 import { MPV_DATA_TOOLS } from "./mpvDataTools";
 
@@ -38,6 +38,13 @@ export interface StaffToolCtx {
   /** Pode ver totais financeiros (financeiro/faturação + finance.view_totals). */
   financeAllowed: boolean;
   helpDocs: HelpDoc[];
+  /**
+   * Plano MPV (F5, só no piloto): a pesquisa das secções da ajuda também pelo
+   * significado (o `ajuda_procurar` usa-a; omissa = a lexical de sempre).
+   */
+  sectionSearch?: SectionSearchFn;
+  /** Prazo das leituras lentas das ferramentas do piloto (ms; omissão SLOW_CALL_MS em ./mpvDataTools.ts). Injetável (testes). */
+  slowCallMs?: number;
 }
 
 // ─── Cidades e datas (./toolArgs.ts, partilhadas com as do piloto) ──────────

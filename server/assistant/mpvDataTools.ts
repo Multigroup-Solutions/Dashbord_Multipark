@@ -39,6 +39,9 @@ import { RULES_DOCS } from "./rulesDocs.generated";
 import { runRulesInForce } from "./rulesTool";
 import { addDays, dayArg, extrasCityArg, normCity, num, rangeArgs, resolveCityArg } from "./toolArgs";
 import type { StaffToolCtx } from "./tools";
+import { SlowCallTimeout, slowCallDefaultMs, slowRead } from "./slowCallCache";
+
+export { resetSlowCallsForTests } from "./slowCallCache";
 
 // ─── Tamanho do resultado ────────────────────────────────────────────────────
 
@@ -85,7 +88,8 @@ const objAt = (root: any, at: readonly string[]): any => at.reduce((o, k) => (o 
 export function fitToolResult(
   result: Record<string, unknown>, max = MPV_TOOL_RESULT_MAX_CHARS,
   /** `protect`: listas (pelo nome) que só se cortam quando já não há mais nada para cortar (o essencial da resposta). */
-  opts: { shown?: readonly ShownSpec[]; protect?: readonly string[] } = {},
+  /** `noteReserve`: o espaço guardado para a nota e os contadores (omissão: NOTE_RESERVE; os testes forçam o 2.º corte com 0). */
+  opts: { shown?: readonly ShownSpec[]; protect?: readonly string[]; noteReserve?: number } = {},
 ): Record<string, unknown> {
   const protect = new Set(opts.protect ?? []);
   const out = JSON.parse(JSON.stringify(result ?? {})) as { [k: string]: Json };
@@ -127,17 +131,24 @@ export function fitToolResult(
     }
     return size() <= target;
   };
-  shrink(max - NOTE_RESERVE);
-  const lists = [...cutLists].slice(0, 6).join(", ").slice(0, 100);
-  out.cortado = lists ? `${CUT_NOTE} Listas encurtadas: ${lists}.` : CUT_NOTE;
-  (opts.shown ?? []).forEach((s, i) => {
-    const o = objAt(out, s.at);
-    if (!o || !Array.isArray(o[s.list]) || originals[i] == null || o[s.list].length === originals[i]) return;
-    o[s.count] = o[s.list].length;
-    if (s.total && o[s.total] == null) o[s.total] = originals[i];
-  });
-  // Se ainda passar (raro: objetos enormes só com números), corta o que houver.
-  if (size() > max) shrink(max);
+  /** A nota (com as listas encurtadas) e os contadores, outra vez a cada corte (nunca ficam desacertados). */
+  const settle = () => {
+    const lists = [...cutLists].slice(0, 6).join(", ").slice(0, 100);
+    out.cortado = lists ? `${CUT_NOTE} Listas encurtadas: ${lists}.` : CUT_NOTE;
+    (opts.shown ?? []).forEach((s, i) => {
+      const o = objAt(out, s.at);
+      if (!o || !Array.isArray(o[s.list]) || originals[i] == null || o[s.list].length === originals[i]) return;
+      o[s.count] = o[s.list].length;
+      if (s.total && o[s.total] == null) o[s.total] = originals[i];
+    });
+  };
+  shrink(max - (opts.noteReserve ?? NOTE_RESERVE));
+  settle();
+  // Se ainda passar (a nota e os contadores não couberam na reserva), corta o que houver e volta a acertar.
+  for (let i = 0; i < 5 && size() > max; i++) {
+    if (!shrink(max) && size() > max) break;
+    settle();
+  }
   return size() <= max ? out : { cortado: CUT_NOTE };
 }
 
@@ -161,10 +172,13 @@ type Impl = (args: Record<string, unknown>, ctx: StaffToolCtx) => Promise<Record
  */
 function dataTool(def: Omit<ChatTool<StaffToolCtx>, "run" | "selfRedacts" | "pii"> & {
   pii: ToolPiiFields; impl: Impl; textMax?: Readonly<Record<string, number>>; shown?: readonly ShownSpec[]; protect?: readonly string[];
+  /** Usa leituras lentas (slowCall): a descrição diz ao modelo como ler o «lidoAs». */
+  slow?: boolean;
 }): ChatTool<StaffToolCtx> {
-  const { impl, textMax, shown, protect, ...tool } = def;
+  const { impl, textMax, shown, protect, slow, ...tool } = def;
   return {
     ...tool,
+    description: slow ? `${tool.description} ${CACHE_HINT}` : tool.description,
     selfRedacts: true,
     async run(args, ctx, extra) {
       const raw = await impl(args, ctx);
@@ -178,20 +192,88 @@ function dataTool(def: Omit<ChatTool<StaffToolCtx>, "run" | "selfRedacts" | "pii
 
 export const SLOW_CALL_MS = 12_000;
 export const SLOW_CALL_MESSAGE = "Demorou demasiado a ler estes dados: tenta um período mais curto (ou uma só cidade).";
-let slowMs = SLOW_CALL_MS;
-/** Só para os testes. */
-export function setSlowCallMsForTests(ms: number | null): void { slowMs = ms ?? SLOW_CALL_MS; }
+/** O que se diz ao modelo nas ferramentas com leituras lentas (os dados podem vir de uma leitura anterior). */
+export const CACHE_HINT = "Se o resultado trouxer «lidoAs», os dados são de uma leitura feita a essa hora (Lisboa): diz isso à pessoa.";
 
-/** Um procedimento lento com prazo: passado ele → ToolUserError (o modelo explica; não gasta voltas). */
-async function slowCall(ctx: StaffToolCtx, path: string, input?: unknown): Promise<any> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Chave da leitura: a PESSOA (dois utilizadores com as mesmas permissões e
+ * cidades nunca partilham), o papel, os acessos, se vê os totais financeiros,
+ * as cidades do pedido, o procedimento e os parâmetros.
+ */
+function slowCallKey(ctx: StaffToolCtx, path: string, input: unknown): string {
+  const a = ctx.access;
+  const cities = !a ? "-" : a.all ? "*" : JSON.stringify([a.cityIds ?? [], a.projectIds ?? [], a.cityNames ?? a.cityName ?? null, !!a.missingCostCenter]);
+  return [ctx.user.id, ctx.user.role, JSON.stringify(ctx.user.accessOverrides ?? null), ctx.financeAllowed ? "fin" : "-", cities, path, JSON.stringify(input ?? null)].join("|");
+}
+
+// ─── Projeções: só o que as ferramentas usam (é isso que se partilha e se guarda) ─
+
+const pick = <T extends object>(o: any, keys: readonly (keyof T | string)[]): any =>
+  o && typeof o === "object" ? Object.fromEntries(keys.filter((k) => (o as any)[k as string] !== undefined).map((k) => [k, (o as any)[k as string]])) : o;
+
+const projectGrid = (g: any) => (g ? pick(g, ["cells", "hidden", "coverage", "deliveries", "pickups", "queue"]) : g);
+
+export const SLOW_PROJECTIONS: Record<string, (raw: any) => unknown> = {
+  "partnerships.live": (r) => (!r?.available ? pick(r, ["available", "reason"]) : {
+    available: true, canSeeTotals: r.canSeeTotals === true, periods: pick(r.periods, ["thisMonth", "from12"]),
+    partners: ((r.partners ?? []) as any[]).map((p) => ({
+      name: p.name, type: p.type, active: p.active,
+      parks: ((p.parks ?? []) as any[]).map((k) => pick(k, ["city", "brand", "feeType", "feePct", "feeFixed"])),
+      thisMonth: pick(p.thisMonth, ["bookings", "value", "ours"]), last12: pick(p.last12, ["bookings"]),
+      record: p.record ? { partnerType: p.record.partnerType ?? null } : null,
+    })),
+  }),
+  "extrasDia.pressure": (v) => (!v?.available ? pick(v, ["available"]) : {
+    available: true, windowStart: v.windowStart, windowEnd: v.windowEnd, windowDays: v.windowDays,
+    cities: Object.fromEntries(Object.entries(v.cities ?? {}).map(([k, c]: [string, any]) => [k, pick(c, ["percentile", "useMeasured"])])),
+    slots: v.slots ?? [],
+    times: v.times ? {
+      ...pick(v.times, ["available", "from", "to", "truncated", "targetMinutes"]),
+      groups: Object.fromEntries(Object.entries(v.times.groups ?? {}).map(([k, g]) => [k, projectGrid(g)])),
+    } : null,
+  }),
+  "multipark.weekActivity": (r) => ({ weekStart: r?.weekStart ?? null, times: r?.times ? { ...pick(r.times, ["available", "targetMinutes", "truncated"]), total: projectGrid(r.times.total) } : null }),
+  "evaluation.mine": (r) => ({
+    // Sem o nome nem a ficha: só se precisa de saber que há ficha.
+    employee: r?.employee ? true : null,
+    totals: r?.totals ? pick(r.totals, ["days", "metrics", "score", "perHour"]) : null,
+    days: ((r?.days ?? []) as any[]).map((d) => ({ day: d.day, score: d.score ? pick(d.score, ["totalPoints", "negativePoints", "lines"]) : null })),
+    disputes: ((r?.disputes ?? []) as any[]).map((d) => ({ status: d.status })),
+  }),
+  "reviews.list": (rows) => ((Array.isArray(rows) ? rows : []) as any[]).map((x) => pick(x, [
+    "id", "projectId", "rating", "status", "respondedAt", "complaintId", "notAReview", "duplicateOf", "reviewDate", "createdAt",
+    "reviewerName", "reviewText", "locationTitle", "aiResponse",
+  ])),
+  "extrasDia.staffing": (s) => (s ? {
+    hours: ((s.hours ?? []) as any[]).map((h) => pick(h, ["hour", "needed", "scheduled"])),
+    gaps: ((s.gaps ?? []) as any[]).map((g) => ({ fromHour: g.fromHour, toHour: g.toHour, missing: g.missing, available: ((g.available ?? []) as any[]).map((p) => ({ name: p.name })) })),
+    people: ((s.people ?? []) as any[]).map((p) => pick(p, ["name", "hours"])),
+    incomplete: s.incomplete ?? null,
+  } : s),
+};
+
+/** "lido às HH:MM" (Lisboa) de uma leitura vinda da cache. PURA. */
+export function readAtLabel(ms: number): string {
+  return new Intl.DateTimeFormat("pt-PT", { timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ms));
+}
+/** O carimbo do resultado: a hora da leitura mais antiga que veio da cache (nada se tudo foi lido agora). PURA. */
+export function cacheStamp(...cachedAt: Array<number | null | undefined>): Record<string, string> {
+  const ts = cachedAt.filter((x): x is number => typeof x === "number");
+  return ts.length ? { lidoAs: `${readAtLabel(Math.min(...ts))} (Lisboa) — leitura anterior, guardada porque demorou` } : {};
+}
+
+/**
+ * Um procedimento lento com prazo (`ctx.slowCallMs`, injetável; omissão
+ * SLOW_CALL_MS): passado ele → ToolUserError (o modelo explica; não gasta
+ * voltas). Single-flight, cache dos atrasados e limpeza: ./slowCallCache.ts.
+ */
+async function slowCall(ctx: StaffToolCtx, path: string, input?: unknown): Promise<{ data: any; cachedAt: number | null }> {
+  const project = SLOW_PROJECTIONS[path] ?? ((x: unknown) => x);
   try {
-    return await Promise.race([
-      ctx.call(path, input),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new ToolUserError(SLOW_CALL_MESSAGE)), slowMs); }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
+    return await slowRead({ key: slowCallKey(ctx, path, input), userId: ctx.user.id, ms: ctx.slowCallMs ?? slowCallDefaultMs(SLOW_CALL_MS), read: () => ctx.call(path, input), project });
+  } catch (err) {
+    if (err instanceof SlowCallTimeout) throw new ToolUserError(SLOW_CALL_MESSAGE);
+    throw err;
   }
 }
 
@@ -266,7 +348,7 @@ const PARTNERS_SHOWN = 12;
 
 async function parceriasResumo(args: Record<string, unknown>, ctx: StaffToolCtx): Promise<Record<string, unknown>> {
   const city = resolveCityArg(ctx.access, args.cidade);
-  const r = await slowCall(ctx, "partnerships.live");
+  const { data: r, cachedAt } = await slowCall(ctx, "partnerships.live");
   if (!r?.available) return { indisponivel: `Não foi possível ler as parcerias da Multipark${r?.reason ? ` (${r.reason})` : ""}.` };
   // Os euros e as taxas só saem quando o servidor diz que a pessoa vê os totais (e, por segurança, tapam-se também aqui).
   const money = r.canSeeTotals === true;
@@ -289,7 +371,8 @@ async function parceriasResumo(args: Record<string, unknown>, ctx: StaffToolCtx)
         }
       }
       return {
-        nome: String(p.name ?? "").slice(0, 80),
+        // Inteiro: a redação faz-se primeiro e só depois se corta (textMax).
+        nome: String(p.name ?? ""),
         tipoMultipark: LIVE_TYPE_LABEL[p.type] ?? p.type ?? null,
         tipo: t ? t.label : null,
         modeloDeCobranca: t ? CHARGE_MODEL_LABEL[t.chargeModel] ?? t.chargeModel : null,
@@ -311,6 +394,7 @@ async function parceriasResumo(args: Record<string, unknown>, ctx: StaffToolCtx)
     });
   const models = rows.map((x) => x.modeloDeCobranca ?? "sem tipo no nosso registo");
   return {
+    ...cacheStamp(cachedAt),
     cidade: city?.name ?? "todas as tuas cidades",
     periodo: r.periods ? { esteMes: r.periods.thisMonth ?? null, desde12Meses: r.periods.from12 ?? null } : null,
     totaisVisiveis: money,
@@ -385,10 +469,10 @@ async function pressaoExplicar(args: Record<string, unknown>, ctx: StaffToolCtx)
   const city = extrasCityArg(ctx.access, args.cidade);
   const weekday = weekdayArg(args.dia) ?? isoWeekday(ctx.today);
   const hour = hourArg(args.hora);
-  const view = await slowCall(ctx, "extrasDia.pressure");
+  const { data: view, cachedAt } = await slowCall(ctx, "extrasDia.pressure");
   const key = extraCityGroupKey(city.id);
   const cityConf = view?.cities?.[key];
-  if (!view?.available || !cityConf) return { cidade: city.name, indisponivel: "Ainda não há cálculo da Pressão para esta cidade (o trabalho corre de noite)." };
+  if (!view?.available || !cityConf) return { ...cacheStamp(cachedAt), cidade: city.name, indisponivel: "Ainda não há cálculo da Pressão para esta cidade (o trabalho corre de noite)." };
   const pct = (cityConf.percentile ?? 75) as CyclePercentile;
   const slots = ((view.slots ?? []) as PressureSlot[]).filter((s) => s.group === key);
   const queue = view.times?.groups?.[key]?.queue ?? null;
@@ -410,6 +494,7 @@ async function pressaoExplicar(args: Record<string, unknown>, ctx: StaffToolCtx)
   };
   const ofDay = slots.filter((s) => s.weekday === weekday).sort((a, b) => a.hour - b.hour);
   const base = {
+    ...cacheStamp(cachedAt),
     cidade: city.name,
     janela: { de: view.windowStart ?? null, ate: view.windowEnd ?? null, dias: num(view.windowDays) || PRESSURE_WINDOW_DAYS },
     percentilDaCidade: `p${pct}`,
@@ -486,23 +571,24 @@ async function temposResumo(args: Record<string, unknown>, ctx: StaffToolCtx): P
   if (week || !modes.pressure) {
     // Semana (Atividade diária): o acesso do ecrã da Semana.
     if (!modes.week) throw new ToolUserError(week ? "Sem acesso à Atividade diária (Semana). Sem a semana, uso a janela da Pressão." : "Sem acesso aos tempos.");
-    const r = await slowCall(ctx, "multipark.weekActivity", { city: city.id, weekStart: week ?? ctx.today });
+    const { data: r, cachedAt } = await slowCall(ctx, "multipark.weekActivity", { city: city.id, weekStart: week ?? ctx.today });
     const t = r?.times;
-    if (!t?.available) return { cidade: city.name, semana: r?.weekStart ?? week, indisponivel: "Sem tempos calculados para esta semana." };
-    return { cidade: city.name, fonte: "Atividade diária → Semana", semana: r?.weekStart ?? week, meta: t.targetMinutes ?? null, ...summarizeTimesGrid(t.total), ...(t.truncated ? { incompleto: true } : {}), nota };
+    if (!t?.available) return { ...cacheStamp(cachedAt), cidade: city.name, semana: r?.weekStart ?? week, indisponivel: "Sem tempos calculados para esta semana." };
+    return { ...cacheStamp(cachedAt), cidade: city.name, fonte: "Atividade diária → Semana", semana: r?.weekStart ?? week, meta: t.targetMinutes ?? null, ...summarizeTimesGrid(t.total), ...(t.truncated ? { incompleto: true } : {}), nota };
   }
   // Janela da Pressão (Extras Dia): o acesso do ecrã da Pressão.
   const weekday = weekdayArg(args.dia);
   const hour = hourArg(args.hora);
-  const view = await slowCall(ctx, "extrasDia.pressure");
+  const { data: view, cachedAt } = await slowCall(ctx, "extrasDia.pressure");
   const t = view?.times;
   const grid = t?.groups?.[extraCityGroupKey(city.id)];
-  if (!t?.available || !grid) return { cidade: city.name, indisponivel: "Sem tempos calculados na janela da Pressão para esta cidade." };
+  if (!t?.available || !grid) return { ...cacheStamp(cachedAt), cidade: city.name, indisponivel: "Sem tempos calculados na janela da Pressão para esta cidade." };
   const filter = weekday == null && hour == null ? undefined : (k: string) => {
     const [d, h] = k.split(":").map(Number);
     return (weekday == null || d === weekday) && (hour == null || h === hour);
   };
   return {
+    ...cacheStamp(cachedAt),
     cidade: city.name, fonte: "Extras Dia → Pressão (dia da semana × hora)", periodo: { de: t.from, ate: t.to }, meta: t.targetMinutes ?? null,
     ...(weekday != null ? { diaDaSemana: WEEKDAYS[weekday] } : {}), ...(hour != null ? { hora: hourLabel(hour) } : {}),
     ...summarizeTimesGrid(grid, { cellKeys: filter }),
@@ -534,9 +620,9 @@ export function evaluationRulesFor(labels: readonly string[], budget = RULES_BUD
 
 async function avaliacaoMinha(args: Record<string, unknown>, ctx: StaffToolCtx): Promise<Record<string, unknown>> {
   const { from, to } = rangeArgs({ de: args.de, ate: args.ate ?? ctx.today }, ctx.today, { defaultFrom: addDays(ctx.today, -29), maxDays: 93 });
-  const r = await slowCall(ctx, "evaluation.mine", { from, to });
+  const { data: r, cachedAt } = await slowCall(ctx, "evaluation.mine", { from, to });
   const periodo = { de: from, ate: to };
-  if (!r?.employee || !r.totals) return { periodo, semDados: true, nota: "Sem ficha de colaborador ligada ou sem dias avaliados." };
+  if (!r?.employee || !r.totals) return { ...cacheStamp(cachedAt), periodo, semDados: true, nota: "Sem ficha de colaborador ligada ou sem dias avaliados." };
   const m = r.totals.metrics ?? {};
   const lines = ((r.totals.score?.lines ?? []) as any[]).filter((l) => num(l.count) !== 0);
   const days = ((r.days ?? []) as any[]).filter((d) => d?.score);
@@ -546,7 +632,8 @@ async function avaliacaoMinha(args: Record<string, unknown>, ctx: StaffToolCtx):
     .slice(0, 5)
     .map((d) => ({
       dia: d.day, pontos: num(d.score.totalPoints), negativos: num(d.score.negativePoints),
-      regras: ((d.score.lines ?? []) as any[]).filter((l) => num(l.subtotal) < 0).map((l) => `${String(l.label ?? "").slice(0, 60)} ×${num(l.count)}`).slice(0, 4),
+      // "regra ×n" inteiros: a redação (texto livre) faz-se primeiro e o corte depois (textMax.regrasDoDia).
+      regrasDoDia: ((d.score.lines ?? []) as any[]).filter((l) => num(l.subtotal) < 0).map((l) => `${String(l.label ?? "")} ×${num(l.count)}`).slice(0, 4),
     }));
   // As regras em vigor com as MESMAS permissões da regras_em_vigor (nunca IA).
   let valores: unknown = null;
@@ -557,6 +644,7 @@ async function avaliacaoMinha(args: Record<string, unknown>, ctx: StaffToolCtx):
     if (!(err instanceof ToolUserError)) throw err;
   }
   return {
+    ...cacheStamp(cachedAt),
     periodo, dias: num(r.totals.days),
     pontos: { total: num(r.totals.score?.totalPoints), positivos: num(r.totals.score?.positivePoints), negativos: num(r.totals.score?.negativePoints) },
     porRegra: lines.map((l) => ({ regra: l.label, n: num(l.count), pontos: num(l.subtotal) })),
@@ -583,9 +671,9 @@ async function criticasPorResponder(args: Record<string, unknown>, ctx: StaffToo
   const rating = args.estrelas == null || args.estrelas === "" ? null : Number(args.estrelas);
   if (rating != null && !(Number.isInteger(rating) && rating >= 1 && rating <= 5)) throw new ToolUserError("Estrelas inválidas (1 a 5).");
   const filter = city ? { projectId: city.projectId } : {};
-  const [stats, rows, projects] = await Promise.all([
+  const [stats, { data: rows, cachedAt }, projects] = await Promise.all([
     ctx.call("reviews.stats", filter).catch(() => null),
-    ctx.call("reviews.list", { ...filter, ...(rating ? { rating } : {}) }),
+    slowCall(ctx, "reviews.list", { ...filter, ...(rating ? { rating } : {}) }),
     // Os parques/marcas (o ecrã usa-os para pôr de lado o "lixo": críticas sem parque nem marca).
     ctx.call("projects.list").catch(() => null),
   ]);
@@ -598,6 +686,7 @@ async function criticasPorResponder(args: Record<string, unknown>, ctx: StaffToo
   const when = (x: any) => String(x.reviewDate ?? x.createdAt ?? "");
   const last = [...pending].sort((a, b) => when(b).localeCompare(when(a))).slice(0, 10);
   return {
+    ...cacheStamp(cachedAt),
     cidade: city?.name ?? "todas as tuas cidades",
     ...(rating ? { estrelas: rating } : {}),
     // UM número "por responder": o desta lista (cidade e estrelas pedidas, sem lixo, sem as que não são críticas nem as repetidas).
@@ -608,7 +697,7 @@ async function criticasPorResponder(args: Record<string, unknown>, ctx: StaffToo
     ultimas: last.map((x) => ({
       id: x.id, estrelas: num(x.rating) || null, data: when(x).slice(0, 10),
       avaliador: String(x.reviewerName ?? ""),
-      perfil: x.locationTitle ? String(x.locationTitle).slice(0, 60) : null,
+      perfil: x.locationTitle ? String(x.locationTitle) : null,
       // Texto inteiro: a redação faz-se primeiro e só depois se corta (textMax).
       texto: String(x.reviewText ?? "").replace(/\s+/g, " ").trim(),
       temRascunho: !!x.aiResponse,
@@ -640,14 +729,14 @@ async function formacaoProgresso(args: Record<string, unknown>, ctx: StaffToolCt
     const certs = (mine.certificates ?? []) as any[];
     out.minha = {
       percursos: as.slice(0, 6).map((a) => ({
-        percurso: String(a.pathName ?? "").slice(0, 80),
+        percurso: String(a.pathName ?? ""),
         estado: ASSIGN_STATUS_LABEL[a.status] ?? a.status,
         progressoPct: num(a.progress?.pct),
         obrigatorios: { feitos: num(a.progress?.requiredDone), total: num(a.progress?.requiredTotal) },
         prazo: a.dueAt ? String(a.dueAt).slice(0, 10) : null,
         diasDeAtraso: num(a.daysLate) || 0,
         bloqueiaEscala: !!a.blocksEscala,
-        emFalta: ((a.items ?? []) as any[]).filter((i) => i.required && !i.completedAt).slice(0, 5).map((i) => String(i.title ?? "").slice(0, 80)),
+        emFalta: ((a.items ?? []) as any[]).filter((i) => i.required && !i.completedAt).slice(0, 5).map((i) => String(i.title ?? "")),
       })),
       certificados: { validos: certs.filter((c) => c.state === "valid").length, aExpirar: certs.filter((c) => c.state === "expiring").length, expirados: certs.filter((c) => c.state === "expired").length },
     };
@@ -657,8 +746,8 @@ async function formacaoProgresso(args: Record<string, unknown>, ctx: StaffToolCt
     out.equipa = {
       ambito: scopeFor(ctx.user, "formacao") === "below_city" ? "a tua equipa" : city?.name ?? "todas as tuas cidades",
       totais: { atribuidas: num(dash.totals?.assigned), concluidas: num(dash.totals?.completed), emAtraso: num(dash.totals?.overdue), pct: num(dash.totals?.pct) },
-      porPercurso: ((dash.summary ?? []) as any[]).slice(0, 8).map((g) => ({ cidade: g.city ?? null, percurso: String(g.pathName ?? "").slice(0, 80), atribuidas: num(g.assigned), concluidas: num(g.completed), emAtraso: num(g.overdue), pct: num(g.pct) })),
-      maisAtrasados: ((dash.overdue ?? []) as any[]).slice(0, 8).map((o) => ({ nome: String(o.fullName ?? ""), percurso: String(o.pathName ?? "").slice(0, 80), diasDeAtraso: num(o.daysLate), cidade: o.city ?? null })),
+      porPercurso: ((dash.summary ?? []) as any[]).slice(0, 8).map((g) => ({ cidade: g.city ?? null, percurso: String(g.pathName ?? ""), atribuidas: num(g.assigned), concluidas: num(g.completed), emAtraso: num(g.overdue), pct: num(g.pct) })),
+      maisAtrasados: ((dash.overdue ?? []) as any[]).slice(0, 8).map((o) => ({ nome: String(o.fullName ?? ""), percurso: String(o.pathName ?? ""), diasDeAtraso: num(o.daysLate), cidade: o.city ?? null })),
       promocoesPendentes: ((dash.promotions ?? []) as any[]).length,
       certificadosExpirados: certs.filter((c) => c.state === "expired").length,
       certificadosAExpirar: certs.filter((c) => c.state === "expiring").length,
@@ -678,12 +767,14 @@ async function extrasDiaSituacao(args: Record<string, unknown>, ctx: StaffToolCt
   const q = { date, city: city.id };
   // Os números do ecrã: o indicador de pessoal (staffing: os disponíveis são os que a proposta pode escolher —
   // extras desta cidade, sem quem já está escalado noutra), a escala do dia e os pedidos sem resposta.
-  const [staffing, assignments, schedule, pressure] = await Promise.all([
-    ctx.call("extrasDia.staffing", q),
+  const [staffed, assignments, schedule, pressured] = await Promise.all([
+    slowCall(ctx, "extrasDia.staffing", q),
     ctx.call("extrasDia.assignments", q),
     ctx.call("extrasDia.schedule", q).catch(() => null),
     slowCall(ctx, "extrasDia.pressure").catch(() => null),
   ]);
+  const staffing = staffed.data;
+  const pressure = pressured?.data ?? null;
   const hours = ((staffing?.hours ?? []) as any[]).map((h) => ({ hour: num(h.hour), needed: num(h.needed), scheduled: num(h.scheduled) }));
   const withNeed = hours.filter((h) => h.needed > 0);
   const covered = withNeed.filter((h) => h.scheduled >= h.needed).length;
@@ -700,8 +791,9 @@ async function extrasDiaSituacao(args: Record<string, unknown>, ctx: StaffToolCt
   }
   const people = ((staffing?.people ?? []) as any[]);
   return {
+    ...cacheStamp(staffed.cachedAt, pressured?.cachedAt),
     data: date, cidade: city.name,
-    ...(staffing?.incomplete ? { previsaoIncompleta: String(staffing.incomplete).slice(0, 200) } : {}),
+    ...(staffing?.incomplete ? { previsaoIncompleta: String(staffing.incomplete) } : {}),
     cobertura: { horasComPrevisao: withNeed.length, horasCobertas: covered, pct: withNeed.length ? Math.round((covered * 100) / withNeed.length) : null, picoNecessario: Math.max(0, ...hours.map((h) => h.needed)) },
     faltas: ((staffing?.gaps ?? []) as any[]).slice(0, 8).map((g) => ({
       de: hourLabel(num(g.fromHour)), ate: hourLabel(num(g.toHour)), faltam: num(g.missing),
@@ -724,7 +816,7 @@ async function extrasDiaSituacao(args: Record<string, unknown>, ctx: StaffToolCt
     respostas: {
       // Quem respondeu "disponível" e ainda não está escalado (em nenhuma cidade) — o mesmo do indicador do ecrã.
       disponiveisPorEscalar: people.length,
-      pessoas: people.slice(0, 10).map((p) => ({ nome: String(p.name ?? ""), horas: String(p.hours ?? "").slice(0, 40) })),
+      pessoas: people.slice(0, 10).map((p) => ({ nome: String(p.name ?? ""), horas: String(p.hours ?? "") })),
       ...(people.length > 10 ? { mostradas: 10 } : {}),
       ...(schedule ? { semResposta: num(schedule.noAnswerCount) } : {}),
     },
@@ -748,8 +840,10 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     available: (ctx) => can(ctx.user, "parcerias", "view"),
     // Empresas (não pessoas); o nome passa pela redação do texto livre por segurança.
     pii: { text: ["nome"] },
+    textMax: { nome: 80 },
     shown: [{ at: [], list: "lista", count: "mostrados", total: "parceiros" }],
     protect: ["lista"],
+    slow: true,
     impl: parceriasResumo,
   }),
   dataTool({
@@ -782,6 +876,7 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     available: (ctx) => can(ctx.user, "extras_dia", "view"),
     // Só agregados (sem pessoas).
     pii: {},
+    slow: true,
     impl: pressaoExplicar,
   }),
   dataTool({
@@ -799,6 +894,7 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     // Declara-se a quem pode usar pelo menos um modo; cada modo volta a verificar o seu acesso.
     available: (ctx) => { const m = timesModes(ctx); return m.pressure || m.week; },
     pii: {},
+    slow: true,
     impl: temposResumo,
   }),
   dataTool({
@@ -812,10 +908,12 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
       },
     },
     available: (ctx) => roleRank(ctx.user.role) >= ROLE_RANK.extra,
-    // Só os dados da própria pessoa (sem nomes).
-    pii: {},
+    // Só os dados da própria pessoa (sem nomes); os nomes das regras de cada dia passam pela redação antes do corte.
+    pii: { text: ["regrasDoDia"] },
+    textMax: { regrasDoDia: 70 },
     // Os dias e os pontos por regra são o que responde a "porque tenho estes pontos": cortam-se por último.
     protect: ["diasComMaisNegativos", "porRegra"],
+    slow: true,
     impl: avaliacaoMinha,
   }),
   dataTool({
@@ -824,8 +922,9 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     parameters: { type: "object", properties: { cidade: cityParam, estrelas: { type: "integer", description: "Só as de N estrelas (1–5, opcional)." } } },
     available: (ctx) => can(ctx.user, "criticas", "view"),
     pii: { clients: ["avaliador"], text: ["texto", "perfil"] },
-    textMax: { texto: REVIEW_TEXT_MAX },
+    textMax: { texto: REVIEW_TEXT_MAX, perfil: 60 },
     protect: ["ultimas"],
+    slow: true,
     impl: criticasPorResponder,
   }),
   dataTool({
@@ -835,6 +934,7 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     available: (ctx) => can(ctx.user, "formacao", "view"),
     // Colegas atrasados: [NOME_n] (repostos); títulos de percursos e conteúdos são texto livre.
     pii: { people: ["nome"], text: ["percurso", "emFalta"] },
+    textMax: { percurso: 80, emFalta: 80 },
     impl: formacaoProgresso,
   }),
   dataTool({
@@ -846,9 +946,11 @@ export const MPV_DATA_TOOLS: ChatTool<StaffToolCtx>[] = [
     },
     available: (ctx) => can(ctx.user, "extras_dia", "view"),
     // Colaboradores: o fornecedor vê [NOME_n]; a pessoa vê o nome completo (dois "João" não se confundem).
-    pii: { people: ["nome", "nomes"] },
+    pii: { people: ["nome", "nomes"], text: ["previsaoIncompleta", "horas"] },
+    textMax: { previsaoIncompleta: 200, horas: 40 },
     shown: [{ at: ["escala"], list: "pessoas", count: "mostradas", total: "total" }, { at: ["respostas"], list: "pessoas", count: "mostradas", total: "disponiveisPorEscalar" }],
     protect: ["faltas"],
+    slow: true,
     impl: extrasDiaSituacao,
   }),
 ];

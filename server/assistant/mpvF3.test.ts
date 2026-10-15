@@ -648,7 +648,7 @@ describe("Base de conhecimento: secções com help:<ficheiro>.md#<secção>", ()
     expect(d.queries.some((q) => /^DELETE FROM kb_documents/.test(q.sql))).toBe(false);
   });
 
-  it("1.ª sincronização em partes: no máx. N secções por corrida (o resto na seguinte); sem vetores para as secções", async () => {
+  it("1.ª sincronização em partes: no máx. N secções por corrida (o resto na seguinte); os vetores das secções não entram na quota do Drive (F5: quota própria)", async () => {
     let id = 1;
     const d = createFakeDb((q) => (q.sql.startsWith("INSERT INTO kb_documents") ? [{ insertId: id++ }] : [[]]));
     const r = await syncHelpSections(d as any, HELP_FILES, { maxPerRun: 5 });
