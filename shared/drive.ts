@@ -378,7 +378,7 @@ const POSITION_PT: Record<string, string> = {
   director: "Diretor(a)", supervisor: "Supervisor(a)", team_leader: "Team Leader", backoffice: "Backoffice", frontoffice: "Frontoffice",
   senior_driver: "Condutor(a) sénior", driver: "Condutor(a)", extra: "Extra",
 };
-const CONTRACT_PT: Record<string, string> = { permanent: "Sem termo", fixed_term: "A termo certo", extra: "Extra (prestação pontual)" };
+const CONTRACT_PT: Record<string, string> = { permanent: "Sem termo", fixed_term: "A termo certo", extra: "Extra (prestação pontual)", partner_company: "Parceiro (empresa)" };
 const COMPLAINT_STATUS_PT: Record<string, string> = {
   new: "Nova", analyzing: "Em análise", waiting_client: "À espera do cliente", resolved: "Resolvida", closed: "Fechada", converted: "Convertida",
 };

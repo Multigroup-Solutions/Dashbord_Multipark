@@ -20,6 +20,7 @@ import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
 import { DOC_REJECT_REASON_MAX, DOC_TYPE_LABELS } from "../shared/employeeDocuments";
 import { NOTE_BODY_MAX, NOTE_EDIT_WINDOW_MS, NOTE_KINDS, NOTE_KIND_LABELS } from "../shared/employeeNotes";
 import { docsRequestRouter } from "./rhDocsRequestRouter";
+import { leavesRouter } from "./leavesRouter";
 
 /** 41c: ~10 MB por documento (base64 ≈ 4/3 do ficheiro). */
 const DOC_MAX_BASE64_CHARS = 14_000_000;
@@ -91,7 +92,7 @@ async function notesContext(user: { id: number; role: string }, employeeId: numb
   await assertEmployeeAccess(employeeId);
   return { viewer, ref };
 }
-import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, getLastTimeRecord, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
+import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, getLastTimeRecord, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 import { ROLE_HIERARCHY, requireRole, resolveDeactivationOrThrow } from "./routerGuards";
@@ -531,7 +532,7 @@ export const rhRouter = router({
       extraLevel: z.number().min(1).max(5).optional(),
       department: z.string().optional(),
       projectId: z.number().optional(),
-      contractType: z.enum(["permanent","fixed_term","extra"]).optional(),
+      contractType: z.enum(["permanent","fixed_term","extra","partner_company"]).optional(),
       contractStart: z.string().optional(),
       contractEnd: z.string().optional(),
       monthlySalary: z.string().optional(),
@@ -680,7 +681,7 @@ export const rhRouter = router({
       extraLevel: z.number().min(1).max(5).optional(),
       department: z.string().optional(),
       projectId: z.number().optional(),
-      contractType: z.enum(["permanent","fixed_term","extra"]).optional(),
+      contractType: z.enum(["permanent","fixed_term","extra","partner_company"]).optional(),
       contractStart: z.string().optional(),
       contractEnd: z.string().optional(),
       monthlySalary: z.string().optional(),
@@ -1837,39 +1838,8 @@ export const rhRouter = router({
       return { url, email: input.email, monthName, year: input.year };
     }),
 
-  // ── FÉRIAS / BAIXAS ────────────────────────────────────────────────────
-  leaves: router({
-    list: protectedProcedure
-      .input(z.object({ employeeId: z.number(), year: z.number().optional() }))
-      .query(async ({ ctx, input }) => {
-        // 41c: férias e baixas — o supervisor da cidade também vê
-        await assertOwnOrScopedEmployee(ctx.user, input.employeeId, "supervisor");
-        return getEmployeeLeaves(input.employeeId, input.year);
-      }),
-    create: protectedProcedure
-      .input(z.object({
-        employeeId: z.number(),
-        leaveType: z.enum(["vacation", "sick", "unpaid", "other"]),
-        fromDate: z.string(),
-        toDate: z.string(),
-        notes: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await assertCanManageEmployee(ctx.user, input.employeeId);
-        await createEmployeeLeave({ ...input, createdById: ctx.user.id });
-        await logActivity({ userId: ctx.user.id, action: "create", entity: "employee_leave", entityId: input.employeeId, details: `${input.leaveType} ${input.fromDate}→${input.toDate}` });
-        return { success: true };
-      }),
-    delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        const empId = await employeeIdOfRecord("employee_leaves", input.id);
-        if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Ausência não encontrada" });
-        await assertCanManageEmployee(ctx.user, empId);
-        await deleteEmployeeLeave(input.id);
-        return { success: true };
-      }),
-  }),
+  // ── FÉRIAS / BAIXAS (plano 63, passo 11: mapa de férias — server/leavesRouter.ts) ──
+  leaves: leavesRouter,
 
   // ── HISTÓRICO SALARIAL ─────────────────────────────────────────────────
   salaryHistory: protectedProcedure

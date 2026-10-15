@@ -37,6 +37,10 @@ import {
   SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT,
 } from "./serviceTimes";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, isIsoDay } from "./evaluationClose";
+import {
+  DEFAULT_VACATION_APPROVALS, DEFAULT_VACATION_DAYS_PER_YEAR, FERIAS_AVISOS_FLAG, FERIAS_MAPA_FLAG, HR_PEOPLE_KEY, LEAVES_VIEW_ALL_KEY,
+  VACATION_APPROVALS_KEY, VACATION_DAYS_PER_YEAR_KEY, vacationApprovalsSchema,
+} from "./leaves";
 import { operationalDayOf } from "./lisbonDay";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
@@ -981,6 +985,43 @@ export const SETTINGS = {
     defaultValue: [],
     wiring: "live",
   }),
+  // Plano 63 (passo 11): mapa de férias. Sem nomes no código: as contas escolhem-se aqui.
+  [HR_PEOPLE_KEY]: def({
+    key: HR_PEOPLE_KEY,
+    group: "pessoas",
+    label: "Férias: quem é o RH",
+    description: "Contas do RH. Veem o mapa de férias inteiro (todas as cidades, com baixas e ausências) e aprovam as férias quando a regra diz \"RH\". As férias de quem está aqui seguem a regra \"Quem está no RH\" (por omissão: o super admin). Só o super admin muda.",
+    schema: userIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  [LEAVES_VIEW_ALL_KEY]: def({
+    key: LEAVES_VIEW_ALL_KEY,
+    group: "pessoas",
+    label: "Férias: quem vê o mapa inteiro",
+    description: "Contas que veem o mapa de férias de todas as cidades, com o tipo (férias, baixa, ausência, indisponível) e as notas — além do super admin e das contas do RH. O supervisor vê a sua área e as baixas só como \"ausente\"; os colegas só veem as férias. Só o super admin muda.",
+    schema: userIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
+  [VACATION_APPROVALS_KEY]: def({
+    key: VACATION_APPROVALS_KEY,
+    group: "pessoas",
+    label: "Férias: quem aprova quem",
+    description: "Para cada posto de quem pede (team leader, front office, back office, supervisor…), quem aprova: o RH, o supervisor da cidade de quem pede, qualquer supervisor, o super admin e/ou contas escolhidas. Basta um. Há ainda a regra de quem está no RH e exceções por pessoa (ex.: o supervisor de todas as cidades → super admin), que ganham a tudo. Ninguém aprova as suas; sem ninguém, aprova o super admin. Cada pedido guarda quem o podia aprovar quando foi feito. Só o super admin muda.",
+    schema: vacationApprovalsSchema,
+    defaultValue: DEFAULT_VACATION_APPROVALS,
+    wiring: "live",
+  }),
+  [VACATION_DAYS_PER_YEAR_KEY]: def({
+    key: VACATION_DAYS_PER_YEAR_KEY,
+    group: "pessoas",
+    label: "Férias: dias úteis por ano",
+    description: "Ao marcar férias, o mapa mostra os dias úteis do pedido e o total do ano contra este número (a lei dá 22). É só um aviso: nunca bloqueia. 0 = sem aviso.",
+    schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(0, "Mínimo 0.").max(60, "Máximo 60."),
+    defaultValue: DEFAULT_VACATION_DAYS_PER_YEAR,
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -1014,6 +1055,10 @@ export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   // (quem está na lista fecha em Avaliação → Mês, pelo procedimento próprio)
   EVALUATION_CLOSED_UNTIL_KEY,
   EVALUATION_CLOSERS_KEY,
+  // Plano 63 (passo 11): quem vê as baixas e quem aprova as férias — só o super admin muda
+  HR_PEOPLE_KEY,
+  LEAVES_VIEW_ALL_KEY,
+  VACATION_APPROVALS_KEY,
 ]);
 export function settingSuperAdminOnly(key: string): boolean {
   return SUPER_ADMIN_SETTING_KEYS.has(key);
@@ -1112,6 +1157,9 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   // Jorge (14 out 2026): "porque é que os 141 não dão aviso nenhum?" — avisa gente → desligado por omissão.
   // Tarefa 62 (Q8, Jorge: "não vem: marca-se falta"): as faltas de quem tem horário fixo, como as dos extras.
   { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar. Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas, dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro) e quem mexeu em carros na Multipark. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  // Plano 63 (passo 11, Jorge 15 out 2026: "para toda a gente"). Avisa gente e mexe nos pontos → desligado por omissão.
+  { name: FERIAS_MAPA_FLAG, label: "RH: mapa de férias e pedidos", description: "Perfil → As minhas férias e RH → Mapa de férias: cada funcionário (permanente ou a termo) marca as suas férias, que ficam por aprovar até alguém da cadeia (Definições → Parâmetros → Pessoas → \"Férias: quem aprova quem\") aprovar ou recusar; as do super admin ficam aprovadas sozinhas e ninguém aprova as suas. Os extras avisam \"não vou estar\" (sem aprovação nem pagamento): quem escala no Extras-Dia vê \"indisponível (avisou a DD/MM)\" e, se o aviso veio ANTES de a pessoa ser escalada, a falta desse dia fica sem pontos (avisos depois de escalado não tiram a falta). Quem vê tudo: o super admin, o RH e \"Férias: quem vê o mapa inteiro\"; o supervisor vê a sua área, com as baixas só como \"ausente\"; os colegas só veem as férias. Mapa em PDF (só férias). Cancelar nunca apaga e um mês fechado não muda. Desligado: não aparece a ninguém e nada muda (as férias e baixas já lançadas continuam a contar como até aqui). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  { name: FERIAS_AVISOS_FLAG, label: "RH: avisos das férias", description: "Com o mapa de férias ligado: sino a quem pode aprovar quando alguém pede férias, e a quem pediu quando o pedido é aprovado, recusado (com o motivo) ou cancelado. Só na aplicação. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   { name: "GPS_SPEED_ALERTS", label: "Avisos de excesso de velocidade (GPS do Zello)", description: "Na recolha do GPS do Zello (a provisória das 23h e a final de D-2), cada excesso de velocidade (Definições → Parâmetros → Limite de velocidade) fica registado e avisa no sino o team leader e o supervisor da cidade da pessoa (\"Excesso de velocidade\"): um aviso por pessoa e recolha, com quantos excessos e a velocidade máxima (a final de D-2 só volta a avisar se trouxer excessos que a provisória não tinha; só para dias dos últimos 3; um dia antigo recolhido à mão não avisa). Também o aviso da verificação manual de velocidade (\"verificar agora\", pela API) só sai com isto ligado. Os pontos da Avaliação (−10 por dia acima do limite) contam sempre, com ou sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.

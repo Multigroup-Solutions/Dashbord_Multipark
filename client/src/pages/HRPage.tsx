@@ -63,6 +63,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { FeriasMapButton } from "@/components/ferias/FeriasBits";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { directoryInfoFor, useDirectoryLookup } from "@/hooks/useDirectoryLookup";
 import {
@@ -93,7 +94,7 @@ type Position =
   | "director" | "supervisor" | "team_leader" | "backoffice"
   | "frontoffice" | "senior_driver" | "driver" | "extra";
 
-type ContractType = "permanent" | "fixed_term" | "extra";
+type ContractType = "permanent" | "fixed_term" | "extra" | "partner_company";
 
 type DocType =
   | "id_card" | "residence_permit" | "driving_license" | "nib_proof"
@@ -115,6 +116,8 @@ const CONTRACT_LABELS: Record<ContractType, string> = {
   permanent: "Permanente",
   fixed_term: "Termo Certo",
   extra: "Extra",
+  // Plano 63 (passo 11): parceiro-empresa — fora do mapa de férias e da folha (salário só para os custos)
+  partner_company: "Parceiro (empresa)",
 };
 
 const DOC_LABELS: Record<DocType, string> = {
@@ -2891,6 +2894,7 @@ export default function HRPage() {
               <UserPlus className="w-4 h-4 mr-2" /> Novo Colaborador
             </Button>
           )}
+          <FeriasMapButton />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">
@@ -2938,7 +2942,7 @@ export default function HRPage() {
       {(() => {
         if (filterActive !== "active") return null;
         const fixosIncompletos = employees
-          .filter(({ employee: e }: any) => e.position !== "extra")
+          .filter(({ employee: e }: any) => e.position !== "extra" && e.contractType !== "partner_company")
           .map(({ employee: e }: any) => {
             const faltas: string[] = [];
             if (!e.monthlySalary || parseFloat(String(e.monthlySalary)) === 0) faltas.push("salário");

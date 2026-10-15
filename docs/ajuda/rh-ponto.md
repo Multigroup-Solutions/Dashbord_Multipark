@@ -1,8 +1,8 @@
 ---
 modulo: rh
 titulo: RH e ponto
-rotas: /rh, /rh/dashboard, /perfil
-palavras: falta horário fixo, feriados, falta num feriado, faltas de funcionários, limpeza dos pdas, conta google do pda, oferecer para guardar, início de sessão automático, gestor de palavras-passe, pda mudou de aparelho, registar pda, qr do pda, só o tl regista, a sessão termina em 10 s, estou no terminal, sair do terminal, terminal ocupado, pedir para passar, passar o terminal, ainda estou, terminal pelo perfil, candidatos, candidato, aprovar candidato, quer voltar, inativo pode voltar, inativos e desativados, pedido de ligação, possível duplicado, pedir documentos, pedir documentos em falta, documentos em falta, pedido de documentos, último pedido, template documentos, enviar documentos em falta, lembrar documentos, terminal, horas terminal, terminal no ponto, terminal até, última recolha, última entrega, terminal parcial, aeroporto, ponto no aeroporto, terminal por confirmar, confirmar terminal, desmarcar terminal, nível seguinte, conta não ligada, entra com a google como, sem conta ligada, email da ficha, contas sem ficha, entraram sem ficha, conta como utilizador, a minha ficha, carta validada, carta pendente de validação, carta < 3 anos, carta com menos de 3 anos, sem carta, validar carta, data de emissão da carta, anos de carta, validar documentos, recusar documento, documento recusado, pendente de validação, documentos por validar, substituir documento, documento validado, notas internas, nota interna, trabalhou mal, back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar, entra como, entrar com código, ainda estás no terminal, sim estou, já saí, lugar libertado, reabrir o terminal, sem resposta, gps do zello, horas que contam, horas desaparecidas, picagens noutra ficha, duas fichas, ponto de um mês, mês anterior, pago duas vezes, horas sobrepostas, inativa sem data de fim, resumo do zello na saída, último gps, troços de terminal, corrigir terminal, sobreposição, mês fechado
+rotas: /rh, /rh/dashboard, /perfil, /ferias
+palavras: mapa de férias, férias, marcar férias, pedir férias, aprovar férias, recusar férias, férias por aprovar, quem aprova as férias, não vou estar, indisponível, indisponibilidade dos extras, avisou que não está, baixa, ausência, ausência justificada, parte do dia, cancelar férias, mapa de férias em pdf, 22 dias de férias, parceiro empresa, parceiro (empresa), falta horário fixo, feriados, falta num feriado, faltas de funcionários, limpeza dos pdas, conta google do pda, oferecer para guardar, início de sessão automático, gestor de palavras-passe, pda mudou de aparelho, registar pda, qr do pda, só o tl regista, a sessão termina em 10 s, estou no terminal, sair do terminal, terminal ocupado, pedir para passar, passar o terminal, ainda estou, terminal pelo perfil, candidatos, candidato, aprovar candidato, quer voltar, inativo pode voltar, inativos e desativados, pedido de ligação, possível duplicado, pedir documentos, pedir documentos em falta, documentos em falta, pedido de documentos, último pedido, template documentos, enviar documentos em falta, lembrar documentos, terminal, horas terminal, terminal no ponto, terminal até, última recolha, última entrega, terminal parcial, aeroporto, ponto no aeroporto, terminal por confirmar, confirmar terminal, desmarcar terminal, nível seguinte, conta não ligada, entra com a google como, sem conta ligada, email da ficha, contas sem ficha, entraram sem ficha, conta como utilizador, a minha ficha, carta validada, carta pendente de validação, carta < 3 anos, carta com menos de 3 anos, sem carta, validar carta, data de emissão da carta, anos de carta, validar documentos, recusar documento, documento recusado, pendente de validação, documentos por validar, substituir documento, documento validado, notas internas, nota interna, trabalhou mal, back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar, entra como, entrar com código, ainda estás no terminal, sim estou, já saí, lugar libertado, reabrir o terminal, sem resposta, gps do zello, horas que contam, horas desaparecidas, picagens noutra ficha, duas fichas, ponto de um mês, mês anterior, pago duas vezes, horas sobrepostas, inativa sem data de fim, resumo do zello na saída, último gps, troços de terminal, corrigir terminal, sobreposição, mês fechado
 ---
 # RH e ponto
 
@@ -188,6 +188,65 @@ palavras: falta horário fixo, feriados, falta num feriado, faltas de funcionár
   - **Rejeitar** tira o turno da folha.
 - Ordenados, recibos e folha para o contabilista só para admin.
 - **Folha para o contabilista** gera o PDF da folha do mês, abre-o num separador novo e avisa o RH com o link. O envio ao contabilista faz-se à mão (descarrega o PDF e envia-o).
+
+## Mapa de férias (férias, baixas e ausências)
+
+Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Definições → Automações; **desligado** por omissão, só o super admin o liga). Abre-se em **RH → Mapa de férias** (botão no topo) ou em **Perfil → As minhas férias**. Desligado, não aparece a ninguém e nada muda: as férias e as baixas já lançadas continuam a contar como até aqui.
+
+**Marcar férias** (funcionários permanentes e a termo; separador **As minhas férias**)
+1. Escolhe **De** e **Até** (só de hoje em diante) e, se quiseres, uma nota.
+2. Vês os **dias úteis** do pedido e o total do ano contra os **22 dias** (Definições → "Férias: dias úteis por ano"). Passar dos 22 é só um aviso: nunca bloqueia.
+3. Por baixo diz quem aprova. Carrega em **Pedir férias**: fica **Por aprovar** até alguém da tua cadeia aprovar ou recusar. Basta uma pessoa.
+- Ninguém aprova as suas. As do super admin ficam aprovadas logo.
+- Enquanto está por aprovar, cancelas tu (**Cancelar**). Depois de aprovadas, só as cancela quem aprova (pede-lhe).
+- Uma recusa vem sempre com o motivo, que vês na lista.
+
+**Extras: "Não vou estar"** (separador **Quando não vou estar**)
+- Marcas de que dia a que dia não podes vir. Entra logo: não precisa de aprovação e não é pago.
+- Quem escala no **Extras-Dia** vê "indisponível (avisou a DD/MM)" ao escolher-te e na tua linha da escala.
+- **Avisa antes de seres escalado.** Se te escalarem na mesma e faltares, a falta desse dia fica **sem pontos**. Se avisares **depois** de estares escalado, é uma falta normal.
+- Podes cancelar o teu aviso.
+
+**Por aprovar** (quem aprova)
+- Aparecem os pedidos em que estás na lista de quem pode aprovar (a lista fica guardada no pedido quando é feito). O super admin vê todos.
+- Cada pedido mostra a pessoa, os dias úteis, o total do ano e quem mais da mesma cidade está fora nesses dias.
+- **Aprovar**, ou **Recusar** com o motivo (obrigatório).
+- Com o interruptor **"RH: avisos das férias"** ligado (desligado por omissão), quem aprova recebe o sino quando alguém pede, e quem pediu recebe o sino quando é aprovado, recusado ou cancelado.
+
+**Quem aprova quem** (Definições → Parâmetros → Pessoas → **"Férias: quem aprova quem"**; só o super admin muda). Por omissão:
+- team leader → RH ou supervisor da cidade;
+- front office → supervisor da cidade ou RH;
+- back office → RH;
+- supervisor → super admin ou as contas escolhidas;
+- diretor → super admin;
+- condutores com contrato → supervisor da cidade ou RH;
+- quem está no RH → super admin;
+- exceções por pessoa (ex.: o supervisor de todas as cidades → super admin) ganham a tudo;
+- sem ninguém configurado → super admin.
+"O RH" são as contas de **"Férias: quem é o RH"**.
+
+**Quem vê o quê** (o filtro é feito no servidor, não só no ecrã)
+- O super admin, o RH e as contas de **"Férias: quem vê o mapa inteiro"**: tudo, de todas as cidades, com o tipo (férias, baixa, ausência, indisponível) e as notas.
+- O supervisor: a sua área (férias, pedidos e os avisos dos extras). As baixas e ausências aparecem só como **"ausente"**, sem o motivo.
+- Os colegas: as suas (tudo) e só as **férias** dos colegas da sua cidade. **Nunca veem as baixas.**
+- Os extras: só os seus avisos.
+
+**O mapa** (separador **Mapa**)
+- Um mês de cada vez (setas), uma linha por pessoa. Azul cheio = férias aprovadas; azul claro com "?" = pedidas; "½" = parte do dia; fins de semana e feriados (F) a cinzento. Quem vê tudo escolhe a cidade.
+- Carrega num quadrado para ver o detalhe e, se puderes, aprovar, recusar ou cancelar. Por baixo do mapa há a lista do mês (mais fácil no telemóvel).
+- **Mapa (PDF)** (RH e supervisores): o mapa do ano para afixar, só com as **férias aprovadas** (nunca baixas). A lei pede-o feito até 15 de abril e afixado de 15 de abril a 31 de outubro.
+
+**Lançar ausência** (quem gere a ficha: RH, supervisor da cidade, administradores)
+- Pessoa, tipo (férias, baixa, não remunerada, ausência justificada; nos extras também "indisponível"), datas e nota. Entra **aprovada**, como sempre.
+- **Só parte do dia**: na ausência justificada (consulta, funeral…), um dia, de 0,25 h a 12 h. Nesse dia o atraso não conta; se a pessoa não vier de todo, continua a dar possível falta.
+- As tuas próprias férias não se lançam aqui: pedem-se (ninguém aprova as suas).
+
+**Regras que valem sempre**
+- **Nada se apaga.** Cancelar deixa a ausência no histórico, como "Cancelado".
+- Um **mês fechado** (ordenado aprovado ou pago) não muda: não se pede, aprova, cancela nem lança nada nesse mês.
+- Só as ausências **aprovadas** contam na folha, na Avaliação (atraso) e nas possíveis faltas. As pedidas, as recusadas e as canceladas não contam. O "indisponível" dos extras só conta no Extras-Dia.
+- As datas são validadas (AAAA-MM-DD, início antes do fim, no máximo um ano).
+- **Parceiro (empresa)**: tipo de contrato para os parceiros-empresa. Ficam fora do mapa de férias e da folha de ordenados; o salário fica só como referência para os custos.
 
 ## Dashboard RH: possíveis faltas e detalhe por colaborador
 

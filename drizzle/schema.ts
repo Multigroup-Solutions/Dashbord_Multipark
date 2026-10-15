@@ -905,7 +905,8 @@ export const employees = mysqlTable("employees", {
 	careerLevel: varchar({ length: 32 }), // nível de carreira aprovado (migration 0090)
 	department: varchar({ length: 128 }),
 	projectId: int(),
-	contractType: mysqlEnum(['permanent','fixed_term','extra']).default('permanent'),
+	// Plano 63 (passo 11, 0730): + 'partner_company' (parceiros-empresa: fora do mapa de férias e da folha)
+	contractType: mysqlEnum(['permanent','fixed_term','extra','partner_company']).default('permanent'),
 	contractStart: timestamp({ mode: 'string' }),
 	contractEnd: timestamp({ mode: 'string' }),
 	monthlySalary: decimal({ precision: 10, scale: 2 }),
@@ -1020,16 +1021,31 @@ export const driverApplications = mysqlTable("driver_applications", {
 export const employeeLeaves = mysqlTable("employee_leaves", {
 	id: int().autoincrement().primaryKey(),
 	employeeId: int().notNull(),
-	leaveType: mysqlEnum(['vacation','sick','unpaid','other']).default('vacation').notNull(),
+	// Plano 63 (passo 11, 0730): + 'unavailable' (a indisponibilidade dos extras: aviso, sem aprovação nem pagamento)
+	leaveType: mysqlEnum(['vacation','sick','unpaid','other','unavailable']).default('vacation').notNull(),
 	fromDate: varchar({ length: 10 }).notNull(),
 	toDate: varchar({ length: 10 }).notNull(),
 	notes: varchar({ length: 255 }),
 	createdById: int(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// Plano 63 (passo 11, 0730): mapa de férias. O que já existia fica 'approved'. Nada se apaga: cancela-se.
+	status: varchar({ length: 10 }).default('approved').notNull(),
+	/** NULL = dias inteiros; com valor = ausência justificada de parte de UM dia */
+	hours: decimal({ precision: 4, scale: 2 }),
+	requestedById: int(),
+	requestedAt: timestamp({ mode: 'string' }),
+	decidedById: int(),
+	decidedAt: timestamp({ mode: 'string' }),
+	decisionNote: varchar({ length: 255 }),
+	/** quem podia aprovar quando se pediu (ids de conta) */
+	approverUserIds: json(),
+	cancelledById: int(),
+	cancelledAt: timestamp({ mode: 'string' }),
 },
 (table) => [
 	index("idx_employee_leaves_emp").on(table.employeeId),
 	index("idx_employee_leaves_dates").on(table.fromDate, table.toDate),
+	index("idx_employee_leaves_status").on(table.status, table.fromDate),
 ]);
 
 export const employeeSalaryHistory = mysqlTable("employee_salary_history", {

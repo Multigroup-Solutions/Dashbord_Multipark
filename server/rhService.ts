@@ -15,6 +15,8 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzl
 import { getDb, getDocumentChecklistForEmployee, getPayrollData, toMysqlDateTime } from "./db";
 import { employeePenalties, employees, extrasDiaAssignments, payrollRunLines, payrollRuns, timeRecords } from "../drizzle/schema";
 import { manualBlockReason } from "../shared/suspendSuggest";
+import { approvedLeaveSql, fullDayLeaveSql } from "./leavesSql";
+import { FERIAS_MAPA_FLAG, absenceForScheduler, noticeBeforeAssignment, shortDayPt } from "../shared/leaves";
 
 const nowMysql = () => toMysqlDateTime(new Date());
 
@@ -160,6 +162,33 @@ export function noShowSkipReason(r: { status?: string | null; sentHomeHour?: num
   return null;
 }
 
+/**
+ * Plano 63 (passo 11): ausências APROVADAS de dia inteiro que cobrem o dia
+ * (incluindo a indisponibilidade dos extras — de propósito, é o único leitor
+ * dela além do ecrã do Extras-Dia), por ficha. Só com FERIAS_MAPA ligado;
+ * desligado ou erro → nada (a falta fica como sempre).
+ */
+async function noticesForNoShows(db: any, dateStr: string, employeeIds: number[]): Promise<Map<number, any[]>> {
+  const out = new Map<number, any[]>();
+  const ids = Array.from(new Set(employeeIds.filter((x) => Number.isInteger(x) && x > 0)));
+  if (!ids.length) return out;
+  try {
+    const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+    await ensureFeatureFlagOverrides();
+    if (!isFeatureEnabled(FERIAS_MAPA_FLAG, { defaultEnabled: automationFlagDefault(FERIAS_MAPA_FLAG) })) return out;
+    const res = await db.execute(sql`SELECT employeeId, leaveType, status, fromDate, toDate, hours, requestedAt, createdAt FROM employee_leaves
+       WHERE employeeId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}) AND status = 'approved' AND fromDate <= ${dateStr} AND toDate >= ${dateStr}`);
+    const rows = (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
+    for (const r of rows) {
+      const id = Number(r.employeeId);
+      out.set(id, [...(out.get(id) ?? []), { ...r, fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }]);
+    }
+  } catch (err: any) {
+    console.warn("[no-shows] avisos de ausência não lidos:", String(err?.message ?? err).slice(0, 160));
+  }
+  return out;
+}
+
 export interface NoShowReport { scanned: number; created: number; alreadyPending: number; skipped: Record<NoShowSkip, number>; multiparkRead: boolean }
 
 /**
@@ -172,7 +201,7 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
   const skipped: Record<NoShowSkip, number> = { proposed: 0, sent_home: 0, check_in: 0, multipark: 0 };
   const db = await getDb();
   if (!db) return { scanned: 0, created: 0, alreadyPending: 0, skipped, multiparkRead: false };
-  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city, status: extrasDiaAssignments.status, sentHomeHour: extrasDiaAssignments.sentHomeHour })
+  const rows = await db.select({ id: extrasDiaAssignments.id, employeeId: extrasDiaAssignments.employeeId, personName: extrasDiaAssignments.personName, startHour: extrasDiaAssignments.startHour, endHour: extrasDiaAssignments.endHour, city: extrasDiaAssignments.city, status: extrasDiaAssignments.status, sentHomeHour: extrasDiaAssignments.sentHomeHour, createdAt: extrasDiaAssignments.createdAt })
     .from(extrasDiaAssignments)
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), eq(extrasDiaAssignments.isTeamLeader, 0), isNotNull(extrasDiaAssignments.employeeId)));
   const candidates: typeof rows = [];
@@ -209,14 +238,19 @@ export async function detectExtraDiaNoShows(dateStr: string): Promise<NoShowRepo
       }
     } catch { /* sem identidade/Multipark: fica como antes */ }
   }
+  // Plano 63 (passo 11, com FERIAS_MAPA): quem AVISOU antes de ser escalado (ausência aprovada desse dia,
+  // também a indisponibilidade dos extras) fica com a falta sem pontos; avisos depois de escalado não contam.
+  const notices = candidates.length ? await noticesForNoShows(db, dateStr, candidates.map((c) => Number(c.employeeId))) : new Map<number, any[]>();
   let created = 0, alreadyPending = 0;
   for (const r of candidates) {
     if (r.employeeId == null) continue;
     if (noShowSkipReason({ status: r.status, sentHomeHour: r.sentHomeHour, hasCheckIn: false, multiparkMoves: movesByEmployee.get(r.employeeId) ?? 0 })) { skipped.multipark++; continue; }
+    const notice = noticeBeforeAssignment(notices.get(r.employeeId) ?? [], dateStr, r.createdAt);
+    const noticeNote = notice ? ` — tinha avisado a ${shortDayPt(absenceForScheduler(notice).noticeDay)} que não estava (antes de ser escalado): sem pontos` : "";
     try {
       await db.insert(employeePenalties).values({
-        employeeId: r.employeeId, reason: "no_show_extra_dia", severity: "penalty", points: 1, relatedId: r.id, status: "pending",
-        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
+        employeeId: r.employeeId, reason: "no_show_extra_dia", severity: "penalty", points: notice ? 0 : 1, relatedId: r.id, status: "pending",
+        notes: `Possível falta ao extras-dia em ${dateStr} (${r.personName}, ${r.city}, ${r.startHour}h) — sem check-in no turno${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação${noticeNote}`.slice(0, 512),
       });
       created++;
     } catch (err: any) {
@@ -271,8 +305,9 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
     isWorkDay: true, contractStart: r.contractStart ?? null, contractEnd: r.contractEnd ?? null,
     city: cityOf(r.projectId != null ? Number(r.projectId) : null),
   }));
+  // Plano 63 (passo 11): só as ausências APROVADAS e de dia inteiro (a de parte do dia não tira o dia)
   const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves
-     WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)}`))
+     WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)} AND ${approvedLeaveSql()} AND ${fullDayLeaveSql()}`))
     .map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }));
   const starts = fixedScheduledStarts(dateStr, dateStr, schedules, leaves);
   const escala = new Set((await db.select({ employeeId: extrasDiaAssignments.employeeId }).from(extrasDiaAssignments)

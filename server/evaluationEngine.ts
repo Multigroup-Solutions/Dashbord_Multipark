@@ -25,6 +25,7 @@
  */
 import { and, desc, eq, gte, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { approvedLeaveSql } from "./leavesSql";
 import {
   employeeDayMetrics,
   employeeMetricAdjustments,
@@ -164,9 +165,10 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
         FROM schedules s JOIN employees e ON e.id = s.employeeId
        WHERE e.isActive = 1 AND s.isWorkDay = 1
          AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+    // Plano 63 (passo 11): só as ausências APROVADAS (as pedidas não tiram o atraso); a de parte do dia também conta (justificada).
     leaveRows = rowsOf(await db.execute(sql`
       SELECT employeeId, fromDate, toDate FROM employee_leaves
-       WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
+       WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)} AND ${approvedLeaveSql()}`));
   } catch { /* sem horários: só a escala (como antes) */ }
   const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
     ? await (await import("./aiOps/cities")).projectCityResolver(db)

@@ -41,7 +41,12 @@ export const PAYROLL_PARAMS = {
   irsEstimate: 0.15,     // ESTIMATIVA simplificada
 } as const;
 
-export interface LeaveLike { leaveType: "vacation" | "sick" | "unpaid" | "other"; fromDate: string; toDate: string }
+/**
+ * Ausência APROVADA (plano 63, passo 11: o leitor já só traz as aprovadas).
+ * `hours` = parte de um dia (ausência justificada): não tira o dia inteiro
+ * (o modelo das 40 h, passo 6, tira essas horas às esperadas).
+ */
+export interface LeaveLike { leaveType: "vacation" | "sick" | "unpaid" | "other" | "unavailable"; fromDate: string; toDate: string; hours?: string | number | null }
 export interface ScheduleLike { weekday: number; startTime: string; endTime: string; isWorkDay: number | boolean }
 
 export interface EmployeeMonthInput {
@@ -142,6 +147,8 @@ export function computeEmployeeMonth(inp: EmployeeMonthInput): EmployeeMonthResu
   // ausências por tipo (só dias dentro do vínculo e do mês)
   const leaveDaysSet = new Set<string>(), unpaidSet = new Set<string>();
   for (const l of inp.leaves) {
+    // parte de um dia e a indisponibilidade dos extras não são dias de ausência
+    if ((l.hours != null && l.hours !== "") || l.leaveType === "unavailable") continue;
     const f = l.fromDate < cFrom ? cFrom : l.fromDate, t = l.toDate > cTo ? cTo : l.toDate;
     for (let d = f; d <= t; d = addDay(d)) { leaveDaysSet.add(d); if (l.leaveType === "unpaid") unpaidSet.add(d); }
   }

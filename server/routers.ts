@@ -5170,7 +5170,9 @@ export const appRouter = router({
             return [id, { summary: [summary, p.note].filter(Boolean).join(" — "), text: hint?.text ?? "", marked: !!summary, morning: !!hint?.morning, night: !!hint?.night }] as const;
           }));
         }
-        return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null, habitual: habitual.get(c.id) ?? null }));
+        // Plano 63 (passo 11, com FERIAS_MAPA): quem avisou que não está nesse dia (indisponível / férias / "ausente" — nunca o motivo)
+        const absences = input?.date ? await (await import("./leaves")).absencesOnDay(input.date, list.map(c => c.id)) : new Map();
+        return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null, habitual: habitual.get(c.id) ?? null, absence: absences.get(c.id) ?? null }));
       }),
 
     // 44a (Jorge: "quando solto um extra para ser team leader tenho que o soltar em todo lado"):
@@ -5210,7 +5212,10 @@ export const appRouter = router({
         requireAccess(ctx.user, "extras_dia", "view");
         const v = await extrasCostViewFor(ctx.user);
         const { maskAssignmentCost } = await import("../shared/extrasCostView");
-        return (await listAssignments(input.date, input.city)).map((a) => maskAssignmentCost(a, v));
+        const rows = (await listAssignments(input.date, input.city)).map((a) => maskAssignmentCost(a, v));
+        // Plano 63 (passo 11, com FERIAS_MAPA): escalado num dia em que avisou que não estava → aviso na linha
+        const absences = await (await import("./leaves")).absencesOnDay(input.date, rows.map((a) => a.employeeId).filter((x): x is number => x != null));
+        return rows.map((a) => ({ ...a, absence: a.employeeId != null ? absences.get(a.employeeId) ?? null : null }));
       }),
 
     upsertAssignment: protectedProcedure

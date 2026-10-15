@@ -50,6 +50,7 @@ import ExtrasDiaPage from "./pages/ExtrasDiaPage";
 import BookingFilePage from "./pages/BookingFilePage";
 import InvitePage from "./pages/InvitePage";
 import DisponibilidadePage from "./pages/DisponibilidadePage";
+import FeriasPage from "./pages/FeriasPage";
 import WhatsAppInboxPage from "./pages/WhatsAppInboxPage";
 import ComunicacaoPage from "./pages/ComunicacaoPage";
 import CalendarioPage from "./pages/CalendarioPage";
@@ -284,6 +285,10 @@ function Router() {
       </Route>
       <Route path="/disponibilidade">
         {() => (<DashboardLayout><DisponibilidadePage /></DashboardLayout>)}
+      </Route>
+      {/* Plano 63 (passo 11): mapa de férias (só com FERIAS_MAPA ligado — a página diz) */}
+      <Route path="/ferias">
+        {() => (<DashboardLayout><FeriasPage /></DashboardLayout>)}
       </Route>
       <Route path="/whatsapp">
         {() => (<DashboardLayout><WhatsAppInboxPage /></DashboardLayout>)}

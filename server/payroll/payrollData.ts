@@ -8,6 +8,9 @@
  *  - registos de ponto do mês (com folga de 1 dia para turnos que atravessam
  *    a meia-noite/mês) emparelhados em turnos;
  *  - ausências com TIPO, horário individual, histórico salarial e taxas.
+ *    Plano 63 (passo 11): só as APROVADAS (approvedLeaveSql — as pedidas,
+ *    recusadas e canceladas e a indisponibilidade dos extras não contam);
+ *  - os parceiros-empresa (`partner_company`) ficam FORA da folha.
  * Filtro opcional por centro de custos (com descendentes).
  */
 import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql, type SQL } from "drizzle-orm";
@@ -17,6 +20,7 @@ import { countableShifts, pairShifts } from "./shifts";
 import { computeEmployeeMonth, type EmployeeMonthResult } from "./compute";
 import { addDays, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 import { inactiveContractEnd, pontoFichaWarnings, shiftOverlapWarnings, type PontoFichaLike } from "../../shared/pontoFichas";
+import { approvedLeaveSql } from "../leavesSql";
 
 export type PayrollRow = EmployeeMonthResult & {
   department: string | null; projectName: string | null; projectId: number | null; nif: string | null; nib: string | null;
@@ -52,7 +56,8 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
   // A mesma pessoa em duas fichas (de qualquer cidade): contas de login de
   // todas as fichas da folha — para os avisos e para ver turnos em duplicado.
   const folhaFichas = await loadFolhaFichas(db, inFolha, checkInsByEmp);
-  const conds: any[] = [inFolha];
+  // Plano 63 (passo 11): parceiros-empresa fora da folha (o salário fica só como referência para os custos)
+  const conds: any[] = [inFolha, sql`COALESCE(${employees.contractType}, '') <> 'partner_company'`];
   let projectIds: number[] | null = null;
   if (opts.projectId) {
     projectIds = await resolveProjectIds(opts.projectId);
@@ -87,8 +92,8 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
   const snapshotByEmp = new Map<number, { monthlySalary: any; mealAllowancePerDay: any }>();
   for (const h of hist) if (!snapshotByEmp.has(h.employeeId)) snapshotByEmp.set(h.employeeId, { monthlySalary: h.monthlySalary, mealAllowancePerDay: h.mealAllowancePerDay });
 
-  const leaves = await db.select({ employeeId: employeeLeaves.employeeId, leaveType: employeeLeaves.leaveType, fromDate: employeeLeaves.fromDate, toDate: employeeLeaves.toDate })
-    .from(employeeLeaves).where(and(inArray(employeeLeaves.employeeId, empIds), lte(employeeLeaves.fromDate, monthLast), gte(employeeLeaves.toDate, monthFirst)));
+  const leaves = await db.select({ employeeId: employeeLeaves.employeeId, leaveType: employeeLeaves.leaveType, fromDate: employeeLeaves.fromDate, toDate: employeeLeaves.toDate, hours: employeeLeaves.hours })
+    .from(employeeLeaves).where(and(inArray(employeeLeaves.employeeId, empIds), lte(employeeLeaves.fromDate, monthLast), gte(employeeLeaves.toDate, monthFirst), approvedLeaveSql()));
   const leavesByEmp = new Map<number, typeof leaves>();
   for (const l of leaves) { if (!leavesByEmp.has(l.employeeId)) leavesByEmp.set(l.employeeId, []); leavesByEmp.get(l.employeeId)!.push(l); }
 
