@@ -5,7 +5,7 @@ pagina: criticas
 titulo: Críticas Google
 separadores: dashboard=Dashboard, list=Reviews, cleanup=Limpeza
 rotas: /criticas
-palavras: limpeza, não é crítica, repetida, crítica repetida, duplicada, crítica duplicada, desfazer limpeza, resumo de críticas, lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
+palavras: 5 estrelas, cinco estrelas, resposta automática, responder sozinho, publicar sozinho, cancelar resposta automática, retomar, 6 horas, limpeza, não é crítica, repetida, crítica repetida, duplicada, crítica duplicada, desfazer limpeza, resumo de críticas, lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---
 # Críticas Google
 
@@ -32,7 +32,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - As por responder têm uma barra **azul** à esquerda (já não amarela).
 
 **Responder (respondida = publicada)**
-- A IA só prepara rascunhos; **publica sempre uma pessoa**. Guardar um texto é rascunho, não conta como respondida.
+- A IA só prepara rascunhos; **publica sempre uma pessoa** (a única exceção são as respostas automáticas às 5★, com o interruptor delas ligado — ver "Respostas automáticas às 5★"). Guardar um texto é rascunho, não conta como respondida.
 - O rascunho **automático** só é feito para críticas **escritas nos últimos 14 dias** (conta a data da crítica, não a do dia em que entrou no dashboard). Na **1.ª importação** de um perfil (o histórico todo de uma vez) as críticas antigas nunca têm rascunho automático; as dos últimos 14 dias têm. Nas críticas que chegam por email conta a data do email. Para uma crítica antiga, abre-a e carrega em **Gerar com IA** (ou **Regenerar**).
 - **Ligada ao Google**: **Aprovar e publicar** (pede confirmação; fica visível para todos). Sai pela Google quando a conta está ligada; senão pela Windsor, com o interruptor **Críticas: publicar respostas no Google pela Windsor** ligado (vem desligado). Sem nenhum dos dois, o aviso diz o que falta — publica no perfil Google e marca **Já publiquei no Google**.
 - **Veio por email**: **Aprovar** (o texto está bom) → publica-o no perfil Google → **Já publiquei no Google**. Se marcaste por engano, **Desfazer** (o texto fica).
@@ -67,6 +67,21 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
   - Na Windsor, a que bate pelas estrelas e pelo texto fica **por conciliar** (uma pessoa escolhe; as marcadas não aparecem como candidatas).
 - Nada se apaga: as marcadas saem da lista, dos números e dos rascunhos automáticos. Na crítica aparece **Não é crítica** ou **Repetida de #…**. A conversa do email repetido liga-se à crítica original.
 - Antes de ligar o "juntar": conferir com amostras reais dos dois emails da Google (por fazer).
+
+## Respostas automáticas às 5★
+- Interruptor **Críticas 5★: publicar a resposta sozinho (6 h depois)** em Definições → Automações: {{regra:reviews.autoPublishFlag}} por omissão, e só o super admin o liga. Desligado, nada muda: a IA só prepara e publica sempre uma pessoa.
+- Ligado, só entram as críticas que cumprem **tudo**:
+  - **5★** e **ligadas ao Google** (vieram pela API ou pela Windsor; as de email nunca);
+  - escritas nos últimos {{regra:reviews.autoDraftMaxAgeDays}} dias (as antigas respondem-se à mão);
+  - **sem reclamação**, **sem resposta**, não dispensadas, não marcadas como "não é crítica" nem "repetida";
+  - o texto **sem links, emails, telefones, insultos** nem nada que pareça uma instrução (ex.: "ignora as instruções…").
+- A IA barata escreve a resposta (o texto da crítica é tratado como dado, nunca como ordem) e a resposta tem de passar: entre {{regra:reviews.replyMinChars}} e {{regra:reviews.replyMaxChars}} caracteres, sem números, links, emails, telefones, matrículas nem marcadores `[…]`, e na **língua da crítica**. Se não passar, não sai (fica o motivo).
+- A resposta fica **{{regra:reviews.autoPublishDelayHours}} h à vista** na crítica, no cartão **Resposta automática (5★)**, com **Cancelar** (team leader e acima, nas suas cidades). Cancelar não apaga nada: a crítica fica por responder e pode responder-se à mão.
+- **Antes de publicar**, a crítica é lida outra vez **no Google** (ou na Windsor): só sai se continuar com **5★**, com o **mesmo texto** e **sem resposta** (por exemplo, dada diretamente no perfil). Se não der para ler, não sai e tenta mais tarde ({{regra:reviews.autoPublishMaxAttempts}} vezes ao todo). Fica publicada com o **utilizador do sistema** e no registo de atividade ("review_auto_publish").
+- **Limites**: no máximo {{regra:reviews.autoPublishMaxPerProfileDay}} por perfil Google em 24 h. Ao fim de {{regra:reviews.autoPublishMaxFailures}} falhas seguidas **pára sozinho** e avisa (sino e email ao supervisor e ao back office); no topo das Críticas aparece o aviso e o admin carrega em **Retomar**. Uma resposta à espera há mais de {{regra:reviews.autoPublishExpireHours}} h depois da hora (interruptor desligado ou agendador parado) já não sai.
+- **Desligar o interruptor** pára as que estão à espera; as já publicadas **não se despublicam**.
+- **Depois de publicar**: uma vez por dia, durante {{regra:reviews.autoPublishVerifyDays}} dias, a crítica é lida outra vez; se descer das 5★, sai um aviso para ver se é preciso responder de novo ou abrir uma reclamação.
+- Publica pela Google ligada diretamente ou, sem ela, pela Windsor com o interruptor **Críticas: publicar respostas no Google pela Windsor** ligado (vem desligado). Sem nenhum dos dois, as respostas ficam à espera e não saem.
 
 ## Limpeza
 - Separador para admin e super admin, para as que já existem; nunca corre sozinha. Só vê as críticas das suas cidades.

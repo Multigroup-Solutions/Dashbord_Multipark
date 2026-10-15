@@ -599,6 +599,66 @@ export function canAutoConfirm(state: { status: string; holdAuto: boolean } | nu
   return !!state && state.status === "proposed" && !state.holdAuto;
 }
 
+// ─── Dia mexido à mão perto da confirmação (plano MPV F7, D4b) ──────────────
+// Por decidir pelo Jorge: (a) "confirm" — confirma na mesma (o que se fazia
+// até aqui); (b) "skip_notify" — não confirma e avisa o TL/supervisor para
+// confirmarem eles (omissão: a mais segura); (c) "if_older_30m" — só confirma
+// se a última mudança feita à mão tiver mais de 30 min.
+
+export type ManualEditAtConfirm = "confirm" | "skip_notify" | "if_older_30m";
+export const MANUAL_EDIT_AT_CONFIRM_MODES: readonly ManualEditAtConfirm[] = ["confirm", "skip_notify", "if_older_30m"];
+export const MANUAL_EDIT_AT_CONFIRM_DEFAULT: ManualEditAtConfirm = "skip_notify";
+export const MANUAL_EDIT_AT_CONFIRM_LABELS: Record<ManualEditAtConfirm, string> = {
+  confirm: "Confirma na mesma (como até aqui)",
+  skip_notify: "Não confirma e avisa o TL, o supervisor e o back office",
+  if_older_30m: "Só confirma se a última mudança à mão tiver mais de 30 min",
+};
+/** "if_older_30m": a última mudança à mão tem de ter mais do que isto (min). */
+export const MANUAL_EDIT_SETTLE_MIN = 30;
+
+export type AutoConfirmDecision =
+  | { action: "confirm" }
+  /** Nada a confirmar (sem proposta, já confirmada ou suspensa). */
+  | { action: "skip"; reason: string }
+  /** Mexido à mão há pouco: volta a ver na corrida seguinte. */
+  | { action: "wait"; reason: string }
+  /** Mexido à mão: não confirma sozinho e avisa (uma vez). */
+  | { action: "hold_notify"; reason: string };
+
+/**
+ * O que a confirmação automática faz a este dia/cidade agora. `nowMs` e a
+ * marca `manual.atUnix` em tempo real (UTC). PURA.
+ */
+export function autoConfirmDecision(
+  state: { status: string; holdAuto: boolean; manual?: { atUnix: number } | null } | null,
+  mode: ManualEditAtConfirm,
+  nowMs: number,
+): AutoConfirmDecision {
+  if (!canAutoConfirm(state)) return { action: "skip", reason: "sem proposta por confirmar ou envio suspenso" };
+  const manual = state!.manual;
+  if (!manual || mode === "confirm") return { action: "confirm" };
+  if (mode === "skip_notify") return { action: "hold_notify", reason: "mexido à mão — não se confirma sozinho (confirma à mão em Extras-dia)" };
+  const ageMin = Math.floor((nowMs - manual.atUnix * 1000) / 60_000);
+  if (ageMin > MANUAL_EDIT_SETTLE_MIN) return { action: "confirm" };
+  return { action: "wait", reason: `mexido à mão há ${Math.max(0, ageMin)} min — confirma quando passarem ${MANUAL_EDIT_SETTLE_MIN} min sem mexer` };
+}
+
+// ─── Cobertura depois da confirmação (plano MPV F7, §6.1 "Falhas") ──────────
+
+/** Abaixo disto (fração das horas×condutor pedidas) a confirmação das 15:00 avisa. */
+export const COVERAGE_ALERT_MIN = 0.8;
+
+/**
+ * Fração das horas×condutor pedidas que estão cobertas pela escala (a partir
+ * das 03h, como a proposta). Sem nada pedido = 1. PURA.
+ */
+export function scheduleCoverage(needed: readonly number[], existing: readonly Span[]): number {
+  const need = needed.reduce((s, n, h) => s + (h >= DAY_START_HOUR ? Math.max(0, n ?? 0) : 0), 0);
+  if (need <= 0) return 1;
+  const missing = remainingNeed(needed, existing).reduce((s, n, h) => s + (h >= DAY_START_HOUR ? n : 0), 0);
+  return Math.max(0, Math.min(1, (need - missing) / need));
+}
+
 // ─── A mão humana manda (Jorge, 7 out 2026) ─────────────────────────────────
 // "Ele faz a primeira coisa até alguém ver; se é retirado ou é colocado outro,
 // o sistema já não muda." O cron só faz a PRIMEIRA proposta de um dia/cidade
@@ -680,7 +740,69 @@ export type NotifyKind = "scheduled" | "removed";
 
 /** Estados finais (não se volta a tentar a mesma versão). */
 export const FINAL_NOTIFY_STATUSES = new Set(["sent", "opted_out", "invalid", "no_contact", "skipped"]);
-export const MAX_NOTIFY_ATTEMPTS = 3;
+/**
+ * Plano MPV F7 (§6.1): 4 tentativas com espera crescente — a 1.ª no envio e
+ * as outras 30, 60 e 90 min depois da anterior (ex.: 15:00 → 15:30 → 16:30 →
+ * 18:00). Antes eram 3 tentativas em corridas seguidas: com o agendador de
+ * 15 em 15 min, uma falha da Meta de meia hora esgotava-as todas.
+ */
+export const MAX_NOTIFY_ATTEMPTS = 4;
+/** Espera depois da tentativa n: n × 30 min. */
+export const NOTIFY_RETRY_STEP_MIN = 30;
+/**
+ * Folga (min) na espera: o envio acaba uns segundos depois de a corrida
+ * começar e a corrida seguinte (30 min depois) chega à reserva antes disso —
+ * sem folga a nova tentativa escorregava sempre para a corrida a seguir.
+ */
+export const NOTIFY_RETRY_TOLERANCE_MIN = 2;
+
+/** Quanto se espera depois da tentativa `attempts` (min). PURA. */
+export function notifyRetryWaitMinutes(attempts: number): number {
+  return NOTIFY_RETRY_STEP_MIN * Math.max(1, Math.floor(attempts || 0));
+}
+
+/**
+ * Uma falha volta a ser tentada agora? Só 'failed' com menos de
+ * MAX_NOTIFY_ATTEMPTS tentativas e passada a espera da última
+ * (`ageMs` = agora − última mudança da linha). PURA.
+ */
+export function notifyRetryDue(row: { status: string; attempts: number; ageMs: number }): boolean {
+  if (row.status !== "failed" || row.attempts >= MAX_NOTIFY_ATTEMPTS) return false;
+  return row.ageMs >= (notifyRetryWaitMinutes(row.attempts) - NOTIFY_RETRY_TOLERANCE_MIN) * 60_000;
+}
+
+/** Falhou todas as tentativas (não se volta a tentar sozinho)? PURA. */
+export function notifyExhausted(row: { status: string; attempts: number }): boolean {
+  return row.status === "failed" && row.attempts >= MAX_NOTIFY_ATTEMPTS;
+}
+
+/** Uma reserva 'sending' esquecida (o processo morreu a meio) liberta-se ao fim disto. */
+export const NOTIFY_SENDING_STALE_MIN = 15;
+
+/**
+ * Quem ficou por avisar depois das tentativas todas: nenhum canal 'sent', pelo
+ * menos um canal esgotado e nenhum ainda por tentar. Uma linha por pessoa e
+ * versão da linha da escala. PURA.
+ */
+export function unnotifiedAfterRetries<T extends { assignmentId: number; version: number; channel: string; status: string; attempts: number; personName?: string | null }>(
+  rows: readonly T[],
+): Array<{ assignmentId: number; version: number; personName: string; channels: string[] }> {
+  const by = new Map<string, T[]>();
+  for (const r of rows) {
+    const k = `${r.assignmentId}:${r.version}`;
+    by.set(k, [...(by.get(k) ?? []), r]);
+  }
+  const out: Array<{ assignmentId: number; version: number; personName: string; channels: string[] }> = [];
+  for (const list of Array.from(by.values())) {
+    if (list.some((r) => r.status === "sent")) continue;
+    const exhausted = list.filter((r) => notifyExhausted(r));
+    if (!exhausted.length) continue;
+    // Outro canal ainda em curso ou por tentar → ainda não "ficou por avisar".
+    if (list.some((r) => r.status === "sending" || (r.status === "failed" && !notifyExhausted(r)))) continue;
+    out.push({ assignmentId: list[0].assignmentId, version: list[0].version, personName: String(list[0].personName ?? "").trim() || `linha #${list[0].assignmentId}`, channels: exhausted.map((r) => r.channel) });
+  }
+  return out.sort((a, b) => a.personName.localeCompare(b.personName, "pt") || a.assignmentId - b.assignmentId);
+}
 
 export interface NotifyLogRow {
   assignmentId: number;

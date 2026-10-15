@@ -23,8 +23,14 @@ import { ACCIDENTS_FROM_DAY, EVALUATION_POINTS, EVALUATION_RULES_VERSION, LATE_A
 import { PAID_ON_CREATE_ROLES } from "./expenseCreatePayment";
 import { CREW_MEASURE_MIN_SAMPLES, CYCLE_PERCENTILES, MAX_CYCLE_MINUTES, MIN_SAMPLE, PRESSURE_SINCE_DEFAULT, RUSH_HOURS, TIGHT_TOP_SHARE } from "./extrasPressure";
 import {
-  DAY_START_HOUR, IDLE_PENALTY, MAX_NOTIFY_ATTEMPTS, MAX_SHIFT_HOURS, MIN_SHIFT_HOURS, PICKUP_PAIR_AFTER_MIN, PICKUP_PAIR_BEFORE_MIN, RANK_WEIGHTS,
+  COVERAGE_ALERT_MIN, DAY_START_HOUR, IDLE_PENALTY, MANUAL_EDIT_AT_CONFIRM_DEFAULT, MANUAL_EDIT_AT_CONFIRM_LABELS, MANUAL_EDIT_SETTLE_MIN, MAX_NOTIFY_ATTEMPTS,
+  MAX_SHIFT_HOURS, MIN_SHIFT_HOURS, NOTIFY_RETRY_STEP_MIN, PICKUP_PAIR_AFTER_MIN, PICKUP_PAIR_BEFORE_MIN, RANK_WEIGHTS,
 } from "./extrasSchedule";
+import { REMINDER_LEAD_MIN } from "./extrasReminders";
+import {
+  REPLY_MAX_CHARS, REPLY_MIN_CHARS, REVIEW_AUTO_PUBLISH_DELAY_HOURS, REVIEW_AUTO_PUBLISH_EXPIRE_HOURS, REVIEW_AUTO_PUBLISH_MAX_ATTEMPTS,
+  REVIEW_AUTO_PUBLISH_MAX_CONSECUTIVE_FAILURES, REVIEW_AUTO_PUBLISH_MAX_PER_PROFILE_DAY, REVIEW_AUTO_PUBLISH_VERIFY_DAYS,
+} from "./reviewAutoPublish";
 import { NO_COMMISSION_TYPES } from "./partnerRules";
 import { getPartnerType } from "./partnerTypes";
 import { REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, REVIEW_COMPLAINT_SLA_HOURS } from "./reviewRules";
@@ -75,6 +81,9 @@ const onCities = (map: Readonly<Record<string, boolean>>) => {
   return on.length ? `ligado em ${joinPt(on)}` : "desligado em todas as cidades";
 };
 const roleNames =(roles: readonly string[]) => joinPt(roles.map((r) => ROLE_LABELS[r as Role] ?? r));
+/** "11:00" → 660 e 630 → "10:30". */
+const hhmmMin = (s: string) => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
+const hhmmOf = (min: number) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 
 /** Os marcadores conhecidos. Acrescentar aqui antes de usar na ajuda. */
 export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
@@ -142,6 +151,16 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   "extras.rankWeights.reliability": v(Math.round(RANK_WEIGHTS.reliability * 100), "shared/extrasSchedule.ts:RANK_WEIGHTS"),
   "extras.idlePenalty": v(dec(IDLE_PENALTY), "shared/extrasSchedule.ts:IDLE_PENALTY"),
   "extras.maxNotifyAttempts": v(MAX_NOTIFY_ATTEMPTS, "shared/extrasSchedule.ts:MAX_NOTIFY_ATTEMPTS"),
+  // Plano MPV F7 (§6.1): novas tentativas, lembretes, dia mexido à mão, cobertura
+  "extras.notifyRetryStepMin": v(NOTIFY_RETRY_STEP_MIN, "shared/extrasSchedule.ts:NOTIFY_RETRY_STEP_MIN"),
+  "extras.reminderLeadMin": v(REMINDER_LEAD_MIN, "shared/extrasReminders.ts:REMINDER_LEAD_MIN"),
+  "extras.reminderProposeAt": d(hhmmOf(hhmmMin(String(SETTINGS["extras.autoProposeAt"].defaultValue)) - REMINDER_LEAD_MIN), "shared/appSettings.ts:SETTINGS[extras.autoProposeAt] − REMINDER_LEAD_MIN"),
+  "extras.reminderConfirmAt": d(hhmmOf(hhmmMin(String(SETTINGS["extras.autoConfirmAt"].defaultValue)) - REMINDER_LEAD_MIN), "shared/appSettings.ts:SETTINGS[extras.autoConfirmAt] − REMINDER_LEAD_MIN"),
+  "extras.manualEditAtConfirm": d(`«${MANUAL_EDIT_AT_CONFIRM_LABELS[MANUAL_EDIT_AT_CONFIRM_DEFAULT]}»`, "shared/extrasSchedule.ts:MANUAL_EDIT_AT_CONFIRM_DEFAULT"),
+  "extras.manualEditSettleMin": v(MANUAL_EDIT_SETTLE_MIN, "shared/extrasSchedule.ts:MANUAL_EDIT_SETTLE_MIN"),
+  "extras.coverageAlertPct": v(Math.round(COVERAGE_ALERT_MIN * 100), "shared/extrasSchedule.ts:COVERAGE_ALERT_MIN"),
+  "extras.remindersFlag": d(automationFlagDefault("EXTRAS_REMINDERS") ? "ligado" : "desligado", "shared/appSettings.ts:AUTOMATION_FLAGS[EXTRAS_REMINDERS]"),
+  "extras.completeFlag": d(automationFlagDefault("EXTRAS_COMPLETE_BEFORE_CONFIRM") ? "ligado" : "desligado", "shared/appSettings.ts:AUTOMATION_FLAGS[EXTRAS_COMPLETE_BEFORE_CONFIRM]"),
   // Tempos de serviço (parâmetros do cálculo)
   "serviceTimes.callWindowBeforeMin": v(CALL_WINDOW_BEFORE_MIN, "shared/serviceTimes.ts:CALL_WINDOW_BEFORE_MIN"),
   "serviceTimes.callWindowAfterMin": v(CALL_WINDOW_AFTER_MIN, "shared/serviceTimes.ts:CALL_WINDOW_AFTER_MIN"),
@@ -172,6 +191,16 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   "reviews.complaintSlaHours": v(REVIEW_COMPLAINT_SLA_HOURS, "shared/reviewRules.ts:REVIEW_COMPLAINT_SLA_HOURS"),
   "reviews.autoDraftsFlag": d(automationFlagDefault("AI_REVIEW_AUTO_DRAFTS") ? "ligado" : "desligado", "shared/appSettings.ts:AUTOMATION_FLAGS[AI_REVIEW_AUTO_DRAFTS]"),
   "reviews.autoDraftMaxAgeDays":v(REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, "shared/reviewRules.ts:REVIEW_AUTO_DRAFT_MAX_AGE_DAYS"),
+  // Plano MPV F7 (§6.2): respostas automáticas às 5★
+  "reviews.autoPublishFlag": d(automationFlagDefault("REVIEW_AUTO_PUBLISH_5STAR") ? "ligado" : "desligado", "shared/appSettings.ts:AUTOMATION_FLAGS[REVIEW_AUTO_PUBLISH_5STAR]"),
+  "reviews.autoPublishDelayHours": v(REVIEW_AUTO_PUBLISH_DELAY_HOURS, "shared/reviewAutoPublish.ts:REVIEW_AUTO_PUBLISH_DELAY_HOURS"),
+  "reviews.autoPublishMaxPerProfileDay": v(REVIEW_AUTO_PUBLISH_MAX_PER_PROFILE_DAY, "shared/reviewAutoPublish.ts:REVIEW_AUTO_PUBLISH_MAX_PER_PROFILE_DAY"),
+  "reviews.autoPublishMaxFailures": v(REVIEW_AUTO_PUBLISH_MAX_CONSECUTIVE_FAILURES, "shared/reviewAutoPublish.ts:REVIEW_AUTO_PUBLISH_MAX_CONSECUTIVE_FAILURES"),
+  "reviews.autoPublishExpireHours": v(REVIEW_AUTO_PUBLISH_EXPIRE_HOURS, "shared/reviewAutoPublish.ts:REVIEW_AUTO_PUBLISH_EXPIRE_HOURS"),
+  "reviews.autoPublishVerifyDays": v(REVIEW_AUTO_PUBLISH_VERIFY_DAYS, "shared/reviewAutoPublish.ts:REVIEW_AUTO_PUBLISH_VERIFY_DAYS"),
+  "reviews.autoPublishMaxAttempts": v(REVIEW_AUTO_PUBLISH_MAX_ATTEMPTS, "shared/reviewAutoPublish.ts:REVIEW_AUTO_PUBLISH_MAX_ATTEMPTS"),
+  "reviews.replyMinChars": v(REPLY_MIN_CHARS, "shared/reviewAutoPublish.ts:REPLY_MIN_CHARS"),
+  "reviews.replyMaxChars": v(REPLY_MAX_CHARS, "shared/reviewAutoPublish.ts:REPLY_MAX_CHARS"),
 };
 
 export class HelpRuleMarkerError extends Error {

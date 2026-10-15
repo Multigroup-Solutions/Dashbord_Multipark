@@ -1342,6 +1342,22 @@ export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
 	index("idx_edn_date_city").on(table.assignmentDate, table.city),
 ]);
 
+// 0705 (plano MPV F7) — avisos da escala que só saem uma vez (lembretes das
+// 10:30/14:30, "mexido à mão", "ficaram por avisar", cobertura baixa, completado).
+export const extrasDiaAlerts = mysqlTable("extras_dia_alerts", {
+	id: int().autoincrement().primaryKey(),
+	assignmentDate: varchar({ length: 10 }).notNull(),
+	city: varchar({ length: 16 }).notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	alertKey: varchar({ length: 64 }).default('').notNull(),
+	detail: varchar({ length: 1000 }),
+	recipients: int().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_eda_alert").on(table.assignmentDate, table.city, table.kind, table.alertKey),
+]);
+
 // 0540 — notas internas do dia de trabalho (Extras-dia → Pressão): várias por
 // (cidade, dia de calendário); hora operacional opcional (3–26); arquivar, nunca apagar.
 export const extrasDayNotes = mysqlTable("extras_day_notes", {
@@ -1525,6 +1541,36 @@ export const googleReviews = mysqlTable("google_reviews", {
 (table) => [
 	// 0700 — "repetidas desta" sem ler a tabela toda.
 	index("idx_google_reviews_duplicate_of").on(table.duplicateOf),
+]);
+
+/**
+ * 0705 (plano MPV F7, §6.2) — fila das respostas automáticas às críticas de 5★
+ * (interruptor REVIEW_AUTO_PUBLISH_5STAR). Uma linha por crítica; nada se apaga.
+ */
+export const reviewAutoPublish = mysqlTable("review_auto_publish", {
+	id: int().autoincrement().primaryKey(),
+	reviewId: int().notNull(),
+	googleLocationId: int(),
+	projectId: int(),
+	status: varchar({ length: 16 }).notNull(),
+	replyText: text(),
+	reason: varchar({ length: 300 }),
+	scheduledFor: datetime({ mode: 'string' }),
+	attempts: int().default(0).notNull(),
+	lastAttemptAt: datetime({ mode: 'string' }),
+	publishedAt: datetime({ mode: 'string' }),
+	channel: varchar({ length: 12 }),
+	cancelledById: int(),
+	cancelledAt: datetime({ mode: 'string' }),
+	verifiedAt: datetime({ mode: 'string' }),
+	alertedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_rap_review").on(table.reviewId),
+	index("idx_rap_status_when").on(table.status, table.scheduledFor),
+	index("idx_rap_location_published").on(table.googleLocationId, table.publishedAt),
 ]);
 
 /** 0285 — alertas "a trabalhar sem PDA ou Zello ligado" (shared/opsPresence.ts). */

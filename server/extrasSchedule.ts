@@ -55,6 +55,17 @@ import {
   type NotifyLogRow,
   type ScheduleCandidate,
   type ScheduleSettings,
+  COVERAGE_ALERT_MIN,
+  MANUAL_EDIT_AT_CONFIRM_DEFAULT,
+  MANUAL_EDIT_AT_CONFIRM_MODES,
+  MAX_NOTIFY_ATTEMPTS,
+  NOTIFY_SENDING_STALE_MIN,
+  autoConfirmDecision,
+  fmtDayPt,
+  notifyRetryDue,
+  scheduleCoverage,
+  unnotifiedAfterRetries,
+  type ManualEditAtConfirm,
 } from "../shared/extrasSchedule";
 import { DEFAULT_CREW_RULES, SETTINGS, hhmmToMinutes, type CrewRulesMap } from "../shared/appSettings";
 
@@ -87,17 +98,20 @@ export interface LoadedScheduleSettings extends ScheduleSettings {
   autoConfirmAt: string;
   crewRules: CrewRulesMap;
   meetingPoints: Record<ScheduleCity, string>;
+  /** Plano MPV F7 (D4b): o que a confirmação automática faz a um dia mexido à mão. */
+  manualEditAtConfirm: ManualEditAtConfirm;
 }
 
 export async function loadScheduleSettings(): Promise<LoadedScheduleSettings> {
   const { getSetting } = await import("./appSettings");
-  const [propose, days, auto, confirm, cars, mp] = await Promise.all([
+  const [propose, days, auto, confirm, cars, mp, manualMode] = await Promise.all([
     getSetting("extras.autoProposeAt"),
     getSetting("extras.autoProposeDaysAhead"),
     getSetting("extras.autoConfirm"),
     getSetting("extras.autoConfirmAt"),
     getSetting("extras.crewRules"),
     getSetting("extras.meetingPoints"),
+    getSetting("extras.manualEditAtConfirm"),
   ]);
   const autoProposeAt = propose ?? (SETTINGS["extras.autoProposeAt"].defaultValue as string);
   const autoConfirmAt = confirm ?? (SETTINGS["extras.autoConfirmAt"].defaultValue as string);
@@ -110,6 +124,9 @@ export async function loadScheduleSettings(): Promise<LoadedScheduleSettings> {
     autoConfirm: auto ?? (SETTINGS["extras.autoConfirm"].defaultValue as boolean),
     crewRules: { ...DEFAULT_CREW_RULES, ...(cars ?? {}) },
     meetingPoints: { lisbon: "", porto: "", faro: "", ...(mp ?? {}) },
+    manualEditAtConfirm: (MANUAL_EDIT_AT_CONFIRM_MODES as readonly string[]).includes(String(manualMode ?? ""))
+      ? (manualMode as ManualEditAtConfirm)
+      : MANUAL_EDIT_AT_CONFIRM_DEFAULT,
   };
 }
 
@@ -661,8 +678,13 @@ export async function loadNotifyLog(assignmentIds: number[]): Promise<NotifyLogR
 
 /**
  * Reserva o envio de (linha, versão, tipo, canal). true = este processo envia.
- * Nova → insere 'sending'; falhada com < 3 tentativas, ou 'sending' esquecida
- * há mais de 15 min → volta a 'sending'. Duas corridas ao mesmo tempo: só uma ganha.
+ * Nova → insere 'sending'. Falhada → só com espera crescente (plano MPV F7):
+ * menos de MAX_NOTIFY_ATTEMPTS (4) tentativas e passados 30 × tentativas min
+ * desde a última (`updatedAt < NOW() − INTERVAL (30 × attempts) MINUTE`, com
+ * 2 min de folga — regra pura `notifyRetryDue`); 'sending' esquecida há mais
+ * de 15 min → volta a 'sending'. A idade vem do relógio da BD (o mesmo do
+ * `updatedAt`). Duas corridas ao mesmo tempo: só uma ganha (o UPDATE só
+ * passa se o estado e as tentativas forem os que se leram).
  */
 export async function claimNotification(
   a: { id: number; version: number; employeeId: number | null; assignmentDate: string; city: string },
@@ -675,10 +697,21 @@ export async function claimNotification(
     INSERT IGNORE INTO extras_dia_notifications (assignmentId, version, kind, channel, employeeId, assignmentDate, city, status, attempts)
     VALUES (${a.id}, ${a.version}, ${kind}, ${channel}, ${a.employeeId}, ${a.assignmentDate}, ${a.city}, 'sending', 1)`);
   if (extractAffectedRows(ins) > 0) return true;
+  const seen = rowsOf(await db.execute(sql`
+    SELECT status, attempts, TIMESTAMPDIFF(SECOND, updatedAt, NOW()) AS ageS
+      FROM extras_dia_notifications
+     WHERE assignmentId = ${a.id} AND version = ${a.version} AND kind = ${kind} AND channel = ${channel} LIMIT 1`))[0];
+  if (!seen) return false;
+  const status = String(seen.status ?? "");
+  const attempts = Number(seen.attempts ?? 0) || 0;
+  const ageMs = Math.max(0, Number(seen.ageS ?? 0) || 0) * 1000;
+  const retry = notifyRetryDue({ status, attempts, ageMs })
+    || (status === "sending" && ageMs > NOTIFY_SENDING_STALE_MIN * 60_000);
+  if (!retry) return false;
   const upd = await db.execute(sql`
     UPDATE extras_dia_notifications SET status = 'sending', attempts = attempts + 1
      WHERE assignmentId = ${a.id} AND version = ${a.version} AND kind = ${kind} AND channel = ${channel}
-       AND ((status = 'failed' AND attempts < 3) OR (status = 'sending' AND updatedAt < (NOW() - INTERVAL 15 MINUTE)))`);
+       AND status = ${status} AND attempts = ${attempts}`);
   return extractAffectedRows(upd) > 0;
 }
 
@@ -1004,7 +1037,7 @@ export interface ScheduleOverview {
   noAnswerCount: number;
   availableCount: number;
   notifications: { assignmentId: number; version: number; kind: string; channel: string; status: string; detail: string | null }[];
-  settings: { autoProposeAt: string; autoConfirm: boolean; autoConfirmAt: string; daysAhead: number };
+  settings: { autoProposeAt: string; autoConfirm: boolean; autoConfirmAt: string; daysAhead: number; manualEditAtConfirm: ManualEditAtConfirm };
 }
 
 export async function getScheduleOverview(date: string, city: ScheduleCity): Promise<ScheduleOverview> {
@@ -1044,7 +1077,7 @@ export async function getScheduleOverview(date: string, city: ScheduleCity): Pro
     noAnswerCount: (await noAnswerTargets(date, city, cands)).length,
     availableCount: cands.filter((c) => candidateWindows(c).length > 0).length,
     notifications,
-    settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead },
+    settings: { autoProposeAt: settings.autoProposeAt, autoConfirm: settings.autoConfirm, autoConfirmAt: settings.autoConfirmAt, daysAhead: settings.daysAhead, manualEditAtConfirm: settings.manualEditAtConfirm },
   };
 }
 
@@ -1060,27 +1093,243 @@ export interface ScheduleCronReport {
   details: Record<string, unknown>;
 }
 
+// ─── Avisos que só saem uma vez (0705, extras_dia_alerts) ───────────────────
+
+export type ScheduleAlertKind =
+  | "reminder_propose" | "reminder_confirm" | "manual_hold" | "unnotified" | "low_coverage" | "confirm_failed" | "complete";
+
 /**
- * /api/cron/extras-schedule (de 30 em 30 min, 08h–23h Lisboa):
- *  - a partir de `extras.autoProposeAt`: propõe amanhã … +N para cada cidade
- *    (só a PRIMEIRA proposta de dias intocados — nunca num dia com proposta,
- *    escala, suspensão ou mexido à mão);
- *  - a partir de `extras.autoConfirmAt` (se `extras.autoConfirm`): confirma a
- *    proposta de amanhã não suspensa e avisa;
- *  - escalas já confirmadas e não suspensas de hoje em diante: envia avisos
- *    em falta (linhas editadas → nova versão; falhas → até 3 tentativas).
+ * Reserva um aviso de (dia, cidade, tipo, chave): true = é a primeira vez e
+ * este processo avisa. Sem a tabela (0705 por aplicar) → false: na dúvida não
+ * se avisa (nunca há avisos repetidos a cada 15 min).
  */
-export async function runScheduleAutomation(now: Date = new Date()): Promise<ScheduleCronReport> {
+export async function claimScheduleAlert(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string; detail?: string | null; recipients?: number }): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return false;
+    const res = await db.execute(sql`
+      INSERT IGNORE INTO extras_dia_alerts (assignmentDate, city, kind, alertKey, detail, recipients)
+      VALUES (${a.date.slice(0, 10)}, ${a.city}, ${a.kind}, ${(a.key ?? "").slice(0, 64)}, ${a.detail ? a.detail.slice(0, 1000) : null}, ${a.recipients ?? 0})`);
+    return extractAffectedRows(res) > 0;
+  } catch (err: any) {
+    console.warn("[extras-schedule] reserva do aviso falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+    return false;
+  }
+}
+
+/** Quem foi avisado depois de reservado (para o registo). Nunca lança. */
+async function noteAlertRecipients(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }, recipients: number): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.execute(sql`UPDATE extras_dia_alerts SET recipients = ${recipients}
+      WHERE assignmentDate = ${a.date.slice(0, 10)} AND city = ${a.city} AND kind = ${a.kind} AND alertKey = ${(a.key ?? "").slice(0, 64)}`);
+  } catch { /* registo */ }
+}
+
+/** Chave curta e estável de uma lista (para "ficaram por avisar" de um conjunto de linhas). */
+export function alertKeyOf(parts: readonly (string | number)[]): string {
+  let h = 0x811c9dc5;
+  const s = [...parts].map(String).sort().join("|");
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `${parts.length}:${h.toString(16)}`;
+}
+
+/**
+ * Linhas da escala (dia, cidade) com os avisos esgotados e sem nenhum canal
+ * enviado — "ficaram por avisar" (regra pura `unnotifiedAfterRetries`).
+ */
+export async function loadUnnotifiedAfterRetries(date: string, city: string): Promise<ReturnType<typeof unnotifiedAfterRetries>> {
+  const db = await getDb();
+  if (!db) return [];
+  const res = await db.execute(sql`
+    SELECT n.assignmentId, n.version, n.channel, n.status, n.attempts, a.personName
+      FROM extras_dia_notifications n
+      JOIN extras_dia_assignments a ON a.id = n.assignmentId AND a.version = n.version AND a.status = 'confirmed'
+     WHERE n.assignmentDate = ${date} AND n.city = ${city} AND n.kind = 'scheduled'`);
+  return unnotifiedAfterRetries(rowsOf(res).map((r) => ({
+    assignmentId: Number(r.assignmentId), version: Number(r.version), channel: String(r.channel),
+    status: String(r.status), attempts: Number(r.attempts ?? 0), personName: r.personName ? String(r.personName) : null,
+  })));
+}
+
+/**
+ * Cobertura da escala de (dia, cidade) agora (previsão ao vivo vs linhas da
+ * escala, sem TL). null = previsão incompleta (não se avisa com ela).
+ */
+export async function loadScheduleCoverage(date: string, city: ScheduleCity): Promise<{ coverage: number; gaps: Gap[] } | null> {
+  const { getExtrasDiaForecast } = await import("./extrasDia");
+  const [forecast, rows] = await Promise.all([getExtrasDiaForecast(addDaysIso(date, -1), city), loadDayRows(date)]);
+  if (forecastIncompleteReason(forecast)) return null;
+  const needed = forecast.hourly.map((h) => h.driversNeeded);
+  const mine = rows.filter((r) => r.city === city && r.isTeamLeader === 0);
+  return { coverage: scheduleCoverage(needed, mine), gaps: summarizeGaps(remainingNeed(needed, mine).map((v, h) => (h < 3 ? 0 : v))) };
+}
+
+// ─── Completar com quem respondeu (plano MPV F7, §6.1) ──────────────────────
+
+/** Nota das linhas acrescentadas pelo "completar" (o lembrete das 14:30 lista-as). */
+export const COMPLETED_NOTE = "completado com quem respondeu";
+
+export interface CompleteResult {
+  status: "completed" | "skipped";
+  reason?: string;
+  added: Array<{ personName: string; startHour: number; endHour: number }>;
+  gaps: Gap[];
+}
+
+const skippedComplete = (reason: string): CompleteResult => ({ status: "skipped", reason, added: [], gaps: [] });
+
+/**
+ * Antes da confirmação, num dia com a proposta AUTOMÁTICA ainda intocada,
+ * acrescenta às horas em falta os extras que entretanto marcaram
+ * disponibilidade. Só acrescenta (nunca tira nem muda ninguém); num dia mexido
+ * à mão, suspenso, confirmado ou sem proposta automática não faz nada; quem
+ * foi tirado à mão fica de fora. As linhas novas ficam "proposta automática"
+ * (`source = 'auto'`, a nota diz "completado").
+ */
+export async function completeSchedule(input: { date: string; city: ScheduleCity }): Promise<CompleteResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de dados indisponível.");
+  const { date, city } = input;
+  const [state, evidence] = await Promise.all([getScheduleState(date, city), manualEvidence(db, date, city)]);
+  if (!state || state.status !== "proposed" || state.proposedBy !== "auto") return skippedComplete("sem proposta automática por confirmar");
+  if (state.holdAuto) return skippedComplete("envio automático suspenso");
+  if (state.manual || evidence.manualRows > 0 || evidence.removedByHand > 0) return skippedComplete(MANUAL_DAY_REASON);
+  const { getExtrasDiaForecast } = await import("./extrasDia");
+  const forecast = await getExtrasDiaForecast(addDaysIso(date, -1), city);
+  const incomplete = forecastIncompleteReason(forecast);
+  if (incomplete) return skippedComplete(incomplete);
+  const needed = forecast.hourly.map((h) => h.driversNeeded);
+  const [dayRows, removedIds] = await Promise.all([loadDayRows(date), loadRemovedByHand(date)]);
+  const kept = dayRows.filter((r) => r.city === city && r.isTeamLeader === 0);
+  if (!remainingNeed(needed, kept).some((v, h) => h >= 3 && v > 0)) return skippedComplete("sem horas em falta");
+  const staying = new Set(dayRows.filter((r) => r.employeeId != null).map((r) => r.employeeId as number));
+  const exclude = new Set([...Array.from(staying), ...removedByHandOut(removedIds, staying)]);
+  const candidates = await loadScheduleCandidates(date, city);
+  const plan = planSchedule({ needed, existing: kept, candidates, exclude });
+  if (!plan.picks.length) return { ...skippedComplete("ninguém novo disponível para as horas em falta"), gaps: plan.gaps };
+
+  let aborted: string | null = null;
+  await db.transaction(async (tx) => {
+    const lock = rowsOf(await tx.execute(sql`
+      SELECT status, holdAuto, proposedBy, (manualAt IS NOT NULL) AS manual FROM extras_dia_schedules
+       WHERE assignmentDate = ${date} AND city = ${city} FOR UPDATE`))[0];
+    // Entretanto alguém mexeu, suspendeu ou confirmou → desiste (a mão humana manda).
+    if (!lock || String(lock.status) !== "proposed" || String(lock.proposedBy ?? "") !== "auto" || Number(lock.holdAuto) === 1 || Number(lock.manual) === 1) {
+      aborted = lock && Number(lock.manual) === 1 ? MANUAL_DAY_REASON : "a escala mudou entretanto";
+      return;
+    }
+    for (const p of plan.picks) {
+      await tx.execute(sql`
+        INSERT INTO extras_dia_assignments
+          (assignmentDate, city, employeeId, personName, level, isTeamLeader, shift, startHour, endHour, notes, status, version, proposalReason, createdById, source)
+        VALUES (${date}, ${city}, ${p.employeeId}, ${p.personName.slice(0, 128)}, ${p.level}, 0, ${p.shift}, ${p.startHour}, ${p.endHour},
+                ${COMPLETED_NOTE}, 'proposed', 1, ${p.reason.slice(0, 500)}, NULL, 'auto')`);
+    }
+    const note = `Completado antes da confirmação: ${plan.picks.length} acrescentado(s).${plan.gaps.length ? ` Ainda: ${plan.gaps.map(describeGap).join("; ")}.` : ""}`;
+    await tx.execute(sql`
+      UPDATE extras_dia_schedules
+         SET gapsJson = ${JSON.stringify(plan.gaps)}, summary = LEFT(CONCAT(COALESCE(summary, ''), '\n', ${note}), 1000)
+       WHERE assignmentDate = ${date} AND city = ${city}`);
+  });
+  if (aborted) return skippedComplete(aborted);
+  await logActivity({
+    userId: 0,
+    action: "extras_schedule_complete",
+    entity: "extras_dia_schedules",
+    details: `Completado com quem respondeu (cron) · ${date} · ${CITY_LABELS_PT[city]} · ${plan.picks.map((p) => `${p.personName} ${p.startHour}h–${p.endHour}h`).join(", ")}${plan.gaps.length ? ` · ${plan.gaps.map(describeGap).join("; ")}` : ""}`.slice(0, 1000),
+  });
+  return { status: "completed", added: plan.picks.map((p) => ({ personName: p.personName, startHour: p.startHour, endHour: p.endHour })), gaps: plan.gaps };
+}
+
+/** Condutores (sem TL) propostos e confirmados num dia/cidade (para o lembrete). */
+export async function countScheduleRows(date: string, city: string): Promise<{ proposed: number; confirmed: number }> {
+  const mine = (await loadDayRows(date)).filter((r) => r.city === city && r.isTeamLeader === 0);
+  return { proposed: mine.filter((r) => r.status === "proposed").length, confirmed: mine.filter((r) => r.status !== "proposed").length };
+}
+
+/** Nomes acrescentados pelo "completar" num dia/cidade (para o lembrete). */
+export async function loadCompletedNames(date: string, city: string): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const res = await db.execute(sql`
+      SELECT personName FROM extras_dia_assignments
+       WHERE assignmentDate = ${date} AND city = ${city} AND isTeamLeader = 0 AND source = 'auto' AND notes = ${COMPLETED_NOTE}
+       ORDER BY personName`);
+    return rowsOf(res).map((r) => String(r.personName ?? "").trim()).filter(Boolean);
+  } catch { return []; }
+}
+
+// ─── Orquestração do trabalho (injetável nos testes) ────────────────────────
+
+/** Interruptor lido fresco (sobreposição da BD > env > omissão do catálogo). */
+export async function scheduleFlagOn(name: string): Promise<boolean> {
+  const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([
+    import("./_core/featureFlags"), import("../shared/appSettings"),
+  ]);
+  await ensureFeatureFlagOverrides();
+  return isFeatureEnabled(name, { defaultEnabled: automationFlagDefault(name) });
+}
+
+export interface ScheduleAutomationDeps {
+  flagOn(name: string): Promise<boolean>;
+  loadSettings(): Promise<LoadedScheduleSettings>;
+  getState(date: string, city: ScheduleCity): Promise<ScheduleState | null>;
+  propose(input: { date: string; city: ScheduleCity; by: "auto"; userId: null }): Promise<ProposeResult>;
+  complete(input: { date: string; city: ScheduleCity }): Promise<CompleteResult>;
+  confirm(input: { date: string; city: ScheduleCity; by: "auto"; userId: null }): Promise<ConfirmResult>;
+  sendNotifications(date: string, city: ScheduleCity, opts: { userId: null; respectHold: true }): Promise<NotifySummary>;
+  unnotified(date: string, city: ScheduleCity): Promise<ReturnType<typeof unnotifiedAfterRetries>>;
+  coverage(date: string, city: ScheduleCity): Promise<{ coverage: number; gaps: Gap[] } | null>;
+  claimAlert(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string; detail?: string | null }): Promise<boolean>;
+  alert(input: import("./notify").NotifyInput): Promise<{ recipients: number[] }>;
+  noteRecipients(a: { date: string; city: string; kind: ScheduleAlertKind; key?: string }, recipients: number): Promise<void>;
+}
+
+export const realScheduleDeps: ScheduleAutomationDeps = {
+  flagOn: scheduleFlagOn,
+  loadSettings: loadScheduleSettings,
+  getState: getScheduleState,
+  propose: proposeSchedule,
+  complete: completeSchedule,
+  confirm: confirmSchedule,
+  sendNotifications: sendScheduleNotifications,
+  unnotified: loadUnnotifiedAfterRetries,
+  coverage: loadScheduleCoverage,
+  claimAlert: claimScheduleAlert,
+  alert: async (input) => (await import("./notify")).notify(input),
+  noteRecipients: noteAlertRecipients,
+};
+
+/** "faltam 2 condutores entre 14h–17h" → "Faltam 2 …" */
+const capital = (s: string) => (s ? `${s[0].toUpperCase()}${s.slice(1)}` : s);
+
+/**
+ * /api/cron/extras-schedule (de 15 em 15 min, 08h–23h Lisboa — plano MPV F7):
+ *  - a partir de `extras.autoProposeAt` (11:00): propõe amanhã … +N para cada
+ *    cidade (só a PRIMEIRA proposta de dias intocados — nunca num dia com
+ *    proposta, escala, suspensão ou mexido à mão);
+ *  - 30 min antes da confirmação, com EXTRAS_COMPLETE_BEFORE_CONFIRM: completa
+ *    as horas em falta de amanhã com quem respondeu (só dias intocados);
+ *  - a partir de `extras.autoConfirmAt` (15:00, se `extras.autoConfirm`):
+ *    confirma a proposta de amanhã não suspensa e avisa; um dia mexido à mão
+ *    segue `extras.manualEditAtConfirm` (D4b); cobertura < 80 % → aviso;
+ *  - escalas já confirmadas e não suspensas de hoje em diante: envia avisos
+ *    em falta (linhas editadas → nova versão; falhas → até 4 tentativas, com
+ *    30/60/90 min de espera) e avisa quem ficou por avisar depois de todas.
+ */
+export async function runScheduleAutomation(now: Date = new Date(), deps: ScheduleAutomationDeps = realScheduleDeps): Promise<ScheduleCronReport> {
   const ln = lisbonNow(now);
   const report: ScheduleCronReport = { ok: true, now: ln, ran: [], skipped: [], warnings: [], errors: [], details: {} };
-  const { isFeatureEnabled } = await import("./_core/featureFlags");
-  if (!isFeatureEnabled("EXTRAS_AUTOMATION")) {
+  if (!(await deps.flagOn("EXTRAS_AUTOMATION"))) {
     report.skipped.push("desligado (EXTRAS_AUTOMATION=off)");
     return report;
   }
-  const settings = await loadScheduleSettings();
+  const settings = await deps.loadSettings();
   const due = scheduleDue(ln, settings);
-  const step = async (key: string, fn: () => Promise<unknown>) => {
+  const step = async (key: string, fn: () => Promise<unknown>): Promise<{ ok: boolean; out: any; error?: string }> => {
     try {
       const out: any = await fn();
       if (out && out.status === "skipped") report.skipped.push(`${key} (${out.reason ?? "nada a fazer"})`);
@@ -1088,31 +1337,108 @@ export async function runScheduleAutomation(now: Date = new Date()): Promise<Sch
       report.details[key] = out;
       for (const w of out?.notifications?.warnings ?? out?.warnings ?? []) if (!report.warnings.includes(w)) report.warnings.push(w);
       for (const e of out?.notifications?.errors ?? out?.errors ?? []) report.errors.push(`${key}: ${e}`);
+      return { ok: true, out };
     } catch (err: any) {
-      report.errors.push(`${key}: ${String(err?.message ?? err).slice(0, 200)}`);
+      const error = String(err?.message ?? err).slice(0, 200);
+      report.errors.push(`${key}: ${error}`);
+      return { ok: false, out: null, error };
+    }
+  };
+  /** Aviso a TL + supervisor + back office da cidade, uma só vez por (dia, cidade, tipo, chave). */
+  const alertOnce = async (a: { date: string; city: ScheduleCity; kind: ScheduleAlertKind; key?: string; title: string; body: string }) => {
+    try {
+      if (!(await deps.claimAlert({ date: a.date, city: a.city, kind: a.kind, key: a.key, detail: a.body }))) return;
+      const r = await deps.alert({
+        kind: "extras_schedule_alert", city: a.city, title: a.title, body: a.body, link: "/extras-dia",
+        entity: { type: "extras_schedule_alert", id: `${a.date}:${a.city}:${a.kind}:${a.key ?? ""}` },
+      });
+      await deps.noteRecipients({ date: a.date, city: a.city, kind: a.kind, key: a.key }, r?.recipients?.length ?? 0);
+      report.ran.push(`alert:${a.kind}:${a.date}:${a.city}`);
+    } catch (err: any) {
+      report.warnings.push(`aviso ${a.kind} (${a.date}, ${CITY_LABELS_PT[a.city]}) falhou: ${String(err?.message ?? err).slice(0, 120)}`);
     }
   };
 
   for (const date of due.proposeDates) {
     for (const city of SCHEDULE_CITIES) {
-      await step(`propose:${date}:${city}`, () => proposeSchedule({ date, city, by: "auto", userId: null }));
+      await step(`propose:${date}:${city}`, () => deps.propose({ date, city, by: "auto", userId: null }));
     }
   }
+
+  // Completar com quem respondeu: 30 min antes da confirmação (14:30), só amanhã e só dias intocados.
+  const completeFrom = settings.autoConfirmAtMin - 30;
+  if (settings.autoConfirm && ln.minutes >= completeFrom && ln.minutes < settings.autoConfirmAtMin && (await deps.flagOn("EXTRAS_COMPLETE_BEFORE_CONFIRM"))) {
+    const date = addDaysIso(ln.date, 1);
+    for (const city of SCHEDULE_CITIES) {
+      // Uma vez por dia e cidade (a leitura da previsão é ao vivo — não se repete de 15 em 15 min).
+      if (!(await deps.claimAlert({ date, city, kind: "complete" }))) continue;
+      await step(`complete:${date}:${city}`, () => deps.complete({ date, city }));
+    }
+  }
+
   for (const date of due.confirmDates) {
     for (const city of SCHEDULE_CITIES) {
-      const state = await getScheduleState(date, city);
-      if (!canAutoConfirm(state)) continue;
-      await step(`confirm:${date}:${city}`, () => confirmSchedule({ date, city, by: "auto", userId: null }));
+      const state = await deps.getState(date, city);
+      const decision = autoConfirmDecision(state, settings.manualEditAtConfirm, now.getTime());
+      if (decision.action === "skip") continue;
+      if (decision.action === "wait") { report.skipped.push(`confirm:${date}:${city} (${decision.reason})`); continue; }
+      if (decision.action === "hold_notify") {
+        report.skipped.push(`confirm:${date}:${city} (${decision.reason})`);
+        const who = state?.manual?.byName ? ` por ${state.manual.byName}` : "";
+        await alertOnce({
+          date, city, kind: "manual_hold",
+          title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}) por confirmar: mexida à mão`,
+          body: `O dia foi mexido à mão${who}${state?.manual?.what ? ` (${state.manual.what})` : ""}, por isso às ${settings.autoConfirmAt} não foi confirmado nem os extras foram avisados. Confirma tu em Extras-dia → Dia → "Confirmar escala" (avisa cada extra por WhatsApp e email).`,
+        });
+        continue;
+      }
+      const r = await step(`confirm:${date}:${city}`, () => deps.confirm({ date, city, by: "auto", userId: null }));
+      if (!r.ok) {
+        await alertOnce({
+          date, city, kind: "confirm_failed",
+          title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}): a confirmação automática falhou`,
+          body: `A confirmação das ${settings.autoConfirmAt} falhou (${r.error ?? "erro"}). O agendador volta a tentar de 15 em 15 min; se não passar, confirma à mão em Extras-dia → Dia.`,
+        });
+        continue;
+      }
+      if (r.out?.status !== "confirmed") continue;
+      // Cobertura abaixo de 80 % depois de confirmar → aviso (a previsão é a de agora).
+      try {
+        const cov = await deps.coverage(date, city);
+        if (cov && cov.coverage < COVERAGE_ALERT_MIN) {
+          await alertOnce({
+            date, city, kind: "low_coverage",
+            title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}): só ${Math.round(cov.coverage * 100)} % das horas cobertas`,
+            body: `Confirmada às ${settings.autoConfirmAt} com ${Math.round(cov.coverage * 100)} % das horas×condutor previstas (abaixo de ${Math.round(COVERAGE_ALERT_MIN * 100)} %).${cov.gaps.length ? ` ${capital(cov.gaps.map(describeGap).join("; "))}.` : ""} Pede disponibilidade a quem não respondeu ou põe gente à mão.`,
+          });
+        }
+      } catch (err: any) {
+        report.warnings.push(`cobertura ${date} ${CITY_LABELS_PT[city]}: ${String(err?.message ?? err).slice(0, 120)}`);
+      }
     }
   }
-  // Avisos em falta nas escalas já confirmadas (hoje em diante).
+  // Avisos em falta nas escalas já confirmadas (hoje em diante) e quem ficou por avisar.
   for (let i = 0; i <= Math.max(1, settings.daysAhead); i++) {
     const date = addDaysIso(ln.date, i);
     for (const city of SCHEDULE_CITIES) {
-      const state = await getScheduleState(date, city);
+      const state = await deps.getState(date, city);
       if (!state || state.status !== "confirmed" || state.holdAuto) continue;
-      if (report.ran.includes(`confirm:${date}:${city}`)) continue;
-      await step(`notify:${date}:${city}`, () => sendScheduleNotifications(date, city, { userId: null, respectHold: true }));
+      if (!report.ran.includes(`confirm:${date}:${city}`)) {
+        await step(`notify:${date}:${city}`, () => deps.sendNotifications(date, city, { userId: null, respectHold: true }));
+      }
+      try {
+        const left = await deps.unnotified(date, city);
+        if (left.length) {
+          const channels = Array.from(new Set(left.flatMap((l) => l.channels))).map((c) => (c === "whatsapp" ? "WhatsApp" : "email")).join(" e ");
+          await alertOnce({
+            date, city, kind: "unnotified", key: alertKeyOf(left.map((l) => `${l.assignmentId}:${l.version}`)),
+            title: `Escala de ${fmtDayPt(date)} (${CITY_LABELS_PT[city]}): ${left.length === 1 ? "1 extra ficou" : `${left.length} extras ficaram`} por avisar`,
+            body: `O aviso de trabalho (${channels}) falhou nas ${MAX_NOTIFY_ATTEMPTS} tentativas (a última 3 h depois da primeira): ${left.map((l) => l.personName).join(", ")}. Avisa-os tu (telefone) — em Extras-dia → Dia vês o estado de cada aviso.`,
+          });
+        }
+      } catch (err: any) {
+        report.warnings.push(`por avisar ${date} ${CITY_LABELS_PT[city]}: ${String(err?.message ?? err).slice(0, 120)}`);
+      }
     }
   }
   report.ok = scheduleCronOk(report);

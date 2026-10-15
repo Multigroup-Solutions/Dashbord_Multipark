@@ -207,6 +207,18 @@ async function emailCandidatesByText(tx: any, projectId: number, review: ReturnT
 }
 
 /**
+ * Por onde sai uma resposta agora: Google direto quando ligado; senão a
+ * Windsor (chave + interruptor GBP_WINDSOR_REPLY); senão 'none'. Também usado
+ * pelas 5★ automáticas (plano MPV F7) para não tentar publicar sem canal.
+ */
+export async function currentReplyChannel(): Promise<'google' | 'windsor' | 'none'> {
+  const w = await import('./windsor');
+  const conn = await connection();
+  return w.replyChannel({ oauthConnected: !!conn?.refreshTokenEnc && conn.status === 'connected',
+    windsorConfigured: w.windsorConfigured(), windsorReplyOn: w.windsorConfigured() && await w.windsorFlagOn('GBP_WINDSOR_REPLY') });
+}
+
+/**
  * Publica no Google a resposta escrita no dashboard (pedido do Jorge,
  * 2026-09-16: "receber a crítica e responder pela dashboard"). Só para
  * críticas importadas pela API (têm `googleReviewName`); as que vieram por
@@ -228,9 +240,7 @@ export async function publishReply(reviewId: number, comment: string, userId: nu
   }
   // 33a: Google direto quando ligado; senão pela Windsor (chave + interruptor GBP_WINDSOR_REPLY).
   const w = await import('./windsor');
-  const conn = await connection();
-  const channel = w.replyChannel({ oauthConnected: !!conn?.refreshTokenEnc && conn.status === 'connected',
-    windsorConfigured: w.windsorConfigured(), windsorReplyOn: w.windsorConfigured() && await w.windsorFlagOn('GBP_WINDSOR_REPLY') });
+  const channel = await currentReplyChannel();
   if (channel === 'none') {
     throw new Error(w.windsorConfigured()
       ? 'A Google não está ligada diretamente e a resposta pela Windsor está desligada (Definições → Automações → GBP_WINDSOR_REPLY).'

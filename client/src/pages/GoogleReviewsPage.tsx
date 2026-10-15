@@ -4,6 +4,7 @@ import { lisbonDayOf } from "@shared/lisbonDay";
 import { toCsv } from "@shared/csv";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
 import { isMarkedPublished } from "@shared/reviewRules";
+import { AUTO_PUBLISH_STATUS_LABELS } from "@shared/reviewAutoPublish";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useConfirm } from "./training/shared";
 import { useLocation } from "wouter";
@@ -97,6 +98,7 @@ export default function GoogleReviewsPage() {
             <p className="text-muted-foreground">Avaliações do Google e respostas (a IA só prepara; publica sempre uma pessoa)</p>
           </div>
         </div>
+        {beyondOwn && <AutoPublishPausedNote />}
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="max-w-full justify-start overflow-x-auto">
@@ -461,6 +463,89 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
 
 // ─── REVIEW DETAIL DIALOG ─────────────────────────────────────────────────────
 
+/**
+ * Plano MPV F7 (§6.2): a resposta automática de uma crítica de 5★ — o texto
+ * que vai sair, quando, e "Cancelar". Não aparece nada se a crítica nunca
+ * entrou na fila (o normal com o interruptor desligado).
+ */
+function AutoPublishCard({ reviewId, canEdit, onChanged }: { reviewId: number; canEdit: boolean; onChanged: () => void }) {
+  const q = trpc.reviews.autoPublishFor.useQuery({ id: reviewId }, { retry: false, staleTime: 30_000 });
+  const utils = trpc.useUtils();
+  const [confirm, confirmUi] = useConfirm();
+  const cancelMut = trpc.reviews.autoPublishCancel.useMutation({
+    onSuccess: (r) => {
+      utils.reviews.autoPublishFor.invalidate({ id: reviewId });
+      onChanged();
+      toast[r.cancelled ? "success" : "info"](r.cancelled ? "Cancelada: a resposta automática não sai." : "Já não estava à espera (saiu ou foi cancelada).");
+    },
+    onError: (e) => toast.error(e.message || "Não foi possível cancelar"),
+  });
+  const a = q.data;
+  if (!a) return null;
+  const label = AUTO_PUBLISH_STATUS_LABELS[a.status as keyof typeof AUTO_PUBLISH_STATUS_LABELS] ?? a.status;
+  const waiting = a.status === "scheduled";
+  return (
+    <Card className={waiting ? "border-blue-300" : undefined}>
+      {confirmUi}
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
+          <Bot className="w-4 h-4" /> Resposta automática (5★)
+          <Badge variant="outline">{label}</Badge>
+          {waiting && a.scheduledFor && <span className="text-xs font-normal text-muted-foreground">sai a partir de {fmtPTDateTime(`${a.scheduledFor.replace(" ", "T")}Z`)}</span>}
+          {a.publishedAt && <span className="text-xs font-normal text-muted-foreground">{fmtPTDateTime(`${a.publishedAt.replace(" ", "T")}Z`)}</span>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {a.replyText && <p className="text-sm bg-muted/50 p-3 rounded-lg border break-words whitespace-pre-line">{a.replyText}</p>}
+        {a.reason && !waiting && <p className="text-xs text-muted-foreground">Porquê: {a.reason}</p>}
+        {waiting && !a.flagOn && <p className="text-xs text-amber-800">O interruptor está desligado: esta resposta não sai enquanto não o voltarem a ligar.</p>}
+        {waiting && (
+          <p className="text-xs text-muted-foreground">Antes de sair, a crítica é lida outra vez no Google: só sai se continuar com 5★, com o mesmo texto e sem resposta.</p>
+        )}
+        {waiting && canEdit && (
+          <Button size="sm" variant="outline" disabled={cancelMut.isPending}
+            onClick={async () => {
+              if (!(await confirm({ title: "Cancelar a resposta automática?", description: "Esta resposta não sai. A crítica fica por responder (podes responder à mão).", confirmLabel: "Cancelar resposta" }))) return;
+              cancelMut.mutate({ id: reviewId });
+            }}>
+            <XCircle className="w-4 h-4 mr-1" /> {cancelMut.isPending ? "A cancelar…" : "Cancelar"}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Aviso no topo quando a publicação automática das 5★ parou (3 falhas seguidas). */
+function AutoPublishPausedNote() {
+  const { user } = useAuth();
+  const q = trpc.reviews.autoPublishStatus.useQuery(undefined, { retry: false, staleTime: 60_000 });
+  const utils = trpc.useUtils();
+  const resume = trpc.reviews.autoPublishResume.useMutation({
+    onSuccess: () => { utils.reviews.autoPublishStatus.invalidate(); toast.success("Publicação automática retomada."); },
+    onError: (e) => toast.error(e.message || "Não foi possível retomar"),
+  });
+  const s = q.data;
+  // Desligado (a omissão): não se mostra nada — a página fica como sempre foi.
+  if (!s || !s.flagOn) return null;
+  if (!s.state.pausedAt) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Respostas automáticas às 5★ ligadas: a IA prepara a resposta, fica 6 h à vista na crítica (com "Cancelar") e só depois sai, se a crítica continuar com 5★ e sem resposta no Google.{s.waiting ? ` ${s.waiting} à espera.` : ""}
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 flex flex-wrap items-center gap-2">
+      <AlertTriangle className="h-4 w-4 shrink-0" />
+      <span className="min-w-0 break-words">Respostas automáticas às 5★ paradas desde {fmtPTDateTime(`${s.state.pausedAt.replace(" ", "T")}Z`)}: {s.state.pausedReason ?? "falhas seguidas"}. {s.waiting} à espera.</span>
+      {roleRank((user as any)?.role) >= roleRank("admin") && (
+        <Button size="sm" variant="outline" className="ml-auto" disabled={resume.isPending} onClick={() => resume.mutate()}>Retomar</Button>
+      )}
+    </div>
+  );
+}
+
 function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
   const { user } = useAuth();
   const canEdit = can(user as any, "criticas", "edit");
@@ -625,6 +710,9 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
             plate={review.vehiclePlate}
             name={review.reviewerName}
           />
+
+          {/* Plano MPV F7: resposta automática às 5★ (só aparece se a crítica entrou na fila). */}
+          <AutoPublishCard reviewId={id} canEdit={canEdit} onChanged={refresh} />
 
           {/* Resposta pública já no Google (vinda da API) */}
           {review.googleReply && (
