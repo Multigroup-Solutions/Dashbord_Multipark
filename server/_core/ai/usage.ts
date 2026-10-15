@@ -102,8 +102,7 @@ export function resetAiUsageCachesForTests(): void {
   spendCache = null;
   ownSpendCache.clear();
   ownUserDayCache.clear();
-  reservedByFeature.clear();
-  reservedByUser.clear();
+  reservations.clear();
 }
 
 /** `AND feature NOT IN (…)` das funcionalidades com teto próprio (vazio se não houver). */
@@ -245,37 +244,64 @@ export async function ownBudgetSpend(feature: string, userId: number | null | un
   return { dayEur, monthEur, userDayEur };
 }
 
-// Reservas à cabeça dos turnos em curso nesta instância (por funcionalidade e por pessoa).
-const reservedByFeature = new Map<string, number>();
-const reservedByUser = new Map<string, number>();
-const addTo = (map: Map<string, number>, key: string, v: number) => {
-  const n = Math.max(0, (map.get(key) ?? 0) + v);
-  if (n < 1e-9) map.delete(key); else map.set(key, n);
-};
+// Reservas à cabeça dos turnos em curso nesta instância. Cada uma tem validade:
+// se a função morrer a meio (limite da Vercel) sem a libertar, deixa de contar sozinha.
+interface OwnReservation { feature: string; userKey: string | null; eur: number; expiresAt: number }
+const reservations = new Map<number, OwnReservation>();
+let reservationSeq = 0;
+/** Validade por omissão de uma reserva (sem prazo do chamador). */
+export const OWN_BUDGET_RESERVATION_TTL_MS = 120_000;
+
+/** Soma das reservas válidas (e esquece as expiradas). */
+function reservedSum(feature: string, userKey: string | null, now: number): { feature: number; user: number } {
+  let f = 0;
+  let u = 0;
+  for (const [id, r] of reservations) {
+    if (r.expiresAt <= now) { reservations.delete(id); continue; }
+    if (r.feature !== feature) continue;
+    f += r.eur;
+    if (userKey && r.userKey === userKey) u += r.eur;
+  }
+  return { feature: f, user: u };
+}
 
 /**
- * Reserva à cabeça `eur` (omissão OWN_BUDGET_TURN_RESERVE_EUR) para um turno
- * em curso: os pedidos que chegam ao mesmo tempo contam com ela. Devolve a
- * função que a liberta (uma vez; o runAi chama-a antes de registar o custo
- * real). Funcionalidade sem teto próprio → nada.
+ * Reserva à cabeça `eur` (omissão OWN_BUDGET_TURN_RESERVE_EUR; o runAi passa
+ * a estimativa do turno, ownBudgetTurnEstimateEur) para um turno em curso: os
+ * pedidos que chegam ao mesmo tempo contam com ela. Devolve a função que a
+ * liberta (uma vez; o runAi chama-a antes de registar o custo real). Expira ao
+ * fim de `ttlMs` (o runAi passa 2× o prazo do pedido). Funcionalidade sem teto
+ * próprio → nada.
  */
-export function reserveOwnBudget(feature: string, userId: number | null | undefined, eur: number = OWN_BUDGET_TURN_RESERVE_EUR): () => void {
+export function reserveOwnBudget(
+  feature: string, userId: number | null | undefined, eur: number = OWN_BUDGET_TURN_RESERVE_EUR,
+  opts: { ttlMs?: number; now?: number } = {},
+): () => void {
   if (!hasOwnBudget(feature) || !(eur > 0)) return () => undefined;
-  addTo(reservedByFeature, feature, eur);
-  const uk = userId != null ? `${feature}|${userId}` : null;
-  if (uk) addTo(reservedByUser, uk, eur);
-  let done = false;
-  return () => {
-    if (done) return;
-    done = true;
-    addTo(reservedByFeature, feature, -eur);
-    if (uk) addTo(reservedByUser, uk, -eur);
-  };
+  const id = ++reservationSeq;
+  const now = opts.now ?? Date.now();
+  const ttl = Math.max(1_000, opts.ttlMs ?? OWN_BUDGET_RESERVATION_TTL_MS);
+  reservations.set(id, { feature, userKey: userId != null ? `${feature}|${userId}` : null, eur, expiresAt: now + ttl });
+  return () => { reservations.delete(id); };
 }
 
 /** Só testes. */
-export function ownBudgetReservedForTests(feature: string, userId?: number | null): { feature: number; user: number } {
-  return { feature: reservedByFeature.get(feature) ?? 0, user: userId != null ? reservedByUser.get(`${feature}|${userId}`) ?? 0 : 0 };
+export function ownBudgetReservedForTests(feature: string, userId?: number | null, now: number = Date.now()): { feature: number; user: number } {
+  return reservedSum(feature, userId != null ? `${feature}|${userId}` : null, now);
+}
+
+/**
+ * Estimativa do custo MÁXIMO de um turno, para a reserva (auditoria do F0b):
+ * por chamada, o teto de saída × preço de saída + a entrada estimada × preço
+ * de entrada; × as chamadas possíveis (as voltas de ferramentas + a final, ou
+ * 1 sem ferramentas). Nunca abaixo de OWN_BUDGET_TURN_RESERVE_EUR. PURA.
+ */
+export function ownBudgetTurnEstimateEur(p: {
+  price: { input: number; output: number }; maxOutputTokens: number; inputTokens: number; calls: number;
+}): number {
+  const perCall = (Math.max(0, p.maxOutputTokens) * p.price.output + Math.max(0, p.inputTokens) * p.price.input) / 1_000_000;
+  const est = perCall * Math.max(1, Math.floor(p.calls));
+  return Math.max(OWN_BUDGET_TURN_RESERVE_EUR, Math.round(est * 1_000_000) / 1_000_000);
 }
 
 /**
@@ -287,8 +313,8 @@ export function ownBudgetReservedForTests(feature: string, userId?: number | nul
  *
  * Limite do excesso: cada instância só vê as suas reservas; o gasto das
  * outras chega pela BD (≤ 60 s de atraso abaixo dos 80 %, nenhum acima). O
- * teto pode passar, no máximo, ≈ (turnos em curso nas outras instâncias ×
- * 0,20 €) + o que um turno gastar acima da estimativa.
+ * teto pode passar, no máximo, ≈ (turnos em curso nas outras instâncias × a
+ * estimativa de cada um, ≥ 0,20 €) + o que um turno gastar acima da estimativa.
  */
 export async function ownBudgetCheck(feature: string, userId: number | null | undefined, now: number = Date.now()): Promise<{ ok: boolean; reason: OwnBudgetReason | null; spend: OwnBudgetSpend; budget: AiAssistantSmartBudget }> {
   const budget = await getOwnBudget(feature);
@@ -296,8 +322,9 @@ export async function ownBudgetCheck(feature: string, userId: number | null | un
   if (!hasOwnBudget(feature)) return { ok: true, reason: null, spend: zero, budget };
   const hasUser = userId != null;
   const withReserved = (s: OwnBudgetSpend): OwnBudgetSpend => {
-    const rf = reservedByFeature.get(feature) ?? 0;
-    const ru = hasUser ? reservedByUser.get(`${feature}|${userId}`) ?? 0 : 0;
+    const r = reservedSum(feature, hasUser ? `${feature}|${userId}` : null, now);
+    const rf = r.feature;
+    const ru = r.user;
     return { dayEur: s.dayEur + rf, monthEur: s.monthEur + rf, userDayEur: s.userDayEur + ru };
   };
   try {
