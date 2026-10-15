@@ -554,3 +554,47 @@ export async function insertTimeRecordAtomic(
     return { id: Number((ins as any)?.[0]?.insertId ?? 0) };
   });
 }
+
+/** Teto da leitura do Zello no check-out (a saída já está gravada; o resto espera no máximo isto). */
+export const CHECKOUT_ZELLO_CAP_MS = 20_000;
+
+/**
+ * Retrato do Zello do turno (km, velocidades, minutos com o Zello ligado e
+ * desligado) junto à SAÍDA já gravada. Corre DEPOIS de gravar a saída e as
+ * horas: um Zello lento ou um corte de 60 s nunca perdem a saída (antes lia-se
+ * o Zello primeiro, até 15 s por chamada). Só preenche uma saída que ainda não
+ * tem o retrato (`zelloKm` vazio): repetir não muda nada, nunca cria outra
+ * saída e nunca mexe nas horas. Melhor esforço: nunca lança.
+ */
+export async function attachZelloToCheckOut(o: { recordId: number; employeeId: number; inAt: Date; outAt: Date }): Promise<import("./zello").ZelloShiftSummary | null> {
+  if (!(o.recordId > 0)) return null;
+  try {
+    const { resolveZelloUsernameForShift } = await import("./db");
+    // o PDA em que a pessoa picou nesse turno; senão a ligação fixa da ficha (telemóveis pessoais)
+    const username = await resolveZelloUsernameForShift(o.employeeId, o.inAt, o.outAt);
+    if (!username) return null;
+    const { summarizeZelloShift } = await import("./zello");
+    const z = await summarizeZelloShift(username, o.inAt, o.outAt);
+    if (!z) return null;
+    const db = await getDb();
+    if (!db) return z;
+    await db.update(timeRecords).set({
+      zelloKm: String(z.km),
+      zelloAvgSpeed: String(z.avgSpeed),
+      zelloMaxSpeed: String(z.maxSpeed),
+      zelloOfflineMinutes: z.offlineMinutes,
+      zelloOnlineMinutes: z.onlineMinutes,
+    }).where(and(eq(timeRecords.id, o.recordId), eq(timeRecords.employeeId, o.employeeId), eq(timeRecords.type, "check_out"), isNull(timeRecords.zelloKm)));
+    return z;
+  } catch (err) {
+    console.warn("[checkOut] retrato do Zello não junto à saída (a saída está gravada):", String((err as Error)?.message ?? err).slice(0, 160));
+    return null;
+  }
+}
+
+/** Espera por `p` no máximo `ms`; depois disso devolve `fallback` (a promessa continua sozinha). */
+export async function withCap<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); (timer as any)?.unref?.(); });
+  try { return await Promise.race([p, cap]); } finally { if (timer) clearTimeout(timer); }
+}

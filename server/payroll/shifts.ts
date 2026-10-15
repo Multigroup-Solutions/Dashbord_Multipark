@@ -167,3 +167,45 @@ export function pairShifts(records: TimeRecordLike[]): { shifts: Shift[]; orphan
 export function countableShifts(shifts: Shift[]): Shift[] {
   return shifts.filter((s) => s.outId != null && (s.status === "ok" || s.status === "approved"));
 }
+
+/**
+ * Resumo do ponto de UM mês com a regra da folha (ficha → Ponto, rh.timeRecords.monthlyHours):
+ * turnos que COMEÇAM entre `firstDay` e `lastDay` (dias de Lisboa); contam os
+ * fechados e não suspeitos/rejeitados; à parte os suspeitos (não pagos até
+ * revisão) e as entradas sem saída. Antes a ficha somava as horas de todas as
+ * saídas do mês, também as suspeitas e as rejeitadas, e não batia com a folha.
+ */
+export function pontoMonthSummary(records: TimeRecordLike[], firstDay: string, lastDay: string): {
+  totalHours: number; shifts: number; suspiciousHours: number; suspiciousShifts: number; openShifts: number;
+} {
+  const month = pairShifts(records).shifts.filter((s) => s.day >= firstDay && s.day <= lastDay);
+  const countable = countableShifts(month);
+  const suspicious = month.filter((s) => s.status === "suspicious");
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  return {
+    totalHours: r2(countable.reduce((t, s) => t + s.hours, 0)),
+    shifts: countable.length,
+    suspiciousHours: r2(suspicious.reduce((t, s) => t + s.hours, 0)),
+    suspiciousShifts: suspicious.length,
+    openShifts: month.filter((s) => s.status === "open").length,
+  };
+}
+
+/**
+ * As picagens que a ficha → Ponto mostra num mês (ids): as dos turnos que
+ * COMEÇAM entre `firstDay` e `lastDay` (dias de Lisboa) — com a saída, mesmo
+ * que caia no dia seguinte — e as soltas (saída sem entrada) dentro do mês
+ * [`start`, `end`) UTC. A lista soma assim o mesmo que `pontoMonthSummary` e a
+ * folha: a saída de um turno da noite de dia 31 aparece no mês em que entrou.
+ */
+export function pontoMonthRecordIds(records: TimeRecordLike[], firstDay: string, lastDay: string, start: string, end: string): Set<number> {
+  const { shifts, orphans } = pairShifts(records);
+  const ids = new Set<number>();
+  for (const s of shifts) {
+    if (s.day < firstDay || s.day > lastDay) continue;
+    ids.add(s.inId);
+    if (s.outId != null) ids.add(s.outId);
+  }
+  for (const o of orphans) if (o.recordedAt >= start && o.recordedAt < end) ids.add(o.id);
+  return ids;
+}

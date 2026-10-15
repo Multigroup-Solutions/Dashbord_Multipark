@@ -19,6 +19,7 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { isPlausibleEmail, normalizeEmail } from "../shared/email";
 import { isPlaceholderAccount } from "../shared/loginCode";
 import { normalizePhoneForStorage } from "../shared/phone";
+import { fichasToLinkByEmail } from "../shared/pontoFichas";
 import { getDb, logActivity } from "./db";
 import { driverApplications, employees, users } from "../drizzle/schema";
 import { roleForPosition } from "./identityReconcile";
@@ -270,7 +271,9 @@ async function backfillEmployeeContacts(
   }
   if (!employee.userId) {
     const user = await findUserByEmail(db, email);
-    if (user) patch.userId = user.id;
+    // Uma pessoa = uma ficha: a conta que já está numa ficha ATIVA não passa a
+    // estar também nesta (o ponto mudava de ficha a meio do mês — shared/pontoFichas.ts).
+    if (user && !(await accountHasActiveFicha(db, user.id, employee.id))) patch.userId = user.id;
   }
   if (Object.keys(patch).length === 0) return;
   await db.update(employees).set(patch).where(eq(employees.id, employee.id));
@@ -429,16 +432,55 @@ export async function adoptPlaceholderAccountByEmail(
 export interface LinkActor { actorId?: number | null; source?: "ui" | "cron" | "system" | "site" }
 const actorOf = (by?: LinkActor) => ({ userId: by?.actorId ?? 0, source: by?.source ?? (by?.actorId ? "ui" : "system") });
 
+/**
+ * A conta já é a principal (ou uma conta extra, employee_accounts) de uma ficha
+ * ATIVA, fora `exceptEmployeeId`? Ligá-la a outra ficha punha a mesma pessoa
+ * em duas fichas e o ponto ia para a que `getEmployeeByUserId` escolhesse.
+ */
+export async function accountHasActiveFicha(db: Db, userId: number, exceptEmployeeId?: number): Promise<boolean> {
+  const except = exceptEmployeeId ?? 0;
+  const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r?.rows ?? r) as any[]) ?? [];
+  try {
+    return rowsOf(await db.execute(sql`SELECT 1 AS x FROM employees e
+      WHERE e.isActive = 1 AND e.id <> ${except}
+        AND (e.userId = ${userId} OR EXISTS (SELECT 1 FROM employee_accounts a WHERE a.employeeId = e.id AND a.userId = ${userId}))
+      LIMIT 1`)).length > 0;
+  } catch {
+    // employee_accounts ainda não criada: só a conta principal
+    return rowsOf(await db.execute(sql`SELECT 1 AS x FROM employees e WHERE e.isActive = 1 AND e.id <> ${except} AND e.userId = ${userId} LIMIT 1`)).length > 0;
+  }
+}
+
+/** Fichas ATIVAS em que a conta está (principal ou extra), por id. */
+export async function activeFichaIdsOfAccount(db: Db, userId: number): Promise<number[]> {
+  const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r?.rows ?? r) as any[]) ?? [];
+  let rows: any[];
+  try {
+    rows = rowsOf(await db.execute(sql`SELECT e.id FROM employees e
+      WHERE e.isActive = 1 AND (e.userId = ${userId} OR EXISTS (SELECT 1 FROM employee_accounts a WHERE a.employeeId = e.id AND a.userId = ${userId}))
+      ORDER BY e.id`));
+  } catch {
+    rows = rowsOf(await db.execute(sql`SELECT e.id FROM employees e WHERE e.isActive = 1 AND e.userId = ${userId} ORDER BY e.id`));
+  }
+  return rows.map((r) => Number(r.id));
+}
+
 export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmail: string, by?: LinkActor): Promise<number[]> {
   const email = normalizeEmail(rawEmail);
   if (!email || !userId) return [];
   const rows = await db
-    .select({ id: employees.id, fullName: employees.fullName })
+    .select({ id: employees.id, fullName: employees.fullName, isActive: employees.isActive })
     .from(employees)
     // Email de trabalho OU pessoal (Fase 1: muitos extras só têm o pessoal)
     .where(and(sql`(LOWER(TRIM(${employees.email})) = ${email} OR LOWER(TRIM(${employees.personalEmail})) = ${email})`, isNull(employees.userId)))
     .orderBy(asc(employees.id));
   const linked: number[] = [];
+  // Uma pessoa = uma ficha (shared/pontoFichas.ts): no máximo UMA ficha, e
+  // nenhuma se a conta já está numa ficha ativa. Antes ligavam-se todas as
+  // fichas com o mesmo email e o ponto passava para a outra a meio do mês.
+  const pick = rows.length
+    ? fichasToLinkByEmail(rows.map((r) => ({ id: r.id, isActive: Number(r.isActive) === 1 })), await accountHasActiveFicha(db, userId))
+    : [];
   // Ficha que JÁ tem outra conta principal e este email (profissional ou
   // pessoal) → esta conta entra como conta EXTRA da mesma pessoa (0081).
   if (!rows.length) {
@@ -459,7 +501,7 @@ export async function linkEmployeesToUserByEmail(db: Db, userId: number, rawEmai
       } catch { /* conta já é principal de outra ficha */ }
     }
   }
-  for (const r of rows) {
+  for (const r of rows.filter((x) => pick.includes(x.id))) {
     await db.update(employees).set({ userId }).where(and(eq(employees.id, r.id), isNull(employees.userId)));
     linked.push(r.id);
     await logActivity({

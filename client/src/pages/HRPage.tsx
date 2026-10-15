@@ -825,16 +825,28 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
   const setTerminal = trpc.rh.timeRecords.setTerminal.useMutation({
     onSuccess: (_d, v) => {
       utils.rh.timeRecords.list.invalidate();
+      utils.rh.timeRecords.monthlyHours.invalidate();
       toast.success(v.terminal ? "Troço marcado como terminal" : "Terminal desmarcado");
       setTerminalEdit(null); setTerminalNote("");
     },
     onError: (e) => toast.error(e.message),
   });
+  // Ponto por MÊS (escolhe-se o mês): todas as picagens do mês e as horas pela
+  // regra da folha. Antes viam-se só as 30 últimas picagens e o total do mês
+  // corrente — um mês passado não dava para conferir.
   const now = new Date();
-  const [year] = useState(now.getFullYear());
-  const [month] = useState(now.getMonth() + 1);
-  const { data: records = [] } = trpc.rh.timeRecords.list.useQuery({ employeeId });
-  const { data: monthly } = trpc.rh.timeRecords.monthlyHours.useQuery({ employeeId, year, month });
+  const [ym, setYm] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const { year, month } = ym;
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
+  const shiftMonth = (delta: number) => setYm(({ year: y, month: m }) => {
+    const t = (y * 12 + (m - 1)) + delta;
+    return { year: Math.floor(t / 12), month: (t % 12) + 1 };
+  });
+  // só a última picagem (entrada aberta?): as do mês vêm com as horas
+  const { data: records = [] } = trpc.rh.timeRecords.list.useQuery({ employeeId, limit: 1 });
+  const monthlyQ = trpc.rh.timeRecords.monthlyHours.useQuery({ employeeId, year, month });
+  const monthly = monthlyQ.data;
+  const monthRecords = (monthly?.records ?? []) as typeof records;
   const [cameraMode, setCameraMode] = useState<"check_in" | "check_out" | null>(null);
   const [expandedRecord, setExpandedRecord] = useState<number | null>(null);
   const { user: recUser } = useAuth();
@@ -980,28 +992,42 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
         </div>
       )}
 
-      {monthly && (
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <Calendar className="w-8 h-8 text-blue-600" />
-            <div>
-              <p className="text-xl font-bold">{monthly.totalHours.toFixed(1)}h</p>
-              <p className="text-xs text-muted-foreground">Horas trabalhadas este mês</p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardContent className="p-4 flex flex-wrap items-center gap-3">
+          <Calendar className="w-8 h-8 text-blue-600" />
+          <div className="flex-1 min-w-[10rem]">
+            <p className="text-xl font-bold">{monthly ? `${monthly.totalHours.toFixed(1)}h` : "…"}</p>
+            <p className="text-xs text-muted-foreground">
+              Horas que contam em {MONTH_NAMES[month - 1]} {year} (como na folha)
+              {monthly && monthly.shifts > 0 ? ` · ${monthly.shifts} turno(s)` : ""}
+            </p>
+            {monthly && monthly.suspiciousShifts > 0 && (
+              <p className="text-xs text-red-700">{monthly.suspiciousShifts} turno(s) por rever ({monthly.suspiciousHours.toFixed(1)} h) — não contam até serem aprovados</p>
+            )}
+            {monthly && monthly.openShifts > 0 && (
+              <p className="text-xs text-amber-700">{monthly.openShifts} entrada(s) sem saída — não contam</p>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="outline" aria-label="Mês anterior" onClick={() => shiftMonth(-1)}><ChevronLeft className="w-4 h-4" /></Button>
+            <span className="text-sm font-medium min-w-[8.5rem] text-center">{MONTH_NAMES[month - 1]} {year}</span>
+            <Button size="sm" variant="outline" aria-label="Mês seguinte" disabled={isCurrentMonth} onClick={() => shiftMonth(1)}><ChevronRight className="w-4 h-4" /></Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {monthlyQ.error && <QueryErrorNote error={monthlyQ.error} onRetry={() => monthlyQ.refetch()} retrying={monthlyQ.isFetching} what={`o ponto de ${MONTH_NAMES[month - 1]}`} />}
 
       {/* Plano 56 B2: os troços de terminal não carregaram → diz-se (erro ≠ "sem terminal") */}
       {terminalRh.error && <QueryErrorNote error={terminalRh.error} onRetry={() => terminalRh.refetch()} retrying={terminalRh.fetching} what="os troços de terminal" />}
 
       {/* Records list */}
       <div className="space-y-2">
-        {records.slice(0, 30).map((r, idx) => {
+        {monthRecords.map((r, idx) => {
           const isExpanded = expandedRecord === r.id;
-          // Plano 56 B2: troços do terminal pelo perfil deste turno — na saída (entrada = a picagem seguinte da lista),
-          // ou na entrada ainda aberta (a última picagem).
-          const shiftIn = r.type === "check_out" ? (records[idx + 1]?.type === "check_in" ? records[idx + 1].recordedAt : null) : idx === 0 ? r.recordedAt : null;
+          // Plano 56 B2: troços do terminal pelo perfil deste turno — na saída (entrada = a picagem seguinte da lista:
+          // a lista do mês traz os turnos inteiros), ou na entrada ainda aberta (a última picagem de todas).
+          const shiftIn = r.type === "check_out" ? (monthRecords[idx + 1]?.type === "check_in" ? monthRecords[idx + 1].recordedAt : null) : records[0]?.id === r.id ? r.recordedAt : null;
           const shiftSessions = terminalRh.enabled && shiftIn ? sessionsInShift(terminalRh.sessions, shiftIn, r.type === "check_out" ? r.recordedAt : null) : [];
           const hasCoords = r.latitude && r.longitude;
           // Ponto suspeito (check-out esquecido cortado a 12h) ou fora do raio → VERMELHO
@@ -1158,7 +1184,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
             </div>
           );
         })}
-        {records.length === 0 && <p className="text-center text-muted-foreground py-8">Sem registos de ponto</p>}
+        {monthly && monthRecords.length === 0 && <p className="text-center text-muted-foreground py-8">Sem picagens em {MONTH_NAMES[month - 1]} {year}</p>}
       </div>
 
       {terminalEdit && (
