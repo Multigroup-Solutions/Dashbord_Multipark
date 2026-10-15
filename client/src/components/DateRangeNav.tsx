@@ -99,13 +99,15 @@ export function UniDateNav({
  * limpa o range.
  */
 export default function DateRangeNav({
-  start, end, gran, onChange, showAll = true,
+  start, end, gran, onChange, showAll = true, granularities,
 }: {
   start: string;
   end: string;
   gran: DateGran;
   onChange: (start: string, end: string, gran: DateGran) => void;
   showAll?: boolean;
+  /** Períodos oferecidos no seletor (omissão: todos). Ex.: só Dia/Semana num pedido semanal. */
+  granularities?: Array<Exclude<DateGran, "custom">>;
 }) {
   const hasRange = Boolean(start || end);
   const step = (dir: -1 | 1) => {
@@ -130,7 +132,7 @@ export default function DateRangeNav({
       <Select value={hasRange ? gran : "all"} onValueChange={pickGran}>
         <SelectTrigger aria-label="Tipo de período" className="w-[118px] !h-10 bg-white border-[#c2d6ff] text-[#0046ad] font-semibold"><SelectValue /></SelectTrigger>
         <SelectContent>
-          {(Object.keys(GRAN_LABEL) as Array<keyof typeof GRAN_LABEL>).map((g) => (
+          {(granularities ?? (Object.keys(GRAN_LABEL) as Array<keyof typeof GRAN_LABEL>)).map((g) => (
             <SelectItem key={g} value={g}>{GRAN_LABEL[g]}</SelectItem>
           ))}
           <SelectItem value="custom" disabled={!hasRange}>Livre</SelectItem>

@@ -4,6 +4,7 @@
 Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashboard-jorge) para: (1) seleção múltipla de extras com contactos, (2) envio em massa de templates WhatsApp, (3) inbox de respostas via webhook Meta, (4) API segura para uma app externa de formulário de disponibilidades. Plano aprovado pelo Jorge em 2026-07-09. Implementação faseada — cada fase é revista antes da seguinte. Este ficheiro tem o plano completo, os 5 ajustes do Jorge, e o changelog por fase.
 
 ## Related
+- `site-applications-approval.md` — **2026-10-13**: aprovar uma candidatura do site pode mandar logo o pedido de disponibilidade (mesmo `sendBroadcast`, template AVAILABILITY da cidade escolhida, input aninhado `availabilityRequest` — sem `city` no topo).
 - `employee-city-derivation.md` — **2026-10-07**: a cidade derivada passa a escolher o TEMPLATE (registo `shared/driverTemplates.ts`).
 - `sync-runners-topology.md` — topologia de execução (Railway `setInterval` vs Vercel/GitHub Actions cron). Relevante porque o webhook e o broadcast correm no processo Railway; o `runConcurrent` reutilizado vem do `multiparkBookingSync.ts`.
 - `profile-photo-upload.md` — **2026-10-01**: a foto da ficha (`employees.photoUrl`) é a fonte do avatar do inbox (lista + cabeçalho da conversa).
@@ -52,7 +53,7 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 ## Changelog
 
 ### 2026-10-09 — Inbox: filtro de CIDADE da pessoa (Lisboa / Porto / Faro / Sem cidade)
-**Type**: feature (SEM migração, NÃO commitado, sobre `main` @ `c4e93d2c`)
+**Type**: feature (SEM migração; branch `feat/whatsapp-inbox-city-filter`, **merged em `main` pela PR #360 (`29d35dc2`, 2026-10-09 16:13 UTC) e LIVE em produção** — deploy Vercel `dpl_8zM6frG1xXpUTdVCDf9W6H3sRQXM` READY)
 **Scope**: `shared/whatsappInboxView.ts` (`INBOX_CITY_FILTERS`, `InboxCityFilter`, `INBOX_CITY_SCAN_LIMIT`=5000,
 `conversationCityKey`, `matchesCityFilter`, `city` em `InboxListFilters` + contado em `activeInboxFilterCount`),
 `server/whatsappInbox.ts` (`cityKey` em `ConversationRow`, `leadProjectIdSql`, `classifyConversationCities`,

@@ -166,7 +166,7 @@ function cityDisabled(p: PreviewCity | undefined): boolean {
  * sem variáveis), por isso os papéis do envio continuam a bater certo; um
  * `{{1}}` num link de botão fica à vista (é o link pessoal do formulário).
  */
-function renderPreview(p: PreviewCity, name: string, shared: string): string {
+export function renderPreview(p: PreviewCity, name: string, shared: string): string {
   const slots = resolveBodyParamRoles(p.paramNames ?? [], p.paramCount ?? 0, p.params);
   return previewTemplateBody(p.fullText || p.bodyText || "", slots, { recipient: name, shared });
 }

@@ -91,6 +91,7 @@ import {
   NOT_MONDAY_MESSAGE,
 } from "./extrasAvailability";
 import { sendBroadcast } from "./whatsappBroadcast";
+import { availabilityRangeError } from "../shared/availabilityWeek";
 import { isDriverCity, type City } from "../shared/driverTemplates";
 
 /** Cidade do registo de templates dos motoristas (LISBOA, PORTO…). */
@@ -5739,10 +5740,29 @@ export const appRouter = router({
     // alocá-lo ao centro de custos (cidade) escolhido por quem aprova. O
     // middleware já recusa um `projectId` fora das cidades do utilizador
     // (`hasForeignCityFilter`); o `assertProjectAccess` aqui é a segunda linha.
+    //
+    // `availabilityRequest` (opcional): logo a seguir, o pedido de
+    // disponibilidade por WhatsApp para esse intervalo (uma semana segunda–
+    // domingo, ou parte dela). Vai aninhado de propósito: um `city` no topo do
+    // input faria o middleware estreitar o âmbito. Aprovar vem SEMPRE primeiro;
+    // o envio nunca desfaz a aprovação e o resultado volta em `availabilityRequest`.
     approve: protectedProcedure
-      .input(z.object({ id: z.number(), projectId: z.number().int().positive(), confirmReactivate: z.boolean().optional() }))
+      .input(z.object({
+        id: z.number(),
+        projectId: z.number().int().positive(),
+        confirmReactivate: z.boolean().optional(),
+        availabilityRequest: z
+          .object({ from: z.string().max(10), to: z.string().max(10) })
+          .superRefine((r, rctx) => {
+            const problem = availabilityRangeError(r.from, r.to);
+            if (problem) rctx.addIssue({ code: "custom", message: problem });
+          })
+          .optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "leads_extras", "edit");
+        // Pedir o envio sem poder enviar WhatsApp recusa ANTES de aprovar (nada fica a meio).
+        if (input.availabilityRequest) requireAccess(ctx.user, "whatsapp", "edit");
         assertProjectAccess(input.projectId);
         const { approveApplication } = await import("./webIntake");
         let result: Awaited<ReturnType<typeof approveApplication>>;
@@ -5753,7 +5773,29 @@ export const appRouter = router({
         }
         // Aprovada → o lead fica Convertido → a tarefa da candidatura fecha já (0545).
         await (await import("./leadTasks")).afterLeadChange();
-        return result;
+        if (!result.ok || !input.availabilityRequest) return { ...result, availabilityRequest: null };
+
+        const { sendApplicationAvailabilityRequest } = await import("./applicationAvailabilityRequest");
+        const availabilityRequest = await sendApplicationAvailabilityRequest({
+          applicationId: input.id,
+          employeeId: result.employeeId,
+          chosenCity: result.costCenter.city,
+          range: input.availabilityRequest,
+          createdById: ctx.user.id,
+        });
+        await logActivity({
+          userId: ctx.user.id,
+          action: "whatsapp_broadcast",
+          entity: "driver_applications",
+          entityId: input.id,
+          details: availabilityRequest.sent
+            ? `Pedido de disponibilidade (${availabilityRequest.weekLabel}, ${availabilityRequest.city}) enviado por WhatsApp ao aprovar a candidatura → employee ${result.employeeId}`
+            : `Pedido de disponibilidade (${availabilityRequest.weekLabel}) NÃO enviado ao aprovar a candidatura → employee ${result.employeeId}: ${availabilityRequest.reason}`.slice(0, 500),
+        }).catch((err) => {
+          // Aprovação e envio já feitos: uma falha do registo não pode virar "erro" no ecrã.
+          console.warn(`[candidaturas] registo do pedido de disponibilidade da candidatura #${input.id} falhou:`, err);
+        });
+        return { ...result, availabilityRequest };
       }),
   }),
 
