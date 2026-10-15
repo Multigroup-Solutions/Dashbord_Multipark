@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { trpc } from "@/lib/trpc";
+import { isForbidden, retryTransient } from "@/lib/queryRetry";
+import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useDashboardFilters, DashboardFilterBar } from "@/components/DashboardFilterBar";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can, scopeFor } from "@shared/access";
-import { addDays, operationalDayOf } from "@shared/lisbonDay";
+import { addDays, lisbonDayOf, operationalDayOf } from "@shared/lisbonDay";
+import { contractsExpiring, missingDocsTotals } from "@shared/peopleStats";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -68,6 +71,9 @@ const legendLabel = (value: string, entry: any) => (
   </span>
 );
 
+/** Subtítulo de um cartão cuja leitura falhou: "Sem acesso" (permissão) ou erro — nunca 0 (plano 64, D12). */
+const failedNote = (error: unknown) => (isForbidden(error) ? "Sem acesso" : "Leitura falhou — não é 0");
+
 // ─── KPI CARD ────────────────────────────────────────────────────────────────
 
 function KpiCard({
@@ -107,24 +113,34 @@ function KpiCard({
 
 export default function PessoasDashboard() {
   const filters = useDashboardFilters();
+  const globalFilters = useGlobalFilters();
   const { user } = useAuth();
-  // Avaliação: o MESMO motor da página Avaliação (dias operacionais, últimos 7).
-  // Antes pedia a avaliação semanal da semana corrente, que só é gerada na
-  // segunda-feira seguinte — vinha sempre vazia.
-  const evalTo = operationalDayOf(Date.now());
+  // Plano 64 (D1–D8): a cidade/marca do topo vale para TODOS os cartões, com as
+  // mesmas consultas das páginas de referência (lista do RH, Avaliação, Formação).
+  const scope = globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {};
+  // Avaliação: o MESMO motor da página Avaliação, nos últimos 7 dias
+  // operacionais ATÉ ONTEM (o dia de hoje ainda não está calculado).
+  const evalTo = addDays(operationalDayOf(Date.now()), -1);
   const evalFrom = addDays(evalTo, -6);
   const canEval = !!user && can(user as any, "avaliacao", "view") && scopeFor(user as any, "avaliacao") !== "own";
 
-  // Queries
-  const { data: stats, isLoading: loadingStats } = trpc.rh.stats.useQuery();
-  const { data: employees = [] } = trpc.rh.list.useQuery();
-  const { data: docStatus } = trpc.rh.documents.allStatus.useQuery();
-  const evalQ = trpc.evaluation.ranking.useQuery({ from: evalFrom, to: evalTo }, { enabled: canEval });
+  // Queries ("—" com a nota quando falham, nunca 0)
+  const statsQ = trpc.rh.stats.useQuery(scope, { retry: retryTransient });
+  const stats = statsQ.data;
+  const loadingStats = statsQ.isLoading;
+  // A MESMA lista do RH (fichas ativas, cidade/marca do topo): saem as inativas, desativadas e candidatos.
+  const listQ = trpc.rh.list.useQuery({ isActive: true, ...scope }, { retry: retryTransient });
+  const employees = listQ.data ?? [];
+  const docsQ = trpc.rh.documents.allStatus.useQuery(undefined, { retry: retryTransient });
+  const docStatus = docsQ.data;
+  const evalQ = trpc.evaluation.ranking.useQuery({ from: evalFrom, to: evalTo, ...scope }, { enabled: canEval, retry: retryTransient });
   const evaluations = evalQ.data ?? [];
-  const { data: quizRanking = [] } = trpc.training.quizRanking.useQuery();
-  const { data: examAttempts = [] } = trpc.training.careerExamAttempts.useQuery({});
+  const quizQ = trpc.training.quizRanking.useQuery(scope, { retry: retryTransient });
+  const quizRanking = quizQ.data ?? [];
+  const examsQ = trpc.training.careerExamAttempts.useQuery(scope, { retry: retryTransient });
+  const examAttempts = examsQ.data ?? [];
 
-  // ── Employee map
+  // ── Employee map (fichas ativas da lista)
   const employeeMap = useMemo(() => {
     const m = new Map<number, { fullName: string; position: string; contractType: string; contractEnd: string | null }>();
     employees.forEach((e: any) => {
@@ -132,53 +148,42 @@ export default function PessoasDashboard() {
       m.set(emp.id, {
         fullName: emp.fullName,
         position: emp.position,
-        contractType: emp.contractType,
+        // contrato vazio = "sem termo" (o valor por omissão da ficha)
+        contractType: emp.contractType || "permanent",
         contractEnd: emp.contractEnd || null,
       });
     });
     return m;
   }, [employees]);
 
-  // ── KPI: Contratos a expirar em 30 dias
-  const contractsExpiring30d = useMemo(() => {
-    const now = new Date();
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() + 30);
-    let count = 0;
-    employeeMap.forEach((emp) => {
-      if (emp.contractEnd) {
-        const end = new Date(emp.contractEnd);
-        if (end >= now && end <= cutoff) count++;
-      }
-    });
-    return count;
-  }, [employeeMap]);
+  // ── KPI: Contratos a expirar (dias de Lisboa: hoje ≤ fim ≤ hoje + 30)
+  const contractsExpiring30d = useMemo(
+    () => (listQ.data ? contractsExpiring(Array.from(employeeMap.values()), lisbonDayOf(Date.now())) : null),
+    [employeeMap, listQ.data],
+  );
 
-  // ── KPI: Documentos em falta
-  const missingDocsCount = useMemo(() => {
-    if (!docStatus) return 0;
-    let total = 0;
-    Object.values(docStatus).forEach((s: any) => {
-      total += s.missing.length;
-    });
-    return total;
-  }, [docStatus]);
-
-  // ── KPI: Employees with missing docs (for subtitle)
-  const employeesWithMissingDocs = useMemo(() => {
-    if (!docStatus) return 0;
-    return Object.values(docStatus).filter((s: any) => s.missing.length > 0).length;
-  }, [docStatus]);
+  // ── KPI: Documentos em falta — só as fichas ATIVAS da lista (uma ficha sem documentos tem os 7 em falta)
+  const missingDocs = useMemo(() => {
+    if (!docStatus || !listQ.data) return null;
+    return missingDocsTotals(Array.from(employeeMap.keys()).map((id) => ({ id })), docStatus as Record<number, { total: number; present: number }>);
+  }, [docStatus, listQ.data, employeeMap]);
 
   // ── KPI: pessoas avaliadas nos últimos 7 dias ("—" sem dados: nunca 0 por erro)
   const evaluationsThisWeek: string | number = !canEval ? "—" : evalQ.data ? evaluations.length : "—";
 
-  // ── KPI: Taxa de aprovação exames
+  // ── KPI: Taxa de aprovação exames (exames não arquivados, fichas ativas, cidade do topo)
   const examApprovalRate = useMemo(() => {
     if (examAttempts.length === 0) return null;
     const passed = examAttempts.filter((a: any) => a.passed).length;
     return Math.round((passed / examAttempts.length) * 100);
   }, [examAttempts]);
+
+  const kpiFailures = [
+    statsQ.error ? { key: "stats", error: statsQ.error, what: "as fichas ativas", retry: () => statsQ.refetch(), fetching: statsQ.isFetching } : null,
+    listQ.error ? { key: "list", error: listQ.error, what: "a lista do RH (contratos e gráficos)", retry: () => listQ.refetch(), fetching: listQ.isFetching } : null,
+    docsQ.error ? { key: "docs", error: docsQ.error, what: "os documentos", retry: () => docsQ.refetch(), fetching: docsQ.isFetching } : null,
+    examsQ.error ? { key: "exams", error: examsQ.error, what: "os exames", retry: () => examsQ.refetch(), fetching: examsQ.isFetching } : null,
+  ].filter((x): x is NonNullable<typeof x> => x != null);
 
   // ── Chart: Distribuição por posição
   const positionDistribution = useMemo(() => {
@@ -220,11 +225,11 @@ export default function PessoasDashboard() {
       }));
   }, [evaluations, employeeMap]);
 
-  // ── Top 5 quiz ranking
+  // ── Top 5 quiz ranking (só fichas ativas, cidade do topo)
   const top5Quiz = useMemo(() => {
     return quizRanking.slice(0, 5).map((r: any) => ({
       employeeId: r.employeeId,
-      name: employeeMap.get(r.employeeId)?.fullName || `#${r.employeeId}`,
+      name: employeeMap.get(r.employeeId)?.fullName || r.name || `#${r.employeeId}`,
       totalScore: r.totalScore,
       totalAttempts: r.totalAttempts,
       bestScore: r.bestScore,
@@ -250,6 +255,8 @@ export default function PessoasDashboard() {
         </p>
       </div>
 
+      {/* Sem Período (D8): os números são "agora" ou janelas fixas com o rótulo a dizer qual;
+          a cidade e a marca valem para todos os cartões. */}
       <DashboardFilterBar
         from={filters.from}
         to={filters.to}
@@ -259,30 +266,35 @@ export default function PessoasDashboard() {
         onCityChange={filters.setCityId}
         brandId={filters.brandId}
         onBrandChange={filters.setBrandId}
+        showDates={false}
       />
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <KpiCard
-          title="Funcionários Ativos"
-          value={stats?.totalActive ?? 0}
-          subtitle={`${stats?.totalPermanent ?? 0} permanentes`}
+          title="Fichas ativas"
+          value={stats ? stats.totalActive : "—"}
+          subtitle={stats
+            ? `${stats.staff} funcionários · ${stats.extras} extras${stats.partners > 0 ? ` · ${stats.partners} parceiros-empresa` : ""}`
+            : statsQ.error ? failedNote(statsQ.error) : ""}
           icon={Users}
           iconColor="text-blue-600"
           iconBg="bg-blue-100"
         />
         <KpiCard
           title="Contratos a Expirar"
-          value={contractsExpiring30d}
-          subtitle="Próximos 30 dias"
+          value={contractsExpiring30d ?? "—"}
+          subtitle={listQ.error ? failedNote(listQ.error) : "Próximos 30 dias (hoje incluído)"}
           icon={CalendarClock}
           iconColor="text-amber-600"
           iconBg="bg-amber-100"
         />
         <KpiCard
           title="Documentos em Falta"
-          value={missingDocsCount}
-          subtitle={`${employeesWithMissingDocs} colaboradores`}
+          value={missingDocs ? missingDocs.missing : "—"}
+          subtitle={missingDocs
+            ? `em ${missingDocs.employees} fichas ativas`
+            : docsQ.error ? failedNote(docsQ.error) : listQ.error ? failedNote(listQ.error) : ""}
           icon={FileWarning}
           iconColor="text-red-600"
           iconBg="bg-red-100"
@@ -290,30 +302,39 @@ export default function PessoasDashboard() {
         <KpiCard
           title="Avaliados (7 dias)"
           value={evaluationsThisWeek}
-          subtitle={evalQ.isError ? "erro a ler a avaliação" : "pessoas com dias avaliados"}
+          subtitle={!canEval ? "Sem acesso" : evalQ.error ? failedNote(evalQ.error) : "últimos 7 dias operacionais (até ontem)"}
           icon={ClipboardCheck}
           iconColor="text-green-600"
           iconBg="bg-green-100"
         />
         <KpiCard
           title="Taxa Aprovação Exames"
-          value={examApprovalRate !== null ? `${examApprovalRate}%` : "—"}
-          subtitle={`${examAttempts.length} tentativas`}
+          value={examsQ.data && examApprovalRate !== null ? `${examApprovalRate}%` : "—"}
+          subtitle={examsQ.error ? failedNote(examsQ.error) : examsQ.data ? `${examAttempts.length} tentativas` : ""}
           icon={GraduationCap}
           iconColor="text-purple-600"
           iconBg="bg-purple-100"
         />
       </div>
+      {kpiFailures.length > 0 && (
+        <div className="space-y-2">
+          {kpiFailures.map((f) => (
+            <QueryErrorNote key={f.key} error={f.error} what={f.what} onRetry={f.retry} retrying={f.fetching} />
+          ))}
+        </div>
+      )}
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Distribuicao por Posicao (Pie) */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Distribuição por Posição</CardTitle>
+            <CardTitle className="text-base">Distribuição por Posição (fichas ativas)</CardTitle>
           </CardHeader>
           <CardContent>
-            {positionDistribution.length === 0 ? (
+            {listQ.error ? (
+              <p className="text-center text-muted-foreground py-8">{failedNote(listQ.error)}</p>
+            ) : positionDistribution.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">Sem dados</p>
             ) : (
               <ResponsiveContainer width="100%" height={300}>
@@ -340,10 +361,12 @@ export default function PessoasDashboard() {
         {/* Distribuicao por Contrato (Donut) */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Distribuição por Tipo de Contrato</CardTitle>
+            <CardTitle className="text-base">Distribuição por Tipo de Contrato (fichas ativas)</CardTitle>
           </CardHeader>
           <CardContent>
-            {contractDistribution.length === 0 ? (
+            {listQ.error ? (
+              <p className="text-center text-muted-foreground py-8">{failedNote(listQ.error)}</p>
+            ) : contractDistribution.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">Sem dados</p>
             ) : (
               <ResponsiveContainer width="100%" height={300}>
@@ -376,7 +399,7 @@ export default function PessoasDashboard() {
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Trophy className="w-4 h-4 text-yellow-500" />
-              Top 5 — últimos 7 dias
+              Top 5 — últimos 7 dias operacionais (até ontem)
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -417,7 +440,11 @@ export default function PessoasDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {top5Quiz.length === 0 ? (
+            {quizQ.error ? (
+              <QueryErrorNote error={quizQ.error} onRetry={() => quizQ.refetch()} retrying={quizQ.isFetching} what="o ranking do quiz" />
+            ) : quizQ.isLoading ? (
+              <p className="text-center text-muted-foreground py-8">A carregar…</p>
+            ) : top5Quiz.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">
                 Nenhuma tentativa ainda
               </p>

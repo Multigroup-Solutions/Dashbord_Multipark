@@ -95,7 +95,7 @@ async function notesContext(user: { id: number; role: string }, employeeId: numb
   await assertEmployeeAccess(employeeId);
   return { viewer, ref };
 }
-import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, setScheduleDayOff, getTimeRecords, getLastTimeRecord, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
+import { createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, setScheduleDayOff, getTimeRecords, getLastTimeRecord, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 import { ROLE_HIERARCHY, requireRole, resolveDeactivationOrThrow } from "./routerGuards";
@@ -450,10 +450,36 @@ export const rhRouter = router({
     }),
 
   // ── STATS ──────────────────────────────────────────────────────────────────────────────────
-  stats: protectedProcedure.query(async ({ ctx }) => {
-    requireAccess(ctx.user, "rh", "view");
-    await seedExtraRates();
-    return getHRStats();
+  // Plano 64 (D1/D2): as fichas que a lista do RH mostra (o mesmo filtro do
+  // rh.list — scopedEmployeeRows), com a cidade/marca do topo; sem cidade, a
+  // mesma por omissão que a lista (scopeCityQuery). Contagens pela regra única
+  // (funcionários / extras / parceiros-empresa) e "Horas este mês" pela regra
+  // do ponto (#390).
+  stats: protectedProcedure
+    .input(z.object({ projectId: z.number().nullish() }).optional())
+    .query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "rh", "view");
+      await seedExtraRates();
+      const { scopedEmployeeRows } = await import("./rhEmployeeScope");
+      const { rows } = await scopedEmployeeRows(await rhViewer(ctx.user), { projectId: input?.projectId ?? undefined });
+      return getHRStats(rows);
+    }),
+
+  // Plano 64 (D11): relatório SÓ DE LEITURA (super admin) — fichas ativas em que
+  // o posto e o contrato não batem quanto a "extra". A folha paga o extra só
+  // pelo posto (payroll/payrollData.ts, fica como está); aqui decide-se ficha a
+  // ficha, na própria ficha.
+  extraMismatch: protectedProcedure.query(async ({ ctx }) => {
+    if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin vê este relatório." });
+    const { scopedEmployeeRows } = await import("./rhEmployeeScope");
+    const { extraRuleMismatch } = await import("../shared/employeeKind");
+    const { rows } = await scopedEmployeeRows(await rhViewer(ctx.user), { isActive: true });
+    const out: Array<{ employeeId: number; fullName: string; position: string | null; contractType: string | null; projectName: string | null } & NonNullable<ReturnType<typeof extraRuleMismatch>>> = [];
+    for (const r of rows) {
+      const m = extraRuleMismatch({ position: r.employee.position ?? null, contractType: r.employee.contractType ?? "permanent" });
+      if (m) out.push({ employeeId: r.employee.id, fullName: r.employee.fullName, position: r.employee.position ?? null, contractType: r.employee.contractType ?? null, projectName: r.project?.name ?? null, ...m });
+    }
+    return out;
   }),
 
   // Última vez que cada colaborador trabalhou (cartões dos extras:
@@ -473,22 +499,14 @@ export const rhRouter = router({
     .query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "rh", "view");
       const viewer = await rhViewer(ctx.user);
-      let rows = await getAllEmployees({ isActive: input?.isActive, position: input?.position });
-      const allowedIds = scopedProjectIds();
-      if (allowedIds) rows = rows.filter(r => r.employee.projectId != null && allowedIds.includes(r.employee.projectId));
-      // filtro global de cidade/centro (com descendentes)
-      if (input?.projectId) {
-        const ids = new Set(await resolveProjectIds(input.projectId));
-        rows = rows.filter((r: any) => r.employee.projectId != null && ids.has(r.employee.projectId));
-      }
-      // role da conta de cada ficha: fichas de admin/super_admin ficam
-      // protegidas de quem está abaixo (dados pessoais escondidos).
+      // Âmbito de cidade, cidade/centro escolhido (com descendentes) e quem pode
+      // ver cada ficha — o filtro partilhado com rh.stats (plano 64, D1).
       // (também para admins: a ficha de um super_admin fica mascarada a um admin, como no detalhe)
-      const roleByUserId = new Map<number, string>();
-      for (const u of await getAllUsers()) roleByUserId.set(u.id, u.role);
+      const { scopedEmployeeRows } = await import("./rhEmployeeScope");
+      const { rows, roleOf } = await scopedEmployeeRows(viewer, { isActive: input?.isActive, position: input?.position, projectId: input?.projectId });
       // 49c: "Candidato" é um estado (não o motivo, que é sensível) — calcula-se antes de limpar.
       const candidateIds = new Set((rows as any[]).filter((r) => !r.employee.isActive && r.employee.deactivationReason === "candidato").map((r) => r.employee.id));
-      const visible = sanitizeEmployeeRows(viewer, rows as any[], (emp) => (emp.userId != null ? roleByUserId.get(emp.userId) : null));
+      const visible = sanitizeEmployeeRows(viewer, rows as any[], roleOf);
       // Jorge (7 out 2026): estado da carta em cada ficha (etiqueta e filtro da lista).
       const { licenceStatusesOrNull } = await import("./rhDocuments");
       const licences = await licenceStatusesOrNull(visible.map((r: any) => r.employee));
@@ -1076,10 +1094,16 @@ export const rhRouter = router({
       .query(async ({ ctx }) => {
         requireAccess(ctx.user, "rh", "view");
         const { docsSummary } = await import("../shared/employeeDocuments");
+        const { scopedEmployeeRows } = await import("./rhEmployeeScope");
+        // Plano 64 (D4): a partir das FICHAS que a lista do RH mostra (ativas e
+        // não ativas — o filtro "Docs em falta" também mostra as inativas), e
+        // um resumo para CADA uma: uma ficha sem nenhum documento tem os 7
+        // obrigatórios em falta (antes nem aparecia — as piores ficavam de fora).
+        const { rows: fichas } = await scopedEmployeeRows(await rhViewer(ctx.user));
         const map = await getAllEmployeesDocumentStatus();
         // 0530: "Completos" / "N em falta" e, à parte, "N por validar" (ficheiros pendentes).
         const result: Record<number, ReturnType<typeof docsSummary>> = {};
-        map.forEach((rows, empId) => { result[empId] = docsSummary(rows); });
+        for (const r of fichas) result[r.employee.id] = docsSummary(map.get(r.employee.id) ?? []);
         return result;
       }),
     // "Eliminar" = ARQUIVAR (0530): o RH da ficha e admin+ sempre (substituir);

@@ -14,6 +14,7 @@
  *    ficam no terminal sem mudar o valor.
  * Nada aqui toca na BD.
  */
+import { isExtraEmployee } from "./employeeKind";
 import { distanceMeters, lisbonClock, type AirportCityId, type AirportFence, type AirportsMap } from "./pontoTerminal";
 
 export type TerminalCityKey = AirportCityId;
@@ -53,9 +54,9 @@ export function canUseTerminal(e: TerminalPersonLike | null | undefined): boolea
   return (TERMINAL_POSITIONS as readonly string[]).includes(String(e.position ?? "")) || e.contractType === "extra";
 }
 
-/** É extra (posto ou contrato)? A mesma regra de server/pontoTerminal.ts `isExtraEmployee`. PURA. */
+/** É extra (posto ou contrato)? A regra única de shared/employeeKind.ts (a de server/pontoTerminal.ts `isExtraEmployee`). PURA. */
 export function isTerminalExtra(e: TerminalPersonLike | null | undefined): boolean {
-  return !!e && (e.position === "extra" || e.contractType === "extra");
+  return isExtraEmployee(e);
 }
 
 /** Nível +1 no pagamento: só extras (1); condutores e TL ficam no terminal sem mudar o valor (0). PURA. */

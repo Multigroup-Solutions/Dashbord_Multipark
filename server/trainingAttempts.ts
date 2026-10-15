@@ -5,10 +5,10 @@
  */
 import { aiFeatureAvailable } from "./_core/ai/status";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import {
-  getDb, logActivity, saveCareerExamAttempt, saveQuizAttempt,
+  getDb, logActivity, resolveProjectIds, saveCareerExamAttempt, saveQuizAttempt,
 } from "./db";
 import { projectScope } from "./cityScope";
 import { gradeAssessment } from "./trainingAssessments";
@@ -445,9 +445,19 @@ export async function copyAiQuestionToBank(id: number, userId: number, viewer: K
 
 // ─── Ranking ───────────────────────────────────────────────────────────────
 
-/** Melhor pontuação por pessoa, no âmbito da cidade de quem vê. */
-export async function quizRanking(limit = 50) {
+/**
+ * Melhor pontuação por pessoa, no âmbito da cidade de quem vê. Plano 64 (D6):
+ * só fichas ATIVAS (como a Formação → gestão) e, com `projectId`, só essa
+ * cidade/marca (com descendentes). É o mesmo ranking do Pessoas e da
+ * Formação → Avaliações.
+ */
+export async function quizRanking(limit = 50, opts: { projectId?: number | null } = {}) {
   const d = await db();
+  let pick: SQL | undefined;
+  if (opts.projectId) {
+    const ids = await resolveProjectIds(opts.projectId);
+    pick = ids.length ? inArray(employees.projectId, ids) : sql`1 = 0`;
+  }
   const rows = await d.select({
     employeeId: quizAttempts.employeeId,
     bestScore: sql<number>`MAX(${quizAttempts.score})`,
@@ -455,7 +465,7 @@ export async function quizRanking(limit = 50) {
     firstAt: sql<string>`MIN(${quizAttempts.createdAt})`,
   }).from(quizAttempts)
     .innerJoin(employees, eq(employees.id, quizAttempts.employeeId))
-    .where(projectScope(employees.projectId))
+    .where(and(projectScope(employees.projectId), eq(employees.isActive, 1), pick))
     .groupBy(quizAttempts.employeeId);
   const ranked = rankBestScores(rows.map(r => ({ employeeId: r.employeeId, bestScore: Number(r.bestScore), attempts: Number(r.attempts), firstBestAt: r.firstAt })), limit);
   const names = await displayNames(ranked.map(r => r.employeeId));

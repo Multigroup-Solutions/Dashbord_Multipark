@@ -16,6 +16,10 @@ import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ChevronDown } from "lucide-react";
 import { FIXED_NO_SHOW_DISMISS_LABELS, type FixedNoShowDismissReason } from "@shared/scheduleReview";
+import { lisbonYesterday } from "@shared/lisbonDay";
+import { retryTransient } from "@/lib/queryRetry";
+import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { Link } from "wouter";
 
 const MONTH_NAMES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
@@ -123,8 +127,8 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
             size="sm"
             disabled={processNoShows.isPending}
             onClick={() => {
-              const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-              processNoShows.mutate({ date: yesterday });
+              // ontem no calendário de Lisboa (plano 64, D9): entre as 00h e a 01h (verão) o dia UTC dava anteontem
+              processNoShows.mutate({ date: lisbonYesterday(Date.now()) });
             }}
           >
             {processNoShows.isPending ? "A processar..." : "Processar faltas (ontem)"}
@@ -160,6 +164,9 @@ export default function RhDashboardPage({ onBack }: { onBack?: () => void } = {}
           </TabsContent>
         </Tabs>
       )}
+
+      {/* Plano 64 (D11): fichas em que posto e contrato não batem quanto a "extra" (só leitura) */}
+      <ExtraMismatchCard />
 
       {/* 41b: possíveis faltas — em baixo, compacto e com ações em massa */}
       <PendingNoShowsPanel />
@@ -277,6 +284,75 @@ export function PendingNoShowsPanel({ defaultOpen = false, onlyFixed = false }: 
         </div>
       </div>
     </details>
+  );
+}
+
+const POSITION_PT: Record<string, string> = {
+  director: "Diretor", supervisor: "Supervisor", team_leader: "Team Leader", backoffice: "Back office",
+  frontoffice: "Front office", senior_driver: "Condutor sénior", driver: "Condutor", extra: "Extra",
+};
+const CONTRACT_PT: Record<string, string> = { permanent: "Sem termo", fixed_term: "A termo certo", extra: "Extra", partner_company: "Parceiro (empresa)" };
+const PAYROLL_AS_PT: Record<string, string> = { extra: "paga como extra", staff: "paga como funcionário", outside: "fora da folha" };
+
+/**
+ * Plano 64 (D11) — RELATÓRIO SÓ DE LEITURA: fichas ativas em que o posto e o
+ * contrato não batem quanto a "extra". A regra única (o resto da app) diz extra
+ * se UM dos dois o disser; a folha paga o extra só pelo posto e NÃO muda aqui.
+ * Decide-se ficha a ficha, na própria ficha (posto ou tipo de contrato).
+ */
+function ExtraMismatchCard() {
+  const [open, setOpen] = useState(false);
+  const q = trpc.rh.extraMismatch.useQuery(undefined, { retry: retryTransient });
+  const rows = q.data ?? [];
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <button type="button" className="flex w-full items-center justify-between gap-2 text-left" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <CardTitle className="text-base flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600" /> Posto e contrato diferentes
+            <Badge variant="secondary">{q.data ? rows.length : q.error ? "—" : "…"}</Badge>
+          </CardTitle>
+          <ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+        <p className="text-xs text-muted-foreground">
+          Só leitura. Fichas ativas em que um diz "extra" e o outro não. O resto da app conta como extra; a folha decide só pelo posto (não muda aqui). Abre a ficha e acerta o posto ou o contrato.
+        </p>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {q.error ? (
+            <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o relatório" />
+          ) : q.isLoading ? (
+            <p className="text-sm text-muted-foreground">A carregar…</p>
+          ) : rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nenhuma ficha ativa com posto e contrato diferentes.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs text-muted-foreground">
+                    <th className="p-2">Nome</th><th className="p-2">Centro</th><th className="p-2">Posto</th><th className="p-2">Contrato</th><th className="p-2">A folha hoje</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.employeeId} className="border-b align-top">
+                      <td className="p-2 font-medium min-w-[160px]">
+                        <Link href={`/rh?employeeId=${r.employeeId}`} className="text-primary hover:underline">{r.fullName}</Link>
+                      </td>
+                      <td className="p-2 text-xs text-muted-foreground">{r.projectName ?? "—"}</td>
+                      <td className="p-2 whitespace-nowrap">{POSITION_PT[r.position ?? ""] ?? r.position ?? "—"}</td>
+                      <td className="p-2 whitespace-nowrap">{CONTRACT_PT[r.contractType ?? "permanent"] ?? r.contractType}</td>
+                      <td className="p-2 text-xs" title={r.note}>{PAYROLL_AS_PT[r.payrollAs] ?? r.payrollAs}<span className="block text-muted-foreground">{r.note}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
   );
 }
 

@@ -101,7 +101,8 @@ export function scopeCityQuery(path: string, access: CityAccess, input: unknown)
     const name = access.cityName?.toLowerCase();
     return { ...raw, city: raw.city ?? (name === 'lisboa' ? 'lisbon' : name) };
   }
-  if (['multipark.bookingStats', 'multipark.operationsSummary', 'services.multiparkExtras', 'rh.list'].includes(path)) {
+  // Plano 64 (D1): o rh.stats tem o mesmo âmbito por omissão que a lista do RH (rh.list).
+  if (['multipark.bookingStats', 'multipark.operationsSummary', 'services.multiparkExtras', 'rh.list', 'rh.stats'].includes(path)) {
     return { ...raw, projectId: raw.projectId ?? access.defaultCityId };
   }
   return input;

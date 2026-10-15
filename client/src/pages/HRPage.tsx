@@ -14,6 +14,7 @@ import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
 import { readImageAsJpeg } from "@/components/ProfilePhotoPrompt";
 import { formatIban, ibanError, maskIban, maskNif, sameIban } from "@shared/iban";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { retryTransient } from "@/lib/queryRetry";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDateTime, fmtPTDate } from "@/lib/lisbonTime";
 import { DeactivationDialog } from "@/components/DeactivationDialog";
@@ -191,23 +192,46 @@ const POSITION_COLORS: Record<Position, string> = {
 };
 
 // ─── STATS BAR ────────────────────────────────────────────────────────────────
+// Plano 64 (D1/D2): as fichas que a lista mostra (a cidade/marca do topo, como a
+// lista), contadas pela regra única (funcionários / extras = posto ou contrato /
+// parceiros-empresa) e as horas do mês pela regra do ponto (a da ficha → Ponto e
+// da folha: turnos pelo dia em que começam, sem suspeitos nem rejeitados).
 function HRStatsBar() {
-  const { data: stats } = trpc.rh.stats.useQuery();
+  const { projectId } = useGlobalFilters();
+  const q = trpc.rh.stats.useQuery(projectId !== undefined ? { projectId } : {}, { retry: retryTransient });
+  const stats = q.data;
+  if (q.error) {
+    return (
+      <div className="mb-6">
+        <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os números do RH" />
+      </div>
+    );
+  }
   if (!stats) return null;
+  const fmtH = (h: number) => `${h.toFixed(1).replace(".", ",")}h`;
+  const items = [
+    { label: "Total Ativos", value: String(stats.totalActive), hint: stats.partners > 0 ? `${stats.partners} parceiros-empresa` : null, icon: Users, color: "text-blue-600" },
+    { label: "Funcionários", value: String(stats.staff), hint: "sem termo e a termo", icon: Shield, color: "text-green-600" },
+    { label: "Extras", value: String(stats.extras), hint: "posto ou contrato extra", icon: Clock, color: "text-amber-600" },
+    {
+      label: "Horas este Mês",
+      value: stats.monthlyHours != null ? fmtH(stats.monthlyHours) : "—",
+      hint: stats.monthlyHours == null
+        ? `Leitura falhou — não é 0${stats.monthlyHoursError ? ` (${stats.monthlyHoursError})` : ""}`
+        : stats.monthlySuspiciousHours ? `suspeitas: ${fmtH(stats.monthlySuspiciousHours)} (à parte)` : null,
+      icon: Calendar, color: "text-purple-600",
+    },
+  ];
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-      {[
-        { label: "Total Ativos", value: stats.totalActive, icon: Users, color: "text-blue-600" },
-        { label: "Permanentes", value: stats.totalPermanent, icon: Shield, color: "text-green-600" },
-        { label: "Extras", value: stats.totalExtras, icon: Clock, color: "text-amber-600" },
-        { label: "Horas este Mês", value: `${stats.monthlyHours.toFixed(1)}h`, icon: Calendar, color: "text-purple-600" },
-      ].map((s) => (
+      {items.map((s) => (
         <Card key={s.label}>
           <CardContent className="p-4 flex items-center gap-3">
             <s.icon className={`w-8 h-8 ${s.color}`} />
-            <div>
-              <p className="text-2xl font-bold">{s.value}</p>
+            <div className="min-w-0">
+              <p className="text-2xl font-bold tabular-nums">{s.value}</p>
               <p className="text-xs text-muted-foreground">{s.label}</p>
+              {s.hint && <p className="text-[11px] text-muted-foreground truncate" title={s.hint}>{s.hint}</p>}
             </div>
           </CardContent>
         </Card>

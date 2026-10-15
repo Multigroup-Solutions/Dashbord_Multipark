@@ -1690,15 +1690,12 @@ export async function getMonthlyHours(employeeId: number, year: number, month: n
   const db = await getDb();
   const empty = { totalHours: 0, shifts: 0, suspiciousHours: 0, suspiciousShifts: 0, openShifts: 0, records: [] as (typeof timeRecords.$inferSelect)[] };
   if (!db) return empty;
-  const { lisbonDayRangeUtc, addDays } = await import("../shared/lisbonDay");
-  const { pontoMonthRecordIds, pontoMonthSummary } = await import("./payroll/shifts");
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const firstDay = `${year}-${pad(month)}-01`;
-  const lastDay = `${year}-${pad(month)}-${pad(new Date(Date.UTC(year, month, 0)).getUTCDate())}`;
+  const { lisbonDayRangeUtc } = await import("../shared/lisbonDay");
+  const { pontoMonthRecordIds, pontoMonthSummary, pontoMonthWindow } = await import("./payroll/shifts");
   // folga de 1 dia de cada lado: o turno da véspera que acaba no dia 1 (é do
-  // mês anterior) e o do último dia que acaba no seguinte (é deste)
-  const from = lisbonDayRangeUtc(addDays(firstDay, -1)).start;
-  const until = lisbonDayRangeUtc(addDays(lastDay, 1)).end;
+  // mês anterior) e o do último dia que acaba no seguinte (é deste). A mesma
+  // janela do RH → "Horas este mês" (plano 64, D2).
+  const { firstDay, lastDay, readFrom: from, readUntil: until } = pontoMonthWindow(year, month);
   const rows = await db.select().from(timeRecords)
     .where(and(eq(timeRecords.employeeId, employeeId), gte(timeRecords.recordedAt, from), lt(timeRecords.recordedAt, until)))
     .orderBy(asc(timeRecords.recordedAt), asc(timeRecords.id));
@@ -1744,26 +1741,71 @@ export async function updateExtraRate(level: number, hourlyRate: string) {
 }
 
 // ─── RH: STATS ────────────────────────────────────────────────────────────────
-export async function getHRStats() {
+/**
+ * Horas do ponto de várias fichas num mês (plano 64, D2), pela regra do #390:
+ * a mesma janela (`pontoMonthWindow`) e a mesma conta (`pontoMonthSummary`,
+ * ficha a ficha) da ficha → Ponto e da folha — turnos pelo dia de Lisboa em
+ * que COMEÇAM, só os contáveis, os suspeitos à parte. Uma só leitura de
+ * `time_records` para todas, agrupada por ficha. null = sem BD.
+ */
+export async function getPontoMonthTotals(employeeIds: number[], year: number, month: number) {
   const db = await getDb();
   if (!db) return null;
-  const [total] = await db.select({ count: sql<number>`count(*)` }).from(employees).where(eq(employees.isActive, 1));
-  const [extras] = await db.select({ count: sql<number>`count(*)` }).from(employees).where(and(eq(employees.isActive, 1), eq(employees.position, "extra")));
-  const [permanent] = await db.select({ count: sql<number>`count(*)` }).from(employees).where(and(eq(employees.isActive, 1), eq(employees.contractType, "permanent")));
+  const { pontoMonthTotals, pontoMonthWindow } = await import("./payroll/shifts");
+  const w = pontoMonthWindow(year, month);
+  const ids = Array.from(new Set(employeeIds.filter((id) => Number.isInteger(id) && id > 0)));
+  const rows: Array<{ id: number; employeeId: number; type: "check_in" | "check_out"; recordedAt: string; hoursWorked: string | null; notes: string | null; reviewStatus: "ok" | "suspicious" | "approved" | "rejected"; terminalStatus: string | null; terminalUntil: string | null }> = [];
+  // em blocos (um IN com milhares de fichas fica pesado)
+  for (let i = 0; i < ids.length; i += 1000) {
+    const chunk = ids.slice(i, i + 1000);
+    rows.push(...await db.select({
+      id: timeRecords.id, employeeId: timeRecords.employeeId, type: timeRecords.type, recordedAt: timeRecords.recordedAt,
+      hoursWorked: timeRecords.hoursWorked, notes: timeRecords.notes, reviewStatus: timeRecords.reviewStatus,
+      terminalStatus: timeRecords.terminalStatus, terminalUntil: timeRecords.terminalUntil,
+    }).from(timeRecords)
+      .where(and(inArray(timeRecords.employeeId, chunk), gte(timeRecords.recordedAt, w.readFrom), lt(timeRecords.recordedAt, w.readUntil)))
+      .orderBy(asc(timeRecords.recordedAt), asc(timeRecords.id)));
+  }
+  return { ...pontoMonthTotals(rows, w.firstDay, w.lastDay), firstDay: w.firstDay, lastDay: w.lastDay };
+}
 
-  // Total hours this month
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const [hoursRow] = await db
-    .select({ total: sql<string>`COALESCE(SUM(${timeRecords.hoursWorked}), 0)` })
-    .from(timeRecords)
-    .where(gte(timeRecords.recordedAt, toMysqlDateTime(monthStart)));
-
+/**
+ * Barra do RH, cartão do Pessoas e "Colaboradores" do Geral (plano 64, D1/D2).
+ * `fichas` = as fichas que a lista do RH mostra a quem pede (ativas e não
+ * ativas; rhEmployeeScope.ts `scopedEmployeeRows`, o mesmo filtro do `rh.list`):
+ *  - contagens só das ATIVAS, pela regra única (shared/employeeKind.ts):
+ *    funcionários, extras (posto ou contrato) e parceiros-empresa;
+ *    `totalPermanent`/`totalExtras` ficam com os mesmos números (o Geral lê-os);
+ *  - "Horas este mês" (mês de Lisboa): as fichas do âmbito com picagens,
+ *    ATIVAS OU NÃO e sem os parceiros-empresa — o conjunto da folha. Leitura
+ *    falhada → `monthlyHours: null` e o erro (o ecrã mostra "—", nunca 0).
+ */
+export async function getHRStats(
+  fichas: ReadonlyArray<{ employee: { id: number; isActive: number | null; position: string | null; contractType: string | null } }>,
+  nowMs: number = Date.now(),
+) {
+  const { hrCounts } = await import("../shared/employeeKind");
+  const { lisbonDayOf } = await import("../shared/lisbonDay");
+  const counts = hrCounts(fichas.map((r) => r.employee));
+  const today = lisbonDayOf(nowMs);
+  const year = Number(today.slice(0, 4)), month = Number(today.slice(5, 7));
+  let hours: Awaited<ReturnType<typeof getPontoMonthTotals>> = null;
+  let hoursError: string | null = null;
+  try {
+    hours = await getPontoMonthTotals(fichas.filter((r) => r.employee.contractType !== "partner_company").map((r) => r.employee.id), year, month);
+    if (!hours) hoursError = "BD indisponível";
+  } catch (err) {
+    hoursError = String((err as Error)?.message ?? err).slice(0, 160);
+    console.warn("[rh.stats] horas do mês não lidas:", hoursError);
+  }
   return {
-    totalActive: total?.count ?? 0,
-    totalExtras: extras?.count ?? 0,
-    totalPermanent: permanent?.count ?? 0,
-    monthlyHours: parseFloat(String(hoursRow?.total ?? 0)),
+    ...counts,
+    totalPermanent: counts.staff,
+    totalExtras: counts.extras,
+    month: today.slice(0, 7),
+    monthlyHours: hours ? hours.totalHours : null,
+    monthlySuspiciousHours: hours ? hours.suspiciousHours : null,
+    monthlyHoursError: hoursError,
   };
 }
 
@@ -2644,12 +2686,19 @@ export async function saveCareerExamAttempt(data: { examId: number; employeeId: 
 }
 
 export async function getCareerExamAttempts(employeeId?: number, examId?: number,
-  scope?: { employeeId: number | null; projectIds: number[] }) {
+  scope?: { employeeId: number | null; projectIds: number[] },
+  opts: { forStats?: boolean } = {}) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
   if (employeeId) conditions.push(eq(careerExamAttempts.employeeId, employeeId));
   if (examId) conditions.push(eq(careerExamAttempts.examId, examId));
+  // Plano 64 (D7): a TAXA do Pessoas conta só exames não arquivados, fichas
+  // ativas e a cidade do pedido. "Os meus exames" e o histórico da ficha
+  // chamam sem a opção: uma tentativa de um exame arquivado continua à vista.
+  if (opts.forStats) {
+    conditions.push(isNull(careerExams.archivedAt), eq(employees.isActive, 1), projectScope(employees.projectId));
+  }
   if (scope) conditions.push(or(
     scope.employeeId != null ? eq(careerExamAttempts.employeeId, scope.employeeId) : sql`FALSE`,
     scope.projectIds.length ? inArray(employees.projectId, scope.projectIds) : sql`FALSE`,

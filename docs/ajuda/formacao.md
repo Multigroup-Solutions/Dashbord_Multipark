@@ -26,10 +26,12 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
 3. A resposta certa nunca vai para o teu telemóvel antes de responderes: a correção é feita no servidor. Até 5 jogos por dia: o jogo conta logo que carregas em **Jogar**, mesmo enquanto a IA prepara as perguntas (carregar várias vezes não dá jogos a mais). Com 70% ou mais o quiz conta para o teu percurso.
 4. Se a IA falhar ou estiver desligada, o jogo usa as **perguntas fixas** e aparece um aviso a dizer porquê.
 5. **As tuas últimas tentativas** → **Rever**: vês cada pergunta, a tua resposta, a certa e a explicação.
+6. O **ranking** do quiz (aqui e no Dashboard Pessoas) conta só as **fichas ativas** das tuas cidades: quem foi desativado sai do ranking.
 
 **Carreira**
 1. Em **Carreira** fazes os exames para subir de nível (Condutor N1 → N4). Cada exame tem nota mínima, um limite de tentativas por dia e às vezes tempo. Se passares, a promoção fica **por aprovar** pelo supervisor da cidade, pelo backoffice ou pelo admin; ao aprovar recebes o certificado. Os certificados têm validade e, perto do fim, é-te atribuída a recertificação.
 2. Os exames usam sempre as perguntas do exame (não as da IA): a nota mínima e a aprovação não mudam.
+   - A **Taxa Aprovação Exames** do Dashboard Pessoas conta só os exames **não arquivados** e as fichas ativas. Nos teus exames e no histórico da ficha, as tentativas de um exame arquivado continuam à vista.
 3. Se a página não carregar aparece um aviso a vermelho com **Tentar de novo** (não quer dizer que não tens formação).
 
 **FAQs**
