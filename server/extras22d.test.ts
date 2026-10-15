@@ -142,7 +142,7 @@ describe("guardar e mostrar", () => {
     const tab = src("client/src/pages/extrasDia/PressureTab.tsx");
     // 44a: botões com nomes claros ("Tempo por carro (p{pct})", "Na estrada") e o p75 explicado
     expect(tab).toContain('m.key === "cycle" ? `${m.short} (p${pct})` : m.short');
-    expect(tab).toContain('label: "Na estrada"');
+    expect(tab).toContain('label: "Início da entrega → assinatura"'); // era "Na estrada" (15 out 2026)
     expect(tab).toContain("<CrewCard");
     expect(tab).toContain("Máximo = a tabela das Definições");
     expect(tab).toContain("a escala continua a usar a tabela máxima");

@@ -7,7 +7,11 @@
  *  - `SlowDeliveryDialog`: uma entrega lenta e o que se passava na mesma
  *    cidade nesse horário (pedidos à espera, quem entregou);
  *  - `HandoverShiftCard`: cada turno com a passagem (feita ou não) e, por
- *    chefe de turno, o que a equipa fez a tempo e atrasado.
+ *    chefe de turno, o que a equipa fez: entregas dentro / fora da meta (pelo
+ *    nosso tempo, de quem pegou no carro) e recolhas atrasadas no T2.
+ * 15 out 2026: no dia de um condutor, os tempos de cada entrega que ele
+ * começou (Fila / Trânsito / Cliente e a máxima no Trânsito) e de cada
+ * recolha que tirou do terminal (terminal, destino, P2). A hora marcada saiu.
  * Regras em shared/shiftDayReview.ts; leituras em server/shiftDayDetail.ts.
  */
 import { Link } from "wouter";
@@ -21,7 +25,9 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { fmtHours } from "@shared/dayWorkSummary";
 import { HANDOVER_CITY_LABELS, type HandoverCity, type HandoverShift } from "@shared/shiftHandover";
 import { COMPLIANCE_LABELS, type ComplianceStatus } from "@shared/shiftHandoverAuto";
-import { DELIVERY_LATE_MIN, DELIVERY_VERY_LATE_MIN, PICKUP_LATE_MIN, deliveryBand, type TeamLine } from "@shared/shiftDayReview";
+import { DELIVERY_LATE_MIN, DELIVERY_VERY_LATE_MIN, deliveryBand, type TeamLine } from "@shared/shiftDayReview";
+import { CalibrationBadge, fmtDur, statusLabel } from "@/components/serviceTimes/TimesBits";
+import { Lock } from "lucide-react";
 
 const CITY_LABELS: Record<string, string> = HANDOVER_CITY_LABELS;
 const CHANGE_LABEL: Record<string, string> = { CHECK_IN: "Recolha", CHECK_OUT: "Entrega", MOVEMENT: "Movimento", SPOT_CHANGE: "Mudança de lugar" };
@@ -118,8 +124,8 @@ export function DriverDaySheet({ date, city, person, onClose, onOpenEmployee }: 
                     <thead>
                       <tr className="border-b text-left text-muted-foreground">
                         <th className="p-1">Hora</th><th className="p-1">Ação</th><th className="p-1">Reserva</th><th className="p-1">Matrícula</th><th className="p-1">Parque</th>
-                        <th className="p-1 text-right" title="Entregas: do pedido (pendente) à entrega. Recolhas: face à entrada prevista.">Tempo</th>
-                        <th className="p-1 text-right" title="Velocidade máxima do GPS dele entre o pedido (ou, sem pedido, quando pegou no carro) e a entrega">Vel. máx.</th>
+                        <th className="p-1 text-right" title="Entregas: do pedido (pendente) à entrega.">Tempo</th>
+                        <th className="p-1 text-right" title="Velocidade máxima do GPS da pessoa entre o pedido (ou, sem pedido, quando pegou no carro) e a entrega">Vel. máx.</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -138,8 +144,6 @@ export function DriverDaySheet({ date, city, person, onClose, onOpenEmployee }: 
                                 a.mins != null
                                   ? <span className={band ? BAND_TONE[band] : ""} title={`Pedido às ${fmtPTTime(a.pendingAt)}${a.takenAt ? ` · pegou às ${fmtPTTime(a.takenAt)}` : ""}`}>{a.mins} min</span>
                                   : <span className="text-muted-foreground" title="Sem pedido (pendente) registado antes desta entrega">sem pedido</span>
-                              ) : a.changeType === "CHECK_IN" && a.delayMins != null ? (
-                                <span className={a.delayMins > PICKUP_LATE_MIN ? "text-amber-700 font-semibold" : "text-muted-foreground"} title={`Prevista às ${fmtPTTime(a.plannedIn)}`}>{a.delayMins > 0 ? "+" : ""}{a.delayMins} min</span>
                               ) : ""}
                             </td>
                             <td className={`p-1 text-right tabular-nums ${overLimit ? "text-red-700 font-semibold" : ""}`}>
@@ -155,14 +159,107 @@ export function DriverDaySheet({ date, city, person, onClose, onOpenEmployee }: 
               )}
               <p className="text-[11px] text-muted-foreground mt-1">
                 Contam as ações do dia do TURNO (a noite que passa a meia-noite fica no dia em que começou), como na Atividade diária. Tempo da entrega: do pedido (pendente) até entregue — a amarelo acima de {DELIVERY_LATE_MIN} min, a vermelho acima de {DELIVERY_VERY_LATE_MIN}.
-                Vel. máx.: o GPS do PDA/telemóvel dele entre o pedido (sem pedido, desde que pegou no carro) e a entrega{gps?.threshold != null ? ` (excesso acima de ${Math.round(gps.threshold)} km/h)` : ""}.
+                Vel. máx.: o GPS do PDA/telemóvel da pessoa entre o pedido (sem pedido, desde que pegou no carro) e a entrega{gps?.threshold != null ? ` (excesso acima de ${Math.round(gps.threshold)} km/h)` : ""}.
                 {gps && !gps.available && " Ainda sem GPS recolhido para este dia (a recolha do próprio dia corre às 23h; a final, dois dias depois)."}
               </p>
             </section>
           )}
+          {d?.times && <DriverTimesBlock t={d.times} threshold={gps?.threshold ?? null} />}
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+// ─── Os tempos das entregas que começou e das recolhas que tirou ─────────────
+
+type DriverTimes = {
+  source: string;
+  reason?: string | null;
+  gpsHidden: string | null;
+  gpsNote: string | null;
+  maxInTransit: Record<string, number | null>;
+  deliveries: Array<{ bookingId: string; bookingCode: string | null; requestAt: number | null; startedAt: number | null; deliveredAt: number | null; queueMs: number | null; queueStatus: string | null; transitMs: number | null; customerMs: number | null; ourMs: number | null; transitStatus: string | null; customerStatus?: string | null; totalMs: number | null }>;
+  pickups: Array<{ bookingId: string; bookingCode: string | null; checkInAt: number | null; terminalMs: number | null; terminalStatus: string | null; firstGarage: string | null; p2Ms: number | null; p2Status: string | null; parkedGarage: string | null }>;
+};
+
+/** Cada entrega que ELE começou (pegou no carro) e cada recolha que tirou do terminal. Sem médias aqui. */
+function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number | null }) {
+  if (t.source === "indisponivel") {
+    return <p className="text-[11px] text-amber-800 dark:text-amber-300">Tempos deste dia indisponíveis: {t.reason ?? "a BD da Multipark não respondeu"}. Tenta outra vez daqui a pouco.</p>;
+  }
+  if (!t.deliveries.length && !t.pickups.length) {
+    return <p className="text-[11px] text-muted-foreground">Tempos: nenhuma entrega começada por esta pessoa nem recolha tirada do terminal neste dia.</p>;
+  }
+  const dash = (status: string | null | undefined) => <span className="text-muted-foreground" title={statusLabel(status)} aria-label={`sem medição: ${statusLabel(status)}`}>—</span>;
+  const gpsCell = (v: number | null, status?: string | null) => (t.gpsHidden ? <span className="text-muted-foreground inline-flex" title={t.gpsHidden} aria-label={t.gpsHidden}><Lock className="w-3 h-3" /></span> : v != null ? fmtDur(v) : dash(status));
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold">Tempos</h3>
+        {t.source === "ao_vivo" && <Badge variant="outline" className="text-[10px]">calculado agora · provisório</Badge>}
+        <CalibrationBadge note={t.gpsNote} />
+      </div>
+      {t.gpsHidden && <p className="text-[11px] text-muted-foreground">Trânsito, Cliente, nosso tempo, máxima no Trânsito e tempo no terminal: {t.gpsHidden}.</p>}
+      {t.deliveries.length > 0 && (
+        <div className="overflow-x-auto -mx-1">
+          <table className="w-full text-xs min-w-[34rem]">
+            <caption className="text-left text-[11px] text-muted-foreground pb-1">Entregas que começou (pegou no carro)</caption>
+            <thead>
+              <tr className="border-b text-left text-muted-foreground">
+                <th className="p-1">Pegou</th><th className="p-1">Reserva</th>
+                <th className="p-1 text-right" title="Da chamada (ou do pendente) até pegar no carro">Fila</th>
+                <th className="p-1 text-right" title="De pegar no carro até chegar ao terminal (GPS)">Trânsito</th>
+                <th className="p-1 text-right" title="Do terminal à assinatura do cliente">Cliente</th>
+                <th className="p-1 text-right" title="Velocidade máxima entre pegar no carro e chegar ao terminal">Vel. máx.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {t.deliveries.map((x) => {
+                const max = t.maxInTransit[`${x.bookingId}|${x.startedAt}`];
+                return (
+                  <tr key={`${x.bookingId}-${x.startedAt}`} className="border-b">
+                    <td className="p-1 tabular-nums">{x.startedAt ? fmtPTTime(new Date(x.startedAt).toISOString()) : "—"}</td>
+                    <td className="p-1"><BookingLink code={x.bookingCode} id={x.bookingId} /></td>
+                    <td className="p-1 text-right tabular-nums">{x.queueMs != null ? fmtDur(x.queueMs) : dash(x.queueStatus)}</td>
+                    <td className="p-1 text-right tabular-nums">{gpsCell(x.transitMs, x.transitStatus)}</td>
+                    <td className="p-1 text-right tabular-nums">{gpsCell(x.customerMs, x.customerStatus ?? x.transitStatus)}</td>
+                    <td className={`p-1 text-right tabular-nums ${max != null && threshold != null && max > threshold ? "text-red-700 font-semibold" : ""}`}>{t.gpsHidden ? gpsCell(null) : max != null ? `${max} km/h` : <span className="text-muted-foreground">—</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {t.pickups.length > 0 && (
+        <div className="overflow-x-auto -mx-1">
+          <table className="w-full text-xs min-w-[30rem]">
+            <caption className="text-left text-[11px] text-muted-foreground pb-1">Recolhas que tirou do terminal</caption>
+            <thead>
+              <tr className="border-b text-left text-muted-foreground">
+                <th className="p-1">Check-in</th><th className="p-1">Reserva</th>
+                <th className="p-1 text-right" title="Do check-in até o carro sair do terminal (GPS)">No terminal</th>
+                <th className="p-1">Destino</th>
+                <th className="p-1 text-right" title="Tempo no P2 até sair para um parque">No P2</th>
+              </tr>
+            </thead>
+            <tbody>
+              {t.pickups.map((x) => (
+                <tr key={`${x.bookingId}-${x.checkInAt}`} className="border-b">
+                  <td className="p-1 tabular-nums">{x.checkInAt ? fmtPTTime(new Date(x.checkInAt).toISOString()) : "—"}</td>
+                  <td className="p-1"><BookingLink code={x.bookingCode} id={x.bookingId} /></td>
+                  <td className="p-1 text-right tabular-nums">{gpsCell(x.terminalMs, x.terminalStatus)}</td>
+                  <td className="p-1">{x.firstGarage ?? <span className="text-muted-foreground">—</span>}{x.parkedGarage && x.parkedGarage !== x.firstGarage ? ` → ${x.parkedGarage}` : ""}</td>
+                  <td className="p-1 text-right tabular-nums">{x.p2Ms != null ? fmtDur(x.p2Ms) : dash(x.p2Status)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-[11px] text-muted-foreground">Uma entrega é de quem pegou no carro (quem só despachou não conta); uma recolha, de quem a tirou do terminal. "—" = sem medição (passa o rato para ver porquê). A hora marcada não entra.</p>
+    </section>
   );
 }
 
@@ -271,24 +368,42 @@ const COMPLIANCE_TONE: Record<ComplianceStatus, string> = {
   confirmed: "border-emerald-400 text-emerald-800 bg-emerald-50/60",
 };
 
-/** "12 entregas — 9 a tempo · 3 atrasadas (>15) · 1 >30 · 2 sem medida". */
-function TallyLine({ label, count, onTime, late, veryLate, unmeasured, lateLabel }: {
-  label: string; count: number; onTime: number; late: number; veryLate?: number; unmeasured: number; lateLabel: string;
-}) {
-  if (!count) return <p className="text-muted-foreground">{label}: 0</p>;
+/** "12 entregas — 9 dentro da meta · 3 fora · 2 sem medida". */
+function DeliveryTallyLine({ t, targetMinutes }: { t: TeamLine["deliveries"]; targetMinutes: number }) {
+  if (!t.count) return <p className="text-muted-foreground">Entregas: 0</p>;
   return (
     <p>
-      {label}: <b className="tabular-nums">{count}</b>
-      {" — "}<span className="text-emerald-700 tabular-nums">{onTime} a tempo</span>
-      {" · "}<span className={late > 0 ? "text-amber-700 font-semibold tabular-nums" : "text-muted-foreground tabular-nums"}>{late} {late === 1 ? "atrasada" : "atrasadas"} ({lateLabel})</span>
-      {veryLate != null && veryLate > 0 && <>{" · "}<span className="text-red-700 font-semibold tabular-nums">{veryLate} &gt;{DELIVERY_VERY_LATE_MIN} min</span></>}
-      {unmeasured > 0 && <span className="text-muted-foreground"> · {unmeasured} sem medida</span>}
+      Entregas: <b className="tabular-nums">{t.count}</b>
+      {t.measured > 0 ? (
+        <>
+          {" — "}<span className="text-emerald-700 tabular-nums">{t.onTime} dentro da meta</span>
+          {" · "}<span className={t.late > 0 ? "text-amber-700 font-semibold tabular-nums" : "text-muted-foreground tabular-nums"}>{t.late} fora (&gt;{targetMinutes} min)</span>
+        </>
+      ) : null}
+      {t.count - t.measured > 0 && <span className="text-muted-foreground"> · {t.count - t.measured} sem medida</span>}
+    </p>
+  );
+}
+
+/** "8 recolhas — 3 no T2: 2 a tempo · 1 atrasada". */
+function PickupTallyLine({ t }: { t: TeamLine["pickups"] }) {
+  if (!t.count) return <p className="text-muted-foreground">Recolhas: 0</p>;
+  return (
+    <p>
+      Recolhas: <b className="tabular-nums">{t.count}</b>
+      {t.t2 > 0 && (
+        <>
+          {" — "}{t.t2} no T2{t.measured > 0 ? ": " : ""}
+          {t.measured > 0 && <><span className="text-emerald-700 tabular-nums">{t.onTime} a tempo</span>{" · "}<span className={t.late > 0 ? "text-amber-700 font-semibold tabular-nums" : "text-muted-foreground tabular-nums"}>{t.late} {t.late === 1 ? "atrasada" : "atrasadas"}</span></>}
+          {t.t2 - t.measured > 0 && <span className="text-muted-foreground"> · {t.t2 - t.measured} sem medida</span>}
+        </>
+      )}
     </p>
   );
 }
 
 /** Um turno: a passagem (feita ou não) e, por chefe de turno, a equipa a tempo e atrasada. */
-export function HandoverShiftCard({ row, teams }: { row: ComplianceDayRow; teams: TeamLine[] }) {
+export function HandoverShiftCard({ row, teams, targetMinutes = 15 }: { row: ComplianceDayRow; teams: TeamLine[]; targetMinutes?: number }) {
   const done = row.status === "on_time" || row.status === "late" || row.status === "confirmed";
   return (
     <div className="border rounded-lg px-3 py-2 text-xs space-y-1.5 min-w-0 w-full sm:w-auto sm:min-w-[18rem] sm:flex-1">
@@ -316,10 +431,8 @@ export function HandoverShiftCard({ row, teams }: { row: ComplianceDayRow; teams
             {t.tl ? <>Chefe de turno: {t.tl.name}</> : <span className="text-muted-foreground">Sem chefe de turno na escala</span>}
             <span className="font-normal text-muted-foreground"> · equipa de {plural(t.members.length, "pessoa", "pessoas")}</span>
           </p>
-          <TallyLine label="Entregas" count={t.deliveries.count} onTime={t.deliveries.onTime} late={t.deliveries.over15} veryLate={t.deliveries.over30}
-            unmeasured={t.deliveries.count - t.deliveries.measured} lateLabel={`>${DELIVERY_LATE_MIN} min`} />
-          <TallyLine label="Recolhas" count={t.pickups.count} onTime={t.pickups.onTime} late={t.pickups.late}
-            unmeasured={t.pickups.count - t.pickups.measured} lateLabel={`>${PICKUP_LATE_MIN} min`} />
+          <DeliveryTallyLine t={t.deliveries} targetMinutes={targetMinutes} />
+          <PickupTallyLine t={t.pickups} />
           {t.tl && (t.tlOwn.deliveries > 0 || t.tlOwn.pickups > 0) && (
             <p className="text-muted-foreground">O próprio TL: {plural(t.tlOwn.deliveries, "entrega", "entregas")} · {plural(t.tlOwn.pickups, "recolha", "recolhas")} (fora da conta da equipa)</p>
           )}

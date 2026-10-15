@@ -51,6 +51,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PressureTab, TightHourBadge } from "./extrasDia/PressureTab";
 import { TimesProbeCard } from "./extrasDia/TimesProbeCard";
+import { ServiceTimesCoverageCard } from "./extrasDia/ServiceTimesCoverageCard";
 import { PersonPicker, type PickerCandidate } from "./extrasDia/PersonPicker";
 import { LicenceWarning } from "./extrasDia/LicenceWarning";
 import { QuickNoteButton } from "./extrasDia/QuickNoteButton";
@@ -173,7 +174,9 @@ export default function ExtrasDiaPage() {
     if (!data || !pressureQ.data?.available) return new Map<number, TightReason>();
     const key = extraCityGroupKey(city);
     const slots = (pressureQ.data.slots as PressureSlot[]).filter((s) => s.group === key);
-    return tightHoursForDay(slots, data.targetDate, data.hourly.map((h) => h.hour));
+    // 15 out 2026: com "Hora apertada pela Fila" ligada na cidade (e a Fila medida em ≥ 60 %), a parte "entregas lentas" usa a Fila
+    const queue = (pressureQ.data as { times?: { groups?: Record<string, { queue: Record<string, { n: number; p75: number | null }> | null }> } | null }).times?.groups?.[key]?.queue ?? null;
+    return tightHoursForDay(slots, data.targetDate, data.hourly.map((h) => h.hour), queue ? { queue } : null);
   }, [data, pressureQ.data, city]);
   const assignmentsQ = trpc.extrasDia.assignments.useQuery(
     { date: targetDate, city },
@@ -245,6 +248,8 @@ export default function ExtrasDiaPage() {
 
       {tab === "pressao" && <PressureTab city={city} targetDate={targetDate || addDaysIso(baseDate, 1)} canEdit={access.canEdit} />}
       {/* Plano 62, P0: diagnóstico dos tempos (calibração) — só o super admin. */}
+      {/* 15 out 2026: "De onde vêm os tempos" (cobertura por cidade e semana) — só o super admin. */}
+      {tab === "pressao" && user?.role === "super_admin" && <ServiceTimesCoverageCard />}
       {tab === "pressao" && user?.role === "super_admin" && <TimesProbeCard city={city} />}
 
       {tab === "dia" && isLoading && (

@@ -31,12 +31,13 @@ describe("Resumo do dia — entregas e recolhas (as regras dos cartões)", () =>
     row("d", "CHECK_IN", "2026-10-08 09:00:00", { checkIn: "2026-10-08 08:00:00" }), // conta o 1.º
     row("e", "CHECK_IN", "2026-10-08 12:00:00", { checkIn: null }), // sem previsão: conta, sem medida
   ];
-  it("os mesmos números de sempre (supervisorTimings) e a reserva de cada entrega", () => {
-    expect(supervisorTimings(rows as any, w)).toEqual({ deliveryTimes: [{ booking: "a", mins: 25, agent: "Rui" }], pickupDelays: [20] });
+  it("pendente→entregue e a reserva de cada entrega; nas recolhas a hora marcada já não entra", () => {
+    expect(supervisorTimings(rows as any, w)).toEqual({ deliveryTimes: [{ booking: "a", mins: 25, agent: "Rui" }] });
     const t = dayTimings(rows, w);
     expect(t.deliveries).toEqual([expect.objectContaining({ booking: "a", bookingCode: "MP-a", plate: "AA-00-BB", parkName: "Airpark", pendingAt: "2026-10-08 10:00:00", deliveredAt: "2026-10-08 10:25:00", mins: 25, agentUserId: "u-rui" })]);
     expect(t.unmeasured.map((u) => u.booking).sort()).toEqual(["b", "c"]);
-    expect(t.pickups.map((p) => [p.booking, p.delayMins])).toEqual([["d", 20], ["e", null]]);
+    expect(t.pickups.map((p) => [p.booking, p.at])).toEqual([["d", "2026-10-08 08:20:00"], ["e", "2026-10-08 12:00:00"]]);
+    for (const p of t.pickups) { expect(p).not.toHaveProperty("delayMins"); expect(p).not.toHaveProperty("planned"); }
   });
   it("cor da entrega: >15 atrasada, >30 muito atrasada", () => {
     expect([deliveryBand(15), deliveryBand(16), deliveryBand(31), deliveryBand(null)]).toEqual(["ok", "late", "very_late", null]);
@@ -55,41 +56,46 @@ describe("Resumo do dia — passagens por chefe de turno (equipa = regra 42c)", 
     { employeeId: 5, personName: "Ana", shift: "morning", city: "lisbon", isTeamLeader: 0, startHour: 7, endHour: 11 },
   ];
   const at = (h: number) => new Date(lisbonLocalTimeUtcMs(DAY, h)).toISOString().slice(0, 19).replace("T", " ");
+  // 15 out 2026: a entrega é do condutor do Trânsito e conta pelo nosso tempo (meta 15); a recolha é de quem a tirou do terminal (atrasadas só no T2)
   const lines = teamLines(DAY, roster, {
     deliveries: [
-      { actor: { employeeId: 2, name: "Rui" }, at: at(9), mins: 10 },
-      { actor: { employeeId: 2, name: "Rui" }, at: at(10), mins: 20 },
-      { actor: { employeeId: null, name: "Zé  sem ficha" }, at: at(11), mins: 40 },
-      { actor: { employeeId: 1, name: "Teresa TL" }, at: at(12), mins: 5 }, // o TL: fica de fora da equipa
-      { actor: { employeeId: 5, name: "Ana" }, at: at(9), mins: 12 },  // manhã da Ana
-      { actor: { employeeId: 5, name: "Ana" }, at: at(20), mins: 33 }, // noite da Ana
-      { actor: { employeeId: 5, name: "Ana" }, at: at(21), mins: null }, // sem pendente: conta, sem medida
-      { actor: { employeeId: 99, name: "Fora da escala" }, at: at(10), mins: 50 }, // não conta
+      { actor: { employeeId: 2, name: "Rui" }, at: at(9), ourMins: 10 },
+      { actor: { employeeId: 2, name: "Rui" }, at: at(10), ourMins: 20 },
+      { actor: { employeeId: null, name: "Zé  sem ficha" }, at: at(11), ourMins: 40 },
+      { actor: { employeeId: 1, name: "Teresa TL" }, at: at(12), ourMins: 5 }, // o TL: fica de fora da equipa
+      { actor: { employeeId: 5, name: "Ana" }, at: at(9), ourMins: 12 },  // manhã da Ana
+      { actor: { employeeId: 5, name: "Ana" }, at: at(20), ourMins: 33 }, // noite da Ana
+      { actor: { employeeId: 5, name: "Ana" }, at: at(21), ourMins: null }, // sem chegada pelo GPS: conta, sem medida
+      { actor: { employeeId: 99, name: "Fora da escala" }, at: at(10), ourMins: 50 }, // não conta
     ],
     pickups: [
-      { actor: { employeeId: 2, name: "Rui" }, at: at(8), delayMins: 3 },
-      { actor: { employeeId: 2, name: "Rui" }, at: at(8.5), delayMins: 25 },
-      { actor: { employeeId: 5, name: "Ana" }, at: at(25), delayMins: null },
+      { actor: { employeeId: 2, name: "Rui" }, at: at(8), t2: true, t2LateMins: 0 },
+      { actor: { employeeId: 2, name: "Rui" }, at: at(8.5), t2: true, t2LateMins: 4 },
+      { actor: { employeeId: 2, name: "Rui" }, at: at(9), t2: false, t2LateMins: null }, // T1: nunca atrasada
+      { actor: { employeeId: 5, name: "Ana" }, at: at(25), t2: true, t2LateMins: null },
     ],
-  });
+  }, { targetMinutes: 15 });
   it("uma linha por TL; dois TL no mesmo turno → duas linhas com a mesma equipa", () => {
     expect(lines.map((l) => [l.shift, l.tl?.name])).toEqual([["morning", "Teresa TL"], ["night", "Nuno TL"], ["night", "Paula TL"]]);
     const night = lines.filter((l) => l.shift === "night");
     expect(night[0].deliveries).toEqual(night[1].deliveries);
     expect(night[0].members).toEqual(["Ana"]);
   });
-  it("entregas a tempo / >15 / >30 e recolhas atrasadas >15, como nos cartões", () => {
+  it("entregas dentro / fora da meta pelo nosso tempo; recolhas atrasadas só no T2", () => {
     const m = lines[0];
     expect(m.members).toEqual(["Ana", "Rui", "Zé Sem Ficha"]);
-    expect(m.deliveries).toEqual({ count: 4, measured: 4, onTime: 2, over15: 2, over30: 1 }); // Rui 10, Rui 20, Zé 40, Ana 12
-    expect(m.pickups).toEqual({ count: 2, measured: 2, onTime: 1, late: 1 });
+    expect(m.deliveries).toEqual({ count: 4, measured: 4, onTime: 2, late: 2 }); // Rui 10, Rui 20, Zé 40, Ana 12
+    expect(m.pickups).toEqual({ count: 3, t2: 2, measured: 2, onTime: 1, late: 1 });
     expect(m.tlOwn).toEqual({ deliveries: 1, pickups: 0 });
     const n = lines[1];
-    expect(n.deliveries).toEqual({ count: 2, measured: 1, onTime: 0, over15: 1, over30: 1 }); // Ana 33 + uma sem medida
-    expect(n.pickups).toEqual({ count: 1, measured: 0, onTime: 0, late: 0 });
+    expect(n.deliveries).toEqual({ count: 2, measured: 1, onTime: 0, late: 1 }); // Ana 33 + uma sem medida
+    expect(n.pickups).toEqual({ count: 1, t2: 1, measured: 0, onTime: 0, late: 0 });
+    // a meta vem da definição: com 35 min, os 33 da Ana ficam dentro
+    const wide = teamLines(DAY, roster, { deliveries: [{ actor: { employeeId: 5, name: "Ana" }, at: at(20), ourMins: 33 }], pickups: [] }, { targetMinutes: 35 });
+    expect(wide.find((l) => l.shift === "night")!.deliveries).toEqual({ count: 1, measured: 1, onTime: 1, late: 0 });
   });
   it("turno sem TL na escala: uma linha sem chefe", () => {
-    const l = teamLines(DAY, [{ employeeId: 7, personName: "Só Extra", shift: "morning", city: "porto", isTeamLeader: 0, startHour: 7, endHour: 15 }], { deliveries: [], pickups: [] });
+    const l = teamLines(DAY, [{ employeeId: 7, personName: "Só Extra", shift: "morning", city: "porto", isTeamLeader: 0, startHour: 7, endHour: 15 }], { deliveries: [], pickups: [] }, { targetMinutes: 15 });
     expect(l).toEqual([expect.objectContaining({ tl: null, members: ["Só Extra"], city: "porto" })]);
   });
 });
@@ -239,6 +245,7 @@ describe("Resumo do dia — o ecrã", () => {
     expect(page).toContain('<Th k="stoppedH" label="Parado"');
   });
   it("cartões novos, entregas lentas clicáveis e passagens por chefe de turno", () => {
+    expect(page).toContain("DayTimesSection");
     expect(page).toContain("Km da equipa");
     expect(page).toContain("Excesso de velocidade");
     expect(page).toContain("Horas paradas");

@@ -7,6 +7,11 @@
  * passagens por chefe de turno. Mesma permissão: "Passagem — Resumo do dia"
  * (o servidor exige-a em cada leitura: shiftHandover.supervisorDashboard &c.).
  * 12 out 2026: + reclamações dos carros que saíram nesse dia.
+ * 15 out 2026: os tempos de entrega (Fila, Trânsito, Nosso e a meta, Cliente,
+ * Total) e de recolha (no terminal, no P2, cliente, até arrumado, T2), da
+ * tabela dos tempos ou ao vivo (components/shiftDay/DayTimesSection.tsx). Os
+ * cartões "Pendente→Entrega", ">15/>30" e "Recolhas atrasadas" (pela hora
+ * marcada) saíram: a hora marcada já não entra nos tempos.
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -27,6 +32,8 @@ import { findPersonShift, operationalShift } from "@shared/shiftHandover";
 import { fmtHours, stoppedForDisplay, workedHours } from "@shared/dayWorkSummary";
 import { DEPARTED_COMPLAINTS_HINT } from "@shared/departedComplaints";
 import { TerminalDayCard } from "@/components/terminal/TerminalDayCard";
+import { DayTimesSection, type DayTimes } from "@/components/shiftDay/DayTimesSection";
+import type { SlowDeliveryItem } from "../../../../server/serviceTimesAgg";
 
 /** O separador: escolhe a cidade (as do centro de custos) e mostra o resumo. */
 export default function DaySummaryTab() {
@@ -93,26 +100,12 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
       ) : (
         <>
           {data.timingsTruncated && (
-            <p className="text-xs text-amber-700">Dia com movimentos a mais para ler de uma vez: os tempos de entrega e de recolha são só de uma parte do dia.</p>
+            <p className="text-xs text-amber-700">Dia com movimentos a mais para ler de uma vez: as reclamações dos carros que saíram são só de uma parte do dia.</p>
           )}
           {/* KPIs do dia */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <Card className="p-3 gap-0.5"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold text-emerald-700">{data.totals.checkins}</p></Card>
             <Card className="p-3 gap-0.5"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold text-blue-700">{data.totals.checkouts}</p></Card>
-            <Card className="p-3 gap-0.5">
-              <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" />Pendente→Entrega</p>
-              <p className="text-xl font-bold">{data.delivery.avgMins} min</p>
-              <p className="text-[11px] text-muted-foreground">máx {data.delivery.maxMins} · {data.delivery.count} medidas</p>
-            </Card>
-            <Card className={`p-3 gap-0.5 ${data.delivery.over30 > 0 ? "border-red-300 bg-red-50/50" : ""}`}>
-              <p className="text-xs text-muted-foreground">Entregas &gt;15/&gt;30 min</p>
-              <p className="text-xl font-bold"><span className="text-amber-700">{data.delivery.over15}</span> / <span className="text-red-700">{data.delivery.over30}</span></p>
-            </Card>
-            <Card className="p-3 gap-0.5">
-              <p className="text-xs text-muted-foreground">Recolhas atrasadas &gt;15min</p>
-              <p className="text-xl font-bold text-amber-700">{data.pickup.over15}</p>
-              <p className="text-[11px] text-muted-foreground">desvio médio {data.pickup.avgDelayMins} min</p>
-            </Card>
             <Card className={`p-3 gap-0.5 ${data.complaintsToday > 0 ? "border-amber-300 bg-amber-50/50" : ""}`} title="Reclamações que chegaram (foram criadas) neste dia operacional">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Reclamações do dia</p>
               <p className="text-xl font-bold">{data.complaintsToday}</p>
@@ -138,29 +131,13 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
           {/* Cumprimento das passagens de turno + equipa de cada chefe de turno */}
           {complianceQ.isError
             ? <QueryErrorNote error={complianceQ.error} onRetry={() => complianceQ.refetch()} retrying={complianceQ.isFetching} what="o cumprimento das passagens" />
-            : <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} teams={(data.teams ?? []) as TeamLine[]} />}
+            : <HandoverCompliance data={complianceQ.data} loading={complianceQ.isLoading} teams={(data.teams ?? []) as TeamLine[]} teamsHidden={data.teamsHidden} targetMinutes={data.times.targetMinutes} />}
 
           {/* Plano 56 B2: linha do tempo do terminal da cidade (só com PONTO_TERMINAL ligado) */}
           <TerminalDayCard date={date} city={city} />
 
-          {/* Piores entregas — cada uma abre o que se passava nesse horário */}
-          {data.delivery.worst.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Entregas mais lentas do dia (pendente → entregue)</CardTitle>
-                <p className="text-[11px] text-muted-foreground">Toca numa para ver a reserva, a linha do tempo e os outros pedidos à espera nesse horário.</p>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                {(data.delivery.worst as SlowDelivery[]).map((w) => (
-                  <button key={`${w.booking}-${w.pendingAt}`} type="button" onClick={() => setSlow(w)} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`${w.bookingCode ?? w.booking} · pedido às ${fmtPTTime(w.pendingAt)}`}>
-                    <Badge variant="outline" className={`text-xs cursor-pointer hover:bg-muted ${w.mins > 30 ? "border-red-300 text-red-700" : w.mins > 15 ? "border-amber-300 text-amber-700" : ""}`}>
-                      {w.mins} min{w.agent ? ` · ${w.agent}` : ""}{w.bookingCode ? ` · ${w.bookingCode}` : ""}
-                    </Badge>
-                  </button>
-                ))}
-              </CardContent>
-            </Card>
-          )}
+          {/* 15 out 2026: tempos de entrega e de recolha (as mais lentas abrem o que se passava nesse horário) */}
+          <DayTimesSection t={data.times as DayTimes} driverNames={data.driverNames ?? {}} onOpenSlow={(x) => setSlow(toSlow(x, data.driverNames ?? {}))} />
 
           {/* Condutores do dia */}
           <Card>
@@ -245,13 +222,24 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
   );
 }
 
+/** Uma entrega das mais lentas → o diálogo "o que se passava nesse horário" (do pendente à entrega). */
+function toSlow(x: SlowDeliveryItem, names: Record<number, string>): SlowDelivery {
+  const mins = x.pendingAt && x.deliveredAt ? Math.floor((Date.parse(`${x.deliveredAt.replace(" ", "T")}Z`) - Date.parse(`${x.pendingAt.replace(" ", "T")}Z`)) / 60_000) : 0;
+  return {
+    booking: x.bookingId, mins, agent: x.driverEmployeeId != null ? names[x.driverEmployeeId] ?? null : null,
+    pendingAt: x.pendingAt ?? "", deliveredAt: x.deliveredAt ?? "", bookingCode: x.bookingCode, plate: null, parkName: null, city: null,
+  };
+}
+
 // ─── Cumprimento das passagens (Resumo do dia) ──────────────────────────────
 // 12 out 2026: cada turno diz se houve passagem (a que horas e por quem) e,
 // por chefe de turno, o que a equipa dele fez a tempo e atrasado.
-function HandoverCompliance({ data, loading, teams }: {
+function HandoverCompliance({ data, loading, teams, teamsHidden, targetMinutes }: {
   data: { day: ComplianceDayRow[]; percent30: number | null; expected30: number } | undefined;
   loading: boolean;
   teams: TeamLine[];
+  teamsHidden: string | null;
+  targetMinutes: number;
 }) {
   return (
     <Card>
@@ -264,7 +252,7 @@ function HandoverCompliance({ data, loading, teams }: {
             </Badge>
           )}
         </div>
-        <p className="text-[11px] text-muted-foreground">Equipa = o turno do chefe de turno na escala (mesmo dia, cidade e turno), como no Desempenho. Entregas atrasadas: mais de 15 min do pedido à entrega; recolhas: mais de 15 min depois da entrada prevista.</p>
+        <p className="text-[11px] text-muted-foreground">Equipa = o turno do chefe de turno na escala (mesmo dia, cidade e turno), como no Desempenho. Entregas: de quem pegou no carro, dentro ou fora da meta pelo nosso tempo (Fila + Trânsito, {targetMinutes} min). Recolhas: de quem tirou o carro do terminal; só no T2 há atrasadas. A hora marcada não entra.{teamsHidden ? ` Dentro/fora da meta: ${teamsHidden}.` : ""}</p>
       </CardHeader>
       <CardContent>
         {loading ? <p className="text-sm text-muted-foreground">A carregar…</p> : !data?.day.length ? (
@@ -272,7 +260,7 @@ function HandoverCompliance({ data, loading, teams }: {
         ) : (
           <div className="flex flex-wrap gap-2">
             {data.day.map((r) => (
-              <HandoverShiftCard key={`${r.shift}-${r.city}`} row={r} teams={teams.filter((t) => t.shift === r.shift && t.city === r.city)} />
+              <HandoverShiftCard key={`${r.shift}-${r.city}`} row={r} teams={teams.filter((t) => t.shift === r.shift && t.city === r.city)} targetMinutes={targetMinutes} />
             ))}
           </div>
         )}

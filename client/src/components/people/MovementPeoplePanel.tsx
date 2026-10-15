@@ -11,6 +11,9 @@
  * movimentos. O filtro de cidade e marca é o do topo da app; aqui escolhe-se o
  * período e a pessoa. Quem gere o RH une/separa (Ligações) e tira da lista
  * agentes que não interessam (fica como "não é funcionário", desfaz-se no RH).
+ * 15 out 2026 (Q7): nos Condutores, o relógio de cada linha (e o condutor
+ * escolhido) abre os TEMPOS dele — Fila, Trânsito, Cliente, no terminal e P2
+ * por semana, mês e 6 meses, ao lado dos colegas (components/people/DriverTimesCard.tsx).
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -33,7 +36,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { EyeOff, Link2, Loader2 } from "lucide-react";
+import { EyeOff, Link2, Loader2, Timer } from "lucide-react";
+import { DriverTimesCard } from "@/components/people/DriverTimesCard";
 import { toast } from "sonner";
 
 export function monthToDate(): { start: string; end: string } {
@@ -72,6 +76,8 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
   const [rules, setRules] = useState<MetricRule[]>([]);
   const [detail, setDetail] = useState<DetailTarget | null>(initialDetail ?? null);
   const [links, setLinks] = useState<{ employeeId: number; name: string } | null>(null);
+  // Q7: os tempos de um condutor (gaveta)
+  const [timesOf, setTimesOf] = useState<{ employeeId: number; name: string } | null>(null);
   const valid = !!start && !!end && start <= end;
   const listQ = trpc.reviews.movementPeople.useQuery({ startDate: start, endDate: end, projectId, drivers: mode === "drivers" }, { enabled: valid, refetchOnWindowFocus: false });
   const data = listQ.data;
@@ -150,6 +156,7 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                         <Th k="bookings" label="Reservas" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                         <Th k="lastAt" label="Última ação" align="right" sortKey={sort.sortKey} sortDir={sort.sortDir} onToggle={sort.toggle} />
                       </>}
+                  {mode === "drivers" && <th className="p-2 text-right text-xs font-normal text-muted-foreground" title="Tempos de entrega e de recolha deste condutor, ao lado dos colegas">Tempos</th>}
                   {canManageRh && <th className="p-2" />}
                 </tr></thead>
                 <tbody>
@@ -174,6 +181,16 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                             <td className="p-2 text-right tabular-nums">{r.bookings}</td>
                             <td className="p-2 text-right text-xs text-muted-foreground whitespace-nowrap">{r.lastAt ? fmtPTDateTime(r.lastAt) : "—"}</td>
                           </>}
+                      {mode === "drivers" && (
+                        <td className="p-2 text-right">
+                          {r.employeeId != null && (
+                            <Button size="sm" variant="ghost" className="h-7 px-2" title={`Tempos de ${r.name} (Fila, Trânsito, Cliente, terminal, P2) ao lado dos colegas`} aria-label={`Tempos de ${r.name}`}
+                              onClick={() => setTimesOf({ employeeId: r.employeeId!, name: r.name })}>
+                              <Timer className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </td>
+                      )}
                       {canManageRh && (
                         <td className="p-2 text-right whitespace-nowrap">
                           {r.employeeId != null ? (
@@ -199,13 +216,28 @@ export function MovementPeoplePanel({ mode, initialDetail }: { mode: "drivers" |
                   <td className="p-2 text-right tabular-nums">{totals.movements}</td>
                   <td className="p-2 text-right tabular-nums">{totals.spotChanges}</td>
                   {mode === "drivers" ? <td className="p-2 text-right tabular-nums">{Math.round(totals.km).toLocaleString("pt-PT")}</td> : <><td className="p-2 text-right tabular-nums" title="Soma por pessoa: uma reserva mexida por dois agentes conta nos dois">Σ {totals.bookings}</td><td /></>}
+                  {mode === "drivers" && <td />}
                   {canManageRh && <td />}
                 </tr></tfoot>
               </table>
             </div>
           )}
       </CardContent>
+      {/* Q7: o condutor escolhido na lista → os tempos dele logo por baixo */}
+      {mode === "drivers" && person && (() => {
+        const chosen = all.find((r) => r.key === person);
+        return chosen?.employeeId != null ? <div className="px-6 pb-6"><DriverTimesCard employeeId={chosen.employeeId} name={chosen.name} /></div> : null;
+      })()}
       <MovementDetailSheet target={detail} from={start} to={end} onClose={() => setDetail(null)} />
+      <Sheet open={!!timesOf} onOpenChange={(o) => !o && setTimesOf(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>{timesOf?.name}</SheetTitle>
+            <SheetDescription>Tempos de entrega e de recolha, ao lado dos colegas da mesma cidade e do mesmo serviço.</SheetDescription>
+          </SheetHeader>
+          <div className="px-4 pb-6">{timesOf && <DriverTimesCard employeeId={timesOf.employeeId} name={timesOf.name} compact />}</div>
+        </SheetContent>
+      </Sheet>
       <PersonLinksDialog employeeId={links?.employeeId ?? null} name={links?.name} open={!!links} onOpenChange={(o) => !o && setLinks(null)} />
     </Card>
   );

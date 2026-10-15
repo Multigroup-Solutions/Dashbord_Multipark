@@ -2672,6 +2672,26 @@ export const appRouter = router({
       return loadMovementPeople({ from: input.startDate, to: input.endDate, cities: scopedCityNamesLive(), parkIds: await brandParkIdsFor(input.projectId), drivers: input.drivers });
     }),
 
+    /**
+     * Q7 (Jorge, 14 out 2026): os tempos de UM condutor — Fila, Trânsito, Cliente,
+     * no terminal e P2 — por semana, mês e 6 meses, ao lado dos colegas da mesma
+     * cidade e tipo de serviço, e a evolução (gráfico). Só informação: não dá
+     * pontos. Acesso: o módulo Condutores e agentes (supervisor na cidade dele;
+     * back office, admin e super admin) e a ficha tem de estar no âmbito. O portão
+     * dos tempos com GPS aplica-se no servidor (server/driverTimes.ts).
+     */
+    driverTimes: protectedProcedure.input(z.object({
+      employeeId: z.number().int().positive(),
+      refDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "condutores_agentes", "view");
+      await assertEmployeeAccess(input.employeeId);
+      const [{ getDriverTimes }, { scopedServiceCityKeys }, { operationalDayOf, addDays }] = await Promise.all([import("./driverTimes"), import("./serviceTimesRead"), import("../shared/lisbonDay")]);
+      // o dia de referência: ontem (o último dia já calculado pela noite), salvo pedido
+      const refDay = input.refDay ?? addDays(operationalDayOf(Date.now()), -1);
+      return getDriverTimes({ employeeId: input.employeeId, refDay, cityKeys: await scopedServiceCityKeys(), isSuperAdmin: ctx.user.role === "super_admin" });
+    }),
+
     // Agent performance history (DB local — alimentada pelo sync da API Multipark)
     // D27 (Jorge, 3 out 2026): o agente escolhe-se pela FICHA (os agentes da
     // Multipark ligados a ela), nunca por nome escrito — homónimos e grafias
@@ -3984,7 +4004,9 @@ export const appRouter = router({
         cash: { startMs: win.startMs, endMs: Math.max(win.startMs, Math.min(nowMs, win.endMs)) },
       });
       if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
-      return { available: true as const, ...r.data };
+      // 15 out 2026: a meta da entrega para a cor do cronómetro "Na fila há X" (só a fila tem cor)
+      const targetMinutes = Number((await getSetting("serviceTimes.targetMinutes").catch(() => null)) ?? 15);
+      return { available: true as const, ...r.data, targetMinutes };
     }),
 
     // "Resumir agora" (5 pontos PT-PT): só numa passagem JÁ GRAVADA, a partir do
@@ -4135,7 +4157,8 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_resumo_dia", "view");
       const { getSupervisorDayDashboard } = await import("./db");
-      return getSupervisorDayDashboard(input.date);
+      // 15 out 2026: o portão dos tempos com GPS aplica-se no servidor (só o super admin os vê com ele fechado)
+      return getSupervisorDayDashboard(input.date, { isSuperAdmin: ctx.user.role === "super_admin" });
     }),
 
     // 12 out 2026 (Jorge): "Parado" limitado ao TURNO de cada pessoa (picagens;
@@ -4160,7 +4183,7 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_resumo_dia", "view");
       const { getDriverShiftDay } = await import("./shiftDayDetail");
-      return getDriverShiftDay(input.date, input.key);
+      return getDriverShiftDay(input.date, input.key, Date.now(), { isSuperAdmin: ctx.user.role === "super_admin" });
     }),
 
     // Uma entrega lenta: a reserva, a linha do tempo e os outros pedidos da
@@ -4837,7 +4860,12 @@ export const appRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "Esta cidade não pertence ao teu centro de custos." });
         }
         const { getWeekActivity } = await import("./weekActivity");
-        return getWeekActivity({ city: input.city, weekStart: input.weekStart });
+        const r = await getWeekActivity({ city: input.city, weekStart: input.weekStart });
+        // 15 out 2026: os tempos novos (Fila, Trânsito, Nosso, Cliente, % na meta; recolhas: Cliente, No terminal, No P2)
+        // da tabela dos tempos, ao lado (o formato de sempre não muda); portão dos tempos com GPS aplicado aqui
+        const { getWeekTimes } = await import("./serviceTimesViews");
+        const times = await getWeekTimes({ weekStart: r.weekStart, cityKey: input.city === "lisbon" ? "lisboa" : input.city, isSuperAdmin: ctx.user.role === "super_admin" });
+        return { ...r, times };
       }),
 
     // Liga um agente Multipark a um PARCEIRO (agências que marcam pelo portal)
@@ -5431,7 +5459,14 @@ export const appRouter = router({
         getSetting("extras.timesPercentile").catch(() => null),
         getSetting("extras.useMeasuredTimes").catch(() => null),
       ]);
-      return getPressureView((key) => groupAllowedForCities(key, keys), { crewRules, percentiles, useMeasured });
+      const view = await getPressureView((key) => groupAllowedForCities(key, keys), { crewRules, percentiles, useMeasured });
+      // 15 out 2026: os tempos novos por (dia da semana × hora) de cada cidade, ao lado (o formato de sempre não
+      // muda), com o portão dos tempos com GPS aplicado aqui e a Fila para a "hora apertada" (extras.tightUsesQueue)
+      const { getPressureTimes } = await import("./serviceTimesViews");
+      const times = view.available && view.windowStart && view.windowEnd
+        ? await getPressureTimes({ from: view.windowStart, to: view.windowEnd, cityKeys: keys, isSuperAdmin: ctx.user.role === "super_admin" })
+        : null;
+      return { ...view, times };
     }),
   }),
 

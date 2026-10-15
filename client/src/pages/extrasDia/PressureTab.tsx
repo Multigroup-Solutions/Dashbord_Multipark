@@ -4,6 +4,11 @@
  * extras.timesSince — 22d: acumula —, guardados em ops_pressure_stats).
  * 22d: nas cidades também o tempo por carro de cada condutor, comparado com a
  * tabela máxima (D12). Regras: shared/extrasPressure.ts.
+ * 15 out 2026: "Tempos" — a Fila, o Trânsito, o nosso tempo, o Cliente, a %
+ * na meta e o Total das entregas; o Cliente, o tempo no terminal, no P2, até
+ * arrumado e as atrasadas no T2 das recolhas, da tabela dos tempos (o bloco
+ * `times` do procedimento, com o portão dos tempos com GPS já aplicado). Com
+ * `extras.tightUsesQueue` ligado na cidade, a "hora apertada" usa a Fila.
  */
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -13,15 +18,34 @@ import { DayNoteItem, DayNotesCard } from "./DayNotes";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AlertTriangle, Flame, Gauge, Timer, TrafficCone } from "lucide-react";
+import { AlertTriangle, Flame, Gauge, Lock, Timer, TrafficCone } from "lucide-react";
 import { cellStyle, rampLegend } from "@/components/heatRamp";
 import {
-  CREW_MEASURE_MIN_SAMPLES, MIN_SAMPLE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, hasCycleSplit, isRushHour, loadComparison, pressureSummary,
+  CREW_MEASURE_MIN_SAMPLES, MIN_SAMPLE, TIGHT_TOP_SHARE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, hasCycleSplit, isRushHour, loadComparison, pressureSummary,
   slotCycleOf, slotLoadPerDay, tightReason, tightThresholds, type CrewMeasureBand, type CycleKind, type CyclePercentile, type PressureCrewRow,
   type PressureLoadRow, type PressureSlot,
 } from "@shared/extrasPressure";
+import { CalibrationBadge, fmtDur } from "@/components/serviceTimes/TimesBits";
+import type { GridCell, TimeMetric } from "../../../../server/serviceTimesAgg";
+import type { PressureTimesGroup } from "../../../../server/serviceTimesViews";
 
-type Metric = "load" | "delivery" | "cycle" | "drive" | "crew";
+type Metric = "load" | "delivery" | "cycle" | "drive" | "crew" | "times";
+/** Os tempos novos (tabela dos tempos): um de cada vez no mapa. */
+type TimesPick = TimeMetric | "meta" | "t2";
+const TIMES_OPTIONS: Array<{ key: TimesPick; label: string; kind: "Entregas" | "Recolhas"; help: string }> = [
+  { key: "fila", label: "Fila", kind: "Entregas", help: "Da chamada do cliente (ou do pendente) até o condutor pegar no carro: mostra como está o trabalho e serve para acertar os extras." },
+  { key: "transito", label: "Trânsito", kind: "Entregas", help: "De pegar no carro até chegar ao terminal (paragem pelo GPS)." },
+  { key: "nosso", label: "Nosso tempo", kind: "Entregas", help: "Fila + Trânsito: \"entregámos em X min\" (a meta é a das Definições)." },
+  { key: "meta", label: "% na meta", kind: "Entregas", help: "Entregas com o nosso tempo dentro da meta, das que o têm medido. Aqui mais escuro = mais entregas na meta (melhor)." },
+  { key: "cliente", label: "Cliente", kind: "Entregas", help: "Do terminal à assinatura: a espera pelo cliente (não é tempo nosso)." },
+  { key: "total", label: "Total", kind: "Entregas", help: "Da chamada (ou do pendente) à assinatura do cliente." },
+  { key: "cliente_recolha", label: "Cliente", kind: "Recolhas", help: "Da chamada (ou do \"em recolha\") ao check-in: quanto o cliente demora a chegar." },
+  { key: "terminal", label: "No terminal", kind: "Recolhas", help: "Do check-in até o carro sair do terminal: o tempo para tirar os carros de lá." },
+  { key: "p2", label: "No P2", kind: "Recolhas", help: "Do P2 até ir para um parque: o tempo para os tirar do P2." },
+  { key: "ate_arrumado", label: "Até arrumado", kind: "Recolhas", help: "Do check-in até estar no parque certo." },
+  { key: "t2", label: "% T2 atrasadas", kind: "Recolhas", help: "Recolhas no T2 em que o condutor chegou ao T2 depois do alvo (a contar da chamada)." },
+];
+const TIMES_PCT = new Set<TimesPick>(["meta", "t2"]);
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
 const fmt1 = (n: number | null | undefined) => (n == null ? "—" : String(Math.round(n * 10) / 10).replace(".", ","));
@@ -34,10 +58,11 @@ const ddmmyyyy = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/
 /** 44a: as métricas, com nome claro e o que querem dizer. */
 const METRICS: Array<{ key: Metric; label: string; short: string; city?: boolean }> = [
   { key: "load", label: "Carros por hora", short: "chegadas + saídas feitas" },
-  { key: "delivery", label: "Tempo de entrega", short: "do pedido à assinatura" },
+  { key: "delivery", label: "Total (pedido → assinatura)", short: "fila + caminho + cliente" },
   { key: "cycle", label: "Tempo por carro", short: "de cada condutor", city: true },
-  { key: "drive", label: "Na estrada", short: "de pegar no carro à assinatura", city: true },
+  { key: "drive", label: "Início da entrega → assinatura", short: "caminho + espera pelo cliente", city: true },
   { key: "crew", label: "Pessoas a trabalhar", short: "média, com o TL", city: true },
+  { key: "times", label: "Tempos", short: "fila, trânsito, terminal, P2…", city: true },
 ];
 
 const METRIC_HELP: Record<Metric, string> = {
@@ -46,6 +71,7 @@ const METRIC_HELP: Record<Metric, string> = {
   cycle: "Minutos entre o início de um serviço e o início do seguinte do mesmo condutor (inclui voltar, trânsito e esperas). Mostra-se o p{p}: em {p} % das vezes foi isto ou menos. Mais escuro = cada carro come mais tempo.",
   drive: "Minutos desde que o condutor pega no carro (em entrega) até o cliente assinar: junta o caminho até ao terminal e a espera pelo cliente lá. Mostra-se o p75: em 3 de cada 4 entregas foi isto ou menos. Mais escuro = mais tempo na estrada.",
   crew: "Pessoas diferentes a fazer serviços nessa hora, sempre a contar o team leader (média por dia). Mais escuro = mais gente.",
+  times: "",
 };
 
 /**
@@ -92,15 +118,28 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
   const slots = useMemo(() => (q.data?.slots ?? []).filter((s) => s.group === group) as PressureSlot[], [q.data, group]);
   const loads = useMemo(() => (q.data?.loads ?? []).filter((l) => l.group === group) as PressureLoadRow[], [q.data, group]);
   const byKey = useMemo(() => new Map(slots.map((s) => [`${s.weekday}:${s.hour}`, s])), [slots]);
-  const thresholds = useMemo(() => tightThresholds(slots), [slots]);
-  const summary = useMemo(() => pressureSummary(slots, where), [slots, where]);
+  // 15 out 2026: os tempos novos da cidade (null fora das cidades ou sem tabela) e a Fila para a hora apertada
+  const tg = ((q.data as { times?: { groups?: Record<string, PressureTimesGroup> } | null } | undefined)?.times?.groups?.[group] ?? null) as PressureTimesGroup | null;
+  const targetMinutes = (q.data as { times?: { targetMinutes?: number } | null } | undefined)?.times?.targetMinutes ?? 15;
+  const tightOpts = useMemo(() => (tg?.queue ? { queue: tg.queue } : null), [tg]);
+  const thresholds = useMemo(() => tightThresholds(slots, TIGHT_TOP_SHARE, tightOpts), [slots, tightOpts]);
+  const summary = useMemo(() => pressureSummary(slots, where, 3, tightOpts), [slots, where, tightOpts]);
+  const [timesPick, setTimesPick] = useState<TimesPick>("fila");
   const loadRows = useMemo(() => loadComparison(loads), [loads]);
   const loadText = useMemo(() => describeLoadEffect(loads), [loads]);
   // 22d: só nas cidades (todas as marcas) há tempos por condutor.
   const cityInfo = (q.data?.cities ?? {})[group] as { percentile: CyclePercentile; bands: CrewMeasureBand[]; useMeasured?: boolean } | undefined;
   const pct: CyclePercentile = cityInfo?.percentile ?? 75;
   const crewRows = useMemo(() => (q.data?.crew ?? []).filter((c) => c.group === group) as PressureCrewRow[], [q.data, group]);
-  const metricShown: Metric = !cityInfo && (metric === "cycle" || metric === "drive" || metric === "crew") ? "load" : metric;
+  const metricShown: Metric = (!cityInfo && (metric === "cycle" || metric === "drive" || metric === "crew" || metric === "times")) || (metric === "times" && !tg) ? "load" : metric;
+  const timesHidden = metricShown === "times" && tg ? tg.hidden[timesPick] ?? null : null;
+  const timesValue = (c: GridCell | undefined): number | null => {
+    if (!c || timesHidden) return null;
+    if (timesPick === "meta") return c.inTarget?.pct ?? null;
+    if (timesPick === "t2") return c.t2Late?.pct ?? null;
+    const st = c.m[timesPick];
+    return st ? st.p75Ms / 60_000 : null;
+  };
   const stale = q.data?.stale?.[group];
   // 12 out 2026: entregas / recolhas / juntas. Até o trabalho noturno reler os dias, só "Juntas".
   const split = useMemo(() => hasCycleSplit(slots), [slots]);
@@ -116,17 +155,18 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
     }
     if (metricShown === "drive") return (s.driveN ?? 0) >= MIN_SAMPLE ? s.driveP75 ?? null : null;
     if (metricShown === "crew") return s.crewAvg ?? null;
+    if (metricShown === "times") return timesValue(tg?.cells[`${s.weekday}:${s.hour}`]);
     return s.deliveryN >= MIN_SAMPLE ? s.deliveryP75 : null;
   };
   const max = Math.max(0, ...slots.map((s) => value(s) ?? 0));
-  const unit = metricShown === "load" ? " carros" : metricShown === "crew" ? " pessoas" : " min";
+  const unit = metricShown === "load" ? " carros" : metricShown === "crew" ? " pessoas" : metricShown === "times" && TIMES_PCT.has(timesPick) ? " %" : " min";
   const fmtV = (v: number) => (metricShown === "load" || metricShown === "crew" ? fmt1(v) : fmt0(v));
 
   const detail = (wd: number, h: number): string[] => {
     const s = byKey.get(`${wd}:${h}`);
     const head = `${WEEKDAY_SHORT[wd]} ${String(h).padStart(2, "0")}h`;
     if (!s) return [`${head} — sem movimento`];
-    const tight = tightReason(s, thresholds);
+    const tight = tightReason(s, thresholds, tightOpts?.queue);
     return [
       head,
       `Carros/hora (média por dia): ${fmt1(slotLoadPerDay(s))} — ${fmt1(s.checkinsDone / Math.max(1, s.days))} chegadas, ${fmt1(s.checkoutsDone / Math.max(1, s.days))} saídas`,
@@ -140,7 +180,8 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
       cityInfo && (s.driveN ?? 0) > 0 ? `Na estrada (n=${s.driveN}): mediana ${fmt0(s.driveP50)} · p75 ${fmt0(s.driveP75)} min` : "",
       cityInfo && (s.toParkN ?? 0) > 0 ? `Recolhido → no parque (n=${s.toParkN}): mediana ${fmt0(s.toParkP50)} · p75 ${fmt0(s.toParkP75)} min` : "",
       cityInfo && s.crewAvg != null ? `Pessoas a trabalhar (média): ${fmt1(s.crewAvg)}` : "",
-      tight ? `Hora apertada (top 20 %: ${[tight.load ? "muitos carros" : "", tight.delivery ? "entregas lentas" : ""].filter(Boolean).join(" e ")})` : "",
+      ...timesLines(tg, `${wd}:${h}`, targetMinutes),
+      tight ? `Hora apertada (top 20 %: ${[tight.load ? "muitos carros" : "", tight.delivery ? (thresholds.by === "fila" ? "fila longa" : "entregas lentas") : ""].filter(Boolean).join(" e ")})` : "",
     ].filter(Boolean);
   };
   const [selWd, selH] = (cellKey ?? "").split(":").map(Number);
@@ -184,8 +225,8 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
               {q.data.computedAt && <> Calculado em {q.data.computedAt.slice(0, 16)} UTC.</>}
             </p>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2" role="radiogroup" aria-label="O que mostrar no mapa">
-            {METRICS.filter((m) => !m.city || cityInfo).map((m) => {
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" role="radiogroup" aria-label="O que mostrar no mapa">
+            {METRICS.filter((m) => (!m.city || cityInfo) && (m.key !== "times" || tg)).map((m) => {
               const on = metricShown === m.key;
               return (
                 <button
@@ -242,7 +283,22 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
               {!split && <span className="text-xs text-muted-foreground">Entregas e recolhas em separado: a calcular (o trabalho da noite relê os dias desde abril).</span>}
             </div>
           )}
-          <p className="text-sm text-muted-foreground">{(metricShown === "cycle" ? CYCLE_HELP[cycleKind] : METRIC_HELP[metricShown]).replaceAll("{p}", String(pct))}</p>
+          {metricShown === "times" && tg && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={timesPick} onValueChange={(v) => { setTimesPick(v as TimesPick); setCellKey(null); }}>
+                <SelectTrigger className="w-60 h-9 rounded-[10px]" aria-label="Que tempo"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {TIMES_OPTIONS.map((o) => <SelectItem key={o.key} value={o.key}>{o.kind} — {o.label}{tg.hidden[o.key] ? " (em calibração)" : ""}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <CalibrationBadge note={tg.notes[timesPick] ?? null} />
+              <span className="text-xs text-muted-foreground">
+                {TIMES_PCT.has(timesPick) ? "Mostra-se a %." : "Mostra-se o p75."} Medido em {fmtPct(timesPick === "meta" ? tg.coverage.nosso : timesPick === "t2" ? null : tg.coverage[timesPick as TimeMetric])} das {TIMES_OPTIONS.find((o) => o.key === timesPick)?.kind.toLowerCase()} ({tg.deliveries} entregas, {tg.pickups} recolhas no período).
+              </span>
+            </div>
+          )}
+          <p className="text-sm text-muted-foreground">{metricShown === "times" ? `${TIMES_OPTIONS.find((o) => o.key === timesPick)?.help ?? ""} Células com menos de ${MIN_SAMPLE} casos ficam em branco.` : (metricShown === "cycle" ? CYCLE_HELP[cycleKind] : METRIC_HELP[metricShown]).replaceAll("{p}", String(pct))}</p>
+          {timesHidden && <p className="text-sm font-medium text-muted-foreground flex items-center gap-1"><Lock className="w-4 h-4" />{timesHidden}: este tempo depende do GPS e ainda não se mostra nesta cidade.</p>}
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="overflow-x-auto">
@@ -263,7 +319,7 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
                       const key = `${wd}:${h}`;
                       const s = byKey.get(key);
                       const v = value(s);
-                      const tight = tightReason(s, thresholds);
+                      const tight = tightReason(s, thresholds, tightOpts?.queue);
                       return (
                         <td
                           key={h}
@@ -346,7 +402,9 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
             <ul className="list-disc pl-5 space-y-0.5">{summary.map((s, i) => <li key={i}>{s}</li>)}</ul>
           )}
           <p className="text-xs text-muted-foreground pt-1">
-            "Apertada" = hora no top 20 % do grupo em carros/hora (≥ {fmt1(thresholds.load)}) ou em tempo de entrega p75 (≥ {fmt0(thresholds.deliveryP75)} min).
+            "Apertada" = hora no top 20 % do grupo em carros/hora (≥ {fmt1(thresholds.load)}) ou em {thresholds.by === "fila" ? "Fila" : "tempo de entrega"} p75 (≥ {fmt0(thresholds.deliveryP75)} min).
+            {tg?.tightUsesQueue && !tg.queue && <> A definição "Hora apertada pela Fila" está ligada, mas a Fila só está medida em {fmtPct(tg.queueCoveragePct)} das entregas (precisa de 60 %): fica o tempo total.</>}
+            {tg?.queue && <> Usa a Fila (Definições → Hora apertada pela Fila): da chamada do cliente, ou do pendente, até o condutor pegar no carro.</>}
           </p>
         </CardContent>
       </Card>
@@ -455,6 +513,25 @@ function CrewCard({ bands, rows, pct, where, useMeasured }: { bands: CrewMeasure
       </CardContent>
     </Card>
   );
+}
+
+const fmtPct = (v: number | null | undefined) => (v == null ? "—" : `${String(Math.round(v)).replace(".", ",")} %`);
+
+/** As linhas dos tempos novos no detalhe de uma célula (as escondidas pelo portão não aparecem). */
+function timesLines(tg: PressureTimesGroup | null, key: string, targetMinutes: number): string[] {
+  const c = tg?.cells[key];
+  if (!tg || !c) return [];
+  const out: string[] = [];
+  const line = (m: TimeMetric, label: string) => {
+    const st = c.m[m];
+    if (st) out.push(`${label} (n=${st.n}): mediana ${fmtDur(st.p50Ms)} · p75 ${fmtDur(st.p75Ms)}`);
+  };
+  line("fila", "Fila"); line("transito", "Trânsito"); line("nosso", "Nosso tempo");
+  if (c.inTarget) out.push(`Na meta (${targetMinutes} min): ${fmtPct(c.inTarget.pct)} de ${c.inTarget.n}`);
+  line("cliente", "Cliente (entrega)"); line("total", "Total");
+  line("cliente_recolha", "Cliente (recolha)"); line("terminal", "No terminal"); line("p2", "No P2"); line("ate_arrumado", "Até arrumado");
+  if (c.t2Late) out.push(`T2 atrasadas: ${fmtPct(c.t2Late.pct)} de ${c.t2Late.n}`);
+  return out.length ? ["Tempos (tabela dos tempos):", ...out.map((l) => `  · ${l}`)] : [];
 }
 
 function FragmentCells({ row }: { row: PressureLoadRow | null }) {

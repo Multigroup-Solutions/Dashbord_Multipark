@@ -91,6 +91,8 @@ const PATH_MODULE: Array<[string, ModuleId]> = [
   ["reviews.movementPeople", "condutores_agentes"],
   ["reviews.agentPeople", "condutores_agentes"],
   ["reviews.agentHistory", "condutores_agentes"],
+  // Q7 (15 out 2026): os tempos por condutor seguem o mesmo módulo (e o mesmo alcance de cidade)
+  ["reviews.driverTimes", "condutores_agentes"],
   ["reviews.", "criticas"],
   ["complaints.", "reclamacoes"],
   ["lostFound.", "perdidos"],

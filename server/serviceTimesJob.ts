@@ -465,6 +465,11 @@ export function readWindowFor(from: string, to: string, nowMs: number): { anchor
 
 interface RangeCtx {
   deps: ServiceTimesDeps; settings: ServiceSettings; hash: string; nowMs: number; deadlineAt: number; force: boolean;
+  /**
+   * Ao vivo (Resumo do dia com a tabela ainda vazia): as MESMAS regras, sem GPS
+   * (os tempos com GPS ficam "GPS por recolher") e sem gravar nem anular nada.
+   */
+  live?: boolean;
   /** Parques da Multipark (lidos uma vez por corrida). */
   parkRows: Array<Record<string, unknown>>;
   /** Q6: zonas em vigor (garagens da Multipark + exceções). */
@@ -526,7 +531,9 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   const callsOn = settings.useCalls && range.to >= SERVICE_CALLS_SINCE;
   const calls = callsOn ? await deps.ourDb.calls(w.anchorFromMs - 6 * 3_600_000, w.anchorToMs + 3_600_000) : [];
   const crm = callsOn && liveIds.length ? await deps.ourDb.crmLinks(liveIds) : new Map<string, { phones: string[]; crmIds: number[] }>();
-  const gpsOn = range.to >= settings.gpsSince;
+  const gpsOn = !c.live && range.to >= settings.gpsSince;
+  /** Sem GPS: antes do período do GPS; ao vivo, ainda por recolher (o GPS do dia só chega à noite). */
+  const noGpsStatus: TransitStatus = c.live ? "gps_por_recolher" : "gps_fora_do_periodo";
   /** O GPS do Zello só existe desde `gpsSince` (dia de Lisboa do início). */
   const gpsOnAt = (at: number) => gpsOn && lisbonDayOf(at) >= settings.gpsSince;
   const checkins = gpsOn ? await deps.ourDb.pdaCheckins(w.readFromMs - 17 * 3_600_000, w.readToMs) : [];
@@ -545,8 +552,8 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   ]);
   const dispatch = dispatchStartIds(deliveries.filter((d) => d.start).map((d) => ({ id: d.start!.id, agentUserId: d.start!.agentUserId, at: d.start!.at })));
 
-  // 4. Linhas já guardadas (finais e atuais não se refazem)
-  const existing = await deps.store.existing(utc0(w.anchorFromMs), utc0(w.anchorToMs));
+  // 4. Linhas já guardadas (finais e atuais não se refazem); ao vivo não se lê nem grava nada
+  const existing = c.live ? [] : await deps.store.existing(utc0(w.anchorFromMs), utc0(w.anchorToMs));
   const existingByKey = new Map(existing.map((e) => [rowKey(e.kind, e.bookingId, e.anchorHistoryId), e]));
   const keepFinal = (kind: string, cyc: { bookingId: string; anchor: ServiceEvent }) => {
     if (c.force) return false;
@@ -592,7 +599,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
   const reqList = [...requests.values()].sort((a, b) => a.day.localeCompare(b.day));
   rep.gpsFiles.asked = reqList.length;
   // sem prazo para os ficheiros: ficam por recolher (a noite seguinte, ou o D-3 volta para trás)
-  const files = reqList.length && left() >= SERVICE_GPS_MIN_MS + 6_000 ? await deps.loadGps(reqList, { deadlineAt: c.deadlineAt - 6_000 }) : new Map<string, GpsFile>();
+  const files = reqList.length && !c.live && left() >= SERVICE_GPS_MIN_MS + 6_000 ? await deps.loadGps(reqList, { deadlineAt: c.deadlineAt - 6_000 }) : new Map<string, GpsFile>();
   for (const f of files.values()) { if (f.status === "ok" || f.status === "missing") rep.gpsFiles.read++; else if (f.reason === "prazo") rep.gpsFiles.skipped++; else rep.gpsFiles.failed++; }
   rep.gpsFiles.skipped += Math.max(0, reqList.length - files.size);
   const ctx: GpsCtx = { checkins, fixed, files, finalUntil: zelloLatestDay(c.nowMs) };
@@ -623,7 +630,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
       parks: [...parks.values()].filter((p) => p.zoneCity === city && p.operated && p.pos).map((p) => p.pos!),
     });
     if (d.outcome !== "cancelado" && S != null && E != null && !driverBlock) {
-      if (!gpsOnAt(S)) noGps = "gps_fora_do_periodo";
+      if (!gpsOnAt(S)) noGps = noGpsStatus;
       else if (who?.employeeId == null) noGps = "condutor_desconhecido";
       else {
         const Q0 = Math.min(R ?? S, cm.call?.at ?? Infinity, S);
@@ -691,7 +698,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     const overlap = !!p2Zone && (airport?.zones ?? []).some((z) => zonesTouch(p2Zone, z));
     const spot = spotTypeOf(b.parkingType, b.code);
     const gpsHere = I != null && gpsOnAt(I);
-    let exit: ExitResolution = { kind: "sem_medicao", status: gpsHere ? "sem_zello" : "gps_fora_do_periodo", flags: [] };
+    let exit: ExitResolution = { kind: "sem_medicao", status: gpsHere ? "sem_zello" : noGpsStatus, flags: [] };
     let driver: { employeeId: number; held: HeldGps } | null = null;
     if (I != null && p.outcome === "recebido") {
       if (overlap) exit = { kind: "sem_medicao", status: "zonas_sobrepostas", flags: ["zonas_sobrepostas"] };
@@ -722,7 +729,7 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
       const who = empOf(p.checkIn);
       let arrival: { at: number; alreadyThere: boolean } | { status: string };
       if (!zT2) arrival = { status: "sem_zona_t2" };
-      else if (!gpsOnAt(I)) arrival = { status: "gps_fora_do_periodo" };
+      else if (!gpsOnAt(I)) arrival = { status: noGpsStatus };
       else if (who?.employeeId == null) arrival = { status: "sem_gps" };
       else {
         const hg = heldGps(ctx, who.employeeId, k0, k0 - T2_LOOKBACK_MIN * 60_000, I);
@@ -768,7 +775,8 @@ async function processRange(c: RangeCtx, range: { from: string; to: string }, re
     });
   }
 
-  // 8. Gravar (upsert) e anular o que deixou de aparecer (só com a leitura completa)
+  // 8. Gravar (upsert) e anular o que deixou de aparecer (só com a leitura completa); ao vivo, nada
+  if (c.live) return { report: rep, rows };
   if (rows.length) await deps.store.upsert(rows.map(fitServiceRow));
   rep.written = rows.length;
   if (!rep.truncated) {
@@ -834,6 +842,37 @@ export function summarizeServiceDay(rows: readonly ServiceTimesRow[], day: strin
     + `trânsito p75 ${p(transit, 0.75)}, GPS ${pct(transit.length, del.length)}; na meta ${pct(inTarget, ours.length)}) · `
     + `recolhas ${pick.length} (cliente p50 ${p(num(pick.filter((r) => ok(r.customerStatus)).map((r) => r.customerMs)), 0.5)}; terminal p75 ${p(num(pick.filter((r) => ok(r.terminalStatus)).map((r) => r.terminalMs)), 0.75)}; `
     + `P2 p75 ${hm(num(pick.filter((r) => ok(r.p2Status)).map((r) => r.p2Ms)), 0.75)}; T2 atrasadas ${late}/${t2.length}) · motivos ${JSON.stringify(reasons)}`;
+}
+
+// ─── Ao vivo (sem gravar) ───────────────────────────────────────────────────
+
+export type ServiceLiveDeps = Pick<ServiceTimesDeps, "query" | "now" | "settings" | "ourDb" | "identity">;
+
+/**
+ * Os tempos dos ciclos que fecharam nos dias operacionais [from, to], AGORA,
+ * com as regras do trabalho noturno mas sem GPS (Trânsito, Cliente das
+ * entregas, Nosso, No terminal e T2 ficam "GPS por recolher") e sem escrever
+ * nada: é o Resumo do dia enquanto a tabela dos tempos está vazia (interruptor
+ * desligado ou dia ainda por calcular). Uma leitura da History, só leitura.
+ * Nunca lança: a Multipark em baixo → `ok:false` com o motivo.
+ */
+export async function computeServiceRowsLive(deps: ServiceLiveDeps, o: { from: string; to: string; deadlineAt: number }): Promise<{ ok: true; rows: ServiceTimesRow[]; truncated: boolean } | { ok: false; error: string }> {
+  try {
+    const settings = await deps.settings();
+    const nowMs = deps.now();
+    const pq = buildServiceParksSql(), gq = buildGaragesSql();
+    const [parkRows, garageRows] = await Promise.all([deps.query<Record<string, unknown>>(pq.sql, pq.params), deps.query<Record<string, unknown>>(gq.sql, gq.params)]);
+    const zones = effectiveParkZones(garageCoordsOf(garageRows, parkRows), settings.parkZones).zones;
+    const neverStore: ServiceStore = {
+      loadState: async () => null, saveState: async () => undefined, existing: async () => [], upsert: async () => { throw new Error("ao vivo não grava"); }, voidRows: async () => undefined,
+    };
+    const full: ServiceTimesDeps = { ...deps, loadGps: async () => new Map(), store: neverStore };
+    const { report, rows } = await processRange({ deps: full, settings, hash: "0000000000000000", nowMs, deadlineAt: o.deadlineAt, force: true, live: true, parkRows, zones }, { from: o.from, to: o.to }, "reprocessar");
+    return { ok: true, rows, truncated: report.truncated };
+  } catch (err) {
+    const r = describeReadFailure(err);
+    return { ok: false, error: r.reason };
+  }
 }
 
 // ─── A corrida ──────────────────────────────────────────────────────────────

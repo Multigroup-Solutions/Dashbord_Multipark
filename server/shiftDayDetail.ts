@@ -7,7 +7,10 @@
  *    "Quem trabalhou" carrega-o à parte (não atrasa o resumo);
  *  - `getDriverShiftDay`: o dia de um condutor (linha da tabela): recolhas,
  *    entregas e movimentos com a reserva, pendente→entregue, a velocidade
- *    máxima em cada entrega e o GPS do turno;
+ *    máxima em cada entrega e o GPS do turno; 15 out 2026: por entrega que
+ *    ELE começou, Fila / Trânsito / Cliente e a máxima no Trânsito; por
+ *    recolha que ele tirou do terminal, o terminal, o destino e o P2 (com o
+ *    portão dos tempos com GPS aplicado aqui);
  *  - `getDeliveryContext`: uma entrega lenta e o que se passava na mesma
  *    cidade enquanto esperava.
  *
@@ -33,6 +36,8 @@ const mysqlTs = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace(
 const r1 = (n: number) => Math.round(n * 10) / 10;
 /** Leitura do GPS: no máximo isto (a função morre aos 60 s). */
 const GPS_DEADLINE_MS = 25_000;
+/** Até aqui (desde o início do pedido) para as leituras à Multipark do dia do condutor; depois vem o GPS. */
+const DRIVER_DAY_LIVE_BUDGET_MS = 32_000;
 const HIST_LIMIT = 5000;
 
 // ─── Turno de cada pessoa (picagens / escala) ───────────────────────────────
@@ -133,9 +138,6 @@ export interface DriverAction {
   pendingAt: string | null;
   takenAt: string | null;
   mins: number | null;
-  /** recolhas: entrada prevista e desvio (min) */
-  plannedIn: string | null;
-  delayMins: number | null;
   /** entregas: velocidade máxima (km/h) e excessos no GPS do condutor entre o pedido e a entrega (null sem GPS) */
   maxSpeed: number | null;
   violations: number | null;
@@ -148,7 +150,8 @@ export interface DriverAction {
  * meia-noite fica no dia em que começou) — com a reserva, o tempo
  * pendente→entregue e a velocidade máxima em cada entrega; e o GPS do turno.
  */
-export async function getDriverShiftDay(date: string, key: string, nowMs: number = Date.now()) {
+export async function getDriverShiftDay(date: string, key: string, nowMs: number = Date.now(), opts: { isSuperAdmin?: boolean } = {}) {
+  const t0 = Date.now();
   const [kind, ...rest] = key.split(":");
   const ref = rest.join(":");
   if (!["emp", "agent"].includes(kind) || !ref) throw new TRPCError({ code: "BAD_REQUEST", message: "Sem ações para mostrar desta linha (PDA sem login)." });
@@ -206,16 +209,27 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
   for (const r of mine) {
     const ct = (r.changeType ?? "").toUpperCase();
     const pair = ct === "CHECK_OUT" ? pairByDelivery.get(`${r.bookingExternalId}|${r.actionTime}`) : undefined;
-    let delay: number | null = null;
-    if (ct === "CHECK_IN" && r.checkIn) {
-      const m = Math.trunc((utcMs(r.actionTime) - utcMs(r.checkIn)) / 60_000);
-      if (Number.isFinite(m) && Math.abs(m) < TIMING_MAX_MIN) delay = m;
-    }
+    // a hora marcada já não entra nas recolhas (decisão do Jorge, 14 out 2026)
     actions.push({
       at: r.actionTime, changeType: typeOf(r), booking: r.bookingExternalId, bookingCode: r.bookingCode, plate: r.licensePlate, parkName: r.parkName,
       pendingAt: pair?.pendingAt ?? null, takenAt: pair?.takenAt ?? null, mins: pair?.mins != null && pair.mins < TIMING_MAX_MIN ? pair.mins : null,
-      plannedIn: ct === "CHECK_IN" ? r.checkIn : null, delayMins: delay, maxSpeed: null, violations: null,
+      maxSpeed: null, violations: null,
     });
+  }
+
+  // 15 out 2026: os tempos das entregas que ele começou e das recolhas que tirou do terminal
+  // (a tabela dos tempos; sem linhas, ao vivo), com o portão pela cobertura da cidade no dia
+  let times: (ReturnType<typeof import("./serviceTimesAgg").driverDayTimes> & { source: string; reason: string | null; maxInTransit: Record<string, number | null> }) | null = null;
+  if (empId != null) {
+    const { dayServiceRows, loadServiceViewSettings, scopedServiceCityKeys } = await import("./serviceTimesRead");
+    const { driverDayTimes } = await import("./serviceTimesAgg");
+    // o cálculo ao vivo (sem linhas na tabela) é o MESMO do Resumo do dia (guardado por dia); com prazo,
+    // para sobrar tempo ao GPS do turno (até GPS_DEADLINE_MS) dentro dos 60 s da função
+    const [svc, st] = await Promise.all([
+      dayServiceRows(date, { cityKeys: await scopedServiceCityKeys(), deadlineMs: DRIVER_DAY_LIVE_BUDGET_MS - (Date.now() - t0) }),
+      loadServiceViewSettings(),
+    ]);
+    times = { ...driverDayTimes(svc.rows, empId, { gate: { gate: st.gate, isSuperAdmin: !!opts.isSuperAdmin } }), source: svc.source, reason: svc.reason, maxInTransit: {} };
   }
 
   // GPS (só com ficha): o turno e cada entrega
@@ -232,7 +246,8 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
         return a.changeType === "CHECK_OUT" && from ? { startMs: utcMs(from), endMs: utcMs(a.at) + 1000 } : null;
       };
       const deliveryWindows = actions.map(deliveryWindow).filter((x): x is TimeWindow => !!x);
-      const days = daysOfWindows([...s.windows, ...deliveryWindows]);
+      const transitWindows = (times?.deliveries ?? []).map((d) => d.transitWindow).filter((x): x is TimeWindow => !!x);
+      const days = daysOfWindows([...s.windows, ...deliveryWindows, ...transitWindows]);
       const { threshold, minPoints } = await speedRule();
       const held = await heldPointsFor(new Map([[empId, days]]), { deadlineAt: Date.now() + GPS_DEADLINE_MS });
       const files = held.byEmp.get(empId);
@@ -244,6 +259,12 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
           const st = heldStats(files, [win], threshold, minPoints);
           a.maxSpeed = st.points > 0 ? Math.round(st.maxSpeed) : null;
           a.violations = st.points > 0 ? st.violations : null;
+        }
+        // a máxima NO TRÂNSITO (pegou no carro → chegou ao terminal): só com o portão aberto (a janela já vem filtrada)
+        for (const d of times?.deliveries ?? []) {
+          if (!d.transitWindow) continue;
+          const st = heldStats(files, [d.transitWindow], threshold, minPoints);
+          times!.maxInTransit[`${d.bookingId}|${d.startedAt}`] = st.points > 0 ? Math.round(st.maxSpeed) : null;
         }
       }
       const st = files?.length && s.windows.length ? heldStats(files, s.windows, threshold, minPoints) : null;
@@ -258,7 +279,7 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
   }
   return {
     date, key, name: emp?.fullName ?? (kind === "agent" ? ref : `#${ref}`), employeeId: empId,
-    actions, shifts: shiftInfo, gps,
+    actions, shifts: shiftInfo, gps, times,
     truncated: rows.length >= HIST_LIMIT,
   };
 }

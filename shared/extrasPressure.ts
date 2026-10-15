@@ -334,16 +334,31 @@ export const TIGHT_TOP_SHARE = 0.2;
 export interface TightThresholds {
   /** Carga (carros/hora, média por dia) a partir da qual a hora está no top 20 %. */
   load: number | null;
-  /** p75 da entrega (min) a partir do qual a hora está no top 20 %. */
+  /** p75 da entrega (min) a partir do qual a hora está no top 20 % — o da Fila com `by: "fila"`. */
   deliveryP75: number | null;
+  /** 15 out 2026: "fila" = a parte "entregas lentas" usa o p75 da Fila (extras.tightUsesQueue); sem nada = o total, como sempre. */
+  by?: "fila";
 }
 
 /**
- * Limiares do top 20 % de um grupo: sobre as células com movimento (carga > 0)
- * e, para o p75, só as com amostra suficiente. PURA.
+ * A Fila por hora (dia da semana:hora → p75 em minutos e n), da tabela dos
+ * tempos — só quando `extras.tightUsesQueue` está ligado na cidade E a
+ * cobertura da Fila no grupo chega (≥ 60 %). Sem ela, tudo como sempre.
  */
-export function tightThresholds(slots: PressureSlot[], share = TIGHT_TOP_SHARE): TightThresholds {
+export type QueueByCell = Readonly<Record<string, { n: number; p75: number | null }>>;
+export interface TightOptions { queue?: QueueByCell | null }
+
+/**
+ * Limiares do top 20 % de um grupo: sobre as células com movimento (carga > 0)
+ * e, para o p75, só as com amostra suficiente. Com `opts.queue`, o p75 é o da
+ * Fila (D10: a Fila é a que serve para os extras). PURA.
+ */
+export function tightThresholds(slots: PressureSlot[], share = TIGHT_TOP_SHARE, opts?: TightOptions | null): TightThresholds {
   const loads = slots.map(slotLoadPerDay).filter((x) => x > 0);
+  if (opts?.queue) {
+    const q = Object.values(opts.queue).filter((c) => c.n >= MIN_SAMPLE && c.p75 != null).map((c) => c.p75 as number);
+    return { load: loads.length ? percentile(loads, 1 - share) : null, deliveryP75: q.length ? percentile(q, 1 - share) : null, by: "fila" };
+  }
   const p75s = slots.filter((s) => s.deliveryN >= MIN_SAMPLE && s.deliveryP75 != null).map((s) => s.deliveryP75 as number);
   return {
     load: loads.length ? percentile(loads, 1 - share) : null,
@@ -353,12 +368,20 @@ export function tightThresholds(slots: PressureSlot[], share = TIGHT_TOP_SHARE):
 
 export interface TightReason { load: boolean; delivery: boolean }
 
-/** A célula está no top 20 % (volume OU p75 da entrega)? null = não. PURA. */
-export function tightReason(s: PressureSlot | undefined, t: TightThresholds): TightReason | null {
+/**
+ * A célula está no top 20 % (volume OU p75 da entrega)? null = não. Com os
+ * limiares da Fila (`t.by === "fila"`), a parte "entregas lentas" olha para o
+ * p75 da Fila da célula (`queue`). PURA.
+ */
+export function tightReason(s: PressureSlot | undefined, t: TightThresholds, queue?: QueueByCell | null): TightReason | null {
   if (!s) return null;
   const load = slotLoadPerDay(s);
   const byLoad = t.load != null && load > 0 && load >= t.load;
-  const byDelivery = t.deliveryP75 != null && s.deliveryN >= MIN_SAMPLE && s.deliveryP75 != null && s.deliveryP75 >= t.deliveryP75;
+  let byDelivery: boolean;
+  if (t.by === "fila") {
+    const q = queue?.[`${s.weekday}:${s.hour}`];
+    byDelivery = t.deliveryP75 != null && !!q && q.n >= MIN_SAMPLE && q.p75 != null && q.p75 >= t.deliveryP75;
+  } else byDelivery = t.deliveryP75 != null && s.deliveryN >= MIN_SAMPLE && s.deliveryP75 != null && s.deliveryP75 >= t.deliveryP75;
   return byLoad || byDelivery ? { load: byLoad, delivery: byDelivery } : null;
 }
 
@@ -371,14 +394,14 @@ export function isoWeekday(day: string): number {
  * Horas apertadas da escala de um dia (horas 0–26 do Extras-Dia: 24–26 são
  * 00–02h do dia seguinte). Devolve hora → motivo. PURA.
  */
-export function tightHoursForDay(slots: PressureSlot[], targetDay: string, hours: number[]): Map<number, TightReason> {
-  const t = tightThresholds(slots);
+export function tightHoursForDay(slots: PressureSlot[], targetDay: string, hours: number[], opts?: TightOptions | null): Map<number, TightReason> {
+  const t = tightThresholds(slots, TIGHT_TOP_SHARE, opts);
   const byKey = new Map(slots.map((s) => [`${s.weekday}:${s.hour}`, s]));
   const wd = isoWeekday(targetDay);
   const out = new Map<number, TightReason>();
   for (const h of hours) {
     const weekday = h >= 24 ? (wd % 7) + 1 : wd;
-    const r = tightReason(byKey.get(`${weekday}:${h % 24}`), t);
+    const r = tightReason(byKey.get(`${weekday}:${h % 24}`), t, opts?.queue);
     if (r) out.set(h, r);
   }
   return out;
@@ -405,8 +428,8 @@ export interface TightBlock {
  * Blocos apertados (horas seguidas do mesmo dia da semana no top 20 %),
  * ordenados do mais apertado para o menos. PURA.
  */
-export function tightBlocks(slots: PressureSlot[], limit = 3): TightBlock[] {
-  const t = tightThresholds(slots);
+export function tightBlocks(slots: PressureSlot[], limit = 3, opts?: TightOptions | null): TightBlock[] {
+  const t = tightThresholds(slots, TIGHT_TOP_SHARE, opts);
   const byKey = new Map(slots.map((s) => [`${s.weekday}:${s.hour}`, s]));
   const blocks: TightBlock[] = [];
   for (let wd = 1; wd <= 7; wd++) {
@@ -425,7 +448,7 @@ export function tightBlocks(slots: PressureSlot[], limit = 3): TightBlock[] {
     };
     for (let h = 0; h < 24; h++) {
       const s = byKey.get(`${wd}:${h}`);
-      if (s && tightReason(s, t)) cur.push(s);
+      if (s && tightReason(s, t, opts?.queue)) cur.push(s);
       else flush(h);
     }
     flush(24);
@@ -444,8 +467,8 @@ export function describeTightBlock(b: TightBlock, where: string): string {
 }
 
 /** Resumo curto (até 3 frases) das horas mais apertadas de um grupo. PURA. */
-export function pressureSummary(slots: PressureSlot[], where: string, limit = 3): string[] {
-  return tightBlocks(slots, limit).map((b) => describeTightBlock(b, where));
+export function pressureSummary(slots: PressureSlot[], where: string, limit = 3, opts?: TightOptions | null): string[] {
+  return tightBlocks(slots, limit, opts).map((b) => describeTightBlock(b, where));
 }
 
 // ─── Carga × tempo de entrega ───────────────────────────────────────────────

@@ -138,10 +138,10 @@ describe("servidor: os procedimentos recusam quem não pode (e o MCP corre-os co
       await expect(caller(role, { condutores_agentes: { access: "national", actions: ["view"] } }).evaluation.peoplePerformance(input)).rejects.toMatchObject({ code: "FORBIDDEN" });
     }
   });
-  it("as quatro leituras pedem o módulo novo (nenhuma ficou nas Críticas) e o 'Abrir agente' do RH também", () => {
+  it("as cinco leituras (com os tempos por condutor) pedem o módulo novo (nenhuma ficou nas Críticas) e o 'Abrir agente' do RH também", () => {
     const r = src("server/routers.ts");
     const block = r.slice(r.indexOf("checkoutDrivers: protectedProcedure"), r.indexOf("// ─── FORMAÇÃO E APOIO"));
-    expect(block.match(/requireAccess\(ctx\.user, "condutores_agentes", "view"\)/g)).toHaveLength(4);
+    expect(block.match(/requireAccess\(ctx\.user, "condutores_agentes", "view"\)/g)).toHaveLength(5);
     expect(block).not.toContain('"criticas"');
     expect(src("server/rhRouter.ts")).toContain("canOpenAgent: canAccess(ctx.user, 'condutores_agentes', 'view')");
     // o botão só aparece com canOpenAgent

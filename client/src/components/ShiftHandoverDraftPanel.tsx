@@ -6,6 +6,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { AlertTriangle, Loader2, Plus, RefreshCw, Sparkles } from "lucide-react";
 import { useState } from "react";
+import { fmtElapsed, liveTimer } from "@shared/liveTimers";
+import { useNow } from "@/hooks/useNow";
 import {
   OPEN_ITEM_LABELS,
   OPEN_ITEMS_MAX,
@@ -51,6 +53,8 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
   /** Turno que já não é o atual nem o que acabou de terminar. */
   past?: boolean;
 }) {
+  // 15 out 2026: o "na fila há X min" dos pendentes anda sozinho (a cada 30 s)
+  const now = useNow(30_000);
   if (loading && !draft) return <Card><CardContent className="p-4 text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />A preparar o resumo automático…</CardContent></Card>;
   if (!draft) return null;
   const c = draft.counts;
@@ -119,7 +123,16 @@ export function ShiftHandoverDraftPanel({ draft, loading, onRefresh, past }: {
           {(draft.coveredCars?.list ?? []).map((b) => <p key={`cv${b.externalId}`}>{b.plate ?? "sem matrícula"} · {b.bookingNumber ?? b.externalId}{b.park ? ` · ${b.park}` : ""} · check-in {b.checkIn}</p>)}
         </Section>
         <Section title="Entregas pendentes (na fila)" count={c.pendingDeliveries} failed={bad("pending deliveries")} link="/operacoes" linkLabel="operações" tone="bad">
-          {draft.pendingDeliveries.map((b) => <p key={b.externalId}>{b.since} · {b.bookingNumber ?? b.externalId} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}</p>)}
+          {draft.pendingDeliveries.map((b) => {
+            // 15 out 2026: "na fila há X min" (âmbar a partir da meta, vermelho a partir do dobro)
+            const t = liveTimer("pending_checkout", b.sinceAt, now, draft.targetMinutes ?? 15);
+            return (
+              <p key={b.externalId}>
+                {t?.mins != null ? <span className={`tabular-nums ${t.tone === "late" ? "text-red-700 dark:text-red-400 font-semibold" : t.tone === "warn" ? "text-amber-700 dark:text-amber-400 font-semibold" : ""}`}>na fila há {fmtElapsed(t.mins)}</span> : b.since}
+                {t?.mins != null && b.since ? <span className="text-muted-foreground"> (desde {b.since})</span> : null} · {b.bookingNumber ?? b.externalId} · {b.clientName}{b.plate ? ` · ${b.plate}` : ""}
+              </p>
+            );
+          })}
         </Section>
         {/* 44b (Jorge, 7 out 2026): reclamações, perdidos e ocorrências saíram da passagem de turno — têm as páginas deles. */}
         <Section title="WhatsApp por ler" count={c.whatsappUnread} failed={bad("whatsapp")} link="/whatsapp" linkLabel="WhatsApp" tone="warn">
