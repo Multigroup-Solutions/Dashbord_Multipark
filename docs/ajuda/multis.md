@@ -66,3 +66,14 @@ O **Multis** é o assistente de IA da Multipark dentro da aplicação. Apresenta
 - Em cada página tem um papel: nos Dashboards explica de onde vem cada número; nas Despesas e na Faturação ajuda a lançar e explica noções simples (sem aconselhamento fiscal — para isso, a contabilista); no Operacional, no Extras Dia e na Passagem de turno propõe e quem decide és tu; na Formação faz de tutor; na Avaliação explica os teus pontos; nas Críticas ajuda a responder no tom aprovado.
 - As **perguntas sugeridas** do painel mudam com a página e o separador. Só aparecem as que fazem sentido para o teu acesso (as que precisam de dados só aparecem se o Multis os conseguir ler para ti).
 - O índice da ajuda que o Multis conhece (os títulos das páginas e das secções) é igual para toda a gente; o que fica de fora é o **conteúdo** das secções de módulos a que não tens acesso.
+
+**Dados que o Multis lê (piloto)**
+No piloto, o Multis lê também estes dados, sempre como tu (as tuas cidades e permissões), só para ler e sem usar IA para os ir buscar. Os nomes dos colegas não vão para a IA; dos clientes vai só o primeiro nome.
+- **Parcerias**: quantos parceiros há por tipo e por modelo de cobrança e as reservas de cada um; os valores e as taxas por marca e cidade só a quem vê os totais financeiros.
+- **Despesas**: quantas há por estado, categoria e mês; os totais em euros só a quem os vê no ecrã das Despesas (as canceladas ficam à parte).
+- **Pressão**: para uma cidade, um dia e uma hora, os carros por hora (média), o tempo por carro no percentil da cidade, quantos casos entraram e se o valor é fiável.
+- **Tempos**: Fila, Trânsito, Cliente e os outros tempos de entrega e de recolha, com o mesmo portão do GPS do ecrã (o que está em calibração não aparece).
+- **A tua avaliação**: os teus pontos por regra, os dias com mais pontos negativos e as regras em vigor que os explicam.
+- **Críticas por responder**: quantas faltam e as 10 mais recentes, com o texto curto (sem as que não são críticas nem as repetidas).
+- **Formação**: o que te falta acabar e, a quem acompanha a equipa, quem está mais atrasado.
+- **Situação do Extras Dia**: cobertura face à previsão, faltas, sobras, horas apertadas e quem respondeu à disponibilidade.
