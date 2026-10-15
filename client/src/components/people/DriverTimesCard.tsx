@@ -93,6 +93,7 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
           <p className="text-sm text-muted-foreground">Sem tempos deste condutor nos últimos 6 meses{d.available ? "" : " (a tabela dos tempos ainda está vazia: o cálculo da noite está desligado ou ainda não correu)"}.</p>
         ) : (
           <>
+            {d.truncated && <p className="text-[11px] text-amber-700">Leitura cortada no limite: só os dias mais recentes entram nas contas.</p>}
             <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Que tempo">
               {d.metrics.map((x) => (
                 <button key={x.metric} type="button" role="radio" aria-checked={x.metric === m.metric} onClick={() => setMetric(x.metric)}

@@ -78,7 +78,50 @@ export function driverTimesView(rows: readonly ServiceRow[], o: { employeeId: nu
 const rowsOf = (r: unknown): any[] => { const x = Array.isArray(r) ? r[0] : (r as any)?.rows ?? r; return Array.isArray(x) ? x : []; };
 const EMP_COLUMNS = ["startEmployeeId", "deliverEmployeeId", "driverEmployeeId", "checkInEmployeeId", "p2EmployeeId", "parkedEmployeeId"] as const;
 const CACHE_MS = 5 * 60_000;
-const cache = new Map<string, { at: number; rows: ServiceRow[] }>();
+const CACHE_MAX = 100;
+type DriverTimesResult = DriverTimesView & { available: boolean; truncated: boolean; name: string | null };
+/**
+ * Auditoria do #389: guarda-se o RESULTADO (as contas de um condutor, pequeno),
+ * nunca as linhas dos 6 meses (eram até 5 cópias de centenas de milhares de
+ * linhas na memória da instância). A chave leva o portão: mudar o portão vale
+ * logo, sem esperar pela cache.
+ */
+const cache = new Map<string, { at: number; value: DriverTimesResult }>();
+
+/**
+ * Ronda 2 da auditoria do #389: as linhas das MESMAS cidades e período ficam
+ * guardadas um pouco (UMA entrada, 2 min, só as colunas das contas), para que
+ * abrir vários condutores seguidos (Condutores e agentes, Desempenho) não faça
+ * uma leitura de 6 meses por condutor. Pedidos ao mesmo tempo esperam pela
+ * mesma leitura.
+ */
+export const DRIVER_ROWS_CACHE_MS = 2 * 60_000;
+let rowsCache: { key: string; at: number; value: Promise<{ rows: ServiceRow[]; truncated: boolean }> } | null = null;
+
+/** Só para os testes. */
+export function clearDriverTimesCache(): void { cache.clear(); rowsCache = null; }
+
+/** As linhas das cidades no período (uma leitura por cidade), com a cache de uma entrada. */
+async function cityRows(from: string, toDay: string, cities: readonly string[]): Promise<{ rows: ServiceRow[]; truncated: boolean }> {
+  const key = `${from}|${toDay}|${cities.join(",")}`;
+  if (rowsCache && rowsCache.key === key && Date.now() - rowsCache.at < DRIVER_ROWS_CACHE_MS) return rowsCache.value;
+  const { loadServiceRowsInfo, DRIVER_ROW_COLUMNS } = await import("./serviceTimesRead");
+  const value = (async () => {
+    let rows: ServiceRow[] = [];
+    let truncated = false;
+    for (const city of cities) {
+      const r = await loadServiceRowsInfo({ fromDay: from, toDay, cityKeys: [city], columns: DRIVER_ROW_COLUMNS });
+      rows = rows.length ? rows.concat(r.rows) : r.rows;
+      truncated ||= r.truncated;
+    }
+    return { rows, truncated };
+  })();
+  const entry = { key, at: Date.now(), value };
+  rowsCache = entry;
+  // uma falha não fica guardada
+  value.catch(() => { if (rowsCache === entry) rowsCache = null; });
+  return value;
+}
 
 /** As cidades em que o condutor tem tempos no período (pelos índices de cada condutor). */
 async function citiesOf(employeeId: number, fromDay: string, toDay: string): Promise<string[]> {
@@ -99,24 +142,25 @@ async function citiesOf(employeeId: number, fromDay: string, toDay: string): Pro
  * das cidades dele (dentro do âmbito de quem pede) nos últimos 6 meses — as
  * dele e as dos colegas — e faz as contas. Nunca lança.
  */
-export async function getDriverTimes(o: { employeeId: number; refDay: string; cityKeys: readonly string[] | null; isSuperAdmin: boolean }): Promise<DriverTimesView & { available: boolean; name: string | null }> {
-  const { loadServiceRows, loadServiceViewSettings, employeeNames } = await import("./serviceTimesRead");
+export async function getDriverTimes(o: { employeeId: number; refDay: string; cityKeys: readonly string[] | null; isSuperAdmin: boolean }): Promise<DriverTimesResult> {
+  const { loadServiceViewSettings, employeeNames } = await import("./serviceTimesRead");
   const fromDay = driverPeriodRange("6meses", o.refDay).fromDay;
   const weeklyFrom = addDays(o.refDay, -(DRIVER_SERIES_WEEKS * 7 - 1));
   const from = weeklyFrom < fromDay ? weeklyFrom : fromDay;
   const [mine, st, names] = await Promise.all([citiesOf(o.employeeId, from, o.refDay), loadServiceViewSettings(), employeeNames([o.employeeId])]);
   const cities = mine.filter((c) => !o.cityKeys || o.cityKeys.includes(c)).sort();
-  let rows: ServiceRow[] = [];
-  if (cities.length) {
-    const key = `${from}|${o.refDay}|${cities.join(",")}`;
-    const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_MS) rows = hit.rows;
-    else {
-      rows = await loadServiceRows({ fromDay: from, toDay: o.refDay, cityKeys: cities });
-      if (cache.size > 4) cache.clear();
-      cache.set(key, { at: Date.now(), rows });
-    }
-  }
+  const key = `${o.employeeId}|${from}|${o.refDay}|${cities.join(",")}|${o.isSuperAdmin ? 1 : 0}|${JSON.stringify(st.gate)}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return { ...hit.value, name: names[o.employeeId] ?? hit.value.name };
+  // uma leitura por cidade (o teto vale por cidade), só as colunas das contas por condutor,
+  // partilhada pelos condutores das mesmas cidades durante 2 min
+  const { rows, truncated } = cities.length ? await cityRows(from, o.refDay, cities) : { rows: [] as ServiceRow[], truncated: false };
   const view = driverTimesView(rows, { employeeId: o.employeeId, refDay: o.refDay, gate: st.gate, isSuperAdmin: o.isSuperAdmin });
-  return { ...view, available: rows.length > 0, name: names[o.employeeId] ?? null };
+  const value: DriverTimesResult = { ...view, available: rows.length > 0, truncated, name: names[o.employeeId] ?? null };
+  if (cache.size >= CACHE_MAX) {
+    const oldest = [...cache.entries()].sort((x, y) => x[1].at - y[1].at)[0];
+    if (oldest) cache.delete(oldest[0]);
+  }
+  cache.set(key, { at: Date.now(), value });
+  return value;
 }

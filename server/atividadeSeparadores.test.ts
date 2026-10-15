@@ -358,8 +358,8 @@ describe("5 — Reclamações dos carros que SAÍRAM no dia", () => {
     const op = src("client/src/pages/OperationalPage.tsx");
     expect(op).toContain("trpc.multipark.departedComplaints.useQuery");
     expect(op).toContain("<DepartedComplaintsCard");
-    const db = src("server/db.ts");
-    expect(db).toContain("complaintsDeparted = { available: true, complaints: await countComplaintsForRefs(departedRefs(left))");
+    const dash = src("server/supervisorDay.ts");
+    expect(dash).toContain("complaintsDeparted = { available: true, complaints: await countComplaintsForRefs(departedRefs(left))");
     const r = src("server/routers.ts");
     const block = r.slice(r.indexOf("departedComplaints: protectedProcedure"), r.indexOf("departedComplaints: protectedProcedure") + 900);
     expect(block).toContain('requireAccess(ctx.user, "atividade_diaria", "view")');
