@@ -12,10 +12,30 @@
  * (ex.: o percentil por cidade em Definições → Parâmetros), a ajuda deve dizer
  * "por omissão" ao lado do número.
  */
+import { ROLE_LABELS, type Role } from "./access";
 import { DEFAULT_TIMES_PERCENTILE, SETTINGS } from "./appSettings";
-import { EVALUATION_POINTS, LATE_ARRIVAL_FROM_MINUTES, MAX_LATE_ARRIVALS_PER_DAY, RECOMPUTE_WINDOW_DAYS } from "./evaluationRules";
-import { MIN_SAMPLE } from "./extrasPressure";
-import { DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES, DRIVER_STATS_MIN_N, SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT } from "./serviceTimes";
+import {
+  COMPLAINT_LIST_DEFAULT_DAYS, COMPLAINT_PHOTO_MAX_BYTES, COMPLAINT_SLA_RUNNING, DEDUPE_WINDOW_MS, DEFAULT_INCIDENT_SLA_HOURS, DEFAULT_LOST_SLA_DAYS,
+} from "./caseRules";
+import { COMPLAINT_STATUS_FILTER_LABELS } from "./complaintFilters";
+import { CREDIT_NOTE_STATES, CREDIT_NOTE_STATE_HELP, CREDIT_NOTE_STATE_LABELS } from "./creditNotes";
+import { ACCIDENTS_FROM_DAY, EVALUATION_POINTS, EVALUATION_RULES_VERSION, LATE_ARRIVAL_FROM_MINUTES, MAX_LATE_ARRIVALS_PER_DAY, RECOMPUTE_WINDOW_DAYS } from "./evaluationRules";
+import { PAID_ON_CREATE_ROLES } from "./expenseCreatePayment";
+import { CREW_MEASURE_MIN_SAMPLES, CYCLE_PERCENTILES, MAX_CYCLE_MINUTES, MIN_SAMPLE, PRESSURE_SINCE_DEFAULT, RUSH_HOURS, TIGHT_TOP_SHARE } from "./extrasPressure";
+import {
+  DAY_START_HOUR, IDLE_PENALTY, MAX_NOTIFY_ATTEMPTS, MAX_SHIFT_HOURS, MIN_SHIFT_HOURS, PICKUP_PAIR_AFTER_MIN, PICKUP_PAIR_BEFORE_MIN, RANK_WEIGHTS,
+} from "./extrasSchedule";
+import { NO_COMMISSION_TYPES } from "./partnerRules";
+import { getPartnerType } from "./partnerTypes";
+import { REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, REVIEW_COMPLAINT_SLA_HOURS } from "./reviewRules";
+import {
+  CALL_WINDOW_AFTER_MIN, CALL_WINDOW_BEFORE_MIN, DEFAULT_GARAGE_ROLES, DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES,
+  DISPATCH_MIN_MINUTES, DRIVER_STATS_MIN_N, MAX_CUSTOMER_MIN, MAX_QUEUE_MIN, MAX_TRANSIT_MIN, PICKUP_TRACK_MAX_HOURS, SERVICE_CALLS_SINCE,
+  SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT, SHARED_PHONE_MIN_BOOKINGS, type GarageRole,
+} from "./serviceTimes";
+import {
+  DEFAULT_SPEED_RULE, EXCESS_MERGE_GAP_S, GPS_ABSURD_KMH, LEGACY_COLLECTED_THRESHOLD_KMH, MAX_SPEED_JUMP_KMH_PER_S, POSITION_MAX_GAP_S, POSITION_MIN_GAP_S,
+} from "./speedRules";
 
 export interface HelpRuleValue {
   value: string | number;
@@ -39,6 +59,16 @@ export function ptDay(iso: string): string {
 }
 /** Valor por omissão de uma definição (ver `setting`). */
 const d = (value: string | number, source: string): HelpRuleValue => ({ ...v(value, source), setting: true });
+/** ["a", "b", "c"] → "a, b e c". PURA. */
+export function joinPt(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} e ${items[items.length - 1]}`;
+}
+/** 0,5 com vírgula decimal. */
+const dec = (n: number) => String(n).replace(".", ",");
+/** 7 → "07h" (hora de Lisboa). */
+const hh = (h: number) => `${String(h % 24).padStart(2, "0")}h`;
+const garagesWith = (role: GarageRole) => joinPt(DEFAULT_GARAGE_ROLES.filter((g) => g.role === role).map((g) => g.garage));
+const roleNames = (roles: readonly string[]) => joinPt(roles.map((r) => ROLE_LABELS[r as Role] ?? r));
 
 /** Os marcadores conhecidos. Acrescentar aqui antes de usar na ajuda. */
 export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
@@ -71,6 +101,67 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   "evaluation.lateArrivalFromMinutes": v(LATE_ARRIVAL_FROM_MINUTES, "shared/evaluationRules.ts:LATE_ARRIVAL_FROM_MINUTES"),
   "evaluation.maxLateArrivalsPerDay": v(MAX_LATE_ARRIVALS_PER_DAY, "shared/evaluationRules.ts:MAX_LATE_ARRIVALS_PER_DAY"),
   "evaluation.recomputeWindowDays": v(RECOMPUTE_WINDOW_DAYS, "shared/evaluationRules.ts:RECOMPUTE_WINDOW_DAYS"),
+  // ── Plano MPV F2: "regras em vigor" (shared/rulesInForce.ts) — a MESMA fonte para a ajuda e para as regras ──
+  "evaluation.accidentsFromDay": v(ptDay(ACCIDENTS_FROM_DAY), "shared/evaluationRules.ts:ACCIDENTS_FROM_DAY"),
+  "evaluation.rulesVersion": v(EVALUATION_RULES_VERSION, "shared/evaluationRules.ts:EVALUATION_RULES_VERSION"),
+  // Velocidade (Definições → Parâmetros → gps.speedRule; os limites do GPS são do código)
+  "speed.limitKmh": d(DEFAULT_SPEED_RULE.limitKmh, "shared/speedRules.ts:DEFAULT_SPEED_RULE"),
+  "speed.tolerancePercent": d(DEFAULT_SPEED_RULE.tolerancePercent, "shared/speedRules.ts:DEFAULT_SPEED_RULE"),
+  "speed.minPoints": d(DEFAULT_SPEED_RULE.minPoints, "shared/speedRules.ts:DEFAULT_SPEED_RULE"),
+  "speed.absurdKmh": v(GPS_ABSURD_KMH, "shared/speedRules.ts:GPS_ABSURD_KMH"),
+  "speed.maxJumpKmhPerS": v(MAX_SPEED_JUMP_KMH_PER_S, "shared/speedRules.ts:MAX_SPEED_JUMP_KMH_PER_S"),
+  "speed.mergeGapS": v(EXCESS_MERGE_GAP_S, "shared/speedRules.ts:EXCESS_MERGE_GAP_S"),
+  "speed.positionMinGapS": v(POSITION_MIN_GAP_S, "shared/speedRules.ts:POSITION_MIN_GAP_S"),
+  "speed.positionMaxGapS": v(POSITION_MAX_GAP_S, "shared/speedRules.ts:POSITION_MAX_GAP_S"),
+  "speed.legacyThresholdKmh": v(LEGACY_COLLECTED_THRESHOLD_KMH, "shared/speedRules.ts:LEGACY_COLLECTED_THRESHOLD_KMH"),
+  // Extras Dia → Pressão
+  "extras.timesSince": d(ptDay(PRESSURE_SINCE_DEFAULT), "shared/extrasPressure.ts:PRESSURE_SINCE_DEFAULT"),
+  "extras.cyclePercentiles": v(joinPt(CYCLE_PERCENTILES.map(String)), "shared/extrasPressure.ts:CYCLE_PERCENTILES"),
+  "extras.maxCycleMinutes": v(MAX_CYCLE_MINUTES, "shared/extrasPressure.ts:MAX_CYCLE_MINUTES"),
+  "extras.rushHours": v(joinPt(RUSH_HOURS.map(([a, b]) => `${hh(a)}–${hh(b)}`)), "shared/extrasPressure.ts:RUSH_HOURS"),
+  "extras.crewMeasureMinSamples": v(CREW_MEASURE_MIN_SAMPLES, "shared/extrasPressure.ts:CREW_MEASURE_MIN_SAMPLES"),
+  "extras.tightTopSharePct": v(Math.round(TIGHT_TOP_SHARE * 100), "shared/extrasPressure.ts:TIGHT_TOP_SHARE"),
+  // Extras Dia → escala automática
+  "extras.minShiftHours": v(MIN_SHIFT_HOURS, "shared/extrasSchedule.ts:MIN_SHIFT_HOURS"),
+  "extras.maxShiftHours": v(MAX_SHIFT_HOURS, "shared/extrasSchedule.ts:MAX_SHIFT_HOURS"),
+  "extras.dayStartHour": v(hh(DAY_START_HOUR), "shared/extrasSchedule.ts:DAY_START_HOUR"),
+  "extras.pairBeforeMin": v(PICKUP_PAIR_BEFORE_MIN, "shared/extrasSchedule.ts:PICKUP_PAIR_BEFORE_MIN"),
+  "extras.pairAfterMin": v(PICKUP_PAIR_AFTER_MIN, "shared/extrasSchedule.ts:PICKUP_PAIR_AFTER_MIN"),
+  "extras.rankWeights.coverage": v(Math.round(RANK_WEIGHTS.coverage * 100), "shared/extrasSchedule.ts:RANK_WEIGHTS"),
+  "extras.rankWeights.eval": v(Math.round(RANK_WEIGHTS.eval * 100), "shared/extrasSchedule.ts:RANK_WEIGHTS"),
+  "extras.rankWeights.cost": v(Math.round(RANK_WEIGHTS.cost * 100), "shared/extrasSchedule.ts:RANK_WEIGHTS"),
+  "extras.rankWeights.fairness": v(Math.round(RANK_WEIGHTS.fairness * 100), "shared/extrasSchedule.ts:RANK_WEIGHTS"),
+  "extras.rankWeights.reliability": v(Math.round(RANK_WEIGHTS.reliability * 100), "shared/extrasSchedule.ts:RANK_WEIGHTS"),
+  "extras.idlePenalty": v(dec(IDLE_PENALTY), "shared/extrasSchedule.ts:IDLE_PENALTY"),
+  "extras.maxNotifyAttempts": v(MAX_NOTIFY_ATTEMPTS, "shared/extrasSchedule.ts:MAX_NOTIFY_ATTEMPTS"),
+  // Tempos de serviço (parâmetros do cálculo)
+  "serviceTimes.callWindowBeforeMin": v(CALL_WINDOW_BEFORE_MIN, "shared/serviceTimes.ts:CALL_WINDOW_BEFORE_MIN"),
+  "serviceTimes.callWindowAfterMin": v(CALL_WINDOW_AFTER_MIN, "shared/serviceTimes.ts:CALL_WINDOW_AFTER_MIN"),
+  "serviceTimes.callsSince": v(ptDay(SERVICE_CALLS_SINCE), "shared/serviceTimes.ts:SERVICE_CALLS_SINCE"),
+  "serviceTimes.sharedPhoneMinBookings": v(SHARED_PHONE_MIN_BOOKINGS, "shared/serviceTimes.ts:SHARED_PHONE_MIN_BOOKINGS"),
+  "serviceTimes.dispatchMinMinutes": v(DISPATCH_MIN_MINUTES, "shared/serviceTimes.ts:DISPATCH_MIN_MINUTES"),
+  "serviceTimes.maxQueueMin": v(MAX_QUEUE_MIN, "shared/serviceTimes.ts:MAX_QUEUE_MIN"),
+  "serviceTimes.maxTransitMin": v(MAX_TRANSIT_MIN, "shared/serviceTimes.ts:MAX_TRANSIT_MIN"),
+  "serviceTimes.maxCustomerMin": v(MAX_CUSTOMER_MIN, "shared/serviceTimes.ts:MAX_CUSTOMER_MIN"),
+  "serviceTimes.pickupTrackMaxHours": v(PICKUP_TRACK_MAX_HOURS, "shared/serviceTimes.ts:PICKUP_TRACK_MAX_HOURS"),
+  "serviceTimes.garages.provisoria": d(garagesWith("provisoria"), "shared/serviceTimes.ts:DEFAULT_GARAGE_ROLES"),
+  "serviceTimes.garages.parque": d(garagesWith("parque"), "shared/serviceTimes.ts:DEFAULT_GARAGE_ROLES"),
+  "serviceTimes.garages.final": d(garagesWith("final"), "shared/serviceTimes.ts:DEFAULT_GARAGE_ROLES"),
+  // Despesas
+  "expenses.paidOnCreateRoles": v(roleNames(PAID_ON_CREATE_ROLES), "shared/expenseCreatePayment.ts:PAID_ON_CREATE_ROLES"),
+  "creditNotes.states": v(joinPt(CREDIT_NOTE_STATES.map((s) => `«${CREDIT_NOTE_STATE_LABELS[s]}» (${CREDIT_NOTE_STATE_HELP[s].replace(/\.$/, "").replace(/^./, (c) => c.toLowerCase())})`)), "shared/creditNotes.ts:CREDIT_NOTE_STATE_LABELS"),
+  // Parcerias
+  "partners.noCommissionTypes": v(joinPt([...NO_COMMISSION_TYPES].map((t) => getPartnerType(t).label)), "shared/partnerRules.ts:NO_COMMISSION_TYPES"),
+  // Reclamações, ocorrências e perdidos
+  "cases.incidentSlaHours": d(DEFAULT_INCIDENT_SLA_HOURS, "shared/caseRules.ts:DEFAULT_INCIDENT_SLA_HOURS"),
+  "cases.lostSlaDays": d(DEFAULT_LOST_SLA_DAYS, "shared/caseRules.ts:DEFAULT_LOST_SLA_DAYS"),
+  "cases.dedupeWindowHours": v(DEDUPE_WINDOW_MS / 3_600_000, "shared/caseRules.ts:DEDUPE_WINDOW_MS"),
+  "cases.complaintListDays": v(COMPLAINT_LIST_DEFAULT_DAYS, "shared/caseRules.ts:COMPLAINT_LIST_DEFAULT_DAYS"),
+  "cases.complaintPhotoMaxMb": v(COMPLAINT_PHOTO_MAX_BYTES / (1024 * 1024), "shared/caseRules.ts:COMPLAINT_PHOTO_MAX_BYTES"),
+  "cases.complaintSlaRunning": v(joinPt(COMPLAINT_SLA_RUNNING.map((s) => `«${COMPLAINT_STATUS_FILTER_LABELS[s as keyof typeof COMPLAINT_STATUS_FILTER_LABELS] ?? s}»`)), "shared/caseRules.ts:COMPLAINT_SLA_RUNNING"),
+  // Críticas
+  "reviews.complaintSlaHours": v(REVIEW_COMPLAINT_SLA_HOURS, "shared/reviewRules.ts:REVIEW_COMPLAINT_SLA_HOURS"),
+  "reviews.autoDraftMaxAgeDays": v(REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, "shared/reviewRules.ts:REVIEW_AUTO_DRAFT_MAX_AGE_DAYS"),
 };
 
 export class HelpRuleMarkerError extends Error {

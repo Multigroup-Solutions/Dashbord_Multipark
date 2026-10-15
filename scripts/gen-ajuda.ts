@@ -5,7 +5,9 @@
  *   - server/assistant/helpDocs.generated.ts — os ficheiros (Multis v1,
  *     pesquisa global e Base de conhecimento);
  *   - server/assistant/knowledgeTree.generated.ts — a árvore Grupo → Página →
- *     Secção (plano MPV, §3.2; shared/helpTree.ts) e o índice para o prompt.
+ *     Secção (plano MPV, §3.2; shared/helpTree.ts) e o índice para o prompt;
+ *   - server/assistant/rulesDocs.generated.ts — as regras em vigor (plano MPV,
+ *     §3.3; scripts/gen-regras.ts), com os MESMOS valores dos marcadores.
  *
  * Os marcadores `{{regra:…}}` são trocados pelos valores do código
  * (shared/helpRuleValues.ts) ANTES de gravar: o que as pessoas veem nunca leva
@@ -21,6 +23,7 @@ import { join, resolve } from "node:path";
 import { HELP_INDEX_MAX_TOKENS, HelpTreeError, buildHelpTree, chooseIndexLevel, estimateTokens, findHelpNode, renderHelpIndex, treeIds, treeOutline, type HelpTree } from "../shared/helpTree";
 import { HELP_ID_ALIASES } from "../shared/helpIdAliases";
 import { renderRuleMarkers } from "../shared/helpRuleValues";
+import { writeRulesDocs } from "./gen-regras";
 
 export const AJUDA_DIR = resolve(import.meta.dirname ?? __dirname, "..", "docs", "ajuda");
 export const GENERATED_FILE = resolve(import.meta.dirname ?? __dirname, "..", "server", "assistant", "helpDocs.generated.ts");
@@ -101,4 +104,6 @@ if (process.argv[1] && /gen-ajuda\.ts$/.test(process.argv[1])) {
   console.log(`Escrito ${TREE_FILE}`);
   writeFileSync(IDS_FILE, renderKnownIds(buildHelpTree(files), readKnownIds()));
   console.log(`Escrito ${IDS_FILE}`);
+  // Plano MPV F2: as regras em vigor saem dos mesmos valores (shared/helpRuleValues.ts) — um comando para os dois.
+  writeRulesDocs();
 }
