@@ -65,6 +65,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - Por baixo, **Leituras repetidas**: a mesma coisa (por exemplo, a mesma crítica) lida pela IA mais de uma vez, as 100 com mais vezes. As conversas do Multis não contam.
 - Na tabela do uso por dia vês também as respostas em que a IA **não conseguiu juntar tudo** (texto de recurso, contam como erro), as que tiveram de **acabar sem ferramentas** e as **cortadas por tamanho** (MAX_TOKENS).
 - Só leitura: nada muda ao abrir. O raciocínio de cada funcionalidade muda-se em **Definições → Parâmetros → Raciocínio da IA por funcionalidade** (o "minimal" não vale no modelo smart).
+- **"minimal" só com avaliação**: vem vazio (como sempre). O valor sugerido é `{"mail_routing": "minimal", "whatsapp_triage": "minimal", "complaint_triage": "minimal"}`, mas cada linha só se põe depois de a avaliação dessa funcionalidade passar com o "minimal" (email: `scripts/eval-mail-triage.ts --thinking minimal`; WhatsApp: `scripts/eval-whatsapp-triage.ts --compare`; reclamações: `scripts/eval-complaint-triage.ts --compare`). Desfazer = tirar a linha.
 
 **Multis do piloto e o orçamento**
 - O **Multis do piloto** (modelo smart) tem **teto próprio** em **Definições → Parâmetros → IA → Multis do piloto: teto de gasto** (omissão: 10 € por dia, 150 € por mês, 3 € por pessoa por dia; o dia é o de Lisboa; os três têm de ser maiores que 0). Ao chegar lá, a pessoa fica com o Multis de sempre, com a nota **Modo económico**.

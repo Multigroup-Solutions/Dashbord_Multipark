@@ -3,9 +3,9 @@ modulo: criticas
 grupo: Suporte
 pagina: criticas
 titulo: Críticas Google
-separadores: dashboard=Dashboard, list=Reviews
+separadores: dashboard=Dashboard, list=Reviews, cleanup=Limpeza
 rotas: /criticas
-palavras: lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
+palavras: limpeza, não é crítica, repetida, crítica repetida, duplicada, crítica duplicada, desfazer limpeza, resumo de críticas, lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---
 # Críticas Google
 
@@ -51,10 +51,29 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - A média e as percentagens de positivas/negativas contam só as críticas com estrelas.
 - "tudo respondido" só aparece sem filtro de estado.
 
-**Separadores**: **Dashboard** e **Reviews**. Os antigos **Condutores** e **Agentes** passaram para **Pessoas → Condutores e agentes**. A ligação à conta Google (Google Business Profile) passou para **Integrações**.
+**Separadores**: **Dashboard**, **Reviews** e **Limpeza** (admin). Os antigos **Condutores** e **Agentes** passaram para **Pessoas → Condutores e agentes**. A ligação à conta Google (Google Business Profile) passou para **Integrações**.
 
 **Quando a leitura falha**
 - Lista, números, parques e crítica mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem avaliações" ou "sem dados".
+
+## Emails que não são críticas e críticas repetidas
+- Dois interruptores em **Definições → Automações**, desligados por omissão.
+- **Críticas: só cria crítica a partir de um aviso de avaliação**: um email que chega pelas Críticas (inclui o que a reservas@ apanha) só vira crítica se for o aviso da Google/Trustpilot/Tripadvisor ou trouxer as estrelas. Candidaturas, respostas de clientes e alertas seguem para a **triagem normal da Comunicação** (vão para a caixa do tema) — nunca ficam ignorados.
+- **Críticas: juntar a mesma crítica que chega duas vezes**: lê também o assunto do email (nome e perfil); os emails-resumo da Google ("recebeu 3 novas críticas") nunca viram crítica. A mesma crítica (mesmo parque, mesmas estrelas, mesmo avaliador, o mesmo texto com 20 ou mais letras, até 48 h) fica **repetida** da primeira.
+  - O texto é só o que está entre o nome/estrelas e o botão **Responder** do email; sem isso conta como sem texto.
+  - Sem texto (só estrelas) nunca se junta sozinha.
+  - Avaliador: com nome e apelido dos dois lados tem de ser o nome completo igual ("João Silva" ≠ "João Pereira"); com uma só palavra num dos lados chega o 1.º nome.
+  - Um texto que aparece em críticas de pessoas diferentes ("Excelente serviço, recomendo") nunca junta.
+  - Na Windsor, a que bate pelas estrelas e pelo texto fica **por conciliar** (uma pessoa escolhe; as marcadas não aparecem como candidatas).
+- Nada se apaga: as marcadas saem da lista, dos números e dos rascunhos automáticos. Na crítica aparece **Não é crítica** ou **Repetida de #…**. A conversa do email repetido liga-se à crítica original.
+- Antes de ligar o "juntar": conferir com amostras reais dos dois emails da Google (por fazer).
+
+## Limpeza
+- Separador para admin e super admin, para as que já existem; nunca corre sozinha. Só vê as críticas das suas cidades.
+1. Escolhe **Emails que não são críticas** ou **Críticas repetidas**.
+2. Vês **Vão ser marcadas** e **Batem na regra mas ficam** (com o porquê: tem reclamação, já respondida, remetente desconhecido ou desfeita à mão).
+3. **Marcar…** aplica (pede confirmação). Nas "não é crítica", o rascunho da IA é guardado à parte.
+4. Em **Marcadas**, **Desfazer** (uma) ou **Desfazer todas** volta a pô-las nas listas (o rascunho e a aprovação guardados também voltam). A que desfazes não volta a ser proposta. Quem desfez fica no registo de atividade.
 
 **Quem pode**
 - Condutores e extras **não veem** as Críticas — nem as em que estão envolvidos. Só a partir de team leader.

@@ -1514,7 +1514,18 @@ export const googleReviews = mysqlTable("google_reviews", {
 	// 0123 — sentimento (positivo/neutro/negativo) e rascunho automático já tentado
 	aiSentiment: varchar({ length: 10 }),
 	aiDraftAttemptedAt: timestamp({ mode: 'string' }),
-});
+	// 0700 (plano MPV F6b) — marcas reversíveis: não é crítica / repetida de outra (nunca se apaga).
+	notAReview: tinyint().default(0).notNull(),
+	duplicateOf: int(),
+	reviewMarkedAt: datetime({ mode: 'string' }),
+	reviewMarkedById: int(),
+	reviewMarkUndoneAt: datetime({ mode: 'string' }),
+	reviewMarkBackup: text(),
+},
+(table) => [
+	// 0700 — "repetidas desta" sem ler a tabela toda.
+	index("idx_google_reviews_duplicate_of").on(table.duplicateOf),
+]);
 
 /** 0285 — alertas "a trabalhar sem PDA ou Zello ligado" (shared/opsPresence.ts). */
 export const opsPresenceAlerts = mysqlTable("ops_presence_alerts", {

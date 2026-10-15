@@ -73,6 +73,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
 - Na ficha do cliente, na reclamação, no perdido e na reserva há um separador **Comunicações** com os emails (e o WhatsApp) ligados. Emails de uma caixa ou cidade que não vês aparecem só como "Sem acesso ao conteúdo".
 
 ## Emails que criam casos (reclamacoes@, perdidos@, críticas…)
+- Com **"Críticas: só cria crítica a partir de um aviso de avaliação"** (Definições → Automações, desligado por omissão), um email que entrou pela caixa Críticas sem ser um aviso de avaliação nem trazer estrelas não cria crítica: passa pela **triagem normal** e vai para a caixa do tema (ver a ajuda das Críticas).
 - Se a criação do caso falhar (base de dados, ficheiros), o email fica marcado e o sistema **tenta de novo** sozinho de 15 em 15 min (até 5 vezes). A equipa recebe o aviso de email novo na mesma.
 - O que continuar a falhar aparece em **Definições → Comunicação → Emails que não criaram o caso**, com **Tentar de novo** (admin).
 

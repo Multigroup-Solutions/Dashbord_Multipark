@@ -28,7 +28,7 @@ export type ExpensesTab = (typeof EXPENSES_TABS)[number];
 export const PARTNERSHIPS_TABS = ["partners", "parks", "pro", "summary", "fecho", "analytics", "management"] as const;
 export type PartnershipsTab = (typeof PARTNERSHIPS_TABS)[number];
 /** Críticas (/criticas). */
-export const GOOGLE_REVIEWS_TABS = ["dashboard", "list"] as const;
+export const GOOGLE_REVIEWS_TABS = ["dashboard", "list", "cleanup"] as const;
 export type GoogleReviewsTab = (typeof GOOGLE_REVIEWS_TABS)[number];
 /** Formação (/formacao). */
 export const TRAINING_TABS = ["mine", "videos", "manuals", "faqs", "quiz", "career", "paths", "dashboard"] as const;
