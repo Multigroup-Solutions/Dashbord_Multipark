@@ -20,7 +20,7 @@
  *  - Ausência de parte do dia: `hours` (só "ausência justificada", um dia).
  */
 import { z } from "zod";
-import { addDays } from "./lisbonDay";
+import { addDays, lisbonDayOf } from "./lisbonDay";
 import { ptHolidayOf } from "./workSchedule";
 
 // ─── Tipos e estados ─────────────────────────────────────────────────────────
@@ -477,7 +477,8 @@ export function absenceForScheduler(l: NoticeLeave): SchedulerAbsence {
   const ms = tsMs(l.requestedAt ?? l.createdAt);
   return {
     kind, fromDate: String(l.fromDate).slice(0, 10), toDate: String(l.toDate).slice(0, 10),
-    noticeDay: Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : null,
+    // o dia em Lisboa (um aviso às 00:30 de 26 out é de 26, não do dia 25 em UTC)
+    noticeDay: Number.isFinite(ms) ? lisbonDayOf(ms) : null,
     partial: l.hours != null && l.hours !== "",
   };
 }

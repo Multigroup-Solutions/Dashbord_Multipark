@@ -1,0 +1,30 @@
+/**
+ * Plano 63, passo 11 — correções da auditoria do mapa de férias (regras puras
+ * e guardas que não precisam da BD simulada):
+ *  - o "avisou a DD/MM" do Extras-Dia é o dia de LISBOA (não o dia UTC);
+ *  - o fluxo (sobreposições ao lançar, avisos) está em ferias63Fluxo.test.ts.
+ */
+import { describe, expect, it } from "vitest";
+import { absenceForScheduler, schedulerAbsenceText } from "../shared/leaves";
+
+describe("Extras-Dia: \"avisou a DD/MM\" é o dia em Lisboa", () => {
+  const notice = (requestedAt: string) => absenceForScheduler({ leaveType: "unavailable", status: "approved", fromDate: "2026-11-03", toDate: "2026-11-03", requestedAt });
+  it("verão (UTC+1): 23:30 UTC já é o dia seguinte em Lisboa", () => {
+    expect(notice("2026-08-02 23:30:00").noticeDay).toBe("2026-08-03");
+    expect(schedulerAbsenceText(notice("2026-08-02 23:30:00"))).toBe("Indisponível (avisou a 03/08)");
+  });
+  it("inverno (UTC+0): igual ao UTC", () => {
+    expect(notice("2026-12-01 23:30:00").noticeDay).toBe("2026-12-01");
+  });
+  it("mudança da hora (25 out 2026 e 29 mar 2026): o dia certo dos dois lados", () => {
+    expect(notice("2026-10-24 23:30:00").noticeDay).toBe("2026-10-25"); // 00:30 de verão
+    expect(notice("2026-10-25 00:30:00").noticeDay).toBe("2026-10-25"); // 01:30 (a hora repete)
+    expect(notice("2026-10-25 23:30:00").noticeDay).toBe("2026-10-25"); // já de inverno
+    expect(notice("2026-03-28 23:30:00").noticeDay).toBe("2026-03-28"); // ainda de inverno
+    expect(notice("2026-03-29 23:30:00").noticeDay).toBe("2026-03-30"); // já de verão
+  });
+  it("Date (o mysql2 devolve Date) e sem data", () => {
+    expect(absenceForScheduler({ leaveType: "vacation", status: "approved", fromDate: "2026-11-03", toDate: "2026-11-03", requestedAt: new Date("2026-08-02T23:30:00Z") }).noticeDay).toBe("2026-08-03");
+    expect(absenceForScheduler({ leaveType: "sick", status: "approved", fromDate: "2026-11-03", toDate: "2026-11-03" }).noticeDay).toBeNull();
+  });
+});
