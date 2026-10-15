@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   forecast: null as any,
   mailboxes: [] as any[],
   waWhere: null as unknown,
+  liveHistoryReads: 0,
 }));
 
 const national = vi.hoisted(() => ({ all: true, defaultCityId: null, cityName: null, cityIds: [1], projectIds: [1, 10, 20], missingCostCenter: false }));
@@ -48,7 +49,9 @@ vi.mock("./db", async (original) => ({
       return [[], []];
     },
     select: () => ({
-      from: () => ({
+      // `.from(t)` sozinho (ex.: os projetos do painel dos Perdidos) dá uma lista vazia;
+      // `.from(t).leftJoin().where()` é o badge do WhatsApp.
+      from: () => Object.assign(Promise.resolve([]), {
         leftJoin: () => ({
           where: (w: unknown) => { h.waWhere = w; return Promise.resolve([{ attention: 2, overdue: 1 }]); },
         }),
@@ -68,7 +71,14 @@ vi.mock("./marketingAlertsService", () => ({ computeAlertsFor: async () => ({ al
 vi.mock("./mail/store", async (original) => ({
   ...(await original<object>()),
   listMailboxes: async () => h.mailboxes,
+  getMailbox: async (key: string | null | undefined) => h.mailboxes.find((m) => m.key === key) ?? null,
   db: async () => ({ execute: async () => [[{ unread: 3, awaiting: 1, open: 2, n: 0 }], []] }),
+}));
+// O cruzamento dos condutores do painel dos Perdidos lê o histórico da Multipark ao vivo.
+vi.mock("./multiparkDb/historyLive", async (original) => ({
+  ...(await original<object>()),
+  readLiveHistoryByAgent: async () => { h.liveHistoryReads++; return []; },
+  readLiveHistory: async () => { h.liveHistoryReads++; return []; },
 }));
 
 import { appRouter } from "./routers";
@@ -77,7 +87,7 @@ import { complaintSlaLateSql, countableComplaintSql } from "./departedComplaints
 import { buildBriefingData, collectBriefing, filterBriefingFor, renderBriefingEmail, viewerPerms, type BriefingData } from "./aiOps/briefing";
 import { forecastIncompleteReason } from "./extrasSchedule";
 import { badgeTotal, mailboxSections } from "../shared/mail";
-import { mailBadge, visibleMailboxes } from "./mail/inbox";
+import { mailBadge, sendMail, visibleMailboxes } from "./mail/inbox";
 import { inboxBadge, inboxBadgeConds } from "./whatsappInboxOps";
 import { boxVisibleSql, visibilitySql } from "./whatsappInbox";
 
@@ -88,7 +98,7 @@ const NOW = Date.parse("2026-10-15T10:00:00Z");
 
 beforeEach(() => {
   h.complaintStatsArgs = []; h.reviewStatsArgs = []; h.executed = []; h.waWhere = null;
-  h.forecast = null; h.mailboxes = [];
+  h.forecast = null; h.mailboxes = []; h.liveHistoryReads = 0;
 });
 
 // ─── E1 ──────────────────────────────────────────────────────────────────────
@@ -118,6 +128,14 @@ describe("E1 — Reclamações abertas: uma conta (complaintCounts) para o Supor
     expect(fn).toContain("return complaintCounts(all, Date.now());");
     expect(fn).toContain("archivedAt} IS NULL");
   });
+  it("a página Reclamações conta os cartões pela MESMA função (Novos + Em Análise + Aguarda Cliente = abertas)", () => {
+    const page = src("client/src/pages/ComplaintsPage.tsx");
+    expect(page).toContain("const stats = useMemo(() => complaintCounts(complaints as any[], Date.now()), [complaints]);");
+    // a lista da página (sem filtros) traz sempre todas as abertas (a janela dos 90 dias não as corta)
+    expect(src("server/db.ts")).toContain("OR ${complaints.complaintStatus} IN (${sql.join(COMPLAINT_OPEN_STATUSES.map((x) => sql`${x}`), sql`, `)}))");
+    const c = complaintCounts(rows, NOW);
+    expect(c.new + c.analyzing + c.waitingClient).toBe(c.open);
+  });
   it("router: com a cidade do topo a função recebe-a; sem ela, como antes", async () => {
     await caller("super_admin").complaints.stats({ projectId: 10 });
     await caller("super_admin").complaints.stats();
@@ -138,7 +156,7 @@ describe("E2–E6 — Suporte: a cidade do topo em todos os cartões, as consult
     expect(s).toContain("const scope = globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {};");
     expect(s).toContain("trpc.complaints.stats.useQuery(scope,");
     expect(s).toContain("trpc.reviews.stats.useQuery(scope,");
-    expect(s).toContain("trpc.lostFound.dashboard.useQuery(scope,");
+    expect(s).toContain("trpc.lostFound.dashboard.useQuery({ ...scope, countsOnly: true },");
     expect(s).toContain('trpc.complaints.list.useQuery({ status: "new", ...scope }');
     // E1: o número vem do servidor (sem somar estados no cliente); "de sempre" no subtítulo
     expect(s).toContain("complaintStats ? complaintStats.open : null");
@@ -159,6 +177,19 @@ describe("E2–E6 — Suporte: a cidade do topo em todos os cartões, as consult
     // o procedimento do painel é o da página Perdidos (KanbanView)
     expect(src("client/src/pages/lostFound/KanbanView.tsx")).toContain("trpc.lostFound.dashboard.useQuery(");
   });
+  it("E3: o Suporte pede só os contadores — o cruzamento dos condutores (Multipark ao vivo) não corre; o 'open' é o mesmo", async () => {
+    const counts = await caller("super_admin").lostFound.dashboard({ projectId: 10, countsOnly: true });
+    expect(h.liveHistoryReads).toBe(0);
+    expect(counts.repeatDrivers).toEqual([]);
+    // a página Perdidos (sem countsOnly) continua a pedir o cruzamento — e o 'open' vem da mesma conta
+    const page = await caller("super_admin").lostFound.dashboard({ projectId: 10 });
+    expect(h.liveHistoryReads).toBeGreaterThan(0);
+    expect(page.open).toBe(counts.open);
+    // quem não recebe o cruzamento (abaixo de team leader) também não o faz calcular
+    const r = src("server/routers.ts");
+    expect(r).toContain("const d = await getLostDashboard(scope, { repeatDrivers: seesDrivers && !countsOnly });");
+    expect(r).toContain("return seesDrivers ? d : { ...d, repeatDrivers: [] };");
+  });
   it("E4/E5/E6: rótulo das novas; '—' + nota quando a leitura falha (nunca 0); sem Período", () => {
     const s = src("client/src/pages/SuporteDashboard.tsx");
     expect(s).toContain("Últimas reclamações novas");
@@ -176,7 +207,8 @@ describe("E2–E6 — Suporte: a cidade do topo em todos os cartões, as consult
     const bar = src("client/src/components/DashboardFilterBar.tsx");
     expect(bar).toContain("showDates = true,");
     expect(bar).toContain("{showDates && (");
-    for (const p of ["FinanceiroDashboard", "OperacoesDashboard", "PessoasDashboard"]) {
+    // (o Pessoas passa a usar a prop no PR D; aqui só as que ficam com o Período)
+    for (const p of ["FinanceiroDashboard", "OperacoesDashboard"]) {
       expect(src(`client/src/pages/${p}.tsx`)).not.toContain("showDates");
     }
   });
@@ -295,6 +327,28 @@ describe("E10 — Comunicação: as caixas desativadas saem do badge e vão para
     expect(v.mailboxes.map((m) => m.key)).toEqual(["info"]);
     const b = await mailBadge({ id: 2, role: "admin" });
     expect(b.shared).toBe(v.mailboxes.reduce((s, m) => s + m.unread, 0));
+  });
+  it("super admin, admin, supervisor, team leader e frontoffice: o badge = as caixas ATIVAS que cada um vê na lista", async () => {
+    h.mailboxes = [box("info", true), box("antiga", false)];
+    for (const role of ["super_admin", "admin", "supervisor", "team_leader", "frontoffice"]) {
+      const viewer = { id: 9, role };
+      const v = await visibleMailboxes(viewer);
+      const b = await mailBadge(viewer);
+      expect(b.shared).toBe(v.mailboxes.filter((m) => m.active).reduce((s, m) => s + m.unread, 0));
+      if (role !== "super_admin") expect(v.mailboxes.some((m) => !m.active)).toBe(false);
+    }
+    expect((await mailBadge({ id: 9, role: "admin" })).shared).toBe(3);
+  });
+  it("servidor: das 'Antigas' não se escreve (sem 'Nova mensagem' e o envio recusa) nem são caixa inicial", async () => {
+    h.mailboxes = [box("info", true), box("antiga", false)];
+    const v = await visibleMailboxes({ id: 1, role: "super_admin" });
+    expect(Object.fromEntries(v.mailboxes.map((m) => [m.key, m.canCompose]))).toEqual({ info: true, antiga: false });
+    const send = (mailbox: string) => sendMail({ id: 1, role: "super_admin" }, { mode: "new", mailbox, to: ["cliente@exemplo.pt"], cc: [], bcc: [], body: "Olá", attachments: [] } as any);
+    await expect(send("antiga")).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/desativada/) });
+    // a ativa passa este passo (pára mais à frente, por não ter conta Google de origem neste teste)
+    await expect(send("info")).rejects.not.toMatchObject({ message: expect.stringMatching(/desativada/) });
+    await expect(caller("super_admin").mail.setHomeBox({ key: "antiga" })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/desativada/) });
+    await expect(caller("super_admin").mail.setHomeBox({ key: "info" })).resolves.toEqual({ ok: true, key: "info" });
   });
   it("o ecrã: 'Antigas' fechada por omissão, sem contadores", () => {
     const p = src("client/src/pages/ComunicacaoPage.tsx");

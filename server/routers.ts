@@ -2862,13 +2862,20 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    dashboard: protectedProcedure.input(z.object({ projectId: z.number().optional(), noProject: z.boolean().optional() }).optional())
+    dashboard: protectedProcedure.input(z.object({
+      projectId: z.number().optional(),
+      noProject: z.boolean().optional(),
+      /** Plano 64 (E3): só os contadores (o cartão do Suporte) — sem o cruzamento dos condutores, que lê a Multipark ao vivo. */
+      countsOnly: z.boolean().optional(),
+    }).optional())
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "perdidos", "view");
         const { getLostDashboard } = await import("./caseOps");
-        const d = await getLostDashboard(input ?? {});
-        // Condutores repetidos é informação sensível → só team leader+.
-        return hasRole(ctx.user.role, "team_leader") ? d : { ...d, repeatDrivers: [] };
+        const { countsOnly, ...scope } = input ?? {};
+        // Condutores repetidos é informação sensível → só team leader+ (e só se calculam para quem os recebe).
+        const seesDrivers = hasRole(ctx.user.role, "team_leader");
+        const d = await getLostDashboard(scope, { repeatDrivers: seesDrivers && !countsOnly });
+        return seesDrivers ? d : { ...d, repeatDrivers: [] };
       }),
 
     create: protectedProcedure.input(z.object({

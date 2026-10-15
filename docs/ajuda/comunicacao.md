@@ -18,7 +18,7 @@ Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, d
    - Aqui só há email. O WhatsApp tem a entrada dele: **Comunicação → WhatsApp**.
    - No PC, o **menu do lado recolhe** quando entras nas caixas, para os emails terem o ecrã todo; abre-o no botão do menu quando precisares e, ao sair, volta como estava.
    - No telemóvel, a caixa escolhe-se na lista do topo.
-   - **Antigas** (super admin): as caixas desativadas, numa secção fechada no fim, sem contadores; não contam no número do menu.
+   - **Antigas** (super admin): as caixas desativadas, numa secção fechada no fim, sem contadores; não contam no número do menu. Servem só para consultar: não se escrevem mensagens novas por elas nem podem ser a caixa inicial (★).
    - **Trabalha sempre daqui:** o que envias pelo dashboard fica registado na conversa e ligado ao cliente — também do **O meu email** (uma mensagem nova para um cliente fica no separador **Comunicações** da ficha dele).
 2. Por cima da lista escolhes o que queres ver: **Não lidas · Por responder · Todas** (cada uma com o número ao lado).
    - As **caixas partilhadas abrem sempre em Não lidas**. O **O meu email** e a pesquisa da barra de cima ("ver todos") abrem em **Todas**.
