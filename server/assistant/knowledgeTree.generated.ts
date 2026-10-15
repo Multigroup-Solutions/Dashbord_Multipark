@@ -6004,7 +6004,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Abre Definições → Estado e, no cartão Multis piloto, carrega em Ver o Multis piloto.",
        "children": [],
        "container": false,
-       "chars": 1169
+       "chars": 1215
       },
       {
        "id": "multis.md#avaliacao-do-multis-eval",
@@ -6015,7 +6015,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "O eval faz perguntas de teste ao Multis e dá uma nota a cada resposta, para decidir se o Multis por página vai para toda a gente.",
        "children": [],
        "container": false,
-       "chars": 1852
+       "chars": 2668
       }
      ]
     },

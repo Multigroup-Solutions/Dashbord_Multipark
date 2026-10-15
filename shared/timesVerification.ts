@@ -130,6 +130,8 @@ export interface TvDriverRow {
 
 export interface TimesVerificationReport {
   generatedAt: string;
+  /** Leituras que falharam ou passaram do prazo (o resto do relatório sai na mesma). */
+  notes: string[];
   today: string;
   gate: TvGate;
   coverage: { fromDay: string; toDay: string; rows: TvCoverageRow[]; truncated: boolean };
@@ -336,6 +338,8 @@ export function timesVerificationMarkdown(r: TimesVerificationReport, o: { probe
   L.push("");
   L.push(`Gerado a ${r.generatedAt} (dia operacional ${r.today}). Só leitura. Portão dos tempos com GPS: **${r.gate.visible ? "aberto" : "fechado (em calibração)"}** — abre por cidade com ≥ ${r.gate.minCoveragePct} % de cobertura e n ≥ ${r.gate.minN}.`);
   L.push("");
+  for (const n of r.notes ?? []) L.push(`> Aviso: ${n}`);
+  if (r.notes?.length) L.push("");
   const s = r.sample;
   const withGps = s.items.filter((x) => x.zello.status !== "sem_zello").length;
   L.push("## Conclusão da amostra");

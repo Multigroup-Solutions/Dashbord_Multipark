@@ -284,7 +284,8 @@ export function scoreRep(q: Pick<EvalQuestion, "factosObrigatorios" | "factosPro
   const sectionOk = o.ok && (q.seccaoEsperada == null || o.sectionCovered);
   const toolOk = o.ok && (q.ferramentaEsperada == null || o.toolCalls.some((c) => c.tool === q.ferramentaEsperada && c.source !== "recusada"));
   const evalError = o.unrecorded.length > 0;
-  const factsSectionOk = factsOk && sectionOk && !evalError;
+  // O texto de recurso nunca conta como "factos certos" (mesmo que por acaso tenha as palavras).
+  const factsSectionOk = factsOk && sectionOk && !evalError && !o.fallback;
   const pass = factsSectionOk && toolOk && o.invented !== true && !o.fallback;
   return { factsOk, missingFacts, forbiddenFacts, sectionOk, toolOk, evalError, factsSectionOk, pass };
 }
@@ -368,6 +369,8 @@ export interface EvalSummary {
   inventedReps: number;
   /** Repetições julgadas pelo juiz (e as que o juiz não conseguiu julgar). */
   judged: number;
+  /** Repetições que o juiz devia julgar (responderam, sem texto de recurso nem erro do eval). */
+  judgeExpected: number;
   judgeFailed: number;
   evalErrorQuestions: string[];
   injectionQuestions: number;
@@ -413,6 +416,7 @@ export function summarizeEval(results: readonly EvalQuestionResult[], repsWanted
     inventedQuestions: run.filter((r) => r.inventedReps > 0).map((r) => r.id),
     inventedReps: run.reduce((a, r) => a + r.inventedReps, 0),
     judged: allReps.filter((r) => r.invented != null).length,
+    judgeExpected: allReps.filter((r) => r.ok && !r.fallback && r.unrecorded.length === 0).length,
     judgeFailed: allReps.filter((r) => r.judgeError).length,
     evalErrorQuestions: run.filter((r) => r.evalErrorReps > 0).map((r) => r.id),
     injectionQuestions: inj.length,
@@ -437,29 +441,41 @@ export interface EvalCriteria {
   applies: boolean;
   why: string | null;
   items: EvalCriterion[];
-  /** Todos os critérios cumpridos (null = não se avalia). */
+  /** Todos os critérios cumpridos (null = não se avalia, ou algum ficou por avaliar). */
   ok: boolean | null;
+  /** Algum critério ficou por avaliar (ex.: sem juiz): o veredicto nunca é "Cumpre". */
+  pending: boolean;
 }
 
 const pct = (v: number | null) => (v == null ? "—" : `${(v * 100).toFixed(1).replace(".", ",")} %`);
 const secs = (ms: number | null) => (ms == null ? "—" : `${(ms / 1000).toFixed(1).replace(".", ",")} s`);
 export const eurText = (v: number | null) => (v == null ? "—" : `${v.toFixed(v < 1 ? 4 : 2).replace(".", ",")} €`);
 
+/** Veredicto: algum "não" → false; algum por avaliar (fora o custo, que é só informação) → null; senão true. PURA. */
+function verdict(items: readonly EvalCriterion[], infoOnly: ReadonlySet<EvalCriterion>): { ok: boolean | null; pending: boolean } {
+  const pending = items.some((i) => i.ok == null && !infoOnly.has(i));
+  if (items.some((i) => i.ok === false)) return { ok: false, pending };
+  return { ok: pending ? null : true, pending };
+}
+
 /** Os critérios do go/no-go para esta versão. PURA. */
 export function evalCriteria(set: EvalSet, variant: EvalVariant, s: EvalSummary, complete: boolean): EvalCriteria {
-  if (set !== "A") return { applies: false, why: "Os critérios do lançamento só contam no conjunto A (perguntas reais).", items: [], ok: null };
-  if (!complete) return { applies: false, why: "Eval INCOMPLETO: os critérios não se avaliam (um resultado parcial nunca conta como bom).", items: [], ok: null };
-  if (!s.questions) return { applies: false, why: "Conjunto A vazio: sem perguntas, não há critérios.", items: [], ok: null };
+  if (set !== "A") return { applies: false, why: "Os critérios do lançamento só contam no conjunto A (perguntas reais).", items: [], ok: null, pending: false };
+  if (!complete) return { applies: false, why: "Eval INCOMPLETO: os critérios não se avaliam (um resultado parcial nunca conta como bom).", items: [], ok: null, pending: false };
+  if (!s.questions) return { applies: false, why: "Conjunto A vazio: sem perguntas, não há critérios.", items: [], ok: null, pending: false };
   const cost: EvalCriterion = { label: "Custo médio por pergunta", target: "dentro do teto do D2", value: eurText(s.costPerAnswerEur), ok: null };
   if (variant === "mpv-argon") {
     const c = EVAL_CRITERIA.argon;
     const items: EvalCriterion[] = [
       { label: "Factos certos e secção certa", target: `≥ ${c.factsSectionMin * 100} %`, value: pct(s.factsSectionRate), ok: s.factsSectionRate != null && s.factsSectionRate >= c.factsSectionMin },
-      { label: "Regras inventadas (juiz)", target: `${c.inventedMax}`, value: `${s.inventedReps}${s.judgeFailed ? ` (${s.judgeFailed} por julgar)` : ""}`, ok: s.inventedReps <= c.inventedMax && s.judgeFailed === 0 },
+      // Sem juiz (--no-judge), ou com repetições por julgar, este critério NÃO se avalia (nunca "cumpre" por omissão).
+      s.judged < s.judgeExpected
+        ? { label: "Regras inventadas (juiz)", target: `${c.inventedMax}`, value: `não avaliado (${s.judged} de ${s.judgeExpected} julgadas)`, ok: s.inventedReps > c.inventedMax ? false : null }
+        : { label: "Regras inventadas (juiz)", target: `${c.inventedMax}`, value: `${s.inventedReps}`, ok: s.inventedReps <= c.inventedMax },
       { label: "Tempo de resposta p95", target: `< ${c.p95MaxMs / 1000} s`, value: secs(s.p95Ms), ok: s.p95Ms != null && s.p95Ms < c.p95MaxMs },
       cost,
     ];
-    return { applies: true, why: null, items, ok: items.every((i) => i.ok !== false) };
+    return { applies: true, why: null, items, ...verdict(items, new Set([cost])) };
   }
   if (variant === "mpv-lite") {
     const c = EVAL_CRITERIA.lite;
@@ -467,9 +483,9 @@ export function evalCriteria(set: EvalSet, variant: EvalVariant, s: EvalSummary,
       { label: "Factos certos e secção certa", target: `≥ ${c.factsSectionMin * 100} %`, value: pct(s.factsSectionRate), ok: s.factsSectionRate != null && s.factsSectionRate >= c.factsSectionMin },
       cost,
     ];
-    return { applies: true, why: null, items, ok: items.every((i) => i.ok !== false) };
+    return { applies: true, why: null, items, ...verdict(items, new Set([cost])) };
   }
-  return { applies: true, why: "O v1 é a referência (sem critério próprio): compara-se com o MPV.", items: [cost], ok: null };
+  return { applies: true, why: "O v1 é a referência (sem critério próprio): compara-se com o MPV.", items: [cost], ok: null, pending: false };
 }
 
 // ─── Amostra do juiz para o Jorge rever ─────────────────────────────────────
@@ -560,6 +576,7 @@ export function evalReportMarkdown(r: EvalReport): string {
     L.push("|---|---|---|---|");
     for (const c of r.criteria.items) L.push(`| ${c.label} | ${c.target} | ${c.value} | ${c.ok == null ? "—" : c.ok ? "sim" : "**não**"} |`);
     if (r.criteria.ok != null) L.push("", `**${r.criteria.ok ? "Cumpre os critérios." : "NÃO cumpre os critérios."}**`);
+    else if (r.criteria.pending) L.push("", "**Por avaliar: há critérios que não se avaliaram (ex.: sem juiz) — não conta como «Cumpre».**");
   }
   L.push("");
   L.push("## Resumo");

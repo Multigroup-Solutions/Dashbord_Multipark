@@ -153,6 +153,19 @@ describe("F8 — o relatório", () => {
     expect(timesVerificationCsv(r, "cobertura").split("\n")[0]).toContain("portao_abria");
   });
 
+  it("leituras da tabela com prazo próprio: passado o prazo, o relatório sai na mesma com o aviso", async () => {
+    const { d } = deps();
+    const never = new Promise<never>(() => {});
+    const r = await runTimesVerification({ today: "2026-10-18", cityKeys: null, tableTimeoutMs: 20 }, { ...d, serviceRows: () => never, sampleRows: () => never });
+    expect(r.notes.join(" ")).toMatch(/tabela dos tempos \(8 semanas\) passou de/);
+    expect(r.notes.join(" ")).toMatch(/entregas da amostra passou de/);
+    expect(r.sample.items).toEqual([]);
+    expect(timesVerificationMarkdown(r)).toContain("Aviso:");
+    const mod = readFileSync(resolve(__dirname, "timesVerification.ts"), "utf8");
+    expect(mod).toMatch(/VERIFY_DEADLINE_MS = 42_000/);
+    expect(mod).toMatch(/VERIFY_TABLE_TIMEOUT_MS = 12_000/);
+  });
+
   it("a History falha → a ficha fica \"não deu para ler\" com o motivo (o resto sai na mesma)", async () => {
     const { d } = deps({ historyFails: true });
     const r = await runTimesVerification({ today: "2026-10-18", cityKeys: ["lisboa"] }, d);

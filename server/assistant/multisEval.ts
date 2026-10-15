@@ -196,6 +196,9 @@ export const JUDGE_SYSTEM = [
   "Responde só com {\"inventou\": true|false, \"regra\": \"a regra inventada, numa frase curta\" | null}.",
 ].join("\n");
 
+/** Teto da referência do juiz (≈ 15 k tokens no lite; cabe a ajuda inteira de 3 ficheiros + os resultados). */
+export const JUDGE_REFERENCE_MAX_CHARS = 60_000;
+
 export const judgeSchema = z.object({ inventou: z.boolean(), regra: z.string().max(400).nullable() });
 
 export type EvalJudge = (p: { question: string; reference: string; answer: string }) => Promise<{ invented: boolean; rule: string | null }>;
@@ -208,7 +211,7 @@ export const defaultJudge: EvalJudge = async ({ question, reference, answer }) =
   const { runAi } = await import("../_core/ai/run");
   const r = await runAi({
     feature: "assistant_eval", tier: "lite", system: JUDGE_SYSTEM, schema: judgeSchema, temperature: 0, maxTokens: 400, retries: 1, timeoutMs: 25_000,
-    input: `<pergunta>\n${safeData(clip(question, 1000))}\n</pergunta>\n\n<referencia>\n${safeData(clip(reference, 14_000))}\n</referencia>\n\n<resposta>\n${safeData(clip(answer, 4000))}\n</resposta>`,
+    input: `<pergunta>\n${safeData(clip(question, 1000))}\n</pergunta>\n\n<referencia>\n${safeData(clip(reference, JUDGE_REFERENCE_MAX_CHARS))}\n</referencia>\n\n<resposta>\n${safeData(clip(answer, 4000))}\n</resposta>`,
     entity: "multis_eval_judge",
   });
   return { invented: r.output.inventou, rule: r.output.inventou ? (r.output.regra ?? "").slice(0, 200) || null : null };
@@ -341,7 +344,7 @@ export async function runMultisEval(opts: EvalOptions, inputs: EvalInputs, deps:
         }
         if (t.name === "ajuda_abrir" && typeof raw.id === "string" && raw.error == null) seen.push(raw.id);
         if (t.name === "abrir_ajuda" && typeof raw.ficheiro === "string") seen.push(`${raw.ficheiro}.md`);
-        evidence.push(`${t.name}(${clip(JSON.stringify(args), 200)}) → ${clip(JSON.stringify(raw), 3000)}`);
+        evidence.push(`${t.name}(${clip(JSON.stringify(args), 200)}) → ${clip(JSON.stringify(raw), 8000)}`);
         const red = redactToolResult(raw, t.pii, extra?.redact, { maskPeople: extra?.maskPeople });
         return (MPV_DATA_TOOL_NAMES as readonly string[]).includes(t.name) ? fitToolResult(red, MPV_TOOL_RESULT_MAX_CHARS) : red;
       },
@@ -373,7 +376,8 @@ export async function runMultisEval(opts: EvalOptions, inputs: EvalInputs, deps:
       const reference = [
         def.content === "mpv"
           ? mpvTurnKnowledge({ path: q.pagina, tab: q.separador ?? null, question: q.pergunta, ctx }).block
-          : r.helpFiles.map((f) => { const d = ctx.helpDocs.find((x) => x.file === f); return d ? `<ajuda ficheiro="${f}">\n${clip(d.body, 4000)}\n</ajuda>` : ""; }).join("\n\n"),
+          // v1: a ajuda INTEIRA de cada ficheiro usado (o modelo recebeu partes; o juiz vê tudo, para não chamar "inventado" ao que está noutra parte).
+          : r.helpFiles.map((f) => { const d = ctx.helpDocs.find((x) => x.file === f); return d ? `<ajuda ficheiro="${f}">\n${d.body}\n</ajuda>` : ""; }).join("\n\n"),
         evidence.length ? `<ferramentas>\n${evidence.join("\n")}\n</ferramentas>` : "",
       ].filter(Boolean).join("\n\n") || "(sem referência: nenhuma ajuda nem ferramenta)";
       const jm: RepMeter = { costEur: 0, stop: false, budgetHit: false, models: new Set() };

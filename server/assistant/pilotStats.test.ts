@@ -25,7 +25,7 @@ describe("F8 — cartão Multis piloto: as contas", () => {
       days: 7, since: "2026-10-14 00:00:00",
       usage: [
         u(), u({ status: "error", errorCode: "final_fallback", finishReason: "STOP", latencyMs: 30_000, forcedFinal: 1 }),
-        u({ finishReason: "MAX_TOKENS", userId: 8 }), u({ status: "blocked", costEur: 0 }),
+        u({ finishReason: "MAX_TOKENS", userId: 8 }), u({ status: "blocked", errorCode: "own_budget_user_day", costEur: 0 }), u({ status: "blocked", errorCode: "budget", costEur: 0 }),
         u({ entity: "context_cache_storage", userId: null, costEur: 0.06 }),
         u({ variant: "v1", tier: "lite", userId: 9, costEur: 0.001 }),
       ],
@@ -43,20 +43,20 @@ describe("F8 — cartão Multis piloto: as contas", () => {
     });
     const mpv = s.rows.find((r) => r.variant === "mpv" && r.tier === "smart" && r.userId == null)!;
     expect(s.rows[0]).toBe(mpv);
-    expect(mpv).toMatchObject({ questions: 3, blocked: 1, errorPct: 0.3333, maxTokensPct: 0.3333, forcedFinalPct: 0.3333, answers: 3, downPct: 0.3333, unansweredPct: 0.3333, toolCalls: 2, refusedPct: 0.5, cachedPct: 0.5 });
+    expect(mpv).toMatchObject({ questions: 3, blockedOwn: 1, blockedGlobal: 1, errorPct: 0.3333, maxTokensPct: 0.3333, forcedFinalPct: 0.3333, answers: 3, downPct: 0.3333, unansweredPct: 0.3333, toolCalls: 2, refusedPct: 0.5, cachedPct: 0.5 });
     expect(mpv.storageEur).toBeCloseTo(0.06);
     expect(mpv.eurPerQuestion).toBeCloseTo((0.06 + 0.06) / 3);
     expect(mpv.p95Ms).toBeGreaterThan(20_000);
     const jorge = s.rows.find((r) => r.userId === 7)!;
-    expect(jorge).toMatchObject({ name: "Jorge", inPilot: true, questions: 2, blocked: 1, storageEur: 0, answers: 2, downPct: 0.5, unansweredPct: 0.5 });
+    expect(jorge).toMatchObject({ name: "Jorge", inPilot: true, questions: 2, blockedOwn: 1, blockedGlobal: 1, storageEur: 0, answers: 2, downPct: 0.5, unansweredPct: 0.5 });
     const rui = s.rows.find((r) => r.userId === 9)!;
     expect(rui).toMatchObject({ variant: "v1", tier: "lite", inPilot: false, downPct: 0, refusedPct: 0 });
     expect(s.caches).toEqual([{ model: "gemini-3.1-flash-lite", live: 1 }]);
   });
 
   it("sem perguntas: nulls (nunca 0 % a fingir medição)", () => {
-    const s = buildPilotStats({ days: 1, since: "x", usage: [u({ status: "blocked" })], answers: [], feedback: [], toolCalls: [], caches: [], names: new Map(), pilotUserIds: [] });
-    expect(s.rows[0]).toMatchObject({ questions: 0, blocked: 1, eurPerQuestion: null, p95Ms: null, errorPct: null, downPct: null });
+    const s = buildPilotStats({ days: 1, since: "x", usage: [u({ status: "blocked", errorCode: "own_budget_day" })], answers: [], feedback: [], toolCalls: [], caches: [], names: new Map(), pilotUserIds: [] });
+    expect(s.rows[0]).toMatchObject({ questions: 0, blockedOwn: 1, blockedGlobal: 0, eurPerQuestion: null, p95Ms: null, errorPct: null, downPct: null });
   });
 });
 
@@ -69,6 +69,8 @@ describe("F8 — cartão Multis piloto: a leitura", () => {
     const qs = h.db.queries.map((q: any) => q.sql);
     expect(qs.length).toBeGreaterThanOrEqual(5);
     for (const q of qs) expect(q).toMatch(/^SELECT /);
+    // Ordenadas pela data (o índice de data serve o filtro e a ordem do LIMIT).
+    for (const q of qs.filter((x: string) => x.includes(" LIMIT ") && !x.includes("app_settings"))) expect(q).toMatch(/ORDER BY (m\.)?createdAt DESC, (m\.)?id DESC LIMIT/);
     const usage = h.db.queries.find((q: any) => q.sql.includes("FROM ai_usage_log"));
     expect(usage.params).toEqual(expect.arrayContaining(["assistant", "assistant_smart"]));
     expect(usage.params).not.toContain("assistant_eval");

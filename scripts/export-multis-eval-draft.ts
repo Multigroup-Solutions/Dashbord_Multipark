@@ -13,6 +13,7 @@
  *
  *   pnpm tsx scripts/export-multis-eval-draft.ts                 (90 dias)
  *   pnpm tsx scripts/export-multis-eval-draft.ts --days 30 --out server/fixtures/multisEval/rascunhoA/rascunho.json
+ *   (o --out só aceita um .json dentro de rascunhoA/, que não vai para o repositório)
  *
  * Lê DATABASE_URL do `.env` do dashboard (ou do ambiente).
  */
@@ -21,7 +22,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import mysql from "mysql2/promise";
-import { buildSetADraft, type FailedFeedbackRow } from "../server/assistant/multisEvalDraft";
+import { buildSetADraft, defaultAppVocabulary, draftOutPathOk, type FailedFeedbackRow } from "../server/assistant/multisEvalDraft";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(here, "..", ".env") });
@@ -36,7 +37,13 @@ async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) { console.error("Falta o DATABASE_URL (no .env ou no ambiente)."); process.exit(2); }
   const days = Math.max(1, Math.min(365, Number(opt("--days") ?? 90) || 90));
-  const out = path.resolve(opt("--out") ?? path.join(here, "..", "server", "fixtures", "multisEval", "rascunhoA", `rascunho-A-${new Date().toISOString().slice(0, 10)}.json`));
+  const root = path.resolve(here, "..");
+  const out = path.resolve(opt("--out") ?? path.join(root, "server", "fixtures", "multisEval", "rascunhoA", `rascunho-A-${new Date().toISOString().slice(0, 10)}.json`));
+  // Só dentro de server/fixtures/multisEval/rascunhoA/ (fora do repositório): perguntas reais nunca vão parar a outro sítio.
+  if (!draftOutPathOk(out, root)) {
+    console.error("--out tem de ser um ficheiro .json dentro de server/fixtures/multisEval/rascunhoA/ (que não vai para o repositório).");
+    process.exit(2);
+  }
   const conn = await mysql.createConnection(url);
   try {
     // Só leitura: qualquer escrita nesta sessão falha.
@@ -55,14 +62,14 @@ async function main() {
       id: Number(r.id), role: r.role ?? null, reason: r.reason ?? null, comment: r.comment ?? null, question: r.question ?? null,
       path: r.path ?? null, tools: r.tools ?? null, helpFiles: r.helpFiles ?? null, auto: Number(r.auto) === 1, resolved: Number(r.resolved) === 1, createdAt: r.createdAt ?? null,
     }));
-    const draft = buildSetADraft(list, (people as any[]).map((p) => String(p.n)));
+    const draft = buildSetADraft(list, (people as any[]).map((p) => String(p.n)), { vocab: await defaultAppVocabulary() });
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, JSON.stringify({
-      nota: `RASCUNHO do conjunto A (${days} dias, ${list.length} linhas do 👎 e das falhas). Anonimizado. Rever cada pergunta, preencher seccaoEsperada, ferramentaEsperada, factos e gravações, e só depois passar para server/fixtures/multisEval/conjuntoA/.`,
+      nota: `RASCUNHO do conjunto A (${days} dias, ${list.length} linhas do 👎 e das falhas). Anonimizado por regras simples (contactos, matrículas, NIF/IBAN, nomes da equipa e palavras com maiúscula que parecem nomes, ids das páginas): REVER À MÃO cada pergunta, preencher seccaoEsperada, ferramentaEsperada, factos e gravações, e só depois passar para server/fixtures/multisEval/conjuntoA/.`,
       perguntas: draft.questions,
     }, null, 2) + "\n");
     console.log(`${draft.questions.length} perguntas de rascunho (${draft.skipped} sem texto) em ${out}`);
-    console.log("Revê o ficheiro antes de o partilhar: a anonimização tapa contactos, matrículas, NIF/IBAN e os nomes da equipa, mas confirma.");
+    console.log("Revê o ficheiro à mão antes de o usar: a anonimização é por regras simples (pode deixar passar um nome no início de uma frase ou um código).");
   } finally {
     await conn.end();
   }

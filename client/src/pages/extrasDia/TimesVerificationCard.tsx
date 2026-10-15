@@ -86,6 +86,7 @@ export function TimesVerificationCard({ probeSummary }: { probeSummary?: string 
                 {r.sample.zelloCounts.falhou + r.sample.zelloCounts.nao_lido > 0 ? `, ${r.sample.zelloCounts.falhou + r.sample.zelloCounts.nao_lido} por ler` : ""}.
                 {" "}Portão: <b>{r.gate.visible ? "aberto" : "fechado (em calibração)"}</b> (≥ {r.gate.minCoveragePct} % e n ≥ {r.gate.minN}).
               </p>
+              {r.notes.map((n) => <p key={n} className="text-xs text-amber-700 dark:text-amber-400">{n}</p>)}
               {r.sample.bookingReadFailed && <p className="text-xs text-amber-700 dark:text-amber-400">A ficha das reservas não respondeu: {r.sample.bookingReadFailed}</p>}
             </section>
 

@@ -25,8 +25,20 @@ import {
 import type { CoverageWeekRow } from "./serviceTimesViews";
 import type { GpsFile } from "./serviceTimesJob";
 
-/** Prazo do relatório (a função da Vercel corta aos 60 s). */
+/** Prazo do relatório (a função da Vercel corta aos 60 s): no total fica abaixo de 50 s. */
 export const VERIFY_DEADLINE_MS = 42_000;
+/** Prazo próprio das leituras da nossa tabela (cobertura e amostra, ao mesmo tempo). */
+export const VERIFY_TABLE_TIMEOUT_MS = 12_000;
+
+/** Corre `p` com prazo: passado `ms`, devolve `fallback` e escreve a nota (a leitura não fica à espera). */
+export async function withDeadline<T>(p: Promise<T>, ms: number, fallback: T, onLate: () => void): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([p, new Promise<T>((resolve) => { timer = setTimeout(() => { onLate(); resolve(fallback); }, ms); })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 export const VERIFY_HISTORY_TIMEOUT_MS = 22_000;
 /** Teto das linhas lidas da tabela para a amostra. */
 export const VERIFY_SAMPLE_ROWS_LIMIT = 20_000;
@@ -142,7 +154,7 @@ const mondayOf = (day: string) => { const d = new Date(`${day}T12:00:00Z`); d.se
 
 /** O relatório. Nunca lança (o que falhar fica escrito). */
 export async function runTimesVerification(
-  o: { today: string; cityKeys: readonly string[] | null; sampleSize?: number; sampleDays?: number },
+  o: { today: string; cityKeys: readonly string[] | null; sampleSize?: number; sampleDays?: number; tableTimeoutMs?: number },
   deps: VerifyDeps,
 ): Promise<TimesVerificationReport> {
   const started = deps.now();
@@ -150,9 +162,22 @@ export async function runTimesVerification(
   const [{ coverageCardFrom }, { bookingRowsLive }] = await Promise.all([import("./serviceTimesViews"), import("./serviceTimesBooking")]);
   const { gate, roles } = await deps.settings().catch(() => ({ gate: { visible: false, minCoveragePct: 60, minN: 20 } as GpsGate, roles: [] as GarageRoleEntry[] }));
 
-  // 1. Cobertura (as 8 semanas do cartão "De onde vêm os tempos") com o portão.
+  const notes: string[] = [];
+  const tableMs = o.tableTimeoutMs ?? VERIFY_TABLE_TIMEOUT_MS;
+  const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
+  // 1. Cobertura (as 8 semanas do cartão "De onde vêm os tempos") e 2. as candidatas à amostra (D-14 a D-3):
+  // as duas leituras da tabela ao mesmo tempo, cada uma com o seu prazo.
   const covFrom = addDays(mondayOf(o.today), -7 * (VERIFY_COVERAGE_WEEKS - 1));
-  const cov = await deps.serviceRows({ fromDay: covFrom, toDay: o.today, cityKeys: o.cityKeys }).catch(() => ({ rows: [], truncated: false }));
+  const sampleDays = Math.max(1, Math.min(31, o.sampleDays ?? VERIFY_SAMPLE_DAYS));
+  const size = Math.max(1, Math.min(60, o.sampleSize ?? VERIFY_SAMPLE_SIZE));
+  const sTo = addDays(o.today, -VERIFY_SAMPLE_END_OFFSET_DAYS);
+  const sFrom = addDays(sTo, -(sampleDays - 1));
+  const [cov, candidates] = await Promise.all([
+    withDeadline(deps.serviceRows({ fromDay: covFrom, toDay: o.today, cityKeys: o.cityKeys }).catch(() => { notes.push("Não deu para ler a tabela dos tempos (cobertura e medianas)."); return { rows: [], truncated: false }; }),
+      tableMs, { rows: [], truncated: false }, () => notes.push(`A leitura da tabela dos tempos (8 semanas) passou de ${secs(tableMs)}: a cobertura e as medianas ficam vazias. Tenta outra vez daqui a pouco.`)),
+    withDeadline(deps.sampleRows({ fromDay: sFrom, toDay: sTo, cityKeys: o.cityKeys }).catch(() => { notes.push("Não deu para ler as entregas da amostra."); return [] as TvSampleSource[]; }),
+      tableMs, [] as TvSampleSource[], () => notes.push(`A leitura das entregas da amostra passou de ${secs(tableMs)}: a amostra fica vazia. Tenta outra vez daqui a pouco.`)),
+  ]);
   const card = coverageCardFrom(cov.rows, { roles, today: o.today, truncated: cov.truncated });
 
   // 3. Medianas por condutor (28 dias até ontem), da mesma leitura se couber, senão à parte.
@@ -160,12 +185,6 @@ export async function runTimesVerification(
   const drvFrom = addDays(drvTo, -(VERIFY_DRIVER_DAYS - 1));
   const drvRows = cov.rows.filter((r) => r.kind === "entrega" && r.opDay >= drvFrom && r.opDay <= drvTo);
 
-  // 2. A amostra (D-14 a D-3).
-  const sampleDays = Math.max(1, Math.min(31, o.sampleDays ?? VERIFY_SAMPLE_DAYS));
-  const size = Math.max(1, Math.min(60, o.sampleSize ?? VERIFY_SAMPLE_SIZE));
-  const sTo = addDays(o.today, -VERIFY_SAMPLE_END_OFFSET_DAYS);
-  const sFrom = addDays(sTo, -(sampleDays - 1));
-  const candidates = await deps.sampleRows({ fromDay: sFrom, toDay: sTo, cityKeys: o.cityKeys }).catch(() => [] as TvSampleSource[]);
   const picked = pickVerificationSample(candidates, size, `${sFrom}|${sTo}`);
 
   // A ficha (History, uma leitura) e o Zello ao mesmo tempo — cabem os dois no prazo.
@@ -219,6 +238,7 @@ export async function runTimesVerification(
   const med = driverMedians(drvRows, names, { minN: DRIVER_STATS_MIN_N });
   return {
     generatedAt: new Date(deps.now()).toISOString().slice(0, 16).replace("T", " ") + " UTC",
+    notes,
     today: o.today,
     gate: { visible: !!gate.visible, minCoveragePct: gate.minCoveragePct, minN: gate.minN },
     coverage: { fromDay: covFrom, toDay: o.today, rows: card.weeks.map((w) => coverageRowOf(w, gate)), truncated: cov.truncated },

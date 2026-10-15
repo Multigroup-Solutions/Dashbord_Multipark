@@ -117,7 +117,7 @@ export function MultisPilotCard() {
               </div>
             ))}
             <p className="text-[11px] text-muted-foreground">
-              Uma pergunta = uma linha do registo de uso. Bloqueadas pelo teto do piloto (o Multis respondeu no modelo de sempre, "modo económico") aparecem à parte em "Perguntas". As chamadas das ferramentas contam na versão da última resposta da conversa.
+              Uma pergunta = uma linha do registo de uso. Bloqueadas pelo teto do piloto (o Multis respondeu no modelo de sempre, "modo económico") e pelo orçamento mensal global aparecem à parte em "Perguntas". As chamadas das ferramentas contam na versão da última resposta da conversa.
             </p>
           </>
         )}
@@ -127,7 +127,7 @@ export function MultisPilotCard() {
 }
 
 type Row = {
-  questions: number; blocked: number; eurPerQuestion: number | null; p95Ms: number | null; errorPct: number | null; maxTokensPct: number | null;
+  questions: number; blockedOwn: number; blockedGlobal: number; eurPerQuestion: number | null; p95Ms: number | null; errorPct: number | null; maxTokensPct: number | null;
   forcedFinalPct: number | null; downPct: number | null; unansweredPct: number | null; refusedPct: number | null; toolCalls: number; answers: number; cachedPct: number | null;
 };
 
@@ -135,7 +135,11 @@ function Cells({ r }: { r: Row }) {
   const alarm = r.maxTokensPct != null && r.maxTokensPct > MAX_TOKENS_ALARM;
   return (
     <>
-      <td className="py-1 px-1 text-right tabular-nums whitespace-nowrap">{n(r.questions)}{r.blocked > 0 && <span className="text-muted-foreground"> (+{n(r.blocked)} bloq.)</span>}</td>
+      <td className="py-1 px-1 text-right tabular-nums whitespace-nowrap">
+        {n(r.questions)}
+        {r.blockedOwn > 0 && <span className="text-muted-foreground" title="Bloqueadas pelo teto do piloto: responderam no modelo de sempre (modo económico)"> (+{n(r.blockedOwn)} teto do piloto)</span>}
+        {r.blockedGlobal > 0 && <span className="text-amber-700 dark:text-amber-400" title="Bloqueadas pelo orçamento mensal da IA (ou outro portão)"> (+{n(r.blockedGlobal)} orçamento global)</span>}
+      </td>
       <td className="py-1 px-1 text-right tabular-nums">{eur(r.eurPerQuestion)}</td>
       <td className="py-1 px-1 text-right tabular-nums">{secs(r.p95Ms)}</td>
       <td className="py-1 px-1 text-right tabular-nums">{pct(r.errorPct)}</td>

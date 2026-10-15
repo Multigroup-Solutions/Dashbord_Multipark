@@ -15,8 +15,8 @@
 // escreve, as definições ficam as do código, a resposta não depende da BD).
 //
 // Sai com 0 se o eval acabou e cumpre os critérios (ou não há critérios), 1
-// se acabou e NÃO cumpre, 2 se ficou incompleto, se a IA não respondeu ou se
-// os ficheiros das perguntas têm erros.
+// se acabou e NÃO cumpre, 2 se ficou incompleto, com critérios por avaliar
+// (ex.: --no-judge), se a IA não respondeu ou se os ficheiros têm erros.
 delete process.env.DATABASE_URL;
 delete process.env.DATABASE_URL_MULTIPARK;
 
@@ -78,10 +78,12 @@ async function main() {
   console.log(`${report.complete ? "COMPLETO" : `INCOMPLETO (${report.incompleteReason})`} · passam ${s.passed}/${s.questions} · factos+secção ${s.factsSectionPassed}/${s.questions} · p95 ${s.p95Ms == null ? "—" : `${Math.round(s.p95Ms / 100) / 10} s`} · gasto ${eurText(report.spentEur)}`);
   for (const w of report.warnings) console.log(`Aviso: ${w}`);
   if (report.criteria.applies && report.criteria.ok != null) console.log(report.criteria.ok ? "Cumpre os critérios." : "NÃO cumpre os critérios.");
+  else if (report.criteria.pending) console.log("Por avaliar: há critérios que não se avaliaram (ex.: sem juiz) — não conta como «Cumpre».");
   else if (report.criteria.why) console.log(report.criteria.why);
   console.log(`Relatório: ${base}.md e ${base}.json`);
   if (!report.complete || !s.questions || s.costPerAnswerEur == null) process.exit(2);
-  process.exit(report.criteria.ok === false ? 1 : 0);
+  if (report.criteria.ok === false) process.exit(1);
+  process.exit(report.criteria.pending ? 2 : 0);
 }
 
 main().catch((err) => {

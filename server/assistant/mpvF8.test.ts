@@ -27,7 +27,10 @@ import {
 } from "../../shared/multisEval";
 import { JUDGE_SYSTEM, evalSkipReason, evalToolCtx, runMultisEval, sectionCovered, type EvalInputs } from "./multisEval";
 import { SET_B_INJECTION_CASES, generateSetB, lowestRoleFor, titleKeyword } from "./multisEvalSetB";
-import { anonymizeText, buildSetADraft, evalRoleOf, nameTokens } from "./multisEvalDraft";
+import { anonymizePath, anonymizeText, appVocabulary, buildSetADraft, draftOutPathOk, evalRoleOf, nameTokens } from "./multisEvalDraft";
+import { askAssistant, type AssistantMode } from "./service";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { canSeeHelpPage } from "./helpTools";
 import { knowledgeTree } from "./knowledgeTree";
 import { MPV_STAFF_TOOLS, STAFF_TOOLS } from "./tools";
@@ -118,6 +121,8 @@ describe("F8 — notas, 2 de 3, instáveis, critérios", () => {
     expect(scoreRep(qq, outcome({ toolCalls: [{ tool: "criticas_por_responder", args: {}, source: "recusada" }] })).toolOk).toBe(false);
     expect(scoreRep({ ...qq, seccaoEsperada: "a.md#b" }, outcome({ sectionCovered: false })).factsSectionOk).toBe(false);
     expect(scoreRep(qq, outcome({ ok: false, answer: "" })).pass).toBe(false);
+    // O texto de recurso nunca conta como factos certos, mesmo com as palavras.
+    expect(scoreRep(qq, outcome({ fallback: true })).factsSectionOk).toBe(false);
   });
 
   it("passa com ≥ 2 de 3; 1 ou 2 de 3 = instável; taxa por repetição e p95", () => {
@@ -158,6 +163,15 @@ describe("F8 — notas, 2 de 3, instáveis, critérios", () => {
     expect(evalCriteria("B", "mpv-lite", s90, true)).toMatchObject({ applies: false, ok: null });
     expect(evalCriteria("A", "mpv-argon", s90, false)).toMatchObject({ applies: false, ok: null });
     expect(evalCriteria("A", "mpv-argon", summarizeEval([], 3), true).why).toMatch(/vazio/);
+    // Sem juiz: "0 regras inventadas" por avaliar e o veredicto nunca é "Cumpre".
+    const noJudge = evalCriteria("A", "mpv-argon", summarizeEval(res(10, 10, { invented: null }), 3), true);
+    expect(noJudge).toMatchObject({ ok: null, pending: true });
+    expect(noJudge.items.find((i) => i.label.startsWith("Regras inventadas"))).toMatchObject({ ok: null, value: expect.stringMatching(/não avaliado \(0 de 30/) });
+    // Juiz só em parte das repetições que contam: também por avaliar.
+    const partial = Array.from({ length: 10 }, (_, i) => questionResult(q({ id: `P-${i}` }), [outcome(), outcome(), outcome({ invented: i === 0 ? null : false })], { repsWanted: 3 }));
+    expect(evalCriteria("A", "mpv-argon", summarizeEval(partial, 3), true)).toMatchObject({ ok: null, pending: true });
+    // Mas um "não" noutro critério continua a dar "não cumpre".
+    expect(evalCriteria("A", "mpv-argon", summarizeEval(res(10, 5, { invented: null }), 3), true)).toMatchObject({ ok: false, pending: true });
   });
 
   it("juiz: 20 % reprodutíveis (pelo menos 1) + todas as \"inventou\"", () => {
@@ -215,6 +229,13 @@ describe("F8 — conjunto B gerado da árvore", () => {
     expect(evalSkipReason(SET_B_INJECTION_CASES.find((x) => x.id === "B-INJ-3")!, "v1-lite")).toMatch(/só na versão mpv/);
     expect(evalSkipReason({ ...q(), versoes: undefined }, "v1-lite")).toMatch(/não existe na versão v1/);
     expect(evalSkipReason(q(), "mpv-lite")).toBeNull();
+    // B-INJ-5: o "5" tem de ser o das pendentes (nenhum outro número dos dados é 5).
+    const inj5 = SET_B_INJECTION_CASES.find((x) => x.id === "B-INJ-5")!;
+    const re = inj5.factosObrigatorios[0];
+    expect(factMatches(re, "Este mês há 5 despesas pendentes.")).toBe(true);
+    expect(factMatches(re, "Pendentes: 5.")).toBe(true);
+    expect(factMatches(re, "A Limpeza tem 5 despesas; pendentes há 3.")).toBe(false);
+    expect(JSON.stringify(inj5.gravacoes).match(/\b5\b/g)).toEqual(["5"]);
   });
 
   it("secção certa: MPV aceita a própria ou uma que a contenha; v1 aceita o ficheiro", () => {
@@ -309,6 +330,27 @@ describe("F8 — o motor do eval (sem IA real)", () => {
     expect(r.judgeReview.every((j) => j.invented)).toBe(true);
   });
 
+  it("--no-judge no A: o critério das regras inventadas fica por avaliar (nunca \"Cumpre\"); sem vetores (F5)", async () => {
+    const embed = vi.fn(async () => [[0.1]]);
+    const p = brain({ tool: { name: "criticas_por_responder", args: { cidade: "Lisboa" } }, answer: "Faltam 3." });
+    setAiProvidersForTests({ gemini: Object.assign(p, { embed }) });
+    const r = await runMultisEval({ set: "A", variant: "mpv-argon", reps: 3, judge: false }, inputs([q()]));
+    expect(r.complete).toBe(true);
+    expect(r.criteria).toMatchObject({ applies: true, ok: null, pending: true });
+    expect(evalReportMarkdown(r)).toContain("Por avaliar");
+    expect(embed).not.toHaveBeenCalled();
+    expect(readFileSync(resolve(__dirname, "multisEval.ts"), "utf8")).toContain("embedQuery: null, evalRun:");
+  });
+
+  it("fora do eval o Multis responde no formato de sempre (sem o `run`)", async () => {
+    setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse("Olá.")]) });
+    const mode: AssistantMode = { feature: "assistant", pilot: false, economy: false, economyReason: null };
+    const ctx = evalToolCtx({ papel: "extra" });
+    const r = await askAssistant({ question: "Como crio uma tarefa?" }, ctx, { knowledge: null, memoryEnabled: false, mode });
+    expect(r.ok).toBe(true);
+    expect(r.ok && "run" in r).toBe(false);
+  });
+
   it("v1: ferramenta só do MPV → não se aplica; ajuda e regras correm do código (secção vista pelo ajuda_abrir)", async () => {
     setAiProvidersForTests({ gemini: brain({ answer: "x" }) });
     const r1 = await runMultisEval({ set: "B", variant: "v1-lite", reps: 1, judge: false }, inputs([q()]));
@@ -338,10 +380,32 @@ describe("F8 — o motor do eval (sem IA real)", () => {
 // ─── Rascunho do conjunto A ─────────────────────────────────────────────────
 
 describe("F8 — rascunho do conjunto A (do /multis/falhas e do 👎)", () => {
+  it("anonimiza clientes e nomes curtos da equipa por heurística, emails e matrículas; a página sem ids; o --out só em rascunhoA/", () => {
+    const team = nameTokens(["Ana Sousa", "Rui Gomes", "Zé Maria Santos"]);
+    const vocab = appVocabulary(["Extras Dia", "Pressão", "Ficha da reserva"]);
+    expect(anonymizeText("o cliente Joaquim Ferreira ligou a reclamar", team, vocab)).toBe("o cliente [NOME] ligou a reclamar");
+    expect(anonymizeText("a Ana disse que o Zé faltou", team, vocab)).toBe("a [NOME] disse que o [NOME] faltou");
+    expect(anonymizeText("Rui, manda para joao.silva@gmail.com", team, vocab)).not.toMatch(/Rui|joao\.silva/);
+    expect(anonymizeText("O carro AA-12-BB está em Lisboa na Pressão do Extras Dia?", team, vocab)).toBe("O carro [MATRICULA_1] está em Lisboa na Pressão do Extras Dia?");
+    // Início da frase: uma palavra com maiúscula fica; duas seguidas (nome e apelido) tapam-se.
+    expect(anonymizeText("Quantas reservas há amanhã?", team, vocab)).toBe("Quantas reservas há amanhã?");
+    expect(anonymizeText("Joaquim Ferreira ligou.", team, vocab)).toBe("[NOME] ligou.");
+    expect(anonymizePath("/reservas/12345?tab=x")).toBe("/reservas/:id");
+    expect(anonymizePath("/crm/cliente/MP-8811/historico")).toBe("/crm/cliente/:id/historico");
+    expect(anonymizePath("/extras-dia")).toBe("/extras-dia");
+    expect(anonymizePath(null)).toBe("/");
+    const root = "C:/repo";
+    expect(draftOutPathOk("C:\\repo\\server\\fixtures\\multisEval\\rascunhoA\\r.json", root)).toBe(true);
+    expect(draftOutPathOk("C:/repo/server/fixtures/multisEval/conjuntoA/r.json", root)).toBe(false);
+    expect(draftOutPathOk("C:/repo/server/fixtures/multisEval/rascunhoA/sub/r.json", root)).toBe(false);
+    expect(draftOutPathOk("C:/repo/server/fixtures/multisEval/rascunhoA/r.txt", root)).toBe(false);
+    expect(draftOutPathOk("C:/outro/r.json", root)).toBe(false);
+  });
+
   it("anonimiza contactos, matrículas, nomes da equipa e números compridos; nunca as cidades", () => {
     const names = nameTokens(["João Silva", "Maria Faro", "Ana"]);
     expect(names.has("faro")).toBe(false);
-    expect(names.has("ana")).toBe(false);
+    expect(names.has("ana")).toBe(true);
     const t = anonymizeText("O João Silva (joao@x.pt, 912345678) entregou o AA-12-BB da reserva 1234567 em Faro", names);
     expect(t).not.toMatch(/Jo[aã]o|Silva|joao@|912345678|AA-12-BB|1234567/);
     expect(t).toContain("Faro");

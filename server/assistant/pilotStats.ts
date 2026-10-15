@@ -15,6 +15,9 @@
  *  - assistant_feedback (createdAt) — 👎 (auto = 0) e as marcas automáticas (auto = 1);
  *  - activity_logs (entity, createdAt) — as chamadas das ferramentas ("recusada");
  *  - ai_context_caches — as caches ainda válidas.
+ * Cada leitura filtra e ORDENA pela data (`ORDER BY createdAt DESC, id DESC`),
+ * para o índice de data servir também a ordem do LIMIT (com `ORDER BY id`
+ * o MySQL podia preferir varrer a chave primária para trás).
  * As contas estão em `buildPilotStats` (PURA). Nunca lança: sem BD → vazio.
  */
 import { sql } from "drizzle-orm";
@@ -45,8 +48,10 @@ export interface PilotStatsRow {
   name: string | null;
   inPilot: boolean;
   questions: number;
-  /** Bloqueadas pelo teto próprio (o piloto desceu para o lite). */
-  blocked: number;
+  /** Bloqueadas pelo teto próprio do piloto (errorCode own_budget_*: o piloto desceu para o lite). */
+  blockedOwn: number;
+  /** Bloqueadas pelo orçamento mensal global da IA (errorCode budget) ou outro portão. */
+  blockedGlobal: number;
   costEur: number;
   /** Armazenamento das caches (só na linha da versão). */
   storageEur: number;
@@ -81,12 +86,12 @@ const r6 = (v: number) => Math.round(v * 1_000_000) / 1_000_000;
 
 interface Acc {
   variant: string; tier: string; userId: number | null;
-  questions: number; blocked: number; costEur: number; storageEur: number; lat: number[];
+  questions: number; blockedOwn: number; blockedGlobal: number; costEur: number; storageEur: number; lat: number[];
   errors: number; maxTokens: number; forced: number; rounds: number; roundsN: number; input: number; cached: number;
   answers: number; down: number; unanswered: number; toolCalls: number; refused: number;
 }
 const newAcc = (variant: string, tier: string, userId: number | null): Acc => ({
-  variant, tier, userId, questions: 0, blocked: 0, costEur: 0, storageEur: 0, lat: [], errors: 0, maxTokens: 0, forced: 0, rounds: 0, roundsN: 0, input: 0, cached: 0,
+  variant, tier, userId, questions: 0, blockedOwn: 0, blockedGlobal: 0, costEur: 0, storageEur: 0, lat: [], errors: 0, maxTokens: 0, forced: 0, rounds: 0, roundsN: 0, input: 0, cached: 0,
   answers: 0, down: 0, unanswered: 0, toolCalls: 0, refused: 0,
 });
 
@@ -111,7 +116,11 @@ export function buildPilotStats(input: {
   };
   for (const u of input.usage) {
     if (u.entity === CONTEXT_CACHE_STORAGE_ENTITY) { get(u.variant, u.tier, null).storageEur += Number(u.costEur) || 0; continue; }
-    if (u.status === "blocked") { both(u.variant, u.tier, u.userId, (a) => { a.blocked++; }); continue; }
+    if (u.status === "blocked") {
+      const own = String(u.errorCode ?? "").startsWith("own_budget");
+      both(u.variant, u.tier, u.userId, (a) => { if (own) a.blockedOwn++; else a.blockedGlobal++; });
+      continue;
+    }
     if (u.status !== "ok" && u.status !== "error") continue;
     both(u.variant, u.tier, u.userId, (a) => {
       a.questions++;
@@ -151,7 +160,7 @@ export function buildPilotStats(input: {
     return {
       variant: a.variant, tier: a.tier, userId: a.userId, name: a.userId != null ? input.names.get(a.userId) ?? null : null,
       inPilot: a.userId != null && pilot.has(a.userId),
-      questions: a.questions, blocked: a.blocked, costEur: r6(a.costEur), storageEur: r6(a.storageEur),
+      questions: a.questions, blockedOwn: a.blockedOwn, blockedGlobal: a.blockedGlobal, costEur: r6(a.costEur), storageEur: r6(a.storageEur),
       eurPerQuestion: a.questions ? r6(total / a.questions) : null,
       p50Ms: percentileOf(a.lat, 0.5), p95Ms: lat == null ? null : Math.round(lat),
       errorPct: ratio(a.errors, a.questions), maxTokensPct: ratio(a.maxTokens, a.questions), forcedFinalPct: ratio(a.forced, a.questions),
@@ -210,13 +219,13 @@ export async function getPilotStats(days: number, now: number = Date.now()): Pro
   };
   const [usage, answers, feedback, tools, caches] = await Promise.all([
     read(sql`SELECT userId, variant, tier, status, errorCode, finishReason, forcedFinal, rounds, costEur, latencyMs, inputTokens, cachedTokens, entity
-               FROM ai_usage_log WHERE feature IN (${feats}) AND createdAt >= ${since} ORDER BY id DESC LIMIT ${lim}`),
+               FROM ai_usage_log WHERE feature IN (${feats}) AND createdAt >= ${since} ORDER BY createdAt DESC, id DESC LIMIT ${lim}`),
     read(sql`SELECT m.id, m.conversationId, c.userId, m.variant, m.tier
                FROM ai_chat_messages m JOIN ai_chat_conversations c ON c.id = m.conversationId
-              WHERE m.createdAt >= ${since} AND m.role = 'assistant' AND c.channel = 'staff' ORDER BY m.id DESC LIMIT ${lim}`),
-    read(sql`SELECT messageId, rating, auto FROM assistant_feedback WHERE createdAt >= ${since} ORDER BY id DESC LIMIT ${lim}`),
+              WHERE m.createdAt >= ${since} AND m.role = 'assistant' AND c.channel = 'staff' ORDER BY m.createdAt DESC, m.id DESC LIMIT ${lim}`),
+    read(sql`SELECT messageId, rating, auto FROM assistant_feedback WHERE createdAt >= ${since} ORDER BY createdAt DESC, id DESC LIMIT ${lim}`),
     read(sql`SELECT userId, entityId, (details LIKE '%"estado":"recusada"%') AS refused
-               FROM activity_logs WHERE entity = 'assistant' AND action = 'assistant_tool' AND createdAt >= ${since} ORDER BY id DESC LIMIT ${lim}`),
+               FROM activity_logs WHERE entity = 'assistant' AND action = 'assistant_tool' AND createdAt >= ${since} ORDER BY createdAt DESC, id DESC LIMIT ${lim}`),
     read(sql`SELECT model, COUNT(*) AS live FROM ai_context_caches WHERE expiresAt > UTC_TIMESTAMP() GROUP BY model ORDER BY model`),
   ]);
   const ids = [...new Set([...usage.map((u) => numOrNull(u.userId)), ...answers.map((a) => numOrNull(a.userId)), ...tools.map((t) => numOrNull(t.userId))].filter((x): x is number => x != null))];
