@@ -13,7 +13,6 @@ import {
 import { stoppedForDisplay, stoppedHours } from "../shared/dayWorkSummary";
 import { leftoverFromShares } from "./activityHelpers";
 import { daysOfWindows, holderAtFn } from "./shiftGps";
-import { supervisorTimings } from "./db";
 import { lisbonLocalTimeUtcMs, operationalDayWindowUtc } from "../shared/shiftHandover";
 import { MAX_PLAUSIBLE_KMH, STOPPED_SPEED_KMH } from "./zelloGps";
 
@@ -32,8 +31,8 @@ describe("Resumo do dia — entregas e recolhas (as regras dos cartões)", () =>
     row("e", "CHECK_IN", "2026-10-08 12:00:00", { checkIn: null }), // sem previsão: conta, sem medida
   ];
   it("pendente→entregue e a reserva de cada entrega; nas recolhas a hora marcada já não entra", () => {
-    expect(supervisorTimings(rows as any, w)).toEqual({ deliveryTimes: [{ booking: "a", mins: 25, agent: "Rui" }] });
     const t = dayTimings(rows, w);
+    expect(t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent }))).toEqual([{ booking: "a", mins: 25, agent: "Rui" }]);
     expect(t.deliveries).toEqual([expect.objectContaining({ booking: "a", bookingCode: "MP-a", plate: "AA-00-BB", parkName: "Airpark", pendingAt: "2026-10-08 10:00:00", deliveredAt: "2026-10-08 10:25:00", mins: 25, agentUserId: "u-rui" })]);
     expect(t.unmeasured.map((u) => u.booking).sort()).toEqual(["b", "c"]);
     expect(t.pickups.map((p) => [p.booking, p.at])).toEqual([["d", "2026-10-08 08:20:00"], ["e", "2026-10-08 12:00:00"]]);

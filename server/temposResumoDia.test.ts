@@ -200,9 +200,9 @@ describe("P8 — portão dos tempos com GPS (§8.1), aplicado no servidor", () =
     const r = src("server/routers.ts");
     expect(r).toContain('getSupervisorDayDashboard(input.date, { isSuperAdmin: ctx.user.role === "super_admin" })');
     expect(r).toContain('getDriverShiftDay(input.date, input.key, Date.now(), { isSuperAdmin: ctx.user.role === "super_admin" })');
-    const db = src("server/db.ts");
-    expect(db).toContain("dayTimesView(svc.rows");
-    expect(db).toContain("teamActs(svc.rows");
+    const dash = src("server/supervisorDay.ts");
+    expect(dash).toContain("dayTimesView(svc.rows");
+    expect(dash).toContain("teamActs(svc.rows");
   });
 });
 
@@ -293,8 +293,7 @@ describe("P8 — tabela vazia: os mesmos números ao vivo", () => {
 
 describe("P8 — a hora marcada já não entra nas recolhas", () => {
   it("nem no Resumo do dia, nem no dia do condutor", () => {
-    const db = src("server/db.ts");
-    const fn = db.slice(db.indexOf("export async function getSupervisorDayDashboard"), db.indexOf("// ─── LIGAÇÃO AGENTE→PARCEIRO"));
+    const fn = src("server/supervisorDay.ts");
     expect(fn).not.toMatch(/PICKUP_LATE_MIN|delayMins|avgDelayMins|r\.checkIn\b/);
     const detail = src("server/shiftDayDetail.ts");
     expect(detail).not.toMatch(/delayMins|plannedIn/);

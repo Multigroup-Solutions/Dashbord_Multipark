@@ -235,6 +235,7 @@ export default function WeekActivityTab() {
           </p>
           {measure === "tempos" && !times?.available && <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-[10px] px-3 py-2">Ainda não há tempos guardados para esta semana: o cálculo da noite dos tempos está desligado ou ainda não correu.</p>}
           {timesHidden && <p className="text-sm font-medium text-muted-foreground flex items-center gap-1"><Lock className="w-4 h-4" />{timesHidden}: este tempo depende do GPS e ainda não se mostra.</p>}
+          {measure === "tempos" && times?.truncated && <p className="text-xs text-amber-700">Leitura cortada no limite: só os dias mais recentes da semana entram.</p>}
         </CardHeader>
         <CardContent className="space-y-3">
           {q.isLoading ? <p className="text-sm text-muted-foreground">A ler a semana…</p>
