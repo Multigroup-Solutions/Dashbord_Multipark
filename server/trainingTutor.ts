@@ -53,7 +53,7 @@ const CACHE_MIN_CHARS = 6000;
 // ─── Limites ───────────────────────────────────────────────────────────────
 
 /** Definições (ai.trainingTutorLimits) > env AI_TRAINING_TUTOR_PER_MINUTE/PER_DAY > 10/min e 100/dia. */
-export async function tutorLimits(env: Record<string, string | undefined> = process.env): Promise<Required<RateLimitRule>> {
+export async function tutorLimits(env: Record<string, string | undefined> = process.env): Promise<Required<Pick<RateLimitRule, "perMinute" | "perDay">>> {
   try {
     const { getSetting } = await import("./appSettings");
     const s = await getSetting("ai.trainingTutorLimits");
@@ -343,7 +343,10 @@ export async function explainQuiz(
   }
   const servedIds: number[] = (() => { try { return (JSON.parse(s.questionIds) as unknown[]).map(Number).filter(Number.isFinite); } catch { return []; } })();
   const served = new Set(servedIds);
-  const questions = (await store.quizQuestionsByIds(servedIds)).filter((q) => served.has(q.id));
+  // 0660: no quiz feito pela IA as perguntas são as desta tentativa.
+  type ServedQ = { id: number; question: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: string; explanation: string | null; sourceManualId: number | null; categoryId: number | null };
+  const rows: ServedQ[] = s.source === "ai" ? await store.aiQuizQuestionsOfSession(sessionId, servedIds) : await store.quizQuestionsByIds(servedIds);
+  const questions = rows.filter((q) => served.has(q.id));
   const ans = new Map(answers.filter((a) => served.has(a.questionId)).map((a) => [a.questionId, a.answer]));
   const total = questions.length;
   const wrongQs = questions.filter((q) => ans.get(q.id) !== q.correctOption).slice(0, 10);

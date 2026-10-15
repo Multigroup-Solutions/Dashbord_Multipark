@@ -38,6 +38,14 @@
  * Tempo de entrega = pedido → entregue (0 < t ≤ 240 min); tempo de recolha =
  * check-in começado → feito (0 < t ≤ 180 min). `customerCheckinEta` é um
  * número de minutos (ETA dado pelo cliente), não um instante — não entra.
+ *
+ * Tarefa 62 (fluxo A, Jorge 14 out 2026) — o que cada número É, sem mudar o
+ * cálculo (mexer obrigava a reler 6 meses): o "check-out começado" (`co_started`)
+ * é o PEDIDO do cliente (PENDING_CHECKOUT = na fila), não o condutor a pegar no
+ * carro (esse é o CHECKING_OUT = em entrega); o "tempo de entrega" junta Fila +
+ * Trânsito + espera pelo Cliente (pedido → assinatura); o "tempo de recolha" é
+ * só o do cliente ("em recolha" = CHECKING_IN → check-in feito). Os tempos
+ * separados vêm da tabela `service_times` (Fase 2).
  */
 import { type SqlParam } from "./client";
 import { ParamList } from "./read";
@@ -422,14 +430,14 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
     `  FROM jo`,
     `),`,
     `jb AS (`,
-    `  SELECT jp.at, date_trunc('hour', ${L("jp.at")}) AS hr_at,`,
+    `  SELECT jp.at, jp.ct, date_trunc('hour', ${L("jp.at")}) AS hr_at,`,
     `    CASE WHEN jp.pair_prev THEN NULL WHEN jp.pair_next THEN ${mins("jp.at", "jp.n2_at")} ELSE ${mins("jp.at", "jp.n1_at")} END AS gap,`,
     `    CASE WHEN jp.ct = 'CHECKING_OUT' AND jp.co_done >= jp.at THEN ${mins("jp.at", "jp.co_done")} END AS drive,`,
     `    CASE WHEN jp.ct = 'CHECKING_IN' THEN ${mins("ph.ci_done", "mv.mv_at")} END AS to_park`,
     `  FROM jp LEFT JOIN ph ON ph.bid = jp.bid LEFT JOIN mv ON mv.bid = jp.bid`,
     `),`,
     `jw AS (`,
-    `  SELECT jb.hr_at,`,
+    `  SELECT jb.hr_at, jb.ct,`,
     `    CASE WHEN ${okGap} THEN jb.gap END AS cycle,`,
     `    CASE WHEN ${okDrive} THEN jb.drive END AS drive,`,
     `    CASE WHEN ${okToPark} THEN jb.to_park END AS to_park${r
@@ -441,6 +449,18 @@ export function pressureDriverCtes(p: ParamList, w: PressureWindow, parkIds: str
     `),`,
     `hj AS (SELECT jw.hr_at, count(*) AS jobs FROM jw GROUP BY 1)`,
   ].join("\n");
+}
+
+/**
+ * 12 out 2026: colunas do tempo por carro de UM tipo de serviço (entregas =
+ * CHECKING_OUT, recolhas = CHECKING_IN), com o FILTER do Postgres — `cyo_*` /
+ * `cyi_*`. O par "entrega + recolha pelo meio" (26d) conta como entrega (a
+ * recolha do par não tem intervalo próprio). PURA (constantes nossas).
+ */
+export function splitCycleCols(tag: "o" | "i", ct: "CHECKING_OUT" | "CHECKING_IN"): string {
+  const f = `FILTER (WHERE jw.ct = '${ct}')`;
+  const pc = (q: number) => `percentile_cont(${q}) WITHIN GROUP (ORDER BY jw.cycle) ${f}`;
+  return [`count(jw.cycle) ${f} AS cy${tag}_n`, ...[0.5, 0.6, 0.75, 0.85, 0.9].map((q) => `${pc(q)} AS cy${tag}_p${Math.round(q * 100)}`)].join(", ");
 }
 
 /**
@@ -459,6 +479,9 @@ export function buildPressureDriverSlotsSql(w: PressureWindow, parkIds: string[]
     `dj AS (`,
     `  SELECT ${wdSql("jw.hr_at")} AS wd, ${hrSql("jw.hr_at")} AS hr,`,
     `    count(jw.cycle) AS cy_n, ${pct(0.5, "jw.cycle")} AS cy_p50, ${pct(0.6, "jw.cycle")} AS cy_p60, ${pct(0.75, "jw.cycle")} AS cy_p75, ${pct(0.85, "jw.cycle")} AS cy_p85, ${pct(0.9, "jw.cycle")} AS cy_p90,`,
+    // 12 out 2026 (Jorge): o mesmo tempo por carro, separado — entregas (serviço começado com CHECKING_OUT) e recolhas (CHECKING_IN).
+    `    ${splitCycleCols("o", "CHECKING_OUT")},`,
+    `    ${splitCycleCols("i", "CHECKING_IN")},`,
     `    count(jw.drive) AS dr_n, ${pct(0.5, "jw.drive")} AS dr_p50, ${pct(0.75, "jw.drive")} AS dr_p75, ${pct(0.9, "jw.drive")} AS dr_p90,`,
     `    count(jw.to_park) AS tp_n, ${pct(0.5, "jw.to_park")} AS tp_p50, ${pct(0.75, "jw.to_park")} AS tp_p75`,
     `  FROM jw GROUP BY 1, 2`,
@@ -470,6 +493,8 @@ export function buildPressureDriverSlotsSql(w: PressureWindow, parkIds: string[]
     `)`,
     `SELECT COALESCE(dj.wd, cr.wd) AS wd, COALESCE(dj.hr, cr.hr) AS hr,`,
     `  COALESCE(dj.cy_n, 0) AS cy_n, dj.cy_p50, dj.cy_p60, dj.cy_p75, dj.cy_p85, dj.cy_p90,`,
+    `  COALESCE(dj.cyo_n, 0) AS cyo_n, dj.cyo_p50, dj.cyo_p60, dj.cyo_p75, dj.cyo_p85, dj.cyo_p90,`,
+    `  COALESCE(dj.cyi_n, 0) AS cyi_n, dj.cyi_p50, dj.cyi_p60, dj.cyi_p75, dj.cyi_p85, dj.cyi_p90,`,
     `  COALESCE(dj.dr_n, 0) AS dr_n, dj.dr_p50, dj.dr_p75, dj.dr_p90,`,
     `  COALESCE(dj.tp_n, 0) AS tp_n, dj.tp_p50, dj.tp_p75, cr.crew_avg`,
     `FROM dj FULL OUTER JOIN cr ON cr.wd = dj.wd AND cr.hr = dj.hr`,
@@ -576,7 +601,10 @@ export function buildPressureDaySql(w: PressureWindow, r: PressureWindow, parkId
  * Lisboa): serviços começados (`jobs`), tempo por carro / na estrada / até ao
  * parque em ms (separados por vírgulas) e as pessoas que agiram nessa hora
  * (`uids`). O TL e os escalões de pessoas aplicam-se ao juntar os dias (assim
- * um TL novo ou uma tabela nova contam para a janela toda, como antes). PURA.
+ * um TL novo ou uma tabela nova contam para a janela toda, como antes).
+ * 12 out 2026: o tempo por carro também separado por tipo de serviço
+ * (`cyo` entregas, `cyi` recolhas). `r` pode ser de vários dias (a semana da
+ * Atividade diária, server/weekActivity.ts): as linhas saem por (dia, hora). PURA.
  */
 export function buildPressureDriverDaySql(w: PressureWindow, r: PressureWindow, parkIds: string[]): { sql: string; params: SqlParam[] } {
   const p = new ParamList();
@@ -588,6 +616,9 @@ export function buildPressureDriverDaySql(w: PressureWindow, r: PressureWindow, 
     `dj AS (`,
     `  SELECT to_char(jw.hr_at, 'YYYY-MM-DD') AS d, extract(hour from jw.hr_at)::int AS hr, count(*) AS jobs,`,
     `    string_agg(jw.cycle_ms::text, ',' ORDER BY jw.cycle_ms) AS cy, string_agg(jw.drive_ms::text, ',' ORDER BY jw.drive_ms) AS dr,`,
+    // 12 out 2026: o mesmo tempo por carro separado por tipo de serviço (entregas / recolhas).
+    `    string_agg(jw.cycle_ms::text, ',' ORDER BY jw.cycle_ms) FILTER (WHERE jw.ct = 'CHECKING_OUT') AS cyo,`,
+    `    string_agg(jw.cycle_ms::text, ',' ORDER BY jw.cycle_ms) FILTER (WHERE jw.ct = 'CHECKING_IN') AS cyi,`,
     `    string_agg(jw.to_park_ms::text, ',' ORDER BY jw.to_park_ms) AS tp`,
     `  FROM jw GROUP BY 1, 2`,
     `),`,
@@ -596,7 +627,7 @@ export function buildPressureDriverDaySql(w: PressureWindow, r: PressureWindow, 
     `  WHERE ha.uid IS NOT NULL AND ha.uid <> '' AND ha.at >= ${s}::timestamp AND ha.at < ${e}::timestamp`,
     `  GROUP BY 1, 2`,
     `)`,
-    `SELECT COALESCE(dj.d, ag.d) AS d, COALESCE(dj.hr, ag.hr) AS hr, COALESCE(dj.jobs, 0) AS jobs, dj.cy, dj.dr, dj.tp, ag.uids`,
+    `SELECT COALESCE(dj.d, ag.d) AS d, COALESCE(dj.hr, ag.hr) AS hr, COALESCE(dj.jobs, 0) AS jobs, dj.cy, dj.cyo, dj.cyi, dj.dr, dj.tp, ag.uids`,
     `FROM dj FULL OUTER JOIN ag ON ag.d = dj.d AND ag.hr = dj.hr`,
     `LIMIT 5000`,
   ].join("\n");
@@ -658,7 +689,9 @@ export function mapPressureLoadRow(group: string, r: Record<string, unknown>): P
 
 /** Linha da leitura 3 → campos por condutor de uma célula. PURA. */
 export function mapPressureDriverRow(r: Record<string, unknown>): ({ weekday: number; hour: number } & Required<Pick<PressureSlot,
-  "cycleN" | "cycleP50" | "cycleP60" | "cycleP75" | "cycleP85" | "cycleP90" | "driveN" | "driveP50" | "driveP75" | "driveP90" | "toParkN" | "toParkP50" | "toParkP75" | "crewAvg">>) | null {
+  "cycleN" | "cycleP50" | "cycleP60" | "cycleP75" | "cycleP85" | "cycleP90" | "driveN" | "driveP50" | "driveP75" | "driveP90" | "toParkN" | "toParkP50" | "toParkP75" | "crewAvg"
+  | "cycleOutN" | "cycleOutP50" | "cycleOutP60" | "cycleOutP75" | "cycleOutP85" | "cycleOutP90"
+  | "cycleInN" | "cycleInP50" | "cycleInP60" | "cycleInP75" | "cycleInP85" | "cycleInP90">>) | null {
   const weekday = int(r.wd);
   const hour = int(r.hr);
   if (weekday < 1 || weekday > 7 || hour < 0 || hour > 23) return null;
@@ -666,6 +699,8 @@ export function mapPressureDriverRow(r: Record<string, unknown>): ({ weekday: nu
   return {
     weekday, hour,
     cycleN: int(r.cy_n), cycleP50: r1(r.cy_p50), cycleP60: r1(r.cy_p60), cycleP75: r1(r.cy_p75), cycleP85: r1(r.cy_p85), cycleP90: r1(r.cy_p90),
+    cycleOutN: int(r.cyo_n), cycleOutP50: r1(r.cyo_p50), cycleOutP60: r1(r.cyo_p60), cycleOutP75: r1(r.cyo_p75), cycleOutP85: r1(r.cyo_p85), cycleOutP90: r1(r.cyo_p90),
+    cycleInN: int(r.cyi_n), cycleInP50: r1(r.cyi_p50), cycleInP60: r1(r.cyi_p60), cycleInP75: r1(r.cyi_p75), cycleInP85: r1(r.cyi_p85), cycleInP90: r1(r.cyi_p90),
     driveN: int(r.dr_n), driveP50: r1(r.dr_p50), driveP75: r1(r.dr_p75), driveP90: r1(r.dr_p90),
     toParkN: int(r.tp_n), toParkP50: r1(r.tp_p50), toParkP75: r1(r.tp_p75),
     crewAvg: crew == null ? null : Math.round(crew * 10) / 10,

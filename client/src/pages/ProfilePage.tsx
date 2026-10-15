@@ -14,6 +14,10 @@ import { GoogleSyncCard } from "@/components/google/GoogleSyncCard";
 import { GoogleContactsCard } from "@/components/google/GoogleContactsCard";
 import { GoogleDriveCard } from "@/components/google/GoogleDriveCard";
 import { CallPushCard } from "@/components/whatsapp/CallPushCard";
+import { PasswordCard } from "@/components/login/PasswordCard";
+import { PushAlertsCard } from "@/components/login/PushAlertsCard";
+import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
+import { useCodeLoginOption } from "@/lib/loginOptions";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { NOTIFICATION_GROUP_LABELS, NOTIFICATION_KIND_DEFS, type NotificationGroup } from "@shared/notificationRouting";
@@ -36,6 +40,8 @@ export default function ProfilePage() {
   });
 
   const { data: cityAccess } = trpc.permissions.myCityAccess.useQuery();
+  // Plano 56: palavra-passe e "Ativar avisos" só com "Entrar com email e código" ligado.
+  const { codeLogin } = useCodeLoginOption();
   const { data: myPda } = trpc.operational.pdas.mine.useQuery(undefined, { staleTime: 60_000 });
 
   const initials = (user?.name ?? "?")
@@ -123,6 +129,8 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+      {/* Este telemóvel: registar o PRÓPRIO telemóvel como pessoal (num PDA não aparece) */}
+      <PersonalDeviceCard />
       {/* Atalhos */}
       <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
         {rows.map((r, i) => (
@@ -141,6 +149,11 @@ export default function ProfilePage() {
           </button>
         ))}
       </div>
+
+      {codeLogin && user && <PasswordCard name={user.name ?? null} email={user.email ?? null} />}
+
+      {/* TL e supervisor recebem aqui os códigos de entrada de quem os pede. */}
+      {codeLogin && user && roleRank(user.role) >= roleRank("team_leader") && <PushAlertsCard />}
 
       <GoogleAccountCard returnTo="/perfil" />
 

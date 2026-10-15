@@ -32,18 +32,19 @@ describe("Críticas sem a ligação Google nem Condutores/Agentes", () => {
 });
 
 describe("Pessoas → Condutores e agentes", () => {
-  it("página nova com os dois separadores, rota e entrada no menu Pessoas (mesmo acesso: Críticas)", () => {
+  it("página com os separadores, rota e entrada no menu Pessoas (14 out 2026: módulo próprio condutores_agentes)", () => {
     const p = src("client/src/pages/CondutoresAgentesPage.tsx");
     expect(p).toMatch(/export default function CondutoresAgentesPage/);
-    expect(p).toMatch(/<TabsTrigger value="drivers">/);
-    expect(p).toMatch(/<TabsTrigger value="agents">/);
+    expect(p).toMatch(/has\("drivers"\) && <TabsTrigger value="drivers">/);
+    expect(p).toMatch(/has\("agents"\) && <TabsTrigger value="agents">/);
     expect(p).toMatch(/function CheckoutDriversPanel\(\)/);
     expect(p).toMatch(/function AgentPerformancePanel\(/); // 41a: aceita a ficha vinda do URL
-    expect(p).toMatch(/can\(user as any, "criticas", "view"\)/);
+    expect(p).toMatch(/condutoresTabs\(user as any\)/);
+    expect(p).not.toMatch(/"criticas"/);
     expect(src("client/src/App.tsx")).toMatch(/<Route path="\/pessoas\/condutores-agentes">\s*\{\(\) => \(<DashboardLayout><CondutoresAgentesPage \/><\/DashboardLayout>\)\}/);
     const layout = src("client/src/components/DashboardLayout.tsx");
     const pessoas = layout.slice(layout.indexOf('label: "Pessoas"'), layout.indexOf('label: "Operações"'));
-    expect(pessoas).toMatch(/\{ icon: Car, label: "Condutores e agentes", path: "\/pessoas\/condutores-agentes", module: "criticas" \}/);
+    expect(pessoas).toMatch(/\{ icon: Car, label: "Condutores e agentes", path: "\/pessoas\/condutores-agentes", module: "condutores_agentes" \}/);
     expect(src("docs/ajuda/condutores-agentes.md")).toMatch(/rotas: \/pessoas\/condutores-agentes/);
   });
 });

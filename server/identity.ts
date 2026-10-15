@@ -17,6 +17,7 @@
  */
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { isPlausibleEmail, normalizeEmail } from "../shared/email";
+import { isPlaceholderAccount } from "../shared/loginCode";
 import { normalizePhoneForStorage } from "../shared/phone";
 import { getDb, logActivity } from "./db";
 import { driverApplications, employees, users } from "../drizzle/schema";
@@ -44,14 +45,18 @@ export interface ResolvedEmployee {
   userId: number | null;
 }
 
-/** Uma conta de login criada à mão pelo admin ainda não usada para entrar. */
-export function isPlaceholderLogin(user: Pick<ResolvedUser, "openId" | "loginMethod">): boolean {
-  // Uma conta já fundida noutra mantém o openId `manual_...` (nunca é apagada,
-  // os activity_logs referenciam-na), mas NÃO é placeholder: se voltasse a
-  // sê-lo, cada login repetiria o merge e copiaria o seu isActive=0 para a
-  // conta real, desativando-a a cada entrada.
-  if ((user.loginMethod ?? "").startsWith("merged_into_")) return false;
-  return user.openId.startsWith("manual_") || user.loginMethod === "manual";
+/**
+ * Uma conta de login criada à mão pelo admin ainda não usada para entrar.
+ * Regra em shared/loginCode.ts (isPlaceholderAccount):
+ *  - uma conta já fundida noutra mantém o openId `manual_...` (nunca é
+ *    apagada, os activity_logs referenciam-na), mas NÃO é placeholder: se
+ *    voltasse a sê-lo, cada login repetiria o merge e copiaria o seu
+ *    isActive=0 para a conta real, desativando-a a cada entrada;
+ *  - plano 56: quem já entrou com código (`email_…`), tem palavra-passe ou
+ *    está ligado a uma Google (googleSub) também não é.
+ */
+export function isPlaceholderLogin(user: Pick<ResolvedUser, "openId" | "loginMethod"> & { googleSub?: string | null; hasPassword?: boolean | number | null }): boolean {
+  return isPlaceholderAccount(user);
 }
 
 /**

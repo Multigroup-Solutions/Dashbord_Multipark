@@ -38,6 +38,9 @@ export interface UserRow {
   isActive: number;
   loginMethod: string | null;
   lastSignedIn: string | null;
+  /** 0620 (plano 56): conta Google ligada (sub) e se tem palavra-passe (o hash nunca sai da BD). */
+  googleSub?: string | null;
+  hasPassword?: boolean;
 }
 
 export interface EmployeeRow {
@@ -73,9 +76,17 @@ export interface IdentitySnapshot {
 }
 
 export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
-  const [u] = (await db.execute(sql`
-    SELECT id, openId, name, email, role, isActive, loginMethod, lastSignedIn
-    FROM users ORDER BY id`)) as any;
+  // googleSub/palavra-passe só existem a partir da migração 0620 — tolerante a BD antiga.
+  let u: any;
+  try {
+    [u] = (await db.execute(sql`
+      SELECT id, openId, name, email, role, isActive, loginMethod, lastSignedIn, googleSub, (passwordHash IS NOT NULL) AS hasPassword
+      FROM users ORDER BY id`)) as any;
+  } catch {
+    [u] = (await db.execute(sql`
+      SELECT id, openId, name, email, role, isActive, loginMethod, lastSignedIn, NULL AS googleSub, 0 AS hasPassword
+      FROM users ORDER BY id`)) as any;
+  }
   // personalEmail só existe a partir da migração 0067 — tolerante a BD antiga.
   let e: any;
   try {
@@ -102,6 +113,8 @@ export async function loadIdentitySnapshot(db: Db): Promise<IdentitySnapshot> {
     isActive: Number(r.isActive),
     loginMethod: str(r.loginMethod),
     lastSignedIn: str(r.lastSignedIn),
+    googleSub: str(r.googleSub),
+    hasPassword: Number(r.hasPassword ?? 0) === 1,
   }));
   const employees = (e as any[]).map((r) => ({
     id: Number(r.id),
@@ -476,13 +489,21 @@ export function buildIdentityAudit(snap: IdentitySnapshot): IdentityAudit {
   };
 }
 
-/** Entre vários utilizadores com o mesmo email: ativo > login Google > id mais baixo. */
+/**
+ * A conta já serviu para entrar (não é só um registo do backoffice): Google
+ * (openId ou googleSub), código (`email_…`) ou palavra-passe (plano 56).
+ */
+export function hasOwnLogin(u: Pick<UserRow, "openId" | "googleSub" | "hasPassword">): boolean {
+  return u.openId.startsWith("google_") || !!u.googleSub || u.openId.startsWith("email_") || !!u.hasPassword;
+}
+
+/** Entre vários utilizadores com o mesmo email: ativo > já entrou (Google, código, palavra-passe) > id mais baixo. */
 export function pickUser(rows: UserRow[]): UserRow | null {
   if (!rows.length) return null;
   return [...rows].sort((a, b) => {
     if (a.isActive !== b.isActive) return b.isActive - a.isActive;
-    const ga = a.openId.startsWith("google_") ? 1 : 0;
-    const gb = b.openId.startsWith("google_") ? 1 : 0;
+    const ga = hasOwnLogin(a) ? 1 : 0;
+    const gb = hasOwnLogin(b) ? 1 : 0;
     if (ga !== gb) return gb - ga;
     return a.id - b.id;
   })[0];
@@ -655,13 +676,20 @@ export function planReconcile(snap: IdentitySnapshot, audit: IdentityAudit, opts
     });
   }
 
-  // 3. Utilizadores duplicados → fica um (ativo > Google > id mais baixo).
+  // 3. Utilizadores duplicados → fica um (ativo > já entrou > id mais baixo).
   for (const g of audit.duplicateUsers) {
     const keep = pickUser(g.rows)!;
     const remove = g.rows.filter((u) => u.id !== keep.id);
-    const googleLosers = remove.filter((u) => u.openId.startsWith("google_") && u.isActive === 1);
-    if (googleLosers.length && keep.openId.startsWith("google_")) {
-      plan.skipped.push({ what: "merge_users", ref: g.email, reason: `duas contas Google ATIVAS (#${keep.id}, #${googleLosers.map((u) => u.id).join(",")}) — decidir à mão qual fica` });
+    const loginLosers = remove.filter((u) => hasOwnLogin(u) && u.isActive === 1);
+    if (loginLosers.length && hasOwnLogin(keep)) {
+      const what = [keep, ...loginLosers].every((u) => u.openId.startsWith("google_")) ? "duas contas Google ATIVAS" : "duas contas ATIVAS com entrada própria (Google, código ou palavra-passe)";
+      plan.skipped.push({ what: "merge_users", ref: g.email, reason: `${what} (#${keep.id}, #${loginLosers.map((u) => u.id).join(",")}) — decidir à mão qual fica` });
+      continue;
+    }
+    // Plano 56: as duas ligadas a uma Google (googleSub) → nunca se junta sozinho.
+    const subLosers = remove.filter((u) => !!u.googleSub);
+    if (keep.googleSub && subLosers.length) {
+      plan.skipped.push({ what: "merge_users", ref: g.email, reason: `as duas contas estão ligadas a uma Google (#${keep.id}, #${subLosers.map((u) => u.id).join(",")}) — decidir à mão qual fica` });
       continue;
     }
     plan.mergeUsers.push({ email: g.email, keepUserId: keep.id, removeUserIds: remove.map((u) => u.id) });
@@ -741,6 +769,14 @@ export async function applyReconcile(db: Db, plan: ReconcilePlan): Promise<Apply
     for (const loser of m.removeUserIds) {
       try {
         await db.execute(sql`UPDATE employees SET userId = ${m.keepUserId} WHERE userId = ${loser}`);
+        // Plano 56: a palavra-passe passa para a conta que fica (se esta ainda não tiver).
+        try {
+          const [pw] = (await db.execute(sql`SELECT passwordHash, passwordSetAt FROM users WHERE id = ${loser} AND passwordHash IS NOT NULL LIMIT 1`)) as any;
+          const row = (pw as any[])?.[0];
+          if (row?.passwordHash) {
+            await db.execute(sql`UPDATE users SET passwordHash = ${row.passwordHash}, passwordSetAt = ${row.passwordSetAt ?? null} WHERE id = ${m.keepUserId} AND passwordHash IS NULL`);
+          }
+        } catch { /* coluna ainda por criar */ }
         for (const [table, column] of USER_REF_COLUMNS) {
           try {
             await db.execute(sql.raw(`UPDATE \`${table}\` SET \`${column}\` = ${Number(m.keepUserId)} WHERE \`${column}\` = ${Number(loser)}`));

@@ -138,15 +138,41 @@ export function isCompanyAddress(address: string | null | undefined, domains: Re
   return d === "multigroup.pt";
 }
 
-/** Remetentes automáticos (não pedem resposta). PURA. */
-export function isAutomatedSender(address: string | null | undefined, headers: { autoSubmitted?: string | null; precedence?: string | null } = {}): boolean {
+/**
+ * Remetentes automáticos (não pedem resposta): endereços de no-reply, respostas
+ * automáticas (Auto-Submitted), envios em massa (Precedence bulk/list/junk;
+ * 14 out 2026: List-Unsubscribe / List-Id — as newsletters). Uma lista de um
+ * domínio NOSSO (um Grupo Google da empresa que distribui o info@ ou a
+ * reclamacoes@) não conta: é o cliente a escrever (`ownListDomains`). PURA.
+ */
+export function isAutomatedSender(
+  address: string | null | undefined,
+  headers: { autoSubmitted?: string | null; precedence?: string | null; listUnsubscribe?: string | null; listId?: string | null } = {},
+  opts: { ownListDomains?: readonly string[] } = {},
+): boolean {
   const a = normalizeAddress(address);
   if (/^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|notifications?|bounce[s]?)[+@._-]/.test(a)) return true;
   if (/(^|\.)(noreply|no-reply)\./.test(domainOf(a))) return true;
   const auto = String(headers.autoSubmitted ?? "").toLowerCase();
   if (auto && auto !== "no") return true;
+  if (isOwnListId(headers.listId, opts.ownListDomains)) return false;
   const prec = String(headers.precedence ?? "").toLowerCase();
-  return prec === "bulk" || prec === "list" || prec === "junk";
+  if (prec === "bulk" || prec === "list" || prec === "junk") return true;
+  return !!String(headers.listUnsubscribe ?? "").trim() || !!String(headers.listId ?? "").trim();
+}
+
+/**
+ * O List-Id é de uma lista NOSSA? (Grupos Google: "<info.multipark.pt>" ou
+ * "Info <info.multipark.pt>"). PURA.
+ */
+export function isOwnListId(listId: string | null | undefined, ownDomains: readonly string[] | null | undefined): boolean {
+  const id = String(listId ?? "").toLowerCase();
+  const inner = /<([^>]+)>/.exec(id)?.[1] ?? id.trim();
+  if (!inner || !ownDomains?.length) return false;
+  return ownDomains.some((d) => {
+    const dom = String(d ?? "").trim().toLowerCase();
+    return !!dom && (inner === dom || inner.endsWith(`.${dom}`));
+  });
 }
 
 // ─── Notificações automáticas de reserva (decisão do dono, 26 set 2026) ────
@@ -168,6 +194,11 @@ export const MAIL_AUTOMATED_RESERVATION = 2;
  */
 export const MAIL_AUTOMATED_SYSTEM = 3;
 export const SYSTEM_MAIL_HEADER = "X-Multipark-System";
+/**
+ * Plano 56 (A2): o email com o código de entrada (pela acesso@) leva este
+ * cabeçalho e a sincronização SALTA-O (nunca fica guardado: tem o código).
+ */
+export const LOGIN_MAIL_HEADER = "X-Multipark-Login";
 /** Valores de mail_messages.automated que tornam a conversa "automática" (escondida por omissão). */
 export const MAIL_HIDDEN_AUTOMATED_VALUES: readonly number[] = [MAIL_AUTOMATED_RESERVATION, MAIL_AUTOMATED_SYSTEM];
 
@@ -645,17 +676,18 @@ export function classifyMessage(
   };
 }
 
-/** A mensagem entra no pipeline antigo (ocorrências por assunto, como o IMAP fazia)? PURA. */
+/**
+ * O pipeline da caixa. 14 out 2026: já não há "ocorrência no assunto → pipeline
+ * das ocorrências" (era uma palavra a decidir a categoria): os avisos de
+ * ocorrência da app reconhecem-se pelo formulário e os relatos de pessoas pela
+ * IA (shared/mailTriage.ts). Os parâmetros antigos ficam por compatibilidade. PURA.
+ */
 export function pipelineFor(
   mailbox: Pick<MailboxConfig, "pipeline"> | null | undefined,
-  subject: string | null | undefined,
-  accountPipelines: readonly MailPipeline[] = [],
+  _subject?: string | null | undefined,
+  _accountPipelines: readonly MailPipeline[] = [],
 ): MailPipeline | null {
-  if (mailbox?.pipeline) return mailbox.pipeline;
-  // O IMAP apanhava também reencaminhamentos para a caixa principal com
-  // "ocorrência" no assunto (enquanto o alias próprio não existia).
-  if (accountPipelines.includes("ocorrencias") && /ocorr[eê]ncias?/i.test(String(subject ?? ""))) return "ocorrencias";
-  return null;
+  return mailbox?.pipeline ?? null;
 }
 
 /**
@@ -856,7 +888,29 @@ export function checkSendAs(from: string | null | undefined, account: string, li
 
 export const MAIL_THREAD_STATUSES = ["aberto", "pendente", "resolvido"] as const;
 export type MailThreadStatus = (typeof MAIL_THREAD_STATUSES)[number];
-export const MAIL_THREAD_STATUS_LABELS: Record<MailThreadStatus, string> = { aberto: "Aberta", pendente: "Pendente", resolvido: "Resolvida" };
+// 14 out 2026 (Jorge: "Abertas" lia-se como "já abertas/lidas"): "aberto" mostra-se "Por tratar" (o valor não muda).
+export const MAIL_THREAD_STATUS_LABELS: Record<MailThreadStatus, string> = { aberto: "Por tratar", pendente: "Pendente", resolvido: "Resolvida" };
+/** Os mesmos estados no plural, para os filtros. */
+export const MAIL_THREAD_STATUS_FILTER_LABELS: Record<MailThreadStatus, string> = { aberto: "Por tratar", pendente: "Pendentes", resolvido: "Resolvidas" };
+
+// ─── Lista de conversas: vista principal (14 out 2026) ──────────────────────
+// Jorge: "está um bocado confuso" — as caixas partilhadas abriam em "Abertas"
+// (estado de trabalho) e isso lia-se como "já lidas". Agora há uma escolha
+// principal (Não lidas · Por responder · Todas) e o resto vai para "Filtros".
+export const MAIL_LIST_VIEWS = ["unread", "awaiting", "all"] as const;
+export type MailListView = (typeof MAIL_LIST_VIEWS)[number];
+export const MAIL_LIST_VIEW_LABELS: Record<MailListView, string> = { unread: "Não lidas", awaiting: "Por responder", all: "Todas" };
+
+/** Vista com que a lista abre: caixas partilhadas → Não lidas; O meu email e a pesquisa global (?q=) → Todas. PURA. */
+export function mailInitialView(o: { personal: boolean; search?: string | null }): MailListView {
+  return o.personal || String(o.search ?? "").trim() ? "all" : "unread";
+}
+
+/** Quantos filtros secundários (dentro de "Filtros") estão ativos — o número no botão. PURA. */
+export function mailActiveFilterCount(f: { status: string; assigned: string; brand: string; showAutomatic: boolean; archived: boolean; personal: boolean }): number {
+  return (f.status !== "all" ? 1 : 0) + (!f.personal && f.assigned !== "all" ? 1 : 0) + (f.brand !== "all" ? 1 : 0)
+    + (f.showAutomatic ? 1 : 0) + (f.archived ? 1 : 0);
+}
 
 export const MAIL_DEFAULT_SLA_HOURS = 24;
 export const MAIL_DEFAULT_RETENTION_YEARS = 5;
@@ -878,14 +932,20 @@ export function retentionCutoff(years: number, now: Date = new Date()): string {
 
 // ─── Ligações (mensagem/conversa ↔ registo) ─────────────────────────────────
 
-export const MAIL_LINK_TYPES = ["client", "booking", "complaint", "lost_found", "incident"] as const;
+/**
+ * "incident" = ocorrência ANTIGA do dashboard (id numérico, só leitura — 16a);
+ * "occurrence" (14 out 2026) = ocorrência da app Multipark (id da BD deles),
+ * ligada sozinha a partir do aviso por email da app.
+ */
+export const MAIL_LINK_TYPES = ["client", "booking", "complaint", "lost_found", "incident", "occurrence"] as const;
 export type MailLinkType = (typeof MAIL_LINK_TYPES)[number];
 export const MAIL_LINK_LABELS: Record<MailLinkType, string> = {
   client: "Cliente",
   booking: "Reserva",
   complaint: "Reclamação",
   lost_found: "Perdidos e Achados",
-  incident: "Ocorrência",
+  incident: "Ocorrência (antiga)",
+  occurrence: "Ocorrência",
 };
 /** Módulo que dá acesso à timeline de cada tipo de registo. */
 export const MAIL_LINK_MODULE: Record<MailLinkType, ModuleId> = {
@@ -894,13 +954,15 @@ export const MAIL_LINK_MODULE: Record<MailLinkType, ModuleId> = {
   complaint: "reclamacoes",
   lost_found: "perdidos",
   incident: "ocorrencias",
+  occurrence: "ocorrencias",
 };
 
-/** Id canónico do registo ligado (email em minúsculas; números como texto). PURA. */
+/** Id canónico do registo ligado (email em minúsculas; números como texto; ids da Multipark como vêm). PURA. */
 export function normalizeLinkEntityId(type: MailLinkType, id: string | number): string {
   const s = String(id ?? "").trim();
   if (type === "client") return normalizeAddress(s);
   if (type === "booking") return s.slice(0, 100);
+  if (type === "occurrence") return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : "";
   return /^\d+$/.test(s) ? String(Number(s)) : "";
 }
 

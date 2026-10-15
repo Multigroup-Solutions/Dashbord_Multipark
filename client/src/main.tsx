@@ -6,9 +6,19 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { currentPath, getLoginUrl } from "./const";
+import { isPdaSessionEnding } from "./lib/pdaSessionEnd";
+import { getPdaToken } from "./lib/pdaDevice";
+import { codeLoginCached } from "./lib/loginOptions";
 import "./index.css";
 
 const queryClient = new QueryClient();
+
+// Plano 56 (A2): num PDA (aparelho partilhado, com a entrada com código), o
+// "voltar" do browser nunca mostra a página guardada de quem já saiu — volta a
+// carregar e a sessão é verificada outra vez.
+if (typeof window !== "undefined" && getPdaToken() && codeLoginCached()) {
+  window.addEventListener("pageshow", (e) => { if ((e as PageTransitionEvent).persisted) window.location.reload(); });
+}
 
 // 20d: versão nova publicada com a app aberta — um pedaço antigo já não existe.
 // Recarrega UMA vez (senão o ErrorBoundary mostra "Há uma versão nova").
@@ -33,8 +43,12 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   // 20d: acabou de ser recusada a entrada (?auth=denied) — mandar para a
   // Google outra vez fazia um ciclo (recusado → entrada → 401 → Google…).
   if (new URLSearchParams(window.location.search).get(AUTH_DENIED_PARAM) === AUTH_DENIED_VALUE) return;
+  // Plano 56 (A2): a saída do ponto acabou a sessão do PDA — o resumo fica no
+  // ecrã 10 s e depois vai à página de entrada (não salta já).
+  if (isPdaSessionEnding()) return;
 
-  // a sessão caiu: entra e volta à página onde estavas
+  // a sessão caiu: entra e volta à página onde estavas (com "Entrar com email
+  // e código" ligado vai à página de entrada; senão à Google, como sempre)
   window.location.href = getLoginUrl(currentPath());
 };
 

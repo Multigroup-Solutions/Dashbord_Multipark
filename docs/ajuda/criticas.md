@@ -13,6 +13,7 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 - **Pela Windsor** (quando a conta Google não está ligada diretamente): os mesmos perfis e avaliações chegam pela Windsor e entram aqui da mesma maneira (1–3★ → Reclamação). Interruptor **Críticas: importar do Google Business pela Windsor** (Definições → Automações; vem desligado). A 1.ª vez traz até 3 anos; depois os últimos 60 dias.
 - **Por email** (criticas@): o parque vem do título do perfil Google no email. Sem correspondência exata não se adivinha o parque (ver **Parque, marca ou lixo**).
 - Entram **sozinhas** por estes caminhos: no topo já não há "Sincronizar Gmail" nem "Importar Review" (não faziam nada).
+- Os **avisos de avaliação que chegam a outras caixas** (info@, reservas@…) e os elogios de clientes por email **não criam** críticas aqui (já entram pelos caminhos acima). Com o interruptor **"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas"** (desligado por omissão) vão para a caixa **Críticas** da Comunicação e ficam **lidos**. Uma opinião negativa de um cliente que quer resposta é tratada como **reclamação**.
 
 **Parque, marca ou lixo** (já não há "Sem parque")
 - Cada crítica fica no **parque** dela.

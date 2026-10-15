@@ -2,15 +2,41 @@
  * P3 lote 29e — orçamentos do Google Ads pela regra (shared/marketingBudgetRule.ts):
  * lê a faturação do mês anterior (reservas concluídas, ao vivo da Multipark,
  * sem IVA, sem as do Marketplace) por marca/cidade e o que ficou ao
- * Marketplace por cidade. Guarda 10 min em memória por mês. Nunca grava nada.
+ * Marketplace por cidade (a cidade reconhecida do parque; os sem cidade vêm
+ * à parte, com aviso). Guarda 10 min em memória por mês. Nunca grava nada.
  */
 import { buildRuleBudgets, previousMonth, type RuleBudgetRow } from "../shared/marketingBudgetRule";
 import { MARKETPLACE_CAMPAIGN } from "../shared/marketplace";
+import { CITY_LABELS, type CityKey } from "../shared/city";
 
 const CACHE_MS = 10 * 60_000;
 const cache = new Map<string, { at: number; value: RuleBudgetResult }>();
 
-export type RuleBudgetResult = { ok: true; month: string; baseMonth: string; rows: RuleBudgetRow[] } | { ok: false; month: string; baseMonth: string; reason: string };
+/** O que ficou ao Marketplace em parques sem cidade reconhecida (não dá orçamento a nenhuma cidade — aviso). */
+export interface MarketplaceWithoutCity { base: number; parks: string[] }
+export type RuleBudgetResult = { ok: true; month: string; baseMonth: string; rows: RuleBudgetRow[]; marketplaceWithoutCity?: MarketplaceWithoutCity } | { ok: false; month: string; baseMonth: string; reason: string };
+
+/**
+ * O que ficou ao Marketplace (comissões) → por cidade, pela cidade RECONHECIDA
+ * do parque (resolveParkCity: cidade, terra à volta — "Prior Velho", "Maia" —,
+ * nome, morada). Antes, a cidade gravada tinha de ser "Lisboa"/"Porto"/"Faro"
+ * e o resto ficava fora sem aviso (8 out 2026). PURA.
+ */
+export function marketplaceBaseByCity(rows: ReadonlyArray<{ parkName: string; cityKey: CityKey | null; commission: number | null }>): { byCity: Map<string, number>; withoutCity: MarketplaceWithoutCity } {
+  const byCity = new Map<string, number>();
+  const withoutCity: MarketplaceWithoutCity = { base: 0, parks: [] };
+  for (const m of rows) {
+    if (m.commission == null || !(m.commission > 0)) continue;
+    if (!m.cityKey) {
+      withoutCity.base = Math.round((withoutCity.base + m.commission) * 100) / 100;
+      if (!withoutCity.parks.includes(m.parkName)) withoutCity.parks.push(m.parkName);
+      continue;
+    }
+    const name = CITY_LABELS[m.cityKey];
+    byCity.set(name, (byCity.get(name) ?? 0) + m.commission);
+  }
+  return { byCity, withoutCity };
+}
 
 function monthRange(month: string): { from: string; to: string } {
   const [y, m] = month.split("-").map(Number);
@@ -48,12 +74,8 @@ export async function computeRuleBudgets(month: string): Promise<RuleBudgetResul
     }
     const billing = await readPartnerBillingLive({ start: range.start, end: range.end });
     if (!billing.available) throw new Error(billing.reason);
-    const marketplaceByCity = new Map<string, number>();
-    for (const m of billing.data.marketplace) {
-      if (!m.city || m.commission == null) continue;
-      marketplaceByCity.set(m.city, (marketplaceByCity.get(m.city) ?? 0) + m.commission);
-    }
-    value = { ok: true, month, baseMonth, rows: buildRuleBudgets({ nodes: projects, revenueByBrandNode, marketplaceByCity }) };
+    const { byCity: marketplaceByCity, withoutCity } = marketplaceBaseByCity(billing.data.marketplace);
+    value = { ok: true, month, baseMonth, rows: buildRuleBudgets({ nodes: projects, revenueByBrandNode, marketplaceByCity }), ...(withoutCity.base > 0 ? { marketplaceWithoutCity: withoutCity } : {}) };
   } catch (e: any) {
     value = { ok: false, month, baseMonth, reason: String(e?.message ?? e).slice(0, 200) };
   }

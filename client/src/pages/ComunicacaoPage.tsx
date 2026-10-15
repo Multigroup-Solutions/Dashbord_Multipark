@@ -15,12 +15,15 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useSidebar } from "@/components/ui/sidebar";
 import { toast } from "sonner";
-import { AlarmClock, Archive, Bot, Inbox, Loader2, Mail, PenSquare, RefreshCw, Search, Star, UserRound } from "lucide-react";
+import { AlarmClock, Archive, Bot, Inbox, Loader2, Mail, MailOpen, PenSquare, RefreshCw, Search, SlidersHorizontal, Star, UserRound, X } from "lucide-react";
 import {
-  MAIL_BRAND_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, MAIL_TRIAGE_KEY, MAIL_TRIAGE_LABEL, isMailBrand, isMailOverdue, pickInitialMailbox, type MailThreadStatus,
+  MAIL_BRAND_LABELS, MAIL_LIST_VIEW_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_FILTER_LABELS, MAIL_THREAD_STATUS_LABELS, MAIL_TRIAGE_KEY, MAIL_TRIAGE_LABEL,
+  isMailBrand, isMailOverdue, mailActiveFilterCount, mailInitialView, pickInitialMailbox, type MailListView, type MailThreadStatus,
 } from "@shared/mail";
 import { GoogleAccountCard, useGoogleOAuthReturnToast } from "@/components/GoogleAccountCard";
 import { MailThreadView } from "@/components/mail/MailThreadView";
@@ -30,6 +33,12 @@ import { QueryErrorNote } from "@/components/QueryErrorNote";
 
 const POLL_MS = 60_000;
 const ME = "me";
+const VIEW_ORDER: readonly MailListView[] = ["unread", "awaiting", "all"];
+const VIEW_HINTS: Record<MailListView, string> = {
+  unread: "Conversas com emails ainda por abrir.",
+  awaiting: "O cliente escreveu e ainda ninguém respondeu (sem as resolvidas).",
+  all: "Todas as conversas da caixa, lidas ou não.",
+};
 
 export default function ComunicacaoPage({ personal = false }: { personal?: boolean }) {
   const isMobile = useIsMobile();
@@ -65,11 +74,14 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   const [ownerUserId, setOwnerUserId] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(() => Number(params.get("t")) || null);
   const [brand, setBrand] = useState("all");
-  // ?q= (pesquisa global → "ver todos"): pesquisa já escrita e todos os estados.
-  const [status, setStatus] = useState<MailThreadStatus | "all">(personal || params.get("q") ? "all" : "aberto");
+  // 14 out 2026 (Jorge: "está um bocado confuso"): as caixas partilhadas abrem em "Não lidas";
+  // O meu email e a pesquisa global (?q= → "ver todos") abrem em "Todas". O estado de trabalho
+  // (Por tratar/Pendente/Resolvida) passou para "Filtros" e começa em todos.
+  const [view, setView] = useState<MailListView>(() => mailInitialView({ personal, search: params.get("q") }));
+  const [status, setStatus] = useState<MailThreadStatus | "all">("all");
   const [assigned, setAssigned] = useState<"all" | "me" | "none">("all");
-  const [awaiting, setAwaiting] = useState(false);
-  const [unread, setUnread] = useState(false);
+  const awaiting = view === "awaiting";
+  const unread = view === "unread";
   // Notificações automáticas de reserva: escondidas por omissão (a pesquisa encontra-as sempre).
   const [showAutomatic, setShowAutomatic] = useState(false);
   // Arquivo da retenção (+5 anos, sem ligação): só o super admin, a pedido.
@@ -85,9 +97,12 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   // Trocar de caixa: um clique na lista da esquerda (o "O meu email" tem a rota dele).
   const selectBox = (key: string) => {
     setSelected(null);
-    if (key === ME) { setStatus("all"); navigate("/comunicacao/meu-email"); }
-    else { if (isMe) setStatus("aberto"); navigate(`/comunicacao?caixa=${encodeURIComponent(key)}`); }
+    if (key === ME) { setView("all"); setStatus("all"); navigate("/comunicacao/meu-email"); }
+    else { if (isMe) setView("unread"); navigate(`/comunicacao?caixa=${encodeURIComponent(key)}`); }
   };
+  // Arquivo (+5 anos): emails antigos e já lidos — ao ligá-lo mostra-se tudo.
+  const toggleArchived = () => { setArchived((x) => !x); if (!archived) { setStatus("all"); setView("all"); } };
+  const clearFilters = () => { setStatus("all"); setAssigned("all"); setBrand("all"); setShowAutomatic(false); setArchived(false); };
   const setHome = trpc.mail.setHomeBox.useMutation({
     onSuccess: (r) => { toast.success(r.key ? "É por esta caixa que entras na Comunicação." : "Caixa inicial automática."); utils.mail.overview.invalidate(); },
     onError: (e) => toast.error(e.message),
@@ -211,6 +226,83 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     </nav>
   );
 
+  // ── Filtros (14 out 2026): a escolha principal fica à vista; o resto num só botão ──
+  const brandOptions = (current?.brands ?? []).filter(isMailBrand);
+  const viewCounts: Record<MailListView, number> = {
+    unread: isMe ? (ownerUserId == null ? overview.data?.personalUnread ?? 0 : 0) : current?.unread ?? 0,
+    awaiting: isMe ? 0 : current?.awaiting ?? 0,
+    all: 0,
+  };
+  const activeFilters = mailActiveFilterCount({ status, assigned, brand, showAutomatic, archived, personal: isMe });
+  const activeChips: Array<{ key: string; label: string; clear: () => void }> = [
+    ...(status !== "all" ? [{ key: "status", label: MAIL_THREAD_STATUS_FILTER_LABELS[status], clear: () => setStatus("all") }] : []),
+    ...(!isMe && assigned !== "all" ? [{ key: "assigned", label: assigned === "me" ? "Atribuídas a mim" : "Sem responsável", clear: () => setAssigned("all") }] : []),
+    ...(brand !== "all" && isMailBrand(brand) ? [{ key: "brand", label: MAIL_BRAND_LABELS[brand], clear: () => setBrand("all") }] : []),
+    ...(showAutomatic ? [{ key: "auto", label: "Com automáticos", clear: () => setShowAutomatic(false) }] : []),
+    ...(archived ? [{ key: "archived", label: "Arquivo (+5 anos)", clear: () => setArchived(false) }] : []),
+  ];
+  const filtersButton = (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant={activeFilters ? "selected" : "outline"} className="h-9 shrink-0 gap-1 px-2 text-xs" aria-label={activeFilters ? `Filtros (${activeFilters} ativos)` : "Filtros"}>
+          <SlidersHorizontal className="h-3.5 w-3.5" />Filtros
+          {activeFilters > 0 && <span className="rounded-full bg-background/90 px-1.5 text-[10.5px] font-bold tabular-nums text-primary">{activeFilters}</span>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 space-y-3 p-3">
+        <div className="space-y-1">
+          <div className="text-xs font-medium">Estado da conversa</div>
+          <Select value={status} onValueChange={(v) => setStatus(v as MailThreadStatus | "all")}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os estados</SelectItem>
+              {MAIL_THREAD_STATUSES.map((s) => <SelectItem key={s} value={s}>{MAIL_THREAD_STATUS_FILTER_LABELS[s]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p className="text-[11px] leading-snug text-muted-foreground">É o trabalho da equipa, não se foi lida: <b>{MAIL_THREAD_STATUS_LABELS.aberto}</b> (ainda há o que fazer), <b>{MAIL_THREAD_STATUS_LABELS.pendente}</b> (à espera de alguém), <b>{MAIL_THREAD_STATUS_LABELS.resolvido}</b>.</p>
+        </div>
+        {!isMe && (
+          <div className="space-y-1">
+            <div className="text-xs font-medium">Responsável</div>
+            <Select value={assigned} onValueChange={(v) => setAssigned(v as "all" | "me" | "none")}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Qualquer responsável</SelectItem>
+                <SelectItem value="me">Atribuídas a mim</SelectItem>
+                <SelectItem value="none">Sem responsável</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {brandOptions.length > 1 && (
+          <div className="space-y-1">
+            <div className="text-xs font-medium">Marca</div>
+            <Select value={brand} onValueChange={setBrand}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas as marcas</SelectItem>
+                {brandOptions.map((b) => <SelectItem key={b} value={b}>{MAIL_BRAND_LABELS[b]}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <label className="flex items-start justify-between gap-3 text-xs">
+          <span><span className="font-medium inline-flex items-center gap-1"><Bot className="h-3.5 w-3.5" />Mostrar automáticos</span>
+            <span className="block text-[11px] leading-snug text-muted-foreground">Notificações automáticas de reserva: escondidas por omissão; a pesquisa encontra-as sempre.</span></span>
+          <Switch checked={showAutomatic} onCheckedChange={setShowAutomatic} aria-label="Mostrar automáticos" />
+        </label>
+        {overview.data?.isSuperAdmin && (
+          <label className="flex items-start justify-between gap-3 text-xs">
+            <span><span className="font-medium inline-flex items-center gap-1"><Archive className="h-3.5 w-3.5" />Arquivo (+5 anos)</span>
+              <span className="block text-[11px] leading-snug text-muted-foreground">Emails com mais de 5 anos e sem ligação a nenhum registo: não se apagam, ficam aqui e só tu os vês.</span></span>
+            <Switch checked={archived} onCheckedChange={toggleArchived} aria-label="Arquivo (+5 anos)" />
+          </label>
+        )}
+        {activeFilters > 0 && <Button size="sm" variant="ghost" className="h-7 w-full text-xs" onClick={clearFilters}>Limpar filtros</Button>}
+      </PopoverContent>
+    </Popover>
+  );
+
   // ── Coluna 2: as conversas da caixa ──
   const needsGoogle = isMe && !personalReady && ownerUserId == null;
   const listColumn = (
@@ -232,6 +324,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
             <Search className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Pesquisar em ${boxTitle}`} className="h-9 pl-8 text-sm" />
           </div>
+          {filtersButton}
           {isMe && personalReady && ownerUserId == null && (
             <Button size="icon" variant="ghost" className="h-9 w-9" disabled={syncMine.isPending} onClick={() => syncMine.mutate()} title="Ir buscar os emails novos" aria-label="Atualizar">
               {syncMine.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -241,46 +334,33 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
             <Button size="icon" className="h-9 w-9" onClick={() => { setComposeTo(""); setComposeNew(true); }} aria-label="Nova mensagem"><PenSquare className="h-4 w-4" /></Button>
           )}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          <Select value={status} onValueChange={(v) => setStatus(v as any)}>
-            <SelectTrigger className="h-7 w-[110px] text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas</SelectItem>
-              {MAIL_THREAD_STATUSES.map((s) => <SelectItem key={s} value={s}>{MAIL_THREAD_STATUS_LABELS[s]}s</SelectItem>)}
-            </SelectContent>
-          </Select>
-          {!isMe && (
-            <Select value={assigned} onValueChange={(v) => setAssigned(v as any)}>
-              <SelectTrigger className="h-7 w-[130px] text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Qualquer responsável</SelectItem>
-                <SelectItem value="me">Atribuídas a mim</SelectItem>
-                <SelectItem value="none">Sem responsável</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
-          {(current?.brands.length ?? 0) > 1 && (
-            <Select value={brand} onValueChange={setBrand}>
-              <SelectTrigger className="h-7 w-[110px] text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas as marcas</SelectItem>
-                {current!.brands.filter(isMailBrand).map((b) => <SelectItem key={b} value={b}>{MAIL_BRAND_LABELS[b]}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
-          <Button size="sm" variant={awaiting ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => setAwaiting((x) => !x)}><AlarmClock className="h-3.5 w-3.5 mr-1" />Por responder</Button>
-          <Button size="sm" variant={unread ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => setUnread((x) => !x)}>Não lidas</Button>
-          <Button size="sm" variant={showAutomatic ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => setShowAutomatic((x) => !x)}
-            title="Notificações automáticas de reserva: escondidas por omissão; a pesquisa encontra-as sempre.">
-            <Bot className="h-3.5 w-3.5 mr-1" />Automáticos
-          </Button>
-          {overview.data?.isSuperAdmin && (
-            <Button size="sm" variant={archived ? "selected" : "ghost"} className="h-7 text-xs" onClick={() => { setArchived((x) => !x); if (!archived) setStatus("all"); }}
-              title="Emails com mais de 5 anos e sem ligação a nenhum registo: não se apagam, ficam aqui e só tu os vês.">
-              <Archive className="h-3.5 w-3.5 mr-1" />Arquivo (+5 anos)
-            </Button>
-          )}
+        {/* A escolha principal: o que quero ver nesta caixa. */}
+        <div role="radiogroup" aria-label="Mostrar" className="grid grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5">
+          {VIEW_ORDER.map((v) => {
+            const on = view === v;
+            const n = archived ? 0 : viewCounts[v];
+            return (
+              <button key={v} type="button" role="radio" aria-checked={on} onClick={() => setView(v)}
+                className={`flex min-w-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-xs ${on ? "bg-background font-semibold text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                title={VIEW_HINTS[v]}>
+                {v === "unread" ? <MailOpen className="h-3.5 w-3.5 shrink-0" /> : v === "awaiting" ? <AlarmClock className="h-3.5 w-3.5 shrink-0" /> : <Inbox className="h-3.5 w-3.5 shrink-0" />}
+                <span className="truncate">{MAIL_LIST_VIEW_LABELS[v]}</span>
+                {n > 0 && <span className="shrink-0 rounded-full bg-primary/10 px-1 text-[10.5px] font-bold tabular-nums text-primary">{n > 999 ? "999+" : n}</span>}
+              </button>
+            );
+          })}
         </div>
+        {activeChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {activeChips.map((c) => (
+              <span key={c.key} className="inline-flex items-center gap-0.5 rounded-full border bg-background py-0.5 pl-2 pr-0.5 text-[11px]">
+                {c.label}
+                <button type="button" onClick={c.clear} className="rounded-full p-0.5 hover:bg-accent" aria-label={`Tirar o filtro ${c.label}`}><X className="h-3 w-3" /></button>
+              </span>
+            ))}
+            {activeChips.length > 1 && <button type="button" onClick={clearFilters} className="text-[11px] text-muted-foreground underline-offset-2 hover:underline">Limpar</button>}
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto">
         {needsGoogle && (
@@ -292,7 +372,14 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
         {isMe && !needsGoogle && google && google.status !== "connected" && ownerUserId == null && <div className="p-2"><GoogleAccountCard compact returnTo="/comunicacao/meu-email" /></div>}
         {enabled && list.isLoading && <div className="p-4"><Loader2 className="h-4 w-4 animate-spin" /></div>}
         {enabled && list.error && <div className="p-2"><QueryErrorNote error={list.error} onRetry={() => list.refetch()} retrying={list.isFetching} what="as conversas" /></div>}
-        {enabled && !list.isLoading && !list.error && threads.length === 0 && <p className="p-4 text-sm text-muted-foreground">Sem conversas com estes filtros.</p>}
+        {enabled && !list.isLoading && !list.error && threads.length === 0 && (
+          <div className="p-4 space-y-2 text-sm text-muted-foreground">
+            <p>{view === "unread" && !activeFilters && !q.trim() ? "Nada por ler nesta caixa." : view === "awaiting" && !activeFilters && !q.trim() ? "Nada por responder nesta caixa." : "Sem conversas com estes filtros."}</p>
+            {(view !== "all" || activeFilters > 0) && (
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setView("all"); clearFilters(); }}>Ver todas</Button>
+            )}
+          </div>
+        )}
         {threads.map((t) => {
           const overdue = t.status !== "resolvido" && isMailOverdue(t.awaitingSince, slaHours, now);
           return (

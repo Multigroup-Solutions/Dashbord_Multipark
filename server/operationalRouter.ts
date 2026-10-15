@@ -8,10 +8,20 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess, isOwnOnly } from "./_core/access";
 import { ROLE_RANK as ACCESS_ROLE_RANK } from "../shared/access";
-import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, getSpeedLimits, getDefaultSpeedLimit, createSpeedLimit, updateSpeedLimit, deleteSpeedLimit, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
+import { logActivity, getEmployeeByUserId, getVehicles, getVehicleById, createVehicle, updateVehicle, deleteVehicle, getVehicleMovements, createVehicleMovement, getSpeedAlerts, createSpeedAlert, acknowledgeSpeedAlert, getRadioTranscriptions, createRadioTranscription, getOperationalStats, getVehicleDriverHistory, recordSpeedViolation, getSpeedViolations, acknowledgeSpeedViolation, getSpeedViolationStats, getDailyDriverHistoryByDate, getDailyDriverHistoryByUser, getDailyDriverHistoryRange, getDailyDriverStats, createPda, updatePda, listPdas, getPdaById, createPdaCheckin, checkoutPda, getActiveCheckins, getCheckinsByDate, getCheckinsByPda, createGpsAlert, getGpsAlerts, acknowledgeGpsAlert, getGpsAlertStats } from "./db";
 import { getZelloUsers, getZelloChannels, getZelloLocations, getZelloUserHistory, getZelloUserLocation } from "./zello";
 import { collectDailyDriverData } from "./jobs/dailyDriverCollection";
 import { requireRole } from "./routerGuards";
+
+/**
+ * Plano 56 (A2): o PDA como vai para o ecrã — sem o token do aparelho, o QR e
+ * o nonce da sessão (com o token dava para fazer passar outro aparelho por
+ * este PDA sem ninguém ser avisado). `registered` = já tem aparelho.
+ */
+function publicPdaRow<T extends Record<string, any>>(p: T): Omit<T, "deviceToken" | "qrCode" | "sessionNonce"> & { registered: boolean } {
+  const { deviceToken, qrCode: _qr, sessionNonce: _n, ...rest } = p;
+  return { ...rest, registered: !!deviceToken };
+}
 
 export const operationalRouter = router({
   dashboard: protectedProcedure.query(async ({ ctx }) => {
@@ -425,51 +435,9 @@ export const operationalRouter = router({
 
   // ─── SPEED MONITORING ──────────────────────────────────────────────
   speedMonitoring: router({
-    limits: router({
-      list: protectedProcedure.query(async ({ ctx }) => {
-        requireAccess(ctx.user, "atividade_diaria", "view");
-        return getSpeedLimits();
-      }),
-      create: protectedProcedure.input(z.object({
-        name: z.string().min(1),
-        maxSpeed: z.number().min(1),
-        tolerancePercent: z.number().min(0).max(100).default(10),
-        isDefault: z.boolean().default(false),
-      })).mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "atividade_diaria", "manage");
-        const id = await createSpeedLimit({
-          name: input.name,
-          maxSpeed: input.maxSpeed,
-          tolerancePercent: input.tolerancePercent,
-          isDefault: input.isDefault ? 1 : 0,
-        });
-        await logActivity({ userId: ctx.user.id, action: "create", entity: "speed_limit", entityId: id, details: `Limite ${input.name}: ${input.maxSpeed}km/h` });
-        return { id };
-      }),
-      update: protectedProcedure.input(z.object({
-        id: z.number(),
-        data: z.object({
-          name: z.string().optional(),
-          maxSpeed: z.number().optional(),
-          tolerancePercent: z.number().optional(),
-          isDefault: z.boolean().optional(),
-          isActive: z.boolean().optional(),
-        }),
-      })).mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "atividade_diaria", "manage");
-        const { isDefault, isActive, ...rest } = input.data;
-        const patch: Record<string, unknown> = { ...rest };
-        if (isDefault !== undefined) patch.isDefault = isDefault ? 1 : 0;
-        if (isActive !== undefined) patch.isActive = isActive ? 1 : 0;
-        await updateSpeedLimit(input.id, patch);
-        return { success: true };
-      }),
-      delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-        requireAccess(ctx.user, "atividade_diaria", "manage");
-        await deleteSpeedLimit(input.id);
-        return { success: true };
-      }),
-    }),
+    // ronda 2 (14 out 2026): o limite passou para Definições → Parâmetros → "Limite de velocidade (GPS do
+    // Zello)" (gps.speedRule). A tabela antiga speed_limits já não decide nada — sem ecrã nem endpoints, para
+    // não haver duas fontes (os dados ficam na tabela, sem se apagarem).
 
     violations: router({
       list: protectedProcedure.input(z.object({
@@ -511,15 +479,24 @@ export const operationalRouter = router({
     checkNow: protectedProcedure.mutation(async ({ ctx }) => {
       requireAccess(ctx.user, "atividade_diaria", "manage");
       const locations = await getZelloLocations();
-      const defaultLimit = await getDefaultSpeedLimit();
-      if (!defaultLimit) return { checked: 0, violations: 0, message: "Nenhum limite de velocidade configurado" };
-
-      const threshold = defaultLimit.maxSpeed * (1 + defaultLimit.tolerancePercent / 100);
+      // 14 out 2026: o limite vem de Definições → Parâmetros (gps.speedRule; acima de 120 km/h, 0 % de tolerância, por omissão).
+      // O limite que conta (e que se diz) é o COM a tolerância. Antes, sem a tabela speed_limits, isto não fazia
+      // nada; para não passar a avisar gente sem o Jorge decidir, o aviso só sai com o interruptor GPS_SPEED_ALERTS.
+      const { speedRuleNow } = await import("./speedRule");
+      const { threshold } = await speedRuleNow();
+      const defaultLimit = { maxSpeed: Math.round(threshold) };
+      const { GPS_SPEED_ALERTS_FLAG } = await import("./speedAlerts");
+      const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
+      await ensureFeatureFlagOverrides();
+      const alertsOn = isFeatureEnabled(GPS_SPEED_ALERTS_FLAG, { defaultEnabled: automationFlagDefault(GPS_SPEED_ALERTS_FLAG) });
       let violationCount = 0;
 
+      // ronda 2: um valor absurdo do GPS (acima de 250 km/h — shared/speedRules.ts) não é excesso, é erro
+      const { GPS_ABSURD_KMH } = await import("../shared/speedRules");
       for (const loc of locations) {
-        if (loc.speed > threshold) {
-          const excessPercent = ((loc.speed - defaultLimit.maxSpeed) / defaultLimit.maxSpeed) * 100;
+        if (loc.speed > threshold && loc.speed <= GPS_ABSURD_KMH) {
+          // excessPercent é DECIMAL(5,2) na BD: nunca acima de 999,99
+          const excessPercent = Math.min(999.99, ((loc.speed - defaultLimit.maxSpeed) / defaultLimit.maxSpeed) * 100);
           await recordSpeedViolation({
             zelloUsername: loc.username,
             displayName: loc.displayName || loc.username,
@@ -529,10 +506,11 @@ export const operationalRouter = router({
             latitude: loc.latitude ? String(loc.latitude) : null,
             longitude: loc.longitude ? String(loc.longitude) : null,
             heading: loc.heading ? String(loc.heading) : null,
-            notificationSent: 1,
+            notificationSent: alertsOn ? 1 : 0,
             occurredAt: new Date().toISOString().slice(0, 19).replace("T", " "),
           });
           violationCount++;
+          if (!alertsOn) continue;
           // Aviso `speed_alert` (sem cidade conhecida no Zello → quem vê todas).
           const { notify } = await import("./notify");
           await notify({
@@ -571,6 +549,31 @@ export const operationalRouter = router({
       requireAccess(ctx.user, "historico_diario", "view");
       const { loadDriverTrack } = await import("./driverTrack");
       return loadDriverTrack(input.id);
+    }),
+    /**
+     * Tarefa 62 (P1b, Q9): re-dividir UMA vez o GPS dos últimos 31 dias com o limite de hoje (120 km/h), em
+     * segundo plano no agendador (gps-resplit-backfill), retomável. Só o super admin. Não avisa ninguém.
+     */
+    resplitBackfill: router({
+      status: protectedProcedure.query(async ({ ctx }) => {
+        if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin." });
+        const { realResplitBackfillDeps } = await import("./gpsResplitBackfill");
+        return (await realResplitBackfillDeps()).read();
+      }),
+      start: protectedProcedure.mutation(async ({ ctx }) => {
+        if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin re-divide o GPS dos últimos 31 dias." });
+        const [{ realResplitBackfillDeps, startResplitBackfill }, { lisbonDayOf }] = await Promise.all([import("./gpsResplitBackfill"), import("../shared/lisbonDay")]);
+        const s = await startResplitBackfill(await realResplitBackfillDeps(), { userId: ctx.user.id, todayLisbon: lisbonDayOf(Date.now()) });
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "daily_driver_history", entityId: 0, details: `Re-divisão do GPS de ${s.from} a ${s.to} pedida (em segundo plano)` });
+        return s;
+      }),
+      stop: protectedProcedure.mutation(async ({ ctx }) => {
+        if (ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin." });
+        const { realResplitBackfillDeps, stopResplitBackfill } = await import("./gpsResplitBackfill");
+        const s = await stopResplitBackfill(await realResplitBackfillDeps());
+        await logActivity({ userId: ctx.user.id, action: "update", entity: "daily_driver_history", entityId: 0, details: "Re-divisão do GPS dos últimos 31 dias parada" });
+        return s;
+      }),
     }),
     /**
      * Recolha manual de um dia (só admin — abrange todas as cidades). Prazo de
@@ -648,7 +651,8 @@ export const operationalRouter = router({
   pdas: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireAccess(ctx.user, "pdas", "view");
-      return listPdas();
+      // Plano 56 (A2): o token do aparelho e o nonce da sessão nunca saem para o ecrã.
+      return ((await listPdas()) as any[]).map(publicPdaRow);
     }),
     /** 43b: o Zello de cada PDA bate certo com a lista do Zello? ("mede e põe o nome") */
     zelloCheck: protectedProcedure.query(async ({ ctx }) => {
@@ -660,7 +664,12 @@ export const operationalRouter = router({
         return { available: false as const, reason: `O Zello não respondeu: ${String((err as Error)?.message ?? err).slice(0, 120)}` };
       }
       if (!users.length) return { available: false as const, reason: "O Zello não está configurado." };
-      return { available: true as const, checks: checkPdaZello(pdas.filter((p) => p.status !== "inactive").map((p) => ({ id: Number(p.id), name: String(p.name ?? ""), zelloUsername: p.zelloUsername ?? null })), users) };
+      // Telemóveis pessoais: o Zello da ficha do dono, um a um ("sem Zello" não é erro — há quem não use).
+      const [{ listPersonalDevices }, { personalZelloCheck }] = await Promise.all([import("./personalDevices"), import("../shared/personalDevice")]);
+      const personal = await listPersonalDevices(ctx.user)
+        .then((r) => r.devices.map((d) => ({ deviceId: d.id, ...personalZelloCheck(d.zelloUsername, d.zelloOf ?? d.ownerName ?? d.currentName, users) })))
+        .catch(() => []);
+      return { available: true as const, checks: checkPdaZello(pdas.filter((p) => p.status !== "inactive").map((p) => ({ id: Number(p.id), name: String(p.name ?? ""), zelloUsername: p.zelloUsername ?? null })), users), personal };
     }),
     // PDA ligado AGORA ao próprio utilizador (check-in aberto) — para o Perfil.
     mine: protectedProcedure.query(async ({ ctx }) => {
@@ -702,15 +711,82 @@ export const operationalRouter = router({
     }),
     // Ler o QR no próprio aparelho regista-o como este PDA (substitui a
     // escolha na lista). Só chefias — é uma vez por aparelho.
-    registerByQr: protectedProcedure.input(z.object({ pdaId: z.number(), code: z.string().min(8).max(64) })).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "pdas", "edit", { allowOwn: true });
+    // Plano 56 (A2, com ENTRAR_COM_CODIGO): só TL e acima; a sessão de quem
+    // registou passa a sessão deste PDA; se o PDA estava noutro aparelho, o
+    // supervisor da cidade é avisado no sino. Desligado: como sempre.
+    registerByQr: protectedProcedure.input(z.object({
+      pdaId: z.number(), code: z.string().min(8).max(64), currentToken: z.string().max(80).nullable().optional(),
+      // Telemóveis pessoais (13 out 2026): o token pessoal deste browser, se houver (nunca é o do PDA).
+      personalToken: z.string().max(80).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      // Um telemóvel pessoal ATIVO não passa a PDA partilhado pelo QR (primeiro "Deixar de ser pessoal").
+      // Sem token pessoal (ou já inativo, ou a tabela em baixo) fica tudo como sempre.
+      {
+        const { isDeviceToken, PDA_ON_PERSONAL_MSG } = await import("../shared/personalDevice");
+        if (isDeviceToken(input.personalToken)) {
+          const { personalDeviceStore } = await import("./personalDeviceStore");
+          const personal = await personalDeviceStore().byToken(input.personalToken).catch(() => null);
+          if (personal?.status === "active") throw new TRPCError({ code: "FORBIDDEN", message: PDA_ON_PERSONAL_MSG });
+        }
+      }
+      const { pdaSessionsEnabled } = await import("./pdaSession");
+      const pdaOn = await pdaSessionsEnabled();
+      const { pdaSessionStore } = await import("./pdaSessionStore");
+      if (pdaOn) {
+        if ((ACCESS_ROLE_RANK[ctx.user.role as keyof typeof ACCESS_ROLE_RANK] ?? 0) < ACCESS_ROLE_RANK.team_leader) {
+          // Um extra/condutor que lê o QR do PDA onde já está (este aparelho já
+          // é esse PDA) não regista nada: só fica a saber que está tudo certo.
+          // Noutro aparelho (ou sem token) continua a ser só para o TL.
+          const { QR_TL_ONLY_MSG } = await import("../shared/pdaSession");
+          const { verifyPdaQrCode } = await import("./db");
+          const reg = input.currentToken ? await pdaSessionStore().registration(input.pdaId).catch(() => null) : null;
+          const here = !!(reg?.deviceToken && reg.deviceToken === input.currentToken);
+          const ok = here ? await verifyPdaQrCode(input.pdaId, input.code) : null;
+          if (!here || !ok) throw new TRPCError({ code: "FORBIDDEN", message: QR_TL_ONLY_MSG });
+          return { token: reg!.deviceToken!, name: ok.name, pdaSession: false, alreadyRegistered: true as const };
+        }
+        requireAccess(ctx.user, "pdas", "edit");
+      } else {
+        requireAccess(ctx.user, "pdas", "edit", { allowOwn: true });
+      }
       const { verifyPdaQrCode, setPdaDeviceToken } = await import("./db");
       const pda = await verifyPdaQrCode(input.pdaId, input.code);
       if (!pda) throw new TRPCError({ code: "BAD_REQUEST", message: "QR inválido ou PDA inativo." });
-      const token = await setPdaDeviceToken(input.pdaId);
+      const before = pdaOn ? await pdaSessionStore().registration(input.pdaId).catch(() => null) : null;
+      // A2: o QR lido outra vez no MESMO aparelho (já tem o token deste PDA) não
+      // troca o token nem avisa ninguém — é o mesmo PDA.
+      const sameDevice = !!(before?.deviceToken && input.currentToken && before.deviceToken === input.currentToken);
+      const token = sameDevice ? before!.deviceToken! : await setPdaDeviceToken(input.pdaId);
       if (!token) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
-      await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: `Aparelho registado por QR como ${pda.name}` });
-      return { token, name: pda.name };
+      await logActivity({ userId: ctx.user.id, action: "register_device", entity: "pda", entityId: input.pdaId, details: sameDevice ? `QR lido outra vez no mesmo aparelho (${pda.name})` : `Aparelho registado por QR como ${pda.name}` });
+      let pdaSession = false;
+      if (pdaOn) {
+        // O PDA mudou de aparelho (já tinha outro token): aviso ao supervisor da cidade.
+        if (before?.deviceToken && before.deviceToken !== token) {
+          try {
+            const { notify } = await import("./notify");
+            const { hhmmLisbon } = await import("../shared/opsPresence");
+            const who = ctx.user.name || `#${ctx.user.id}`;
+            await notify({
+              kind: "pda_device", projectId: before.projectId,
+              title: `O ${pda.name} mudou de aparelho`,
+              body: `${who} registou outro aparelho como ${pda.name} pelo QR às ${hhmmLisbon(Date.now())}. O aparelho antigo deixou de ser este PDA. Se não estavas à espera, fala com quem o registou.`,
+              link: "/operacional?tab=pdas",
+              // (nunca um pedaço do token: o id da entidade fica guardado no sino)
+              entity: { type: "pda_device", id: `${input.pdaId}:${(await import("node:crypto")).createHash("sha256").update(`pda-device:${token}`).digest("hex").slice(0, 12)}` },
+              recipientFilter: (c) => c.id !== ctx.user.id,
+            });
+          } catch (err) {
+            console.warn("[pda] aviso de PDA noutro aparelho falhou:", String((err as Error)?.message ?? err).slice(0, 160));
+          }
+        }
+        // O cookie passa a sessão DESTE PDA (presa a ele, como qualquer entrada no PDA).
+        const { sessionClaimsOf, endPdaSession, openPdaSession } = await import("./pdaSession");
+        const claims = await sessionClaimsOf(ctx.req);
+        if (claims?.pda && claims.pn && claims.pda !== input.pdaId) await endPdaSession(claims.pda, claims.pn, "rebind", ctx.user.id);
+        pdaSession = await openPdaSession({ req: ctx.req, res: ctx.res, account: ctx.user, sessionName: ctx.user.name || "Utilizador", pda: { id: input.pdaId, token, name: pda.name }, how: "registo pelo QR" }).catch(() => false);
+      }
+      return { token, name: pda.name, pdaSession, alreadyRegistered: sameDevice };
     }),
     // Login num PDA registado → o PDA (e o Zello) fica com esta pessoa até
     // sair ou entrar outra (PDAs partilhados entre turnos).
@@ -755,13 +831,17 @@ export const operationalRouter = router({
     // Info do aparelho atual (cartão "Este aparelho" na aba PDAs) — qualquer
     // role autenticada pode consultar: os condutores precisam de ver em que
     // PDA estão a picar o ponto.
-    deviceInfo: protectedProcedure.input(z.object({ token: z.string().min(8) })).query(async ({ ctx, input }) => {
+    // Plano 56 (A2, auditoria): mutação (POST) — numa query o token do aparelho
+    // ia no endereço (?input=…) e ficava nos registos da Vercel; com ele, outro
+    // aparelho passava por este PDA (entrada com código de funcionários, sessão de PDA).
+    deviceInfo: protectedProcedure.input(z.object({ token: z.string().min(8).max(80) })).mutation(async ({ ctx, input }) => {
       const { getPdaByDeviceToken } = await import("./db");
       return getPdaByDeviceToken(input.token);
     }),
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "pdas", "view");
-      return getPdaById(input.id);
+      const pda = await getPdaById(input.id);
+      return pda ? publicPdaRow(pda) : pda;
     }),
     create: protectedProcedure.input(z.object({
       name: z.string().min(1),
@@ -808,6 +888,11 @@ export const operationalRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "pdas", "edit");
       await updatePda(input.id, input.data);
+      // (auditoria A2) PDA retirado (inativo/perdido/manutenção): a sessão que lá estiver acaba de vez.
+      if (input.data.status && input.data.status !== "active") {
+        const { endPdaSessionOnRetire } = await import("./pdaSession");
+        await endPdaSessionOnRetire(input.id, ctx.user.id);
+      }
       if (input.data.name !== undefined || input.data.zelloUsername !== undefined) {
         const { syncPdaZelloName } = await import("./pdaZelloName");
         void syncPdaZelloName(input.id);
@@ -823,6 +908,9 @@ export const operationalRouter = router({
       const pda = await getPdaById(input.id);
       if (!pda) throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado." });
       await updatePda(input.id, { status: "inactive" });
+      // (auditoria A2) a sessão que estava no PDA acaba de vez.
+      const { endPdaSessionOnRetire } = await import("./pdaSession");
+      await endPdaSessionOnRetire(input.id, ctx.user.id);
       await logActivity({ userId: ctx.user.id, action: "update", entity: "pda", entityId: input.id, details: `PDA retirado (passou a Inativo; histórico mantido): ${pda.name}` });
       return { success: true, retired: true };
     }),
@@ -892,6 +980,77 @@ export const operationalRouter = router({
         await logActivity({ userId: ctx.user.id, action: "update", entity: "pda_checkin", entityId: input.id, details: "Check-out PDA" });
         return { success: true };
       }),
+    }),
+  }),
+
+  // ─── TELEMÓVEIS PESSOAIS (não são PDAs partilhados; server/personalDevices.ts) ──
+  // O token vai sempre no corpo do pedido (mutações), nunca no endereço.
+  personalDevices: router({
+    /** "Registar este telemóvel como meu" — qualquer pessoa com sessão, no próprio telemóvel. Recusa num PDA. */
+    register: protectedProcedure.input(z.object({
+      pdaToken: z.string().max(80).nullable().optional(),
+      currentToken: z.string().max(80).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const { registerPersonalDevice } = await import("./personalDevices");
+      return registerPersonalDevice(ctx.user, { ...input, userAgent: String((ctx.req as any)?.headers?.["user-agent"] ?? "") || null });
+    }),
+    /** Em cada entrada: quem está neste telemóvel agora (e um PDA convertido passa a pessoal). */
+    seen: protectedProcedure.input(z.object({
+      token: z.string().max(80).nullable().optional(),
+      pdaToken: z.string().max(80).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const { seenPersonalDevice } = await import("./personalDevices");
+      return seenPersonalDevice(ctx.user, input);
+    }),
+    /** Sair neste telemóvel: deixa de aparecer "agora com" esta pessoa. */
+    left: protectedProcedure.input(z.object({ token: z.string().max(80) })).mutation(async ({ ctx, input }) => {
+      const { leftPersonalDevice } = await import("./personalDevices");
+      return leftPersonalDevice(ctx.user, input.token);
+    }),
+    /** Deixar de ser pessoal no PRÓPRIO telemóvel (fica Inativo, nunca se apaga): o dono, ou quem edita PDAs. */
+    unregisterMine: protectedProcedure.input(z.object({ token: z.string().max(80) })).mutation(async ({ ctx, input }) => {
+      const [{ unregisterPersonalDevice }, { canAccess }] = await Promise.all([import("./personalDevices"), import("./_core/access")]);
+      return unregisterPersonalDevice(ctx.user, { token: input.token }, canAccess(ctx.user, "pdas", "edit"));
+    }),
+    /** Deixar de ser pessoal pela lista (Operacional → PDAs): quem edita PDAs, só os telemóveis das suas cidades. */
+    unregister: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "pdas", "edit");
+      const { unregisterPersonalDevice } = await import("./personalDevices");
+      return unregisterPersonalDevice(ctx.user, { id: input.id }, true);
+    }),
+    /** Operacional → PDAs → Telemóveis pessoais (com o âmbito de cidade). */
+    list: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "pdas", "view");
+      const { listPersonalDevices } = await import("./personalDevices");
+      return listPersonalDevices(ctx.user);
+    }),
+    /**
+     * "É um telemóvel pessoal": um PDA que afinal é o telemóvel de alguém
+     * (registado por engano como PDA) passa a telemóvel pessoal dessa pessoa.
+     * Só quem edita PDAs, do team leader para cima, e só PDAs que vê.
+     */
+    convertFromPda: protectedProcedure.input(z.object({
+      pdaId: z.number().int().positive(),
+      employeeId: z.number().int().positive().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "pdas", "edit");
+      if ((ACCESS_ROLE_RANK[ctx.user.role as keyof typeof ACCESS_ROLE_RANK] ?? 0) < ACCESS_ROLE_RANK.team_leader) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Só o team leader (ou acima) converte um PDA em telemóvel pessoal." });
+      }
+      if (!((await listPdas()) as any[]).some((p) => Number(p.id) === input.pdaId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "PDA não encontrado nas tuas cidades." });
+      }
+      let owner: { userId: number | null; employeeId: number | null; name: string | null } | null = null;
+      if (input.employeeId != null) {
+        const { assertEmployeeAccess } = await import("./cityScope");
+        await assertEmployeeAccess(input.employeeId);
+        const { getEmployeeById } = await import("./db");
+        const e = await getEmployeeById(input.employeeId);
+        if (!e) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
+        owner = { userId: e.employee.userId ?? null, employeeId: Number(e.employee.id), name: e.employee.fullName ?? null };
+      }
+      const { convertPdaToPersonal } = await import("./personalDevices");
+      return convertPdaToPersonal(ctx.user, { pdaId: input.pdaId, owner });
     }),
   }),
 

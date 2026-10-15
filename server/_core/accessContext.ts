@@ -85,6 +85,12 @@ export function adjustCityScope(userId: number | undefined, access: Access, from
 /** Qual módulo decide o alcance de cidade de um procedimento (pelo prefixo). */
 const PATH_MODULE: Array<[string, ModuleId]> = [
   ["expenses.", "despesas"],
+  // Pessoas → Condutores e agentes (14 out 2026): estão no router das Críticas, mas o módulo é próprio —
+  // uma permissão por pessoa em "Condutores e agentes" decide também o alcance de cidade (antes de "reviews.")
+  ["reviews.checkoutDrivers", "condutores_agentes"],
+  ["reviews.movementPeople", "condutores_agentes"],
+  ["reviews.agentPeople", "condutores_agentes"],
+  ["reviews.agentHistory", "condutores_agentes"],
   ["reviews.", "criticas"],
   ["complaints.", "reclamacoes"],
   ["lostFound.", "perdidos"],

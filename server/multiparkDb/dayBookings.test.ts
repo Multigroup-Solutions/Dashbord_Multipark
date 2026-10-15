@@ -238,8 +238,10 @@ describe("movimentos, filtros e contagens", () => {
     expect(movementDone("saida", "PENDING_CHECKOUT")).toBe(false);
     expect(movementDone("saida", "CHECKED_OUT")).toBe(true);
   });
-  it("fase: à espera da bagagem", () => {
-    expect(phaseLabel(mk({ status: "PENDING_CHECKOUT", phases: { ...mk({}).phases, baggageWaitingAt: "2026-09-27T10:00:00.000Z" } }))).toBe("À espera da bagagem");
+  it("fase (tarefa 62, a regra do estado ao vivo): na fila, com a etiqueta das malas deste pedido", () => {
+    expect(phaseLabel(mk({ status: "PENDING_CHECKOUT", phases: { ...mk({}).phases, pendingCheckoutAt: "2026-09-27T09:50:00.000Z", baggageWaitingAt: "2026-09-27T10:00:00.000Z" } }))).toBe("Na fila · à espera das malas");
+    // malas de um pedido anterior (antes do pendente de agora) não contam
+    expect(phaseLabel(mk({ status: "PENDING_CHECKOUT", phases: { ...mk({}).phases, pendingCheckoutAt: "2026-09-27T10:30:00.000Z", baggageWaitingAt: "2026-09-27T10:00:00.000Z" } }))).toBe("Na fila");
     expect(phaseLabel(mk({ status: "BOOKED" }))).toBeNull();
   });
   it("filtros: tipo, parque, estado (sem canceladas por omissão) e pesquisa", () => {

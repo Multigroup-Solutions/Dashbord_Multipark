@@ -31,6 +31,7 @@ import { addDays, daysInRange, lisbonDayOf, lisbonDayRangeUtc, lisbonHoursSince 
 import { lisbonToday } from "../shared/expensePeriods";
 import { aggregateSpeedHistory, buildIdentityResolver, classifyActionShift, leftoverFromShares, type ShiftWindow, type SpeedEntry } from "./activityHelpers";
 import { matchKey } from "../shared/textKey";
+import { classifyMovement, displayChangeType, MOVEMENT_KIND_CHANGE_TYPES } from "../shared/multiparkMovements";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -51,6 +52,12 @@ export interface ActivityPerson {
   /** null = sem permissão para ver custos */
   cost: number | null; costPerAction: number | null;
   totalKm: number | null; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number | null;
+  /**
+   * Horas paradas do dia (GPS): a regra do Histórico Diário e do Desempenho —
+   * troços parados entre reports a menos de 1 h (o tempo com o Zello
+   * desligado não conta). null sem GPS (ou partes antigas sem minutos em movimento).
+   */
+  hoursStopped: number | null;
   violations: number; pontoHours: number | null; pdaNames: string | null;
   /** km de dias ainda sem recolha GPS, vindos do ponto (check-out) */
   provisionalKm: boolean;
@@ -107,21 +114,35 @@ export interface ActionReaders {
   legacy: (w: { from: string; to: string }) => Promise<ActivityActionRow[]>;
 }
 
-/** Ações da cópia local (só leitura — já não é alimentada). */
+/**
+ * Ações da cópia local (só leitura — já não é alimentada). Ronda 2 (14 out 2026): cada MOVEMENT com a
+ * MESMA regra da leitura ao vivo e da Avaliação (classifyMovement pelo modifiedFields): o início não é
+ * ação e a mudança de lugar vem como SPOT_CHANGE — também quando a Multipark não responde.
+ */
+export function legacyActionRowOf(r: Record<string, unknown>): ActivityActionRow | null {
+  let changeType = String(r.changeType ?? "").toUpperCase();
+  if (changeType === "MOVEMENT") {
+    changeType = displayChangeType(changeType, classifyMovement(r.modifiedFields));
+    if (changeType === MOVEMENT_KIND_CHANGE_TYPES.inicio) return null;
+  }
+  return {
+    agentUserId: r.agentUserId != null ? String(r.agentUserId) : null,
+    agentName: r.agentName != null ? String(r.agentName) : null,
+    changeType,
+    actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
+    n: 1,
+  };
+}
+
 async function legacyActionRows(w: { from: string; to: string }): Promise<ActivityActionRow[]> {
   const db = await getDb();
   if (!db) return [];
   return rowsOf(await db.execute(sql`
-    SELECT agentUserId, agentName, changeType, actionTime FROM multipark_booking_history
+    SELECT agentUserId, agentName, changeType, actionTime, modifiedFields FROM multipark_booking_history
      WHERE actionTime >= ${w.from} AND actionTime < ${w.to}
        AND agentName IS NOT NULL AND agentName != ''
-       AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}`)).map((r) => ({
-    agentUserId: r.agentUserId != null ? String(r.agentUserId) : null,
-    agentName: r.agentName != null ? String(r.agentName) : null,
-    changeType: String(r.changeType ?? "").toUpperCase(),
-    actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
-    n: 1,
-  }));
+       AND ${bookingHistoryScope(sql`multipark_booking_history.bookingExternalId`)}`))
+    .map(legacyActionRowOf).filter((x): x is ActivityActionRow => !!x);
 }
 
 const DEFAULT_READERS: ActionReaders = { live: (w) => getActivityActionsLive(w), legacy: legacyActionRows };
@@ -149,6 +170,8 @@ export async function loadActivityActions(
   return { rows: [...(await readers.legacy(parts.legacy)), ...live.data.rows], source: "misto", notice };
 }
 
+// 14 out 2026: o MOVEMENT que é só mudança de lugar chega como SPOT_CHANGE (activityLive) e
+// cai nas "outras" ações — conta como ação, não como movimento (shared/multiparkMovements.ts).
 const CT: Record<string, "checkins" | "checkouts" | "movements" | "cancels"> = {
   CHECK_IN: "checkins", CHECKIN: "checkins",
   CHECK_OUT: "checkouts", CHECKOUT: "checkouts",
@@ -205,7 +228,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     key, name, kind, employeeId, partnerName, isTeamLeader: false,
     checkins: 0, checkouts: 0, movements: 0, cancels: 0, other: 0, totalActions: 0,
     inShift: null, outOfShift: null, daysScheduled: 0, hoursPaid: 0, cost: canSeeCost ? 0 : null, costPerAction: null,
-    totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null, violations: 0, pontoHours: null, pdaNames: null,
+    totalKm: null, hoursWorked: null, hoursOnline: null, maxSpeed: null, hoursStopped: null, violations: 0, pontoHours: null, pdaNames: null,
     provisionalKm: false, zelloUsernames: [],
   });
   const get = (key: string, make: () => ActivityPerson) => {
@@ -299,10 +322,11 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
   }
 
   // ── GPS
-  const addGps = (p: ActivityPerson, g: { km: number; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number; violations: number }, day: string) => {
+  const addGps = (p: ActivityPerson, g: { km: number; hoursWorked: number | null; hoursOnline: number | null; maxSpeed: number; violations: number; hoursStopped?: number | null }, day: string) => {
     p.totalKm = r2((p.totalKm ?? 0) + g.km);
     if (g.hoursWorked != null) p.hoursWorked = r2((p.hoursWorked ?? 0) + g.hoursWorked);
     if (g.hoursOnline != null) p.hoursOnline = r2((p.hoursOnline ?? 0) + g.hoursOnline);
+    if (g.hoursStopped != null) p.hoursStopped = r2((p.hoursStopped ?? 0) + g.hoursStopped);
     if (g.maxSpeed > 0) p.maxSpeed = Math.max(p.maxSpeed ?? 0, g.maxSpeed);
     p.violations += g.violations;
     const d = daily.get(day);
@@ -326,12 +350,13 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
       km: Number(sh.km ?? 0),
       hoursWorked: sh.movingMinutes == null ? null : Number(sh.movingMinutes) / 60,
       hoursOnline: Number(sh.minutes ?? 0) / 60,
+      hoursStopped: sh.movingMinutes == null ? null : Math.max(0, Number(sh.minutes ?? 0) - Number(sh.movingMinutes)) / 60,
       maxSpeed: Number(sh.maxSpeed ?? 0), violations: Number(sh.violations ?? 0),
     }, String(sh.day));
   }
   const gpsRows = rowsOf(await db.execute(sql`
     SELECT h.id, h.employeeId, h.zelloUsername, h.displayName, DATE_FORMAT(h.date, '%Y-%m-%d') AS day,
-           h.totalKm, h.hoursWorked, h.totalHoursOnline, h.maxSpeed, h.speedViolations,
+           h.totalKm, h.hoursWorked, h.hoursStopped, h.totalHoursOnline, h.maxSpeed, h.speedViolations,
            CASE WHEN ${gpsRowOwnScope(sql`h.employeeId`, sql`h.zelloUsername`)} THEN 1 ELSE 0 END AS own
       FROM daily_driver_history h
      WHERE DATE(h.date) >= ${startDate} AND DATE(h.date) <= ${lastDay}
@@ -361,7 +386,7 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     if (Number(g.own) !== 1) continue; // só visível pelas partes (já contadas)
     const whole = {
       km: Number(g.totalKm ?? 0), hoursMoving: Number(g.hoursWorked ?? 0), hoursOnline: Number(g.totalHoursOnline ?? 0),
-      maxSpeed: Number(g.maxSpeed ?? 0), violations: Number(g.speedViolations ?? 0),
+      maxSpeed: Number(g.maxSpeed ?? 0), violations: Number(g.speedViolations ?? 0), hoursStopped: Number(g.hoursStopped ?? 0),
     };
     const sums = shareSums.get(Number(g.id));
     const zello = String(g.zelloUsername ?? "");
@@ -373,16 +398,16 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
       if (owner != null) {
         const p = personForEmployee(owner, g.displayName);
         addZello(p, zello);
-        addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations }, day);
+        addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations, hoursStopped: rest.hoursStopped }, day);
         continue;
       }
       const key = `gpsu:${zello}`;
       const p = get(key, () => blank(key, `${g.displayName || zello} — sem login no PDA`, "sem_login", null));
       addZello(p, zello);
-      addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations }, day);
+      addGps(p, { km: rest.km, hoursWorked: rest.hoursMoving, hoursOnline: rest.hoursOnline, maxSpeed: rest.maxSpeed, violations: rest.violations, hoursStopped: rest.hoursStopped }, day);
       continue;
     }
-    const gps = { km: whole.km, hoursWorked: whole.hoursMoving, hoursOnline: whole.hoursOnline, maxSpeed: whole.maxSpeed, violations: whole.violations };
+    const gps = { km: whole.km, hoursWorked: whole.hoursMoving, hoursOnline: whole.hoursOnline, maxSpeed: whole.maxSpeed, violations: whole.violations, hoursStopped: whole.hoursStopped };
     if (g.employeeId != null) {
       const p = personForEmployee(Number(g.employeeId), g.displayName);
       addZello(p, zello);
@@ -555,24 +580,31 @@ async function legacyDetail(range: { start: string; end: string }, w: { userIds?
 
 async function actionsOf(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, range: { start: string; end: string }, who: ReturnType<typeof sql>) {
   return rowsOf(await db.execute(sql`
-    SELECT h.bookingExternalId, h.changeType, h.actionTime, h.agentName, b.licensePlate, b.bookingNumber, b.parkName
+    SELECT h.historyId, h.bookingExternalId, h.changeType, h.actionTime, h.agentName, h.modifiedFields, b.licensePlate, b.bookingNumber, b.parkName
       FROM multipark_booking_history h LEFT JOIN multipark_bookings b ON b.externalId = h.bookingExternalId
      WHERE h.actionTime >= ${range.start} AND h.actionTime < ${range.end} AND ${who}
        AND ${bookingHistoryScope(sql`h.bookingExternalId`)}
      ORDER BY h.actionTime LIMIT 500`)).map((r) => ({
-    bookingExternalId: String(r.bookingExternalId ?? ""), changeType: String(r.changeType ?? ""), actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
+    id: String(r.historyId ?? ""),
+    // ronda 2: a mesma regra da leitura ao vivo (o início fica de fora; a mudança de lugar com o seu nome)
+    bookingExternalId: String(r.bookingExternalId ?? ""), changeType: legacyActionRowOf(r)?.changeType ?? MOVEMENT_KIND_CHANGE_TYPES.inicio, actionTime: r.actionTime instanceof Date ? r.actionTime.toISOString() : String(r.actionTime),
     agentName: r.agentName ? String(r.agentName) : null, licensePlate: r.licensePlate ? String(r.licensePlate) : null,
     bookingNumber: r.bookingNumber ? String(r.bookingNumber) : null, parkName: r.parkName ? String(r.parkName) : null,
-  }));
+  })).filter((x) => x.changeType !== MOVEMENT_KIND_CHANGE_TYPES.inicio);
 }
 
 // ─── Histórico de velocidade por pessoa ──────────────────────────────────────
 
-/** Limite usado nos excessos (o mesmo da recolha): máx. × (1 + tolerância). */
+/**
+ * Limite usado nos excessos (o mesmo da recolha): limite × (1 + tolerância),
+ * de Definições → Parâmetros → "Limite de velocidade (GPS do Zello)" — acima
+ * de 120 km/h (0 % de tolerância) por omissão (tarefa 62; antes vinha da tabela
+ * `speed_limits`, sem ecrã). Erro a ler (ou sem BD) → null: sem limiar, e
+ * quem chama diz-o numa nota (a omissão só vale quando a leitura correu bem).
+ */
 export async function speedThreshold(): Promise<number | null> {
-  const { getDefaultSpeedLimit } = await import("./db");
-  const l = await getDefaultSpeedLimit();
-  return l ? Number(l.maxSpeed) * (1 + Number(l.tolerancePercent ?? 0) / 100) : null;
+  const { speedRuleRead } = await import("./speedRule");
+  return (await speedRuleRead())?.threshold ?? null;
 }
 
 export async function getPersonSpeedHistory(opts: { employeeId?: number; zelloUsername?: string; days: number }) {

@@ -70,28 +70,16 @@ export async function noteInboundForTriage(conversationId: number, nowMs: number
 }
 
 /**
- * Caixa por tema a partir da intenção (17f): colaborador/candidato fica no RH,
- * a escolha à mão nunca muda; "outro" não tira a conversa de onde está.
- * Nunca lança.
+ * Caixa da conversa (Jorge, 8 out 2026): o encaminhador único da IA
+ * (server/commsRouting.ts, interruptor AI_MAIL_ROUTING) usa ESTA triagem — não
+ * há segunda chamada à IA. Conversa que já tem caixa (ou antiga) fica onde
+ * está; nova → caixa do tema, ou Geral quando a IA não percebeu; recrutamento
+ * em 1.º contacto → candidato. Nunca lança.
  */
-async function applyBoxFromIntent(conversationId: number, intent: WhatsappIntent): Promise<void> {
+async function routeAfterTriage(conversationId: number, triage: { intent: WhatsappIntent; confidence: number | null; reason: string | null }): Promise<void> {
   try {
-    const db = await getDb();
-    if (!db) return;
-    const [c] = await db.select({
-      boxKey: whatsappConversations.boxKey, boxSource: whatsappConversations.boxSource, employeeId: whatsappConversations.employeeId,
-      isLead: sql<number>`EXISTS (SELECT 1 FROM extra_leads l WHERE l.phoneE164 = ${whatsappConversations.phoneE164} COLLATE utf8mb4_unicode_ci)`,
-    }).from(whatsappConversations).where(eq(whatsappConversations.id, conversationId)).limit(1);
-    if (!c) return;
-    const { whatsappBoxFor } = await import("../shared/commsBoxes");
-    const next = whatsappBoxFor({
-      boxKey: c.boxKey ?? null, boxSource: (c.boxSource as any) ?? null, employeeId: c.employeeId ?? null, isLead: Number(c.isLead) === 1,
-      intent: intent === "outro" ? null : intent,
-    });
-    if (!next) return;
-    // Só mexe se ninguém a mudou à mão entretanto.
-    await db.update(whatsappConversations).set({ boxKey: next.boxKey, boxSource: next.boxSource })
-      .where(and(eq(whatsappConversations.id, conversationId), sql`COALESCE(${whatsappConversations.boxSource}, '') <> 'manual'`));
+    const { routeWhatsappConversation } = await import("./commsRouting");
+    await routeWhatsappConversation(conversationId, triage);
   } catch (err: any) {
     console.warn("[WhatsApp triagem] caixa falhou:", conversationId, String(err?.message ?? err).slice(0, 160));
   }
@@ -154,7 +142,8 @@ export async function triageConversation(conversationId: number): Promise<{ ok: 
       aiTriagedAt: nowStr(),
       aiTriageFails: 0,
     }).where(eq(whatsappConversations.id, conversationId));
-    await applyBoxFromIntent(conversationId, intent);
+    const { normalizeConfidence } = await import("../shared/commsRouting");
+    await routeAfterTriage(conversationId, { intent, confidence: normalizeConfidence(r.output.confidence), reason: r.output.reason ?? null });
     return { ok: true };
   } catch (err) {
     if (!isStopAiError(err)) {

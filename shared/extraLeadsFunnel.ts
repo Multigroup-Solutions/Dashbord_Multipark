@@ -16,13 +16,15 @@ export const LEAD_STATUSES = ["new", "contacted", "replied", "converted", "decli
 export const EXTRA_LEADS_LIST_LIMIT = 500;
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
 
-export const LEAD_SOURCES = ["manual", "site", "email"] as const;
+export const LEAD_SOURCES = ["manual", "site", "email", "whatsapp"] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
 export const LEAD_SOURCE_LABELS: Record<string, string> = {
   manual: "Manual",
   site: "Site",
   email: "Email",
+  // Jorge (8 out 2026): 1.º contacto de recrutamento por WhatsApp, separado pela IA.
+  whatsapp: "WhatsApp",
 };
 
 export const LEAD_SLA = {

@@ -46,17 +46,20 @@ export function capRows<T>(rows: T[], max = MAX_TOOL_ROWS): { rows: T[]; total: 
  * Executor para o runAi: só corre ferramentas desta lista (o modelo não
  * inventa outras), verifica `available` outra vez e chama `onCall` ANTES de
  * correr (registo de auditoria: nome + parâmetros, nunca resultados).
+ * `onError` recebe o texto de cada `{ error }` devolvido (Multis 2: a resposta
+ * fica marcada em "Perguntas que falharam").
  */
 export function makeToolExecutor<Ctx>(
   tools: ChatTool<Ctx>[],
   ctx: Ctx,
-  hooks: { onCall?: (name: string, args: Record<string, unknown>) => Promise<void> | void } = {},
+  hooks: {
+    onCall?: (name: string, args: Record<string, unknown>) => Promise<void> | void;
+    onError?: (name: string, error: string) => void;
+  } = {},
 ): (call: AiToolCall) => Promise<Record<string, unknown>> {
   const byName = new Map(tools.map((t) => [t.name, t]));
-  return async (call) => {
+  const run = async (call: AiToolCall, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const tool = byName.get(call.name);
-    const args = call.args && typeof call.args === "object" ? call.args : {};
-    try { await hooks.onCall?.(call.name, args); } catch { /* o registo nunca parte o chat */ }
     if (!tool || !tool.available(ctx)) return { error: "Ferramenta indisponível para esta pessoa." };
     try {
       return await tool.run(args, ctx);
@@ -67,5 +70,14 @@ export function makeToolExecutor<Ctx>(
       if (code === "BAD_REQUEST") return { error: "Parâmetros inválidos." };
       return { error: "Não foi possível obter estes dados agora." };
     }
+  };
+  return async (call) => {
+    const args = call.args && typeof call.args === "object" ? call.args : {};
+    try { await hooks.onCall?.(call.name, args); } catch { /* o registo nunca parte o chat */ }
+    const result = await run(call, args);
+    if (typeof result?.error === "string") {
+      try { hooks.onError?.(call.name, result.error); } catch { /* idem */ }
+    }
+    return result;
   };
 }

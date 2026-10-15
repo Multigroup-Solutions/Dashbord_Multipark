@@ -1,6 +1,11 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { BlockedOwnDocuments } from "@/components/BlockedOwnDocuments";
 import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
+import { PersonalDeviceBinder } from "@/components/PersonalDeviceBinder";
+import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
+import { checkoutSummaryLines } from "@shared/pdaSession";
+import { PushAlertsPrompt } from "@/components/login/PushAlertsPrompt";
+import { codeLoginCached, useCodeLoginOption } from "@/lib/loginOptions";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -38,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import { currentPath, getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG } from "@shared/const";
+import { isComebackPosition, isInactivitySuspensionText } from "@shared/comeback";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
 import CameraCapture from "@/components/CameraCapture";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -94,6 +100,8 @@ import {
   Inbox,
   HardDrive,
   PhoneCall,
+  Plane,
+  UserRound,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -118,10 +126,17 @@ import { noAccessHint, noLinkedRecordMessage } from "@shared/ownAccess";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PAGE_RELOAD_EVENT, jumpTo } from "@/lib/jumpTo";
+import { driveUrl, useDriveLinkContext } from "@/lib/driveLink";
 import { NOTIFICATION_KIND_DEFS, NOTIFY_CITY_LABELS, kindLabel, type NotifyCity } from "@shared/notificationRouting";
+import { useTerminal } from "@/components/terminal/useTerminal";
+import { TerminalBar, TerminalBusyDialog } from "@/components/terminal/TerminalBar";
 
-/** Lote 45: o "Drive" do menu abre o Google Drive da pessoa (a conta Google com que está no browser). */
-export const GOOGLE_DRIVE_URL = "https://drive.google.com/drive/my-drive";
+/**
+ * Lote 45: o "Drive" do menu abre o Google Drive num separador novo. 14 out 2026
+ * ("abre um drive qualquer"): no clique troca-se pelo Shared Drive da empresa,
+ * na conta Google da pessoa (`authuser`) — ver lib/driveLink.ts.
+ */
+export const GOOGLE_DRIVE_URL = "https://drive.google.com/drive/shared-drives";
 
 /** Papel ou utilizador (com os overrides de módulo que vêm do auth.me). */
 export type AccessSubject = string | { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
@@ -140,10 +155,14 @@ export type MenuItem = {
   external?: string;
   /** Lote 46: nome no menu de quem só vê o que é SEU aqui (ex.: "A minha ficha" em vez de "Recursos Humanos"). */
   ownLabel?: string;
+  /** 14 out 2026: só estes papéis (além do módulo), ex.: Condutores e agentes só a supervisor e acima. */
+  roles?: readonly string[];
 };
 
 /** Abre um item do menu: navega, ou abre o endereço externo num separador novo. */
 export function openMenuItem(item: Pick<MenuItem, "path" | "external">, navigate: (path: string) => void): void {
+  // Drive: o URL já com a conta certa e o Shared Drive (em cache — o window.open não pode esperar).
+  if (item.external === GOOGLE_DRIVE_URL) item = { ...item, external: driveUrl("shared") };
   if (item.external) {
     window.open(item.external, "_blank", "noopener,noreferrer");
     return;
@@ -158,7 +177,8 @@ export type MenuGroup = {
 };
 
 /** O item é visível para a pessoa (papel + overrides)? (sem módulo = visível a qualquer sessão) */
-export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf" | "beyondOwn">): boolean {
+export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf" | "beyondOwn"> & { roles?: readonly string[] }): boolean {
+  if (item.roles && !item.roles.includes(typeof userRole === "string" ? userRole : String(userRole?.role ?? ""))) return false;
   const mods = item.anyOf ?? (item.module ? [item.module] : []);
   if (item.beyondOwn) return mods.some(m => seesBeyondOwn(userRole, m));
   return mods.length === 0 || mods.some(m => can(userRole, m, "view"));
@@ -216,8 +236,9 @@ export const menuGroups: MenuGroup[] = [
       // Avaliação: separadores "Dia" (avaliacao_operacional) e "Mês";
       // extra/condutor veem a própria avaliação — filtrado no servidor
       { icon: Trophy, label: "Avaliação", path: "/avaliacao", anyOf: ["avaliacao", "avaliacao_operacional"] },
-      // Jorge, 3 out 2026: saíram das Críticas (mesmo acesso: módulo Críticas, team leader+).
-      { icon: Car, label: "Condutores e agentes", path: "/pessoas/condutores-agentes", module: "criticas" },
+      // Jorge, 3 out 2026: saíram das Críticas. 14 out 2026: módulo próprio — só supervisor,
+      // back office, admin e super admin (o Desempenho lá dentro só o super admin).
+      { icon: Car, label: "Condutores e agentes", path: "/pessoas/condutores-agentes", module: "condutores_agentes" },
     ],
   },
   {
@@ -226,7 +247,8 @@ export const menuGroups: MenuGroup[] = [
     items: [
       { icon: LayoutDashboard, label: "Reservas & Operações", path: "/operacoes", module: "reservas_operacoes" },
       { icon: Wrench, label: "Serviços", path: "/servicos", module: "servicos" },
-      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario", "radio"] },
+      // 12 out 2026: + o Resumo do dia (veio da Passagem de turno, mesma permissão).
+      { icon: Truck, label: "Actividade Diária", path: "/operacional", anyOf: ["atividade_diaria", "historico_diario", "radio", "passagem_resumo_dia"] },
       { icon: ListTodo, label: "Tarefas", path: "/tarefas", module: "tarefas" },
       { icon: CalendarDays, label: "Extras Dia", path: "/extras-dia", module: "extras_dia" },
       { icon: CalendarCheck, label: "Passagem de Turno", path: "/passagem-turno", module: "passagem_turno" },
@@ -335,6 +357,9 @@ export default function DashboardLayout({
   });
   const { loading, user, error, logout } = useAuth();
   const utils = trpc.useUtils();
+  // Plano 56: "Iniciar sessão" vai à página de entrada com o interruptor ligado
+  // (lá decide-se se há Google neste PDA); a resposta fica guardada para o getLoginUrl.
+  const { codeLogin: codeLoginNow } = useCodeLoginOption();
   // Conta sem acesso (desativada/desconhecida): a MESMA mensagem que a página
   // de entrada mostra — nunca "inicia sessão", que levaria a tentar em ciclo.
   const accessDenied = error?.message === ACCESS_DENIED_MSG;
@@ -380,7 +405,7 @@ export default function DashboardLayout({
               size="lg"
               className="w-full shadow-lg hover:shadow-xl transition-all"
             >
-              Entrar com Google
+              {(codeLoginNow ?? codeLoginCached()) ? "Entrar" : "Entrar com Google"}
             </Button>
           )}
         </div>
@@ -399,9 +424,16 @@ export default function DashboardLayout({
           <p className="text-sm text-muted-foreground">
             {employee.loginBlockedReason ?? "Contacta o teu supervisor."}
           </p>
-          <p className="text-xs text-muted-foreground border-t pt-3">
-            Para libertar o acesso, fala com um supervisor ou administrador.
-          </p>
+          {/* 49c: os "Suspenso: sem atividade" passam a inativos ao voltar a entrar → chegam à ficha e ao "Voltei". */}
+          {isInactivitySuspensionText(employee.loginBlockedReason) && isComebackPosition(employee.position) ? (
+            <p className="text-sm border-t pt-3">
+              Estavas inativo por falta de atividade. <strong>Sai e volta a entrar com a Google</strong>: passas a ver a tua ficha, atualizas os teus dias livres e dizes ao RH que voltaste.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground border-t pt-3">
+              Para libertar o acesso, fala com um supervisor ou administrador.
+            </p>
+          )}
           {/* 41c: bloqueado por documentos? Carrega-os daqui (só a tua ficha). */}
           <BlockedOwnDocuments />
           {/* 20d: sem isto não havia como sair (ex.: PDA partilhado) */}
@@ -436,6 +468,7 @@ function DashboardLayoutContent({
   setSidebarWidth,
 }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
+  useDriveLinkContext(user); // o "Drive" do menu já sabe a conta e o Shared Drive quando se carrega
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar, setOpenMobile } = useSidebar();
   const isCollapsed = state === "collapsed";
@@ -466,26 +499,35 @@ function DashboardLayoutContent({
     refetchInterval: 120_000,
   });
   const [pontoMode, setPontoMode] = useState<"check_in" | "check_out" | null>(null);
+  // Terminal pelo perfil (plano 56 B1; interruptor PONTO_TERMINAL): "Estou no terminal"
+  // no menu da foto, opção na entrada do ponto e barra fina por baixo do cabeçalho.
+  const terminal = useTerminal(!!employee);
+  const terminalOn = !!terminal.status?.enabled && !!terminal.status?.eligible;
+  const [pontoTerminal, setPontoTerminal] = useState(false);
   const pontoDone = () => {
     utils.rh.timeRecords.myStatus.invalidate();
     utils.rh.timeRecords.list.invalidate();
+    utils.terminal.status.invalidate();
     setPontoMode(null);
+    setPontoTerminal(false);
   };
   const quickCheckIn = trpc.rh.timeRecords.checkIn.useMutation({
     onSuccess: (d) => {
       toast.success("Entrada registada!");
-      // Terminal no ponto (aeroporto) — só vem preenchido com o interruptor ligado
-      if (d?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
-      if (d?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
+      // "Estou no terminal" marcado: a entrada fica feita mesmo com o terminal ocupado
+      if (d?.terminalSession) terminal.handleOpenResult(d.terminalSession as any);
       pontoDone();
     },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
   });
   const quickCheckOut = trpc.rh.timeRecords.checkOut.useMutation({
     onSuccess: (d) => {
+      // Plano 56 (A2): num PDA a saída acaba a sessão — o resumo fica no ecrã e "A sessão termina em 10 s".
+      if (d?.pdaSessionEnded) { setPontoMode(null); beginPdaSessionEnd(checkoutSummaryLines(d as any)); return; }
       toast.success(`Saída registada! ${d.hoursWorked}h trabalhadas`);
-      if (d?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
-      if (d?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
+      if (d?.terminalReleased) toast.info(d.terminalReleased.message, { duration: 8000 });
+      if (d?.terminal === "partial") toast.success(`${d.terminalLabel ?? "Terminal até à última recolha/entrega"}. Daí até à saída conta como hora normal.`, { duration: 10000 });
+      if (d?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS) e ainda não há recolhas/entregas tuas no troço. Não paga terminal até o RH confirmar.", { duration: 10000 });
       pontoDone();
     },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
@@ -493,7 +535,7 @@ function DashboardLayoutContent({
   const submitPonto = (base64: string, mimeType: string) => {
     const employeeId = pontoQ.data?.employeeId;
     if (!employeeId || !pontoMode) return;
-    const doSubmit = (lat: number, lng: number) => {
+    const doSubmit = (lat: number, lng: number, accuracy: number) => {
       const payload = {
         employeeId,
         photoBase64: base64,
@@ -502,7 +544,7 @@ function DashboardLayoutContent({
         longitude: String(lng),
         locationName: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
       };
-      if (pontoMode === "check_in") quickCheckIn.mutate(payload);
+      if (pontoMode === "check_in") quickCheckIn.mutate({ ...payload, ...(pontoTerminal && terminalOn ? { terminal: true, accuracy } : {}) });
       else quickCheckOut.mutate(payload);
     };
     // O ponto exige localização EXATA (o bloqueio global da app foi removido —
@@ -519,7 +561,7 @@ function DashboardLayoutContent({
           setPontoMode(null);
           return;
         }
-        doSubmit(pos.coords.latitude, pos.coords.longitude);
+        doSubmit(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
       },
       () => { toast.error("Sem acesso à localização. Autoriza a localização exata para picar o ponto."); setPontoMode(null); },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
@@ -632,7 +674,8 @@ function DashboardLayoutContent({
   return (
     <>
       {/* Fase 2: login num PDA registado → o PDA fica com esta pessoa */}
-      <PdaDeviceBinder userId={user?.id} />
+      <PdaDeviceBinder userId={user?.id} pdaSession={(user as any)?.pdaSession ?? null} />
+      <PersonalDeviceBinder userId={user?.id} />
       {/* Segurança: sem localização precisa + permissão de câmara, a app não
           funciona (overlay bloqueante). */}
       <div className="relative" ref={sidebarRef}>
@@ -923,9 +966,17 @@ function DashboardLayoutContent({
                   )}
                 </div>
                 <DropdownMenuSeparator />
+                {/* Jorge (14 out 2026): o "Perfil" da barra do telemóvel também no computador.
+                    /perfil é pessoal (shared/routeAccess.ts): abre para todos os papéis, PDA e
+                    sem centro de custos incluídos. No telemóvel (< md) a barra de baixo
+                    (MobileTabBar, md:hidden) já tem o Perfil — aqui só a partir de md, sem repetir. */}
+                <DropdownMenuItem onClick={() => navigate("/perfil")} className="hidden cursor-pointer md:flex">
+                  <UserRound className="mr-2 h-4 w-4" />
+                  <span>O meu perfil</span>
+                </DropdownMenuItem>
                 {pontoStatus === "out" && (
                   <DropdownMenuItem
-                    onClick={() => setPontoMode("check_in")}
+                    onClick={() => { setPontoTerminal(false); setPontoMode("check_in"); }}
                     className="cursor-pointer text-green-700 focus:text-green-700"
                   >
                     <ArrowDownToLine className="mr-2 h-4 w-4" />
@@ -939,6 +990,16 @@ function DashboardLayoutContent({
                   >
                     <ArrowUpFromLine className="mr-2 h-4 w-4" />
                     <span>Dar saída (check-out)</span>
+                  </DropdownMenuItem>
+                )}
+                {terminalOn && !terminal.status?.session && (
+                  <DropdownMenuItem
+                    onClick={() => terminal.start(() => { setPontoTerminal(true); setPontoMode("check_in"); })}
+                    disabled={terminal.working}
+                    className="cursor-pointer text-sky-800 focus:text-sky-800 dark:text-sky-200"
+                  >
+                    <Plane className="mr-2 h-4 w-4" />
+                    <span>Estou no terminal</span>
                   </DropdownMenuItem>
                 )}
                 {employee && (
@@ -957,7 +1018,7 @@ function DashboardLayoutContent({
               </DropdownMenuContent>
             </DropdownMenu>
             {employee && <ProfilePhotoPrompt open={photoOpen} onOpenChange={setPhotoOpen} />}
-            <Dialog open={!!pontoMode} onOpenChange={(o) => { if (!o) setPontoMode(null); }}>
+            <Dialog open={!!pontoMode} onOpenChange={(o) => { if (!o) { setPontoMode(null); setPontoTerminal(false); } }}>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
@@ -965,8 +1026,15 @@ function DashboardLayoutContent({
                     {pontoMode === "check_in" ? "Entrada — Foto + GPS" : "Saída — Foto + GPS"}
                   </DialogTitle>
                 </DialogHeader>
+                {pontoMode === "check_in" && terminalOn && (
+                  <label className="flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-100">
+                    <input type="checkbox" className="h-4 w-4" checked={pontoTerminal} onChange={(e) => setPontoTerminal(e.target.checked)} />
+                    <Plane className="h-4 w-4" aria-hidden />
+                    <span>Estou no terminal</span>
+                  </label>
+                )}
                 {pontoMode && (
-                  <CameraCapture onCapture={submitPonto} onCancel={() => setPontoMode(null)} />
+                  <CameraCapture onCapture={submitPonto} onCancel={() => { setPontoMode(null); setPontoTerminal(false); }} />
                 )}
                 {(quickCheckIn.isPending || quickCheckOut.isPending) && (
                   <p className="text-sm text-muted-foreground text-center animate-pulse">
@@ -978,9 +1046,14 @@ function DashboardLayoutContent({
           </div>
         </div>
 
+        {/* Terminal pelo perfil: "Terminal Lisboa · desde 14:05 · Sair" + pedido de troca */}
+        <TerminalBar t={terminal} />
+        <TerminalBusyDialog t={terminal} />
         {/* pb extra: a última linha da página não fica por baixo da tab bar
             (mobile) nem do botão flutuante do Multis */}
         <main className="flex-1 p-4 lg:p-6 min-w-0 overflow-x-hidden pb-40 md:pb-24 lg:pb-24 bg-background">
+          {/* Plano 56: TL e supervisor recebem os códigos de entrada — "Ativar avisos" (uma vez por aparelho). */}
+          <PushAlertsPrompt role={user?.role ?? null} pdaSession={!!(user as any)?.pdaSession} />
           {routeDecision.kind === "no_access" ? (
             <NoAccessScreen onHome={() => setLocation(filteredItems[0]?.path ?? "/perfil", { replace: true })} onLogout={logout}
               hint={noAccessHint(location, new Set(filteredItems.map(i => i.path)))} onHint={(to) => setLocation(to)} />

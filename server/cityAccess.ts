@@ -8,10 +8,24 @@ export function isPersonalAccessPath(path: string): boolean {
     'rh.me', 'rh.timeRecords.myStatus',
     // O que é de cada um (a ficha vem da sessão): sem centro de custos também.
     'extrasAvailability.myWeek', 'extrasAvailability.setMyWeek', 'extrasAvailability.weekHints',
+    // Dias livres habituais (8 out 2026): de cada um, também com a ficha inativa e sem cidade.
+    'extrasAvailability.myPattern', 'extrasAvailability.setMyPattern',
     'evaluation.mine', 'evaluation.disputes.create',
     // 19c: a foto, o PDA, o Drive e terminar as próprias sessões são de cada um
     // (um extra novo sem cidade tirava a foto pedida e recebia "Sem centro de custos").
     'rh.uploadMyPhoto', 'operational.pdas.mine', 'googleDrive.status', 'settings.security.endMySessions',
+    // 49c: quem entra sem ficha liga a conta ("Sou novo" / "Já me candidatei") e quem está inativo diz "Voltei".
+    'accountLink.mine', 'accountLink.startCandidate', 'accountLink.request', 'accountLink.confirmCode', 'rh.comeback',
+    // Plano 56: a palavra-passe e os códigos de entrada que recebeu são de cada um.
+    'auth.password.status', 'auth.password.set', 'auth.password.change', 'auth.codes.pendingForMe',
+    // Plano 56 A2: a sessão Google num PDA passa a sessão de PDA (é da própria pessoa).
+    'auth.pda.bind',
+    // Plano 56 B1: o terminal da própria pessoa (a cidade vem do GPS e da ficha; sem cidade a resposta diz o que fazer).
+    'terminal.status', 'terminal.start', 'terminal.stop', 'terminal.requestHandover', 'terminal.answerHandover',
+    // Plano 56 B2: "Ainda estás no terminal?" (Sim, estou / Já saí) e "Ainda estou" (reabrir) — sempre a própria pessoa.
+    'terminal.answerStillHere', 'terminal.reopen',
+    // Telemóveis pessoais (13 out 2026): o PRÓPRIO telemóvel (registar, quem está nele, sair, deixar de ser pessoal).
+    'operational.personalDevices.register', 'operational.personalDevices.seen', 'operational.personalDevices.left', 'operational.personalDevices.unregisterMine',
   ].includes(path) || path.startsWith('notifications.') || path.startsWith('googleAccount.');
 }
 
@@ -33,6 +47,8 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
   'rh.accountSummary': 'employeeId', 'rh.agentSummary': 'employeeId', 'rh.autoMail': 'employeeId',
   'rh.myMonthSummary': 'employeeId', 'rh.timeRecords.monthlyHours': 'employeeId',
   'extrasAvailability.forEmployee': 'employeeId', 'rh.loginLinks': 'employeeId',
+  // Dias livres habituais da própria ficha (8 out 2026) — só a leitura; gravar a sua é pelo setMyPattern.
+  'extrasAvailability.patternFor': 'employeeId',
 };
 
 /**
@@ -41,7 +57,11 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
  * Só estes caminhos, e só para a própria ficha (ou caminhos sem ficha que
  * são de cada um).
  */
-const BLOCKED_SELF_PATHS = new Set(['rh.me', 'rh.byId', 'rh.documents.list', 'rh.documents.checklist', 'rh.documents.upload', 'rh.documents.uploadBatch', 'rh.uploadMyPhoto', 'permissions.mine', 'permissions.myCityAccess']);
+const BLOCKED_SELF_PATHS = new Set(['rh.me', 'rh.byId', 'rh.documents.list', 'rh.documents.checklist', 'rh.documents.upload', 'rh.documents.uploadBatch', 'rh.uploadMyPhoto', 'permissions.mine', 'permissions.myCityAccess',
+  // Plano 56: criar/mudar a própria palavra-passe logo a seguir ao código, mesmo com a ficha bloqueada.
+  'auth.password.status', 'auth.password.set', 'auth.password.change',
+  // Plano 56 A2: num PDA a sessão fica presa ao PDA também com a ficha bloqueada (acaba na saída, no logout, às 16 h).
+  'auth.pda.bind']);
 /** 'own' = precisa que a ficha do pedido seja a da pessoa; 'self' = não tem ficha no pedido (é sempre a da pessoa). PURA. */
 export function blockedSelfPathKind(path: string): 'own' | 'self' | null {
   if (!BLOCKED_SELF_PATHS.has(path)) return null;

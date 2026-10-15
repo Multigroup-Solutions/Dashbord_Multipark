@@ -54,7 +54,9 @@ export interface UpsertApplicationResult {
   submissionCount: number;
 }
 
-export async function upsertDriverApplication(input: DriverApplicationInput): Promise<UpsertApplicationResult> {
+export async function upsertDriverApplication(input: DriverApplicationInput, opts: { source?: "site" | "app" } = {}): Promise<UpsertApplicationResult> {
+  // 49c: "Sou novo — quero candidatar-me" na app entra pelo MESMO funil (lead, tarefa, aviso).
+  const origin = opts.source === "app" ? "[App]" : "[Website]";
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
 
@@ -96,7 +98,7 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
       action: "driver_application_resubmit",
       entity: "driver_applications",
       entityId: existing[0].id,
-      details: `[Website] Re-submissão de candidatura: ${fullName} <${email}> (${count}ª vez)`,
+      details: `${origin} Re-submissão de candidatura: ${fullName} <${email}> (${count}ª vez)`,
     });
     return { id: existing[0].id, created: false, submissionCount: count };
   }
@@ -108,7 +110,7 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
     action: "driver_application_create",
     entity: "driver_applications",
     entityId: id,
-    details: `[Website] Nova candidatura de condutor: ${fullName} <${email}>`,
+    details: `${origin} Nova candidatura de condutor: ${fullName} <${email}>`,
   });
   // Sino in-app para quem recruta NA CIDADE da candidatura (team leader,
   // supervisor, backoffice — ver shared/notificationRouting.ts). Só na
@@ -118,7 +120,7 @@ export async function upsertDriverApplication(input: DriverApplicationInput): Pr
     await notify({
       kind: "driver_application",
       city: fields.city ?? null,
-      title: `Nova candidatura Be a Driver: ${fullName}`,
+      title: opts.source === "app" ? `Nova candidatura pela app: ${fullName}` : `Nova candidatura Be a Driver: ${fullName}`,
       body: `${email}${fields.city ? ` · ${fields.city}` : ""}${fields.drivingExperience ? ` · ${fields.drivingExperience}` : ""}`,
       link: "/extras-leads?tab=candidaturas",
       entity: { type: "driver_application", id },
@@ -358,7 +360,7 @@ export async function approveApplication(
     if (reactivate) {
       await db.update(employees).set({ isActive: 1, deactivationReason: null, deactivationReasonOther: null, deactivationNotes: null, deactivatedAt: null, deactivatedById: null } as any)
         .where(and(eq(employees.id, employeeId), eq(employees.isActive, 0)));
-      await logActivity({ userId: reviewedById, action: "employee_reactivate", entity: "employee", entityId: employeeId, details: `Reativada ao aprovar a candidatura #${id} (confirmado por quem aprovou)` });
+      await logActivity({ userId: reviewedById, action: "employee_reactivate", entity: "employee", entityId: employeeId, details: existing?.deactivationReason === "candidato" ? `Ficha de candidato ativada ao aprovar a candidatura #${id}` : `Reativada ao aprovar a candidatura #${id} (confirmado por quem aprovou)` });
     }
   } catch (err) {
     // Falhou: a candidatura volta ao estado em que estava (pode tentar-se de novo).
@@ -403,6 +405,11 @@ export async function approveApplication(
     entityId: id,
     details: `Candidatura aprovada: ${app.fullName} <${app.email}> → employee ${employeeId}${created ? " (criado)" : " (existente)"} · ${costCenterNote}`,
   });
+
+  // 49c: a conta ligada que está como "utilizador" (candidato da app, ou
+  // inativo que voltou) passa ao papel do posto. Nunca parte a aprovação.
+  const { promoteRoleAfterActivation } = await import("./employeeActivation");
+  await promoteRoleAfterActivation({ id: reviewedById }, employeeId);
 
   // O lead correspondente (se existir) fica Convertido e ligado à ficha.
   const { markLeadConvertedForApplication } = await import("./extraLeadsSync");

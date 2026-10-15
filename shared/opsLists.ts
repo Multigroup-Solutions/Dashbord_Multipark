@@ -132,6 +132,11 @@ export interface OpsListRow {
   groupKey: string;
   groupLabel: string;
   ours: boolean;
+  /**
+   * 8 out 2026: parque operado por nós (os nossos e os de terceiros fora da
+   * lista do dono e das Definições) — etiqueta para a comissão do Marketplace.
+   */
+  operated: boolean;
   clientName: string | null;
   clientEmail: string | null;
   clientPhone: string | null;

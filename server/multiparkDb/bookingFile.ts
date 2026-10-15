@@ -30,7 +30,7 @@
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { cityAliases, ParamList, safeMultiparkRead, toIsoUtc, type MultiparkRead, type MultiparkReadUnavailableCode } from "./read";
 import {
-  BOOKING_CHANNEL_LABELS, ORIGIN_LABELS, classifyBookingChannel, classifyPark, type BookingChannel,
+  BOOKING_CHANNEL_LABELS, ORIGIN_LABELS, classifyBookingChannel, classifyPark, marketplaceOperated, type BookingChannel,
 } from "../../shared/multiparkParks";
 
 // Etiquetas das origens: as mesmas das Reservas do dia (classificador único).
@@ -176,7 +176,8 @@ export function pickResolution(ref: string, rows: J[], hintIds: readonly string[
 export const STATUS_LABELS: Record<string, string> = {
   PENDING: "Pendente",
   BOOKED: "Reservada",
-  CHECKING_IN: "A entrar",
+  // tarefa 62 (fluxo A): CHECKING_IN = o cliente ligou e vem a caminho ("em recolha")
+  CHECKING_IN: "Em recolha (cliente ligou)",
   CHECKED_IN: "No parque",
   MOVING: "Em movimento",
   PENDING_CHECKOUT: "À espera de saída",
@@ -192,7 +193,7 @@ export function statusLabel(s: string | null | undefined): string {
 export const CHANGE_TYPE_LABELS: Record<string, string> = {
   CREATED: "Criada",
   UPDATE: "Alteração",
-  CHECKING_IN: "A entrar",
+  CHECKING_IN: "Em recolha (cliente ligou)",
   CHECK_IN: "Check-in",
   MOVEMENT: "Movimento",
   PENDING_CHECKOUT: "À espera de saída",
@@ -422,6 +423,8 @@ export interface BookingFileCore {
     groupLabel: string;
     /** Porquê, em texto curto. */
     reason: string;
+    /** 8 out 2026: operado por nós (os nossos e os de terceiros fora da lista do dono) — etiqueta da comissão. */
+    operated: boolean;
   };
   checkIn: { day: string | null; time: string | null; at: string | null };
   checkOut: { day: string | null; time: string | null; at: string | null };
@@ -494,14 +497,16 @@ export interface BookingFileCore {
   pro: boolean;
 }
 
+// Tarefa 62 (fluxo A): o cliente liga → "Pendente"; o condutor pega no carro → "Em entrega"; o "Cheguei" é um
+// botão (quase não se usa); nas recolhas o cliente liga ~10 min antes → "Em recolha".
 const PHASES: Array<[string, string]> = [
   ["createdAt", "Criada"],
-  ["checkingInAt", "A entrar"],
+  ["checkingInAt", "Em recolha (cliente ligou)"],
   ["movingAt", "Em movimento"],
-  ["pendingCheckoutAt", "À espera de saída"],
-  ["arrivedAtDeliveryAt", "Chegou à entrega"],
+  ["pendingCheckoutAt", "Pendente (cliente ligou)"],
+  ["arrivedAtDeliveryAt", "Cheguei (botão)"],
   ["baggageWaitingAt", "À espera da bagagem"],
-  ["checkingOutAt", "A sair"],
+  ["checkingOutAt", "Em entrega (a caminho)"],
   ["cashierClosedAt", "Caixa fechada"],
 ];
 
@@ -534,7 +539,7 @@ export function mapCoreRow(r: CoreRow): BookingFileCore {
   const feeValue = num(b.partnerFeeValue) ?? (feeType === "FIXED" ? num(pa.feeFixedValue) : num(pa.feePercentage));
   const video = str(b.checkinVideo);
   const name = [str(c.firstName), str(c.lastName)].filter(Boolean).join(" ") || null;
-  const parkCls = classifyPark({ name: str(p.name), city: str(p.city), firebaseBrand: str(p.firebaseBrand), listingType: str(p.listingType) });
+  const parkCls = classifyPark({ name: str(p.name), city: str(p.city), address: str(p.address), firebaseBrand: str(p.firebaseBrand), listingType: str(p.listingType) });
   const ch = classifyBookingChannel({
     parkOurs: parkCls.ours, origin, partnerId, partnerName: str(pa.name), partnerType: str(pa.partnerType), paymentSource: str(b.paymentSource),
   });
@@ -551,6 +556,7 @@ export function mapCoreRow(r: CoreRow): BookingFileCore {
       id: str(b.parkId) ?? str(p.id), name: str(p.name), city: str(p.city),
       firebaseBrand: str(p.firebaseBrand), listingType: parkCls.listingType, status: str(p.status),
       ours: parkCls.ours, groupLabel: parkCls.label, reason: parkCls.reason,
+      operated: marketplaceOperated({ id: str(b.parkId) ?? str(p.id), name: str(p.name), ours: parkCls.ours }),
     },
     checkIn: { day: dayOf(b.checkInDate), time: str(b.checkInTime), at: iso(b.checkIn) },
     checkOut: { day: dayOf(b.checkOutDate), time: str(b.checkOutTime), at: iso(b.checkOut) },

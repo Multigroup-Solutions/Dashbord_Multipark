@@ -13,7 +13,9 @@ export type AiErrorCode =
   | "rate_limited"
   | "provider"
   | "invalid_output"
-  | "unsupported";
+  | "unsupported"
+  // Jorge (8 out 2026): documentos/CV do RH só com o Gemini em Vertex AI na UE.
+  | "eu_only";
 
 export const AI_USER_MESSAGES: Record<AiErrorCode, string> = {
   disabled: "Esta funcionalidade de IA está desligada.",
@@ -24,6 +26,7 @@ export const AI_USER_MESSAGES: Record<AiErrorCode, string> = {
   provider: "A IA não respondeu. Tenta outra vez.",
   invalid_output: "A IA devolveu uma resposta inválida. Tenta outra vez.",
   unsupported: "Este tipo de ficheiro não é suportado pela IA configurada.",
+  eu_only: "Esta funcionalidade só corre com a IA em Vertex AI na UE.",
 };
 
 export class AiError extends Error {
@@ -48,6 +51,10 @@ export class AiDisabledError extends AiError {
 }
 export class AiNotConfiguredError extends AiError {
   constructor() { super("not_configured"); this.name = "AiNotConfiguredError"; }
+}
+/** Ficheiros pessoais inteiros (documentos/CV do RH) fora do Vertex AI na UE. */
+export class AiEuOnlyError extends AiError {
+  constructor(feature: string) { super("eu_only", { detail: feature }); this.name = "AiEuOnlyError"; }
 }
 export class AiBudgetExceededError extends AiError {
   constructor() { super("budget"); this.name = "AiBudgetExceededError"; }

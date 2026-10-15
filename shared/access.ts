@@ -66,7 +66,7 @@ export type Action = "view" | "edit" | "export" | "manage";
 export interface Grant { access: Access; actions: readonly Action[] }
 
 export type ModuleId =
-  | "ficha" | "formacao" | "disponibilidade" | "avaliacao" | "avaliacao_operacional"
+  | "ficha" | "formacao" | "disponibilidade" | "avaliacao" | "avaliacao_operacional" | "condutores_agentes"
   | "servicos" | "historico_diario" | "pdas" | "tarefas" | "despesas"
   | "reservas_operacoes" | "extras_dia" | "parcerias" | "rh" | "rh_salarios"
   | "leads_extras" | "atividade_diaria" | "radio" | "passagem_turno" | "passagem_resumo_dia"
@@ -84,6 +84,7 @@ export const MODULES: readonly ModuleDef[] = [
   { id: "disponibilidade", label: "Disponibilidade (própria)", group: "Pessoal" },
   { id: "avaliacao", label: "Avaliação (mês e própria)", group: "Pessoas" },
   { id: "avaliacao_operacional", label: "Avaliação — Dia", group: "Pessoas" },
+  { id: "condutores_agentes", label: "Condutores e agentes", group: "Pessoas" },
   { id: "rh", label: "Recursos Humanos", group: "Pessoas" },
   { id: "rh_salarios", label: "RH — ordenados e processamento", group: "Pessoas" },
   { id: "leads_extras", label: "Leads de Extras", group: "Pessoas" },
@@ -153,6 +154,13 @@ const MATRIX_SPEC: Record<ModuleId, Row> = {
     ...same("national:ve", ...NAT_OPS), ...same("national:vexm", ...TOP),
   },
   avaliacao_operacional: { supervisor: "city:v", ...same("national:v", ...NAT_OPS), ...same("national:vx", ...TOP) },
+  // Jorge (14 out 2026): "isto não devia aparecer a toda a gente" — Pessoas →
+  // Condutores e agentes (as listas Condutores e Agentes e o detalhe de cada
+  // um) só supervisor (as cidades dele), back office, admin e super admin.
+  // Front office e team leader não (antes vinha do módulo Críticas: TL+). O
+  // separador Desempenho continua só do super admin, pelo papel (nenhuma
+  // permissão por pessoa o abre).
+  condutores_agentes: { supervisor: "city:v", backoffice: "national:v", ...same("national:v", ...TOP) },
   servicos: {
     ...same("city:v", "extra", "condutor"),
     ...same("city:ve", "team_leader", "supervisor"),

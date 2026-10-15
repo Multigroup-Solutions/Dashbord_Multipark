@@ -48,9 +48,12 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Respostas ao aviso de escala | `extras_schedule_reply` | Extras Dia (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Extra responde "não" ao aviso de escala, carrega em "Preciso de alterar" na confirmação do turno, ou resposta que o sistema não percebeu. |
 | A tua passagem de turno | `handover` | Passagem de Turno (view) | a pessoa | Pessoal | — | sim | Passagem de turno entregue (team leaders do turno seguinte) e lembrete de passagem em falta (team leaders do turno). |
 | Passagem de turno em falta | `handover_missing` | Passagem de Turno (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Lembrete de passagem de turno em falta (supervisores da cidade). |
-| Excesso de velocidade | `speed_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Alerta de velocidade (API GPS, registo manual, verificação Zello). |
+| Excesso de velocidade | `speed_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Alerta de velocidade (API GPS, registo manual, verificação Zello) e, com o interruptor GPS_SPEED_ALERTS (desligado por omissão), os excessos que a recolha do GPS do Zello encontra: um aviso por pessoa e dia, com quantos e a máxima (limite em Definições → Parâmetros → Limite de velocidade). |
 | GPS desligado | `gps_alert` | Histórico diário (GPS) (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Condutor com GPS desligado no Zello. |
 | A trabalhar sem PDA ou Zello | `ops_presence` | PDAs (view) | a pessoa | Pessoal | — | com interruptor | Verificação da presença operacional (só com OPS_PRESENCE_ALERTS ligado): ponto aberto sem PDA ou com o Zello desligado, ou movimentos na Multipark sem ponto. D50: obrigatória com o interruptor NOTIFY_CRITICAL_MANDATORY ligado (desligado por omissão). |
+| Códigos de entrada | `login_code` | Actividade Diária (view) | a pessoa | Pessoal | — | sim |  |
+| PDA registado noutro aparelho | `pda_device` | PDAs (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Plano 56 A2 (só com ENTRAR_COM_CODIGO ligado): o QR de um PDA foi lido noutro aparelho (operational.pdas.registerByQr) e o PDA mudou de aparelho. Vai aos supervisores da cidade do PDA, menos a quem registou. |
+| Terminal do aeroporto | `terminal` | Minha ficha (view) | a pessoa | Pessoal | — | não |  |
 | Relatório diário dos motoristas | `driver_daily_report` | Histórico diário (GPS) (view) | nacional | Admin, Super Admin | sim (desligado) | não | Fim da recolha diária do histórico GPS. |
 | Anomalias nas reservas | `anomaly_bookings` | Reservas & Operações (view) | por cidade | Supervisor, Admin, Super Admin | — | não | Deteção diária de anomalias nas reservas (só críticas). |
 | As tuas tarefas | `task` | Tarefas (view) | a pessoa | Pessoal | — | não | Tarefas: atraso, conclusão, comentários (criador, responsáveis, gestores da hierarquia). Nas automáticas (checklists, serviços, disponibilidade, fichas sem cidade) só os responsáveis, e só com "Avisos de atraso das tarefas automáticas" ligado. |
@@ -65,7 +68,9 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | IBAN por aprovar | `rh_bank_change` | Recursos Humanos (edit) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não |  |
 | Os teus documentos em falta | `my_docs_missing` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | Mesmo momento, para a própria pessoa (app + email). |
 | Documento recusado | `my_doc_rejected` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | RH → ficha → Documentos → "Recusar" (com motivo): para a própria pessoa (app + email). |
-| Candidaturas | `driver_application` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Candidatura nova "Be a Driver" no site. |
+| Candidaturas | `driver_application` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Candidatura nova "Be a Driver" no site, ou de quem entrou na app e carregou em "Sou novo — quero candidatar-me". |
+| Pedidos de ligação de conta | `account_link_request` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Ecrã "Liga a tua conta" (49c): alguém entrou com uma conta Google sem ficha e escreveu o email/telefone com que se candidatou ou trabalhou connosco — vai para o RH quando o código por email está desligado (ACCOUNT_LINK_EMAIL_CODE), quando não há uma só pessoa com esses dados, quando a ficha é da estrutura ou está desativada, ou quando as tentativas do código acabam. Também quando um candidato grava um telefone/NIF que já está noutra ficha ou candidatura (possível duplicado). À cidade da ficha encontrada (sem cidade: a quem vê todas) + à pessoa do recrutamento (Definições → rh.missingCityAssignee). |
+| Quer voltar | `employee_comeback` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Uma pessoa INATIVA (motivo que não bloqueia) entrou e carregou em "Voltei, quero trabalhar" (49c) — 1× por pessoa e dia, à cidade da ficha + à pessoa do recrutamento. Sem WhatsApp nem email. |
 | Lead respondeu | `lead_replied` | Leads de Extras (view) | por cidade | Team Leader, Supervisor, Backoffice, Admin, Super Admin | — | não | Lead de extras responde por WhatsApp. |
 | Leads à espera | `leads_waiting` | Leads de Extras (view) | por cidade | Supervisor, Backoffice, Admin, Super Admin | — | não | Resumo diário das leads à espera (por cidade da lead). |
 | Formação em atraso (equipa) | `training_overdue` | Formação (view) | por cidade | Team Leader, Supervisor, Admin, Super Admin | — | não | Formação obrigatória em atraso escalada às chefias. |
@@ -85,6 +90,9 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Caixa: casos graves | `cash_case_alert` | Caixa (por dia e correção) (view) | por cidade | Super Admin | sim (ligado) | não |  |
 | Parceiros: diferenças no fecho do mês | `partner_close_alert` | Parcerias (view) | nacional | Admin, Super Admin | sim (ligado) | não |  |
 | Caixa: resumo diário | `cash_daily_digest` | Caixa (por dia e correção) (view) | por cidade | Super Admin | sim (desligado) | não |  |
+| Caixa: diferença no dia (> 30 €) | `cash_confirm_alert` | Caixa (por dia e correção) (manage) | por cidade | Super Admin | — | não |  |
+| Caixa: justificação recusada | `cash_confirm_refused` | Caixa (por dia e correção) (view) | a pessoa | Pessoal | — | não |  |
+| Caixa: diferença grande no dia (> 70 €) | `cash_confirm_alert_email` | Caixa (por dia e correção) (manage) | por cidade | Super Admin | sim (ligado) | não |  |
 
 ### Marketing
 
@@ -101,6 +109,8 @@ O Super Admin entra sempre; o Admin entra sozinho quando a matriz lhe dá o mód
 | Integrações com problemas | `integration_alert` | Integrações (view) | nacional | Admin, Super Admin | sim (ligado) | não | Ligação (Google Ads, Meta, Google Business, WhatsApp) passa a precisar de religação ou fica em erro. D51: também quando alguém desliga o Google Business ou o Google Ads (menos a quem desligou), com o interruptor INTEGRATION_DISCONNECT_NOTIFY (desligado por omissão). |
 | Crons parados | `cron_stale` | Definições (view) | nacional | Admin, Super Admin | sim (ligado) | não | Cron parado há mais do dobro do intervalo. |
 | A tua conta Google | `google_account_reauth` | Minha ficha (view) | a pessoa | Pessoal | sim (ligado) | não | A autorização da tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada — 1× por mudança de estado. |
+| A tua entrada | `login_security` | Minha ficha (view) | a pessoa | Pessoal | — | sim |  |
+| Entradas recusadas por conta duplicada | `login_conflict` | Utilizadores (view) | nacional | Admin, Super Admin | — | não |  |
 | Sincronização Multipark | `sync_alert` | Sincronização (view) | nacional | Admin, Super Admin | — | não | Sem webhooks Multipark / webhooks retomados / reservas por sincronizar. |
 | Orçamento da IA | `ai_budget` | Definições (view) | nacional | Admin, Super Admin | sim (desligado) | não | Gasto da IA chega ao orçamento do mês. |
 

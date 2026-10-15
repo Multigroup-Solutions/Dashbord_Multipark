@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PersonLinksDialog } from '@/components/PersonLinksDialog';
+import { EmployeeAvailabilityPattern } from '@/components/AvailabilityPatternCard';
 
 /**
  * 41a: o agente da Multipark desta ficha (principal + extra), dentro do cartão
@@ -51,6 +52,9 @@ function EmployeeAgentSection({ employeeId, name }: { employeeId: number; name?:
  * nenhuma: os emails da ficha com que tem de entrar e as contas que entraram
  * SEM ficha e parecem ser dela (só a quem gere o RH de todas as cidades).
  */
+/** Formas de entrar que contam como "já entrou" (Google, código, palavra-passe). */
+const LOGGED_IN_METHODS = new Set(['google', 'email_code', 'password']);
+
 function EmployeeLoginsSection({ employeeId }: { employeeId: number }) {
   const q = trpc.rh.loginLinks.useQuery({ employeeId });
   const d = q.data;
@@ -59,11 +63,12 @@ function EmployeeLoginsSection({ employeeId }: { employeeId: number }) {
   if (!d) return null;
   const active = d.logins.filter(l => l.isActive);
   return <div className="space-y-2">
-    <p className="flex items-center gap-2 text-sm font-medium"><LogIn className="h-4 w-4" />Entra com a Google como</p>
+    <p className="flex items-center gap-2 text-sm font-medium"><LogIn className="h-4 w-4" />Entra como</p>
     {active.length > 0 ? <ul className="space-y-1">{active.map(l => <li key={l.userId} className="flex flex-wrap items-center gap-2 text-sm">
       <Badge variant={l.principal ? 'default' : 'secondary'}>{l.principal ? 'principal' : 'extra'}</Badge>
       <span className="min-w-0 [overflow-wrap:anywhere]">{l.email ?? `conta #${l.userId}`}</span>
-      <span className="text-xs text-muted-foreground">{l.lastSignedIn && l.loginMethod === 'google' ? `último login ${l.lastSignedIn}` : 'ainda não entrou'}</span>
+      {/* Plano 56: também conta quem entrou com um código ou com a palavra-passe. */}
+      <span className="text-xs text-muted-foreground">{l.lastSignedIn && LOGGED_IN_METHODS.has(l.loginMethod ?? '') ? `último login ${l.lastSignedIn}${l.loginMethod === 'google' ? ' (Google)' : l.loginMethod === 'password' ? ' (palavra-passe)' : ' (código)'}` : 'ainda não entrou'}</span>
     </li>)}</ul>
       : <div role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/20 dark:text-amber-100 space-y-1">
         <p><strong>Sem conta ligada.</strong> {d.fichaEmails.length
@@ -78,6 +83,40 @@ function EmployeeLoginsSection({ employeeId }: { employeeId: number }) {
       </li>)}</ul>
     </div>}
     {d.warnings.length > 0 && <ul className="list-disc pl-5 text-xs text-amber-800 dark:text-amber-200 space-y-1">{d.warnings.map(w => <li key={w}>{w}</li>)}</ul>}
+    {d.canLink && <EmployeeLinkRequests employeeId={employeeId} />}
+  </div>;
+}
+
+/**
+ * 49c: pedidos "Liga a tua conta" e possíveis duplicados que apontam para
+ * esta ficha — "Pedido de ligação: <email Google> diz ser <email/telefone>"
+ * com Ligar / Recusar (as regras das Ligações). Só quem gere o RH.
+ */
+function EmployeeLinkRequests({ employeeId }: { employeeId: number }) {
+  const utils = trpc.useUtils();
+  const q = trpc.accountLink.forEmployee.useQuery({ employeeId }, { retry: false });
+  const decide = trpc.accountLink.decide.useMutation({
+    onSuccess: (_r, v) => {
+      toast.success(v.action === 'link' ? 'Conta ligada a esta ficha.' : v.action === 'done' ? 'Marcado como tratado.' : 'Pedido recusado.');
+      utils.accountLink.forEmployee.invalidate({ employeeId });
+      utils.rh.loginLinks.invalidate({ employeeId });
+      utils.rh.accountSummary.invalidate({ employeeId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const list = q.data?.requests ?? [];
+  if (!list.length) return null;
+  return <div role="status" className="space-y-2 rounded-md border border-sky-300 bg-sky-50 p-3 text-sm text-sky-950 dark:border-sky-800 dark:bg-sky-950/20 dark:text-sky-100">
+    {list.map(r => <div key={r.id} className="space-y-1">
+      <p className="font-medium [overflow-wrap:anywhere]">{r.summary}</p>
+      <p className="text-xs">{r.createdAt}{r.note ? ` · ${r.note}` : ''}{r.otherEmployeeId ? <> · <Link className="underline" href={`/rh?employeeId=${r.otherEmployeeId}`}>abrir a ficha #{r.otherEmployeeId}</Link></> : null}</p>
+      {q.data?.canDecide && <div className="flex flex-wrap gap-2">
+        {r.kind === 'link'
+          ? <Button size="sm" className="h-7" disabled={decide.isPending} onClick={() => decide.mutate({ requestId: r.id, action: 'link', employeeId })}><Link2 className="h-3.5 w-3.5 mr-1" />Ligar a esta ficha</Button>
+          : <Button size="sm" variant="outline" className="h-7" disabled={decide.isPending} onClick={() => decide.mutate({ requestId: r.id, action: 'done' })}>Já tratei</Button>}
+        <Button size="sm" variant="ghost" className="h-7" disabled={decide.isPending} onClick={() => { if (confirm(r.kind === 'duplicate' ? 'Não é a mesma pessoa?' : 'Recusar este pedido?')) decide.mutate({ requestId: r.id, action: 'reject' }); }}>{r.kind === 'duplicate' ? 'Não é a mesma pessoa' : 'Recusar'}</Button>
+      </div>}
+    </div>)}
   </div>;
 }
 
@@ -120,6 +159,8 @@ export function EmployeeAccessAvailability({ employeeId, employeeName }: { emplo
     <Card>
       <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="h-4 w-4" />Disponibilidade</CardTitle></CardHeader>
       <CardContent className="space-y-3">
+        {/* Dias livres habituais (8 out 2026): esboço, não datas. */}
+        <EmployeeAvailabilityPattern employeeId={employeeId} />
         <div className="flex items-center justify-between gap-2"><Button size="icon" variant="outline" aria-label="Semana anterior" onClick={() => moveWeek(-7)}><ChevronLeft className="h-4 w-4" /></Button>
           <span className="text-sm font-medium">Semana de {format(new Date(`${weekStart}T12:00:00`), 'dd/MM/yyyy')}</span>
           <Button size="icon" variant="outline" aria-label="Semana seguinte" onClick={() => moveWeek(7)}><ChevronRight className="h-4 w-4" /></Button></div>

@@ -18,7 +18,9 @@ import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { isForbidden } from "@/lib/queryRetry";
 import { availabilityWeekFrom } from "@shared/availabilityWeek";
 import { NoCityNotice, NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
+import { ComeBackCard } from "@/components/ComeBackCard";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
+import { MyAvailabilityPatternCard } from "@/components/AvailabilityPatternCard";
 
 // Semana a mostrar: a do link (?week=, levada à segunda-feira) ou a PRÓXIMA
 // semana de Lisboa — calculada aqui (antes vinha do servidor e, se essa
@@ -69,7 +71,7 @@ export default function DisponibilidadePage() {
 
   // Lote 46: conta Google sem ficha → diz qual é a conta e o que fazer (sem ir ao servidor).
   if ((user as any)?.employee === null) return <NoLinkedRecordNotice email={user?.email} />;
-  return <MyAvailability />;
+  return <><ComeBackCard /><MyAvailability /></>;
 }
 
 const HUB_OPEN_KEY = "mp.disponibilidade.sections.v1";
@@ -193,6 +195,8 @@ function MyAvailability() {
   return (
     <div className="max-w-2xl mx-auto py-6 px-4 space-y-4">
       {missingCostCenter && <NoCityNotice />}
+      {/* Dias livres habituais (8 out 2026): esboço, não datas — por cima da semana. */}
+      <MyAvailabilityPatternCard />
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

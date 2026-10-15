@@ -14,6 +14,7 @@ import { apiKeysRouter } from './apiKeysRouter';
 import { evaluationRouter } from './evaluationRouter';
 import { assistantRouter } from './assistant/router';
 import { aiOpsRouter } from './aiOps/router';
+import { commsRoutingRouter } from './commsRoutingRouter';
 import { z } from "zod";
 import { ACCESS_DENIED_MSG, COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -36,7 +37,7 @@ import {
 } from "./usersDirectory";
 import { storagePut } from "./storage";
 import { CLOTHING_MAX_ITEMS, CLOTHING_MAX_QTY, CLOTHING_SIZES, CLOTHING_TYPES, normalizeClothingItems } from "../shared/clothing";
-import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
+import { DEACTIVATION_NOTES_MAX, DIALOG_DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
 import { isIsoDay, lisbonToday } from "../shared/expensePeriods";
 import { HANDOVER_CITIES, maxHandoverDate } from "../shared/shiftHandover";
 import { MATERIAL_EXCEPTIONS, OPEN_ITEM_KINDS, OPEN_ITEMS_MAX } from "../shared/shiftHandoverAuto";
@@ -101,6 +102,7 @@ import {
   markConversationRead,
   replyToConversation,
 } from "./whatsappInbox";
+import { INBOX_CITY_FILTERS } from "../shared/whatsappInboxView";
 import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import { crmQuerySchema } from "../shared/crmFilters";
@@ -110,8 +112,13 @@ import { rhViewer } from "./rhGuards";
 import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { expensesRouter } from "./expensesRouter";
 import { rhRouter } from "./rhRouter";
+import { accountLinkRouter } from "./accountLinkRouter";
 import { operationalRouter } from "./operationalRouter";
+import { terminalRouter } from "./terminalRouter";
 import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
+import { timesProbeProcedures } from "./sondaTemposRouter";
+import { availabilityPatternProcedures } from "./availabilityPatternRouter";
+import { loginProcedures } from "./loginRouter";
 
 /** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
@@ -120,6 +127,17 @@ const LEAD_STATUS_ENUM = LEAD_STATUSES;
 
 // Dia "YYYY-MM-DD" válido (mês/dia reais) — nunca colado em SQL, mas validado na mesma.
 const handoverDaySchema = z.string().refine(isIsoDay, "Data inválida (AAAA-MM-DD)");
+// Despesas do turno (12 out 2026): dados do talão, todos opcionais — escritos à mão ou lidos pela IA.
+// As regras (NIF, data do talão, IVA ≤ total, categoria) estão em server/shiftExpenses.ts.
+const shiftExpenseExtrasInput = {
+  supplier: z.string().max(256).nullable().optional(),
+  supplierNif: z.string().max(40).nullable().optional(),
+  documentNumber: z.string().max(64).nullable().optional(),
+  invoiceDate: z.string().max(10).nullable().optional(),
+  vatAmount: z.number().finite().min(0).max(100_000).nullable().optional(),
+  categoryId: z.number().int().positive().nullable().optional(),
+  extractedByAi: z.boolean().optional(),
+};
 
 // ─── CRM: auxiliares do router `crm` ────────────────────────────────────────
 
@@ -440,6 +458,33 @@ async function bookingRefInScope(ref: string): Promise<boolean | "unavailable"> 
 const dayStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const crossRefInput = z.object({ from: dayStr, to: dayStr, projectId: z.number().optional(), noProject: z.boolean().optional() });
 
+/** Lote 57: quem vê as caixas de email (a mesma forma do mail.*), com os acessos à parte do pedido. */
+function mailViewerFrom(user: { id: number; role: string; accessOverrides?: any }): { id: number; role: string; accessOverrides: any } {
+  const w = withOverrides(user as any) as any;
+  return { id: w.id, role: w.role, accessOverrides: w.accessOverrides ?? null };
+}
+
+/**
+ * Lote 57: a pessoa usa as caixas partilhadas da Comunicação? (a mesma regra do
+ * mail.*: o super admin sempre; os outros com a Comunicação acima de "own").
+ * Sim → passa pela matriz (a cidade das caixas fica a da Comunicação). Não →
+ * "sem acesso às caixas" (≠ erro, ≠ "sem emails").
+ */
+function sharedMailGate(user: any, viewer: { role: string }): boolean {
+  if (viewer.role === "super_admin") return true;
+  if (!canAccess(user, "comunicacao", "view")) return false;
+  requireAccess(user, "comunicacao", "view");
+  return true;
+}
+
+/** Lote 57: a sugestão é de uma conversa que a pessoa vê (caixa partilhada + cidade da Comunicação). */
+async function assertSuggestionThread(user: any, viewer: { id: number; role: string; accessOverrides: any }, threadId: number): Promise<void> {
+  if (!sharedMailGate(user, viewer)) throw new TRPCError({ code: "FORBIDDEN", message: "Não tens acesso às caixas de email da Comunicação." });
+  const { threadAccess } = await import("./mail/inbox");
+  const acc = await threadAccess(viewer, threadId);
+  if (acc.personal || !acc.mailbox) throw new TRPCError({ code: "FORBIDDEN", message: "Esta conversa não é de uma caixa partilhada." });
+}
+
 export const appRouter = router({
   system: systemRouter,
 
@@ -546,7 +591,14 @@ export const appRouter = router({
         const { getUserModuleOverrides } = await import("./db");
         accessOverrides = await getUserModuleOverrides(u.id);
       } catch { /* sem overrides: fica o papel */ }
-      const uElev = { ...u, accessOverrides };
+      // Plano 56 (A2): sessão presa a um PDA (nome, etiqueta da sessão, fim) — o
+      // ecrã usa-a no logout e na saída do ponto ("A sessão termina em 10 s").
+      let pdaSession: Awaited<ReturnType<typeof import("./pdaSession").pdaSessionInfo>> = null;
+      try {
+        const { pdaSessionInfo } = await import("./pdaSession");
+        pdaSession = await pdaSessionInfo(opts.ctx.req);
+      } catch { pdaSession = null; }
+      const uElev = { ...u, accessOverrides, pdaSession };
       // Se houver ficha de colaborador, devolve também o estado dos docs
       // e bloqueio. Lazy check para extras: actualiza flags se passou tempo.
       try {
@@ -574,11 +626,21 @@ export const appRouter = router({
         return uElev;
       }
     }),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return { success: true } as const;
-    }),
+    // Plano 56 (A2): `expect` = a conta (e a sessão de PDA) que este separador
+    // pensa que tem. Se o cookie já é de outra pessoa/sessão (outro separador
+    // entrou entretanto), não se mexe em nada. Numa sessão de PDA, acaba-a.
+    logout: publicProcedure
+      .input(z.object({ expect: z.object({ userId: z.number().int(), tag: z.string().max(32).nullable() }).nullable().optional() }).optional())
+      .mutation(async ({ ctx, input }) => {
+        const { pdaLogout } = await import("./pdaSession");
+        const r = await pdaLogout(ctx.req, ctx.user?.id ?? null, input?.expect ?? null).catch(() => "ok" as const);
+        if (r === "stale") return { success: true, stale: true } as { success: true; stale?: boolean };
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+        return { success: true } as { success: true; stale?: boolean };
+      }),
+    // Plano 56 (A1): entrar com email + código + palavra-passe (ENTRAR_COM_CODIGO).
+    ...loginProcedures,
   }),
 
   // ── USERS ───────────────────────────────────────────────────────────────────
@@ -732,7 +794,7 @@ export const appRouter = router({
         isActive: z.boolean(),
         // Motivo + notas: OPCIONAIS e só lidos na desativação (sem motivo =
         // `inatividade`). Vocabulário e regra em shared/deactivationReasons.ts.
-        reason: z.enum(DEACTIVATION_REASON_CODES).optional(),
+        reason: z.enum(DIALOG_DEACTIVATION_REASON_CODES).optional(),
         reasonOther: z.string().max(DEACTIVATION_REASON_OTHER_MAX).optional(),
         notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
       }))
@@ -777,6 +839,8 @@ export const appRouter = router({
             await updateEmployee(e.id, { isActive: input.isActive ? 1 : 0, ...deactivationColumns(input.isActive, meta) });
             await logActivity({ userId: ctx.user.id, action: input.isActive ? "activate" : "deactivate", entity: "employee", entityId: e.id,
               details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${e.fullName} com a conta #${input.userId}${deactivation ? ` — ${deactivation.summary}` : ""}` });
+            // 49c: reativar quem voltou / aprovar o candidato → a conta "utilizador" passa ao papel do posto.
+            if (input.isActive) await (await import("./employeeActivation")).promoteRoleAfterActivation(ctx.user, e.id);
             followed.push(e.fullName);
           }
         } catch (err: any) {
@@ -812,6 +876,25 @@ export const appRouter = router({
           token: invite.token,
           expiresAt: invite.expiresAt,
         };
+      }),
+    /**
+     * Plano 56: "Repor acesso" — tira a palavra-passe e o bloqueio, termina as
+     * sessões (sessionVersion + 1) e avisa a pessoa (entra com um código e cria
+     * outra). Fica no registo. Ninguém define a palavra-passe de outro.
+     */
+    resetAccess: protectedProcedure
+      .input(z.object({ userId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        if (input.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Para a tua conta usa o Perfil → Palavra-passe." });
+        const target = await assertCanManageUser(ctx.user, input.userId);
+        const { realLoginDeps, resetAccess } = await import("./loginCode");
+        await resetAccess(await realLoginDeps(), { id: ctx.user.id, name: ctx.user.name ?? null }, { id: target.id, name: target.name ?? null, email: target.email ?? null });
+        const { bumpSessionVersion } = await import("./appSettings");
+        await bumpSessionVersion(target.id);
+        // (auditoria A2) as sessões de PDA da pessoa acabam também (avisos do PDA incluídos).
+        const { endPdaSessionsAfterSessionBump } = await import("./pdaSession");
+        await endPdaSessionsAfterSessionBump([target.id], null, ctx.user.id);
+        return { success: true };
       }),
     getInvites: protectedProcedure
       .input(z.object({ userId: z.number() }))
@@ -1160,6 +1243,8 @@ export const appRouter = router({
   // ── AVALIAÇÃO (motor único: individual + "A minha avaliação") ────────────────
   evaluation: evaluationRouter,
   aiOps: aiOpsRouter,
+  // IA: separar emails e WhatsApp pelas caixas (o que decidiu e o que entrou no recrutamento).
+  commsRouting: commsRoutingRouter,
 
   // ── CATEGORIES ──────────────────────────────────────────────────────────────
   categories: router({
@@ -1487,6 +1572,8 @@ export const appRouter = router({
   }),
 
   rh: rhRouter,
+  // 49c: "Liga a tua conta" (conta Google sem ficha) + caixa do RH (pedidos, duplicados, quer voltar, candidatos)
+  accountLink: accountLinkRouter,
 
   // ─── MARKETING ────────────────────────────────────────────────────────────
   marketing: router({
@@ -1674,7 +1761,9 @@ export const appRouter = router({
         requireAccess(ctx.user, "marketing", "view");
         const { computeRuleBudgets } = await import("./marketingBudgetRule");
         const r = await computeRuleBudgets(input.month);
-        return r.ok ? { ok: true as const, baseMonth: r.baseMonth, count: r.rows.length, total: Math.round(r.rows.reduce((s, x) => s + x.amount, 0) * 100) / 100 } : { ok: false as const, baseMonth: r.baseMonth, reason: r.reason };
+        return r.ok
+          ? { ok: true as const, baseMonth: r.baseMonth, count: r.rows.length, total: Math.round(r.rows.reduce((s, x) => s + x.amount, 0) * 100) / 100, marketplaceWithoutCity: r.marketplaceWithoutCity ?? null }
+          : { ok: false as const, baseMonth: r.baseMonth, reason: r.reason };
       }),
       copyFromPrevious: protectedProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).mutation(async ({ ctx, input }) => {
         requireAccess(ctx.user, "marketing", "manage");
@@ -1690,6 +1779,8 @@ export const appRouter = router({
 
   // ─── OPERACIONAL ──────────────────────────────────────────────────────────
   operational: operationalRouter,
+  // Plano 56 B1: terminal pelo perfil ("Estou no terminal", troca, TL) — server/terminalRouter.ts.
+  terminal: terminalRouter,
 
   // ─── API KEYS MANAGEMENT ──────────────────────────────────────────────────
   // ─── INTEGRAÇÕES (Google Ads) ─────────────────────────────────────────────
@@ -1831,6 +1922,7 @@ export const appRouter = router({
         projectId: projectId ?? null,
         assignedToId: input.assignedToId ?? null,
         createdById: ctx.user.id,
+        origin: "manual",
       });
       await logActivity({ userId: ctx.user.id, action: "create", entity: "complaint", entityId: id, details: `Reclamação: ${input.title}` });
       // Auto-liga a reserva a partir dos sinais (matrícula/email/telefone/
@@ -2044,6 +2136,18 @@ export const appRouter = router({
       await logActivity({ userId: ctx.user.id, action: "unarchive", entity: "complaint", entityId: input.id, details: "Reclamação tirada do arquivo" });
       return { success: true };
     }),
+    // 14 out 2026: a IA criou-a com certeza média ("Por confirmar (IA)") — uma
+    // pessoa confirma que é mesmo reclamação. Se não for, arquiva (nada se apaga).
+    confirmAi: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "edit");
+      const c = await getComplaintById(input.id);
+      if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
+      if (Number((c as any).aiUnconfirmed ?? 0) !== 1) return { success: true, already: true };
+      await updateComplaint(input.id, { aiUnconfirmed: 0 } as any);
+      await addComplaintMessage({ complaintId: input.id, isInternal: 1, authorId: ctx.user.id, authorName: ctx.user.name ?? null, message: `✅ Confirmada como reclamação por ${ctx.user.name ?? "—"} (a IA tinha-a criado por confirmar).` });
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint", entityId: input.id, details: "Reclamação da IA confirmada" });
+      return { success: true, already: false };
+    }),
     // "Isto afinal é um Perdido" — cria o caso nos Perdidos (dados, mensagens,
     // fotos, condutores) e FECHA a reclamação como 'converted', ligada nos
     // dois sentidos. Nada é apagado. Admin+.
@@ -2145,6 +2249,67 @@ export const appRouter = router({
       return autoLinkComplaintBooking(input.id);
     }),
 
+    // ── Lote 57: emails do CLIENTE (todas as caixas partilhadas que a pessoa vê) ──
+    // Antes a ficha só mostrava os emails da própria reclamação. "O meu email" e
+    // caixas sem acesso nunca aparecem; erro ≠ vazio (server/complaintClientMail.ts).
+    clientMail: protectedProcedure.input(z.object({
+      complaintId: z.number().int().positive(),
+      limit: z.number().int().min(1).max(100).optional(),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "view");
+      if (!seesBeyondOwn(withOverrides(ctx.user), "reclamacoes")) throw new TRPCError({ code: "FORBIDDEN", message: "Acesso não autorizado." });
+      const complaint = await getComplaintById(input.complaintId); // âmbito de cidade das reclamações
+      if (!complaint) throw new TRPCError({ code: "NOT_FOUND", message: "Reclamação não encontrada" });
+      const viewer = mailViewerFrom(ctx.user);
+      const { clientMailHistory, NO_MAIL_ACCESS } = await import("./complaintClientMail");
+      // Cidade das caixas = a da Comunicação (quem tem um acesso à parte na Comunicação fica com ele).
+      if (!sharedMailGate(ctx.user, viewer)) return NO_MAIL_ACCESS(input.limit);
+      return clientMailHistory(viewer, {
+        id: complaint.id, clientName: complaint.clientName ?? null, clientEmail: complaint.clientEmail ?? null,
+        clientPhone: complaint.clientPhone ?? null, reservationRef: complaint.reservationRef ?? null,
+      }, { limit: input.limit, scopeIds: scopedProjectIds() });
+    }),
+
+    // ── Lote 57: "Parece uma reclamação" — emails de OUTRAS caixas que a IA viu ──
+    mailSuggestions: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "reclamacoes", "view");
+      const viewer = mailViewerFrom(ctx.user);
+      if (!sharedMailGate(ctx.user, viewer)) return { items: [], noMailAccess: true };
+      const { listMailSuggestions } = await import("./complaintMailIntake");
+      return { items: await listMailSuggestions(viewer, scopedProjectIds()), noMailAccess: false };
+    }),
+    createFromMailSuggestion: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "edit");
+      const viewer = mailViewerFrom(ctx.user);
+      const { suggestionThreadId, createFromSuggestion, IntakeActionError } = await import("./complaintMailIntake");
+      // Sem acesso às caixas partilhadas: recusa antes de ler o que quer que seja.
+      if (!sharedMailGate(ctx.user, viewer)) throw new TRPCError({ code: "FORBIDDEN", message: "Não tens acesso às caixas de email da Comunicação." });
+      try {
+        await assertSuggestionThread(ctx.user, viewer, await suggestionThreadId(input.id));
+        const r = await createFromSuggestion(input.id, { id: ctx.user.id, name: ctx.user.name ?? null }, undefined, defaultScopedProjectId());
+        return r;
+      } catch (e: any) {
+        if (e instanceof IntakeActionError) throw new TRPCError({ code: e.code, message: e.message });
+        throw e;
+      }
+    }),
+    dismissMailSuggestion: protectedProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().max(255).optional() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "reclamacoes", "edit");
+      const viewer = mailViewerFrom(ctx.user);
+      const { suggestionThreadId, dismissSuggestion, IntakeActionError } = await import("./complaintMailIntake");
+      // Sem acesso às caixas partilhadas: recusa antes de ler o que quer que seja.
+      if (!sharedMailGate(ctx.user, viewer)) throw new TRPCError({ code: "FORBIDDEN", message: "Não tens acesso às caixas de email da Comunicação." });
+      try {
+        await assertSuggestionThread(ctx.user, viewer, await suggestionThreadId(input.id));
+        await dismissSuggestion(input.id, { id: ctx.user.id }, input.reason ?? null);
+      } catch (e: any) {
+        if (e instanceof IntakeActionError) throw new TRPCError({ code: e.code, message: e.message });
+        throw e;
+      }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "complaint_mail_intake", entityId: input.id, details: `"Não é reclamação"${input.reason ? `: ${input.reason}` : ""}` });
+      return { success: true };
+    }),
+
 
     // Agentes Multipark que mexeram na matrícula (mesma peça dos Perdidos).
     vehicleAgents: protectedProcedure.input(z.object({
@@ -2185,6 +2350,39 @@ export const appRouter = router({
       await markAllNotificationsRead(ctx.user.id);
       return { success: true };
     }),
+    // Plano 56: "Ativar avisos" para todos (antes só quem atende o WhatsApp).
+    // As mesmas subscrições do server/webPush.ts; cada um só mexe nas suas.
+    pushState: protectedProcedure
+      .input(z.object({ endpoint: z.string().url().max(2048).nullable() }))
+      .query(async ({ ctx, input }) => {
+        const { vapidConfig, hasPushSubscription } = await import("./webPush");
+        const cfg = vapidConfig();
+        if (!cfg) return { available: false as const, publicKey: null, registered: false };
+        const registered = input.endpoint ? await hasPushSubscription(ctx.user.id, input.endpoint) : false;
+        return { available: true as const, publicKey: cfg.publicKey, registered };
+      }),
+    pushSubscribe: protectedProcedure
+      .input(z.object({ endpoint: z.string().url().max(2048), keys: z.object({ p256dh: z.string().min(1).max(255), auth: z.string().min(1).max(64) }) }))
+      .mutation(async ({ ctx, input }) => {
+        const { vapidConfig, savePushSubscription } = await import("./webPush");
+        if (!vapidConfig()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Os avisos no telemóvel não estão configurados no servidor." });
+        const { pushSubscriptionError } = await import("../shared/webPush");
+        const err = pushSubscriptionError(input);
+        if (err) throw new TRPCError({ code: "BAD_REQUEST", message: err });
+        const ua = typeof ctx.req?.headers?.["user-agent"] === "string" ? ctx.req.headers["user-agent"] : null;
+        // Plano 56 (A2): numa sessão de PDA a subscrição é do PDA (muda de dono a cada entrada).
+        const { sessionClaimsOf } = await import("./pdaSession");
+        const claims = await sessionClaimsOf(ctx.req);
+        await savePushSubscription(ctx.user.id, input, ua, { pdaId: claims?.pda ?? null });
+        return { ok: true };
+      }),
+    pushUnsubscribe: protectedProcedure
+      .input(z.object({ endpoint: z.string().url().max(2048) }))
+      .mutation(async ({ ctx, input }) => {
+        const { deletePushSubscription } = await import("./webPush");
+        await deletePushSubscription(ctx.user.id, input.endpoint);
+        return { ok: true };
+      }),
     // Preferências da própria pessoa (Perfil): tipos silenciados, email por
     // tipo e os tipos que PODE receber (pelas regras de roteamento).
     prefs: protectedProcedure.query(async ({ ctx }) => {
@@ -2441,12 +2639,17 @@ export const appRouter = router({
           : `${r.errors.length ? `Sincronizado com ${r.errors.length} erro(s)` : "Sincronizado"}: ${r.stored} email(s) novos, ${r.pipelineCreated} registo(s) criados.${r.done ? "" : " Parcial — carrega outra vez para continuar."}`,
       };
     }),
-    // Checkout drivers ranking (DB local — alimentada pelo sync da API Multipark)
+    // Checkout drivers ranking (DB local — alimentada pelo sync da API Multipark).
+    // 14 out 2026 (Jorge: "isto não devia aparecer a toda a gente"): estas
+    // leituras (Condutores e agentes) pedem o módulo `condutores_agentes` —
+    // supervisor (cidade), back office, admin e super admin. Antes era o das
+    // Críticas (team leader e acima). O MCP (dashboard_query) corre como quem
+    // criou a chave, por isso passa pela mesma guarda.
     checkoutDrivers: protectedProcedure.input(z.object({
       startDate: z.string(),
       endDate: z.string(),
     })).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       const { getCheckoutDriversFromDb } = await import("./db");
       return getCheckoutDriversFromDb(input.startDate, input.endDate);
     }),
@@ -2462,7 +2665,7 @@ export const appRouter = router({
       projectId: z.number().int().optional(),
       drivers: z.boolean().default(false),
     }).refine((r) => r.startDate <= r.endDate, "Intervalo inválido")).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       const days = (Date.parse(`${input.endDate}T00:00:00Z`) - Date.parse(`${input.startDate}T00:00:00Z`)) / 86_400_000 + 1;
       if (days > 62) throw new TRPCError({ code: "BAD_REQUEST", message: "No máximo 62 dias de cada vez." });
       const { loadMovementPeople, brandParkIdsFor } = await import("./movementPeople");
@@ -2474,7 +2677,7 @@ export const appRouter = router({
     // Multipark ligados a ela), nunca por nome escrito — homónimos e grafias
     // diferentes davam o histórico de outra pessoa.
     agentPeople: protectedProcedure.query(async ({ ctx }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       const { employeesWithAgents } = await import("./personIdentity");
       return employeesWithAgents(scopedProjectIds());
     }),
@@ -2486,7 +2689,7 @@ export const appRouter = router({
       agentUserIds: z.array(z.string().min(1).max(128)).min(1).max(10).optional(),
       agentName: z.string().max(200).optional(),
     }).refine((r) => r.employeeId != null || (r.agentUserIds?.length ?? 0) > 0, "Escolhe a pessoa.")).query(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "criticas", "view");
+      requireAccess(ctx.user, "condutores_agentes", "view");
       if (input.employeeId == null) {
         const { getAgentHistoryFromDb } = await import("./db");
         const r = await getAgentHistoryFromDb({ startDate: input.startDate, endDate: input.endDate, userIds: input.agentUserIds! });
@@ -2775,6 +2978,16 @@ export const appRouter = router({
       await addLostFoundMessage({ itemId: input.id, userId: ctx.user.id, userName: ctx.user.name ?? "—", message: `📂 Tirado do arquivo por ${ctx.user.name ?? "—"}.`, isInternal: 1 } as any);
       await logActivity({ userId: ctx.user.id, action: "unarchive", entity: "lost_found", entityId: input.id, details: "Perdido tirado do arquivo" });
       return { success: true };
+    }),
+    // 14 out 2026: a IA criou-o com certeza média ("Por confirmar (IA)") — uma pessoa confirma. Se não for, arquiva.
+    confirmAi: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "perdidos", "edit");
+      const item = await loadLostInScope(input.id);
+      if (Number((item as any).aiUnconfirmed ?? 0) !== 1) return { success: true, already: true };
+      await updateLostFoundItem(input.id, { aiUnconfirmed: 0 } as any);
+      await addLostFoundMessage({ itemId: input.id, userId: ctx.user.id, userName: ctx.user.name ?? "—", message: `✅ Confirmado por ${ctx.user.name ?? "—"} (a IA tinha-o criado por confirmar).`, isInternal: 1 } as any);
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "lost_found", entityId: input.id, details: "Perdido da IA confirmado" });
+      return { success: true, already: false };
     }),
 
     // Photos — URLs assinadas (temporárias), nunca a URL pública guardada.
@@ -3660,6 +3873,10 @@ export const appRouter = router({
       frontPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       terminalPouchValue: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       ticketsExpensesPaid: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      // 0645 — fecho da caixa do turno (confirmação da caixa reserva a reserva).
+      cashierCashReceived: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      cashierMbReceived: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+      cashierMultiparkTotal: z.number().finite().min(0).max(1_000_000).nullable().optional(),
       mbRolls: z.number().int().min(0).max(100_000).nullable().optional(),
       mbRollsInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
       pensInPouch: z.number().int().min(0).max(100_000).nullable().optional(),
@@ -3689,6 +3906,11 @@ export const appRouter = router({
       }
       const { saveShiftHandover } = await import("./db");
       const { handoverDate, shift, city, expectedVersion, ...values } = input;
+      // Confirmação da caixa: num dia já confirmado pelo João os valores do fecho da caixa ficam presos;
+      // quem os escreve fica registado (é essa pessoa que não pode confirmar o mesmo dia).
+      const { handoverCashCheck, markHandoverCashAuthor } = await import("./cashConfirm");
+      const cashCheck = await handoverCashCheck({ day: handoverDate, city, shift, values });
+      if (cashCheck.locked) throw new TRPCError({ code: "FORBIDDEN", message: cashCheck.locked });
       const { canEditOldHandover } = await import("../shared/shiftHandover");
       const result = await saveShiftHandover({ handoverDate, shift, city }, {
         ...values,
@@ -3703,6 +3925,7 @@ export const appRouter = router({
         // Passadas 24h desde a criação: a mesma regra do ecrã (com overrides).
         canEditOld: canEditOldHandover(withOverrides(ctx.user)),
       });
+      if (cashCheck.changed) await markHandoverCashAuthor({ day: handoverDate, city, shift, userId: ctx.user.id });
       await logActivity({
         userId: ctx.user.id,
         action: result.mode === "insert" ? "create" : "update",
@@ -3764,32 +3987,32 @@ export const appRouter = router({
       return { available: true as const, ...r.data };
     }),
 
-    // Resumo por IA a pedido (5 pontos PT-PT); guarda-o se a passagem já existir.
+    // "Resumir agora" (5 pontos PT-PT): só numa passagem JÁ GRAVADA, a partir do
+    // que está gravado. Jorge (8 out 2026): a IA resume sozinha só ao entregar;
+    // depois de uma edição o resumo fica desatualizado até alguém carregar aqui.
     aiSummary: protectedProcedure.input(z.object({
       date: handoverDaySchema,
       shift: z.enum(["morning", "night"]),
       city: z.enum(HANDOVER_CITIES),
-      notes: z.string().max(2000).nullable().optional(),
-      openItems: z.array(openItemSchema).max(OPEN_ITEMS_MAX).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "edit");
-      const { generateAiSummary } = await import("./shiftHandoverAutomation");
+      const { summarizeSavedHandover } = await import("./shiftHandoverAutomation");
       const { aiTrpcError } = await import("./_core/ai/trpcError");
-      const { buildHandoverDraft } = await import("./shiftHandoverDraft");
-      const draft = await buildHandoverDraft({ date: input.date, shift: input.shift, city: input.city }).catch(() => null);
-      let text: string | null;
+      const { canEditOldHandover } = await import("../shared/shiftHandover");
+      let r: Awaited<ReturnType<typeof summarizeSavedHandover>>;
       try {
-        text = await generateAiSummary(draft, { city: input.city, shift: { date: input.date, shift: input.shift }, notes: input.notes ?? null, openItems: (input.openItems ?? []) as any }, { throwOnError: true, userId: ctx.user.id });
+        // Mesma regra das 24h que a gravação (vista ANTES de chamar a IA).
+        r = await summarizeSavedHandover({ handoverDate: input.date, shift: input.shift, city: input.city }, { canEditOld: canEditOldHandover(withOverrides(ctx.user)), userId: ctx.user.id });
       } catch (err) {
         throw aiTrpcError(err);
       }
-      if (!text) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
-      const { saveHandoverAiSummary } = await import("./shiftHandoverAutomation");
-      const { canEditOldHandover } = await import("../shared/shiftHandover");
-      // Mesma regra das 24h que a gravação; e fica registado quem o gerou.
-      const savedId = await saveHandoverAiSummary({ handoverDate: input.date, shift: input.shift, city: input.city }, text, { canEditOld: canEditOldHandover(withOverrides(ctx.user)) });
-      if (savedId != null) await logActivity({ userId: ctx.user.id, action: "update", entity: "shift_handover", entityId: savedId, details: `Resumo IA gerado — ${input.date} ${input.shift} ${input.city}` });
-      return { aiSummary: text, saved: savedId != null };
+      if (!r.ok) {
+        if (r.reason === "not_saved") throw new TRPCError({ code: "BAD_REQUEST", message: "Guarda primeiro a passagem: a IA faz o resumo quando a entregas." });
+        if (r.reason === "locked") throw new TRPCError({ code: "FORBIDDEN", message: "Passaram mais de 24h — só um supervisor pode refazer o resumo." });
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar o resumo agora — tenta outra vez." });
+      }
+      await logActivity({ userId: ctx.user.id, action: "update", entity: "shift_handover", entityId: r.id, details: `Resumo IA gerado — ${input.date} ${input.shift} ${input.city}` });
+      return { aiSummary: r.aiSummary, saved: true as const, version: r.version };
     }),
 
     // 29d (Jorge, 6 out 2026): despesas do turno — entram DIRETAS nas Despesas
@@ -3800,9 +4023,11 @@ export const appRouter = router({
       city: z.enum(HANDOVER_CITIES),
     })).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "view");
-      const { listShiftExpenses, shiftExpensesTotal } = await import("./shiftExpenses");
+      const { listShiftExpenses, shiftExpensesTotal, openableInExpenses } = await import("./shiftExpenses");
       const rows = await listShiftExpenses({ day: input.date, shift: input.shift, city: input.city, includeCancelled: true });
-      return { rows, total: shiftExpensesTotal(rows) };
+      // "Abrir nas Despesas" só para quem pode abrir essa despesa lá (a mesma regra do detalhe).
+      const open = await openableInExpenses(rows, ctx.user).catch(() => rows.map(() => false));
+      return { rows: rows.map((r, i) => ({ ...r, canOpen: open[i] === true })), total: shiftExpensesTotal(rows) };
     }),
     addExpense: protectedProcedure.input(z.object({
       date: handoverDaySchema,
@@ -3812,12 +4037,18 @@ export const appRouter = router({
       amount: z.number().finite().min(0.01).max(100_000),
       invoiceKey: z.string().max(500).nullable().optional(),
       invoiceUrl: z.string().max(2000).nullable().optional(),
+      ...shiftExpenseExtrasInput,
     })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "edit");
       if (input.date > maxHandoverDate()) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível lançar despesas para depois de amanhã." });
       const { addShiftExpense } = await import("./shiftExpenses");
       try {
-        return await addShiftExpense({ day: input.date, shift: input.shift, city: input.city, description: input.description, amount: Math.round(input.amount * 100) / 100, invoiceKey: input.invoiceKey ?? null, invoiceUrl: input.invoiceUrl ?? null, user: { id: ctx.user.id, name: ctx.user.name ?? null } });
+        return await addShiftExpense({
+          day: input.date, shift: input.shift, city: input.city, description: input.description, amount: Math.round(input.amount * 100) / 100,
+          invoiceKey: input.invoiceKey ?? null, invoiceUrl: input.invoiceUrl ?? null, user: { id: ctx.user.id, name: ctx.user.name ?? null },
+          supplier: input.supplier, supplierNif: input.supplierNif, documentNumber: input.documentNumber, invoiceDate: input.invoiceDate,
+          vatAmount: input.vatAmount, categoryId: input.categoryId, extractedByAi: input.extractedByAi,
+        });
       } catch (e: any) {
         throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e).slice(0, 200) });
       }
@@ -3835,6 +4066,26 @@ export const appRouter = router({
       const key = `invoices/${ctx.user.id}/${suffix}-${safeName}`;
       const { url } = await storagePut(key, Buffer.from(input.fileBase64, "base64"), input.mimeType);
       return { url, key };
+    }),
+    // 12 out 2026 (Jorge): a IA lê o talão — a MESMA das Despesas (expense_ocr, com o seu interruptor,
+    // nível e limites), mas com a permissão da passagem de turno (o TL pode não ter as Despesas).
+    // Não grava nada: devolve o que leu para o cartão preencher. Desligada/falhou → erro amigável e
+    // o TL preenche à mão.
+    readReceipt: protectedProcedure.input(z.object({
+      imageBase64: z.string().max(14_000_000),
+      mimeType: z.string().max(100).default("image/jpeg"),
+    })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_turno", "edit");
+      const { readShiftReceipt, shiftReceiptDuplicate } = await import("./shiftExpenses");
+      const { aiTrpcError } = await import("./_core/ai/trpcError");
+      let reading: Awaited<ReturnType<typeof readShiftReceipt>>;
+      try {
+        reading = await readShiftReceipt({ base64: input.imageBase64, mimeType: input.mimeType, userId: ctx.user.id });
+      } catch (err) {
+        throw aiTrpcError(err);
+      }
+      const duplicate = await shiftReceiptDuplicate(reading, ctx.user).catch(() => null);
+      return { ...reading, duplicate };
     }),
     cancelExpense: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "passagem_turno", "edit");
@@ -3885,6 +4136,45 @@ export const appRouter = router({
       requireAccess(ctx.user, "passagem_resumo_dia", "view");
       const { getSupervisorDayDashboard } = await import("./db");
       return getSupervisorDayDashboard(input.date);
+    }),
+
+    // 12 out 2026 (Jorge): "Parado" limitado ao TURNO de cada pessoa (picagens;
+    // sem elas, a escala), a partir dos pontos do Zello. À parte do resumo:
+    // lê os ficheiros do GPS e não pode atrasar o resto. Só fichas da cidade.
+    peopleShiftGps: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+      employeeIds: z.array(z.number().int().positive()).max(300),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
+      const { getPeopleShiftGps } = await import("./shiftDayDetail");
+      return getPeopleShiftGps(input.date, input.employeeIds);
+    }),
+
+    // O dia de um condutor (linha de "Quem trabalhou"): recolhas/entregas/movimentos
+    // com a reserva, pendente→entregue, velocidade máxima em cada entrega e o GPS do turno.
+    driverDay: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+      key: z.string().min(3).max(300),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
+      const { getDriverShiftDay } = await import("./shiftDayDetail");
+      return getDriverShiftDay(input.date, input.key);
+    }),
+
+    // Uma entrega lenta: a reserva, a linha do tempo e os outros pedidos da
+    // cidade à espera ao mesmo tempo (uma leitura, limitada à cidade e à janela).
+    deliveryContext: protectedProcedure.input(z.object({
+      date: handoverDaySchema,
+      city: z.enum(HANDOVER_CITIES).optional(),
+      booking: z.string().min(1).max(64),
+      pendingAt: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+      deliveredAt: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+    })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "passagem_resumo_dia", "view");
+      const { getDeliveryContext } = await import("./shiftDayDetail");
+      return getDeliveryContext({ booking: input.booking, pendingAt: input.pendingAt, deliveredAt: input.deliveredAt });
     }),
   }),
 
@@ -4003,7 +4293,9 @@ export const appRouter = router({
       requireAccess(ctx.user, "parcerias", "view");
       const canSeeTotals = await canSeeFinanceTotals(ctx.user);
       const { readPartnershipsLive, hideLiveMoney, linkRecords } = await import("./multiparkDb/partnerships");
-      const r = await readPartnershipsLive(scopedCityNames());
+      const { getSetting } = await import("./appSettings");
+      const excluded = ((await getSetting("operations.excludedParks").catch(() => null)) as string[] | null) ?? [];
+      const r = await readPartnershipsLive(scopedCityNames(), undefined, undefined, excluded);
       if (!r.available) return { available: false as const, reason: r.reason };
       const records = (await getPartnerships()).map((p: any) => ({
         id: p.id, name: p.name, partnerType: p.partnerType ?? null, partnerStatus: p.partnerStatus ?? null, multiparkPartnerId: p.multiparkPartnerId ?? null,
@@ -4335,7 +4627,9 @@ export const appRouter = router({
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         const byType: Record<string, number> = {};
         for (const m of r.data.rows) byType[m.changeType] = (byType[m.changeType] ?? 0) + 1;
-        return { available: true as const, agentUserIds: ids, total: r.data.rows.length, truncated: r.data.truncated, byType, items: r.data.rows };
+        // 14 out 2026: os inícios de movimento aparecem na lista com "(não conta)", mas ficam fora do total (contados à parte)
+        const movementStarts = byType.MOVEMENT_START ?? 0;
+        return { available: true as const, agentUserIds: ids, total: r.data.rows.length - movementStarts, movementStarts, truncated: r.data.truncated, byType, items: r.data.rows };
       }),
 
     // Liga (ou desliga) um nome de agente Multipark a um colaborador. Único:
@@ -4458,7 +4752,10 @@ export const appRouter = router({
         const { getMultiparkOpsList } = await import("./multiparkDb/opsLists");
         const state = opsListsShared.isOpsListState(input.kind, input.state) ? input.state : "all";
         // D6 (Jorge, 3 out): as compras online por pagar contam nas listas operacionais até serem recolhidas/canceladas
-        const r = await getMultiparkOpsList({ ...input, state, includePending: true }, scopedCityNames());
+        // 8 out 2026: os excluídos nas Definições só dão a etiqueta "não operado" (a lista não muda)
+        const { getSetting } = await import("./appSettings");
+        const excluded = ((await getSetting("operations.excludedParks").catch(() => null)) as string[] | null) ?? [];
+        const r = await getMultiparkOpsList({ ...input, state, includePending: true }, scopedCityNames(), undefined, excluded);
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         return { available: true as const, ...r.data };
       }),
@@ -4503,6 +4800,44 @@ export const appRouter = router({
         requireAccess(ctx.user, "atividade_diaria", "view");
         const { getPersonDay } = await import("./dayActivity");
         return getPersonDay(input.date, input.key);
+      }),
+
+    // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM no(s) dia(s)
+    // operacional(ais) — entrega feita nesse dia, seja qual for o dia da reclamação.
+    departedComplaints: protectedProcedure
+      .input(z.object({
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        projectId: z.number().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "atividade_diaria", "view");
+        const end = input.endDate && input.endDate >= input.startDate ? input.endDate : input.startDate;
+        const { daysInRange } = await import("../shared/lisbonDay");
+        if (daysInRange(input.startDate, end).length > 93) throw new TRPCError({ code: "BAD_REQUEST", message: "Intervalo máximo: 93 dias." });
+        const { getDepartedComplaints } = await import("./departedComplaints");
+        return getDepartedComplaints(input.startDate, end);
+      }),
+
+    // 12 out 2026 (Jorge): separador "Semana" — uma semana (domingo → sábado,
+    // dias operacionais) de UMA cidade, por hora: entregas/recolhas, tempo por
+    // carro (a métrica da Pressão) e espera. Uma leitura por semana, só desta cidade.
+    weekActivity: protectedProcedure
+      .input(z.object({
+        city: z.enum(HANDOVER_CITIES),
+        weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "atividade_diaria", "view");
+        // A cidade tem de ser uma das do utilizador (o pedido já vem limitado a ela).
+        const { scopedCityNamesLive } = await import("./cityScope");
+        const { allowedHandoverCities } = await import("../shared/shiftHandover");
+        const names = scopedCityNamesLive();
+        if (names !== undefined && !allowedHandoverCities({ all: false, cityNames: names }).includes(input.city)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Esta cidade não pertence ao teu centro de custos." });
+        }
+        const { getWeekActivity } = await import("./weekActivity");
+        return getWeekActivity({ city: input.city, weekStart: input.weekStart });
       }),
 
     // Liga um agente Multipark a um PARCEIRO (agências que marcam pelo portal)
@@ -4793,12 +5128,29 @@ export const appRouter = router({
         let missing: Set<number> | null = null;
         try { missing = await employeesMissingTraining(list.map(c => c.id)); }
         catch (err: any) { console.warn("[Training] verificação da formação falhou:", String(err?.message ?? err).slice(0, 160)); }
-        return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null }));
+        // Dias livres HABITUAIS (8 out 2026): só uma dica no seletor para quem não
+        // respondeu à semana — "habitual: Qui tarde" (resumo curto no title). Não
+        // entra na escala automática. Leitura falhada → sem dica.
+        let habitual = new Map<number, { summary: string; text: string; marked: boolean; morning: boolean; night: boolean }>();
+        if (input?.date) {
+          const { patternsForEmployees } = await import("./availabilityPattern");
+          const { patternHintFor, summarizePattern } = await import("../shared/availabilityPattern");
+          const patterns = await patternsForEmployees(list.map(c => c.id));
+          habitual = new Map(Array.from(patterns, ([id, p]) => {
+            const hint = patternHintFor(p.slots, input.date!);
+            const summary = summarizePattern(p.slots, { short: true });
+            return [id, { summary: [summary, p.note].filter(Boolean).join(" — "), text: hint?.text ?? "", marked: !!summary, morning: !!hint?.morning, night: !!hint?.night }] as const;
+          }));
+        }
+        return list.map(c => ({ ...c, trainingMissing: missing ? missing.has(c.id) : false, trainingUnknown: missing == null, habitual: habitual.get(c.id) ?? null }));
       }),
 
     // 44a (Jorge: "quando solto um extra para ser team leader tenho que o soltar em todo lado"):
     // dar a permissão "Pode ser Team Leader na escala" daqui mesmo, sem ir às Permissões.
     // As mesmas regras da página Permissões; fica no registo de atividade.
+    // Fica DE PROPÓSITO (API / futuro botão): o ecrã do Extras-Dia já não o oferece
+    // desde 14 out 2026 (no TL só aparecem contas com permissões de TL). Protegido
+    // por extras_dia edit + canTouchPermission + âmbito da cidade (userInCityScope).
     allowTeamLeader: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive() }))
       .mutation(async ({ ctx, input }) => {
@@ -4812,7 +5164,7 @@ export const appRouter = router({
         const userId = person.employee.userId;
         const name = person.employee.fullName;
         if (!userId) {
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${name} não tem conta no dashboard e a permissão de TL é da conta. Cria a conta em Utilizadores (a partir da ficha) ou muda o posto no RH para Team Leader.` });
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${name} não tem conta no dashboard e a permissão de TL é da conta. Para ser TL, a conta da pessoa tem de ter papel Team Leader ou acima, ou a permissão «Pode ser Team Leader na escala» (Permissões / Utilizadores).` });
         }
         if (userId === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes alterar as tuas próprias permissões." });
         const target = await getUserById(userId);
@@ -5044,6 +5396,9 @@ export const appRouter = router({
     // Frente B (7 out 2026): indicador de pessoal, "Avisar este turno" (pré-visualização +
     // envio por WhatsApp/email) e notas do dia — server/extrasDiaShiftRouter.ts.
     ...extrasDiaShiftProcedures,
+    // Plano 62, P0 (14 out 2026): "Diagnóstico dos tempos (calibração)" — só o super admin, só leitura,
+    // um dia por pedido (server/sondaTempos.ts).
+    ...timesProbeProcedures,
 
     bookingsInSlot: protectedProcedure
       .input(
@@ -5093,6 +5448,9 @@ export const appRouter = router({
         if (!canViewEmployee(viewer, person.employee)) throw new TRPCError({ code: 'FORBIDDEN' });
         return getMyWeek(input.employeeId, input.weekStart);
       }),
+    // Dias livres HABITUAIS (Jorge, 8 out 2026): myPattern/setMyPattern (a própria
+    // pessoa) e patternFor/setPatternFor (RH/supervisor) — server/availabilityPatternRouter.ts.
+    ...availabilityPatternProcedures,
     // Sugestões de semanas (próxima e atual) para o picker.
     weekHints: protectedProcedure.query(() => {
       return { current: mondayOf(), next: nextMonday() };
@@ -5446,7 +5804,13 @@ export const appRouter = router({
       const lastWorked = await getLastWorkedMap().catch(() => ({} as Record<number, string>));
       return { days, items: pickSuspendCandidates(rows, lastWorked, lisbonDayOf(new Date()), days).slice(0, 200) };
     }),
-    /** 41a: suspender = bloqueio manual do acesso (desbloqueia-se no RH). Não desativa nem solta nada. */
+    /**
+     * 41a + 49c: "inatividade" (as sugestões dos Utilizadores) = PÔR INATIVO —
+     * a ficha desativa-se com o motivo "Inatividade" (a mesma cascata do RH:
+     * conta e contas extra); a pessoa pode voltar a entrar como utilizador e
+     * dizer "Voltei". "manual" (botão Suspender da ficha) continua a ser o
+     * bloqueio manual do acesso (desbloqueia-se no RH). Nada se solta nem apaga.
+     */
     suspend: protectedProcedure
       .input(z.object({ employeeIds: z.array(z.number().int().positive()).min(1).max(200), why: z.enum(["inatividade", "manual"]).default("inatividade") }))
       .mutation(async ({ ctx, input }) => {
@@ -5457,14 +5821,34 @@ export const appRouter = router({
         const days = Number(await getSetting("rh.suspendAfterDays").catch(() => 180)) || 180;
         const reason = input.why === "manual" ? SUSPEND_REASON_MANUAL : inactivityReason(days);
         const me = await getEmployeeByUserId(ctx.user.id).catch(() => null);
+        const { rhViewer, rhEmployeeRef } = await import("./rhGuards");
+        const { canManageEmployee } = await import("./rhAccess");
+        const { resolveDeactivation } = await import("../shared/deactivationReasons");
+        const { deactivateEmployeeCascade } = await import("./employeeActivation");
+        const viewer = await rhViewer(ctx.user);
         let done = 0;
         for (const id of [...new Set(input.employeeIds)]) {
           try { await assertEmployeeAccess(id); } catch { continue; }
           if (me?.employee.id === id) continue;
-          if (await suspendEmployee(id, reason)) {
-            done++;
-            await logActivity({ userId: ctx.user.id, action: "suspend", entity: "employee", entityId: id, details: `${reason}${input.why === "manual" ? " (ficha do RH)" : " (sugestão dos Utilizadores)"} — acesso bloqueado até desbloquear no RH` });
+          if (input.why === "manual") {
+            if (await suspendEmployee(id, reason)) {
+              done++;
+              await logActivity({ userId: ctx.user.id, action: "suspend", entity: "employee", entityId: id, details: `${reason} (ficha do RH) — acesso bloqueado até desbloquear no RH` });
+            }
+            continue;
           }
+          // 49c: Pôr inativo (só fichas ativas; quem gere a ficha, como no RH)
+          const ref = await rhEmployeeRef(id);
+          if (!ref || !canManageEmployee(viewer, ref)) continue;
+          const found = await getEmployeeById(id);
+          if (!found || Number(found.employee.isActive) !== 1) continue;
+          const deactivation = resolveDeactivation({ reason: "inatividade", notes: `${reason.replace(/^Suspenso:\s*/i, "")} (sugestão dos Utilizadores).` });
+          try {
+            await deactivateEmployeeCascade(ctx.user, id, deactivation, {
+              logDetails: `Inativo por falta de atividade: ${found.employee.fullName} — ${deactivation.summary}. Pode voltar a entrar como utilizador e dizer "Voltei".`,
+            });
+            done++;
+          } catch { /* guarda (último super_admin, a tua) — segue */ }
         }
         return { suspended: done };
       }),
@@ -5553,6 +5937,56 @@ export const appRouter = router({
         await logActivity({ userId: ctx.user.id, action: "users_merge", entity: "user", entityId: input.keepUserId,
           details: `Conta #${input.dropUserId} (${p.drop.email ?? "sem email"}) junta a #${input.keepUserId} (${p.keep.email ?? "sem email"})${p.employee ? ` · ficha ${p.employee.fullName} #${p.employee.id}` : ""}; a #${input.dropUserId} ficou desativada` });
         return { success: true, ...p };
+      }),
+    /**
+     * 15 out 2026 (Jorge, caso Thiago Camargo): a Google Workspace renomeou a
+     * conta de quem saiu para a pessoa nova — passa essa conta Google da conta
+     * DESATIVADA (que volta ao nome/email da ficha e guarda o histórico) para a
+     * conta ativa da pessoa nova. Ver server/googleAccountMove.ts.
+     */
+    previewGoogleMove: protectedProcedure
+      .input(z.object({ fromUserId: z.number().int().positive(), toUserId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador passa contas Google." });
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { previewGoogleMove } = await import("./googleAccountMove");
+        try {
+          const p = await previewGoogleMove(db as any, input.fromUserId, input.toUserId);
+          return { from: { id: p.from.id, name: p.from.name, email: p.from.email }, to: { id: p.to.id, name: p.to.name, email: p.to.email }, restore: p.restore, googleEmail: p.googleEmail };
+        } catch (err: any) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+      }),
+    moveGoogleAccount: protectedProcedure
+      .input(z.object({ fromUserId: z.number().int().positive(), toUserId: z.number().int().positive(), setEmail: z.boolean().default(true) }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "manage");
+        if (!["admin", "super_admin"].includes(String(ctx.user.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Só um administrador passa contas Google." });
+        if (input.fromUserId === ctx.user.id || input.toUserId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Não mexas na tua própria conta por aqui." });
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "BD indisponível" });
+        const { previewGoogleMove, moveGoogleAccount } = await import("./googleAccountMove");
+        let p;
+        try {
+          const pre = await previewGoogleMove(db as any, input.fromUserId, input.toUserId);
+          if ((pre.from.role === "super_admin" || pre.to.role === "super_admin") && ctx.user.role !== "super_admin") throw new Error("Só um super admin mexe em contas de super admin.");
+          // as fichas das duas contas têm de estar no âmbito de quem passa
+          const { sql: q } = await import("drizzle-orm");
+          const emp = await db.execute(q`SELECT id FROM employees WHERE userId IN (${input.fromUserId}, ${input.toUserId})`) as any;
+          for (const e of ((Array.isArray(emp) ? emp[0] : emp) as any[]) ?? []) await assertEmployeeAccess(Number(e.id));
+          p = await moveGoogleAccount(db as any, { fromUserId: input.fromUserId, toUserId: input.toUserId, setEmail: input.setEmail });
+        } catch (err: any) {
+          if (err instanceof TRPCError) throw err;
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        const what = `Conta Google ${p.googleEmail ?? "(sem email)"} passada da conta #${p.from.id} (desativada; volta a ${p.restore.name ?? p.from.name ?? "?"} <${p.restore.email ?? p.from.email ?? "sem email"}>, histórico fica nela) para a #${p.to.id} (${p.to.name ?? "?"})${p.emailSet ? `, que fica com o email ${p.googleEmail}` : ""}`;
+        await logActivity({ userId: ctx.user.id, action: "users_google_move", entity: "user", entityId: p.to.id, details: what });
+        await logActivity({ userId: ctx.user.id, action: "users_google_move", entity: "user", entityId: p.from.id, details: what });
+        return { success: true, fromUserId: p.from.id, toUserId: p.to.id, googleEmail: p.googleEmail, restored: p.restore, emailSet: p.emailSet };
       }),
     linkAgent: protectedProcedure
       .input(z.object({ employeeId: z.number().int().positive(), agentUserId: z.string().min(1).max(128), agentName: z.string().max(256).optional() }))
@@ -5902,11 +6336,22 @@ export const appRouter = router({
     // ── INBOX ──────────────────────────────────────────────────────────────
     conversations: router({
       // `search` vai ao servidor (17a): procura também fora das 300 mais recentes.
-      list: protectedProcedure.input(z.object({ search: z.string().max(120).optional(), boxKey: z.string().max(40).nullish() }).optional()).query(async ({ ctx, input }) => {
+      // `cityKey` (2026-10-09) também, pela mesma razão. Não se chama `city` de
+      // propósito: esse nome faz o middleware estreitar o âmbito de cidades
+      // (`selectedCityAccess`), que deixa à vista as conversas SEM cidade e
+      // não sabe o que é "none". A visibilidade por cidade aplica-se na mesma.
+      list: protectedProcedure.input(z.object({
+        search: z.string().max(120).optional(),
+        boxKey: z.string().max(40).nullish(),
+        cityKey: z.enum(INBOX_CITY_FILTERS).optional(),
+        // 2026-10-14: a cidade segue o seletor de cima e traz também as SEM
+        // cidade (`inboxCityScope`) — senão quem só tem uma cidade nunca as via.
+        withNoCity: z.boolean().optional(),
+      }).optional()).query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "whatsapp", "view");
         // 17f: as caixas que a pessoa não vê ficam de fora; `boxKey` filtra uma ("geral" = sem caixa).
         const { hiddenBoxKeys } = await import("./whatsappInbox");
-        return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user) });
+        return listConversations({ search: input?.search ?? null, boxKey: input?.boxKey ?? null, hiddenBoxes: await hiddenBoxKeys(ctx.user), city: input?.cityKey ?? null, withNoCity: input?.withNoCity === true });
       }),
       /** Quem é o contacto (17f): ficha do RH, candidato ou cliente do CRM, com o resumo do histórico. */
       identity: protectedProcedure.input(z.object({ conversationId: z.number().int().positive() })).query(async ({ ctx, input }) => {
@@ -6008,6 +6453,7 @@ export const appRouter = router({
         const { setConversationBox } = await import("./whatsappInboxOps");
         const { GENERAL_BOX_KEY } = await import("../shared/commsBoxes");
         await setConversationBox(input.conversationId, input.boxKey === GENERAL_BOX_KEY ? null : input.boxKey, "manual");
+        await (await import("./commsRouting")).noteManualBoxChange("whatsapp", input.conversationId, input.boxKey === GENERAL_BOX_KEY ? null : input.boxKey, ctx.user.id);
         await logActivity({ userId: ctx.user.id, action: "update", entity: "whatsapp_conversation", entityId: input.conversationId, details: `Caixa → ${input.boxKey ?? "Geral"}` } as any).catch(() => {});
         return { ok: true };
       }),

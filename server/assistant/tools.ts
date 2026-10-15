@@ -12,7 +12,8 @@
 import { can, roleRank, ROLE_RANK, seesBeyondOwn, type AccessOverrides } from "../../shared/access";
 import type { CityAccess } from "../cityAccess";
 import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/ai/chat/tools";
-import type { HelpDoc } from "../_core/ai/chat/retrieval";
+import { excerptHelp, type HelpDoc } from "../_core/ai/chat/retrieval";
+import { lateArrivalsOf } from "../../shared/evaluationRules";
 
 export interface StaffUser {
   id: number;
@@ -128,7 +129,10 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     description: "Abre a ajuda (\"como se usa\") de um módulo da aplicação. Usa quando a ajuda certa não veio em <ajuda>.",
     parameters: {
       type: "object",
-      properties: { modulo: { type: "string", description: "Módulo, como aparece entre parênteses no índice da ajuda (ex.: extras_dia, tarefas)." } },
+      properties: {
+        modulo: { type: "string", description: "Módulo, como aparece entre parênteses no índice da ajuda (ex.: extras_dia, tarefas)." },
+        tema: { type: "string", description: "O que procuras dentro dessa ajuda (palavras da pergunta) — traz a parte certa de uma ajuda longa." },
+      },
       required: ["modulo"],
     },
     available: () => true,
@@ -136,7 +140,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
       const m = String(args.modulo ?? "").trim().toLowerCase();
       const doc = ctx.helpDocs.find((d) => d.module === m || d.file === `${m}.md` || d.title.toLowerCase() === m);
       if (!doc) return { error: "Não há ajuda para esse módulo.", modulos: ctx.helpDocs.map((d) => d.module) };
-      return { titulo: doc.title, ajuda: doc.body.slice(0, 3500) };
+      return { titulo: doc.title, ajuda: excerptHelp(doc.body, 3500, String(args.tema ?? "").slice(0, 300)) };
     },
   },
   {
@@ -254,7 +258,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
   },
   {
     name: "minha_avaliacao",
-    description: "A avaliação individual da PRÓPRIA pessoa num intervalo: pontos, horas, recolhas, entregas, movimentos, atrasos, excessos de velocidade, reclamações e acidentes. Omissão: últimos 30 dias.",
+    description: "A avaliação individual da PRÓPRIA pessoa num intervalo: pontos, horas, recolhas, entregas, movimentos (levar ao parque e entre garagens), mudanças de lugar (mesma garagem: não são movimentos), atrasos ao trabalho (entrada 5 min ou mais depois da hora da escala ou do horário), excessos de velocidade, reclamações e acidentes. Omissão: últimos 30 dias.",
     parameters: { type: "object", properties: { ...rangeParams } },
     available: (ctx) => roleRank(ctx.user.role) >= ROLE_RANK.extra,
     async run(args, ctx) {
@@ -266,7 +270,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
         periodo: { de: from, ate: to }, dias: num(r.totals.days),
         pontos: { total: num(r.totals.score?.totalPoints), positivos: num(r.totals.score?.positivePoints), negativos: num(r.totals.score?.negativePoints) },
         porRegra: (r.totals.score?.lines ?? []).filter((l: any) => num(l.count) !== 0).map((l: any) => ({ regra: l.label, n: num(l.count), pontos: num(l.subtotal) })),
-        metricas: { horas: num(m.hoursWorked), recolhas: num(m.recolhas), entregas: num(m.entregas), movimentos: num(m.movements), atrasos: num(m.delays), excessosVelocidade: num(m.speedingEvents), reclamacoes: num(m.complaints), acidentes: num(m.accidents) },
+        metricas: { horas: num(m.hoursWorked), recolhas: num(m.recolhas), entregas: num(m.entregas), movimentos: num(m.movements), mudancasDeLugar: num(m.spotChanges), atrasosTrabalho: lateArrivalsOf({ delays: num(m.delays), lateServices: num(m.lateServices) }), excessosVelocidade: num(m.speedingEvents), reclamacoes: num(m.complaints), acidentes: num(m.accidents) },
         pontosPorHora: r.totals.perHour?.pointsPerHour ?? null,
         contestacoesAbertas: (r.disputes ?? []).filter((d: any) => d.status === "open").length,
       };

@@ -19,6 +19,7 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList } from "./read";
+import { MARKETPLACE_ORIGIN_SQL } from "./marketplaceSql";
 
 export type FinanceAggKind = "delivered" | "collected" | "forecast" | "noshow" | "cancelled" | "checkout_any" | "checkin_any";
 
@@ -136,7 +137,8 @@ export function buildFinanceAggSql(spec: FinanceAggSpec): { sql: string; params:
     `  SELECT b."id" AS id, ${lisbonDay(dayCol)} AS day, b."parkId" AS park_id, b."partnerId" AS partner_id,`,
     `    NULLIF(b."paymentMethod", '') AS pm, b."campaignId" AS campaign_id, b."bookingPrice" AS price, b."parkingPrice" AS parking, b."deliveryPrice" AS delivery,`,
     `    b."status"::text AS status, COALESCE(b."pro", false) AS pro, COALESCE(b."discountApplied", b."discountAmount", 0) AS discount,`,
-    `    COALESCE(b."origin"::text = 'MARKETPLACE', false) AS mkt`,
+    // regra única nos parques NOSSOS (só estes se leem aqui): veio pelo Marketplace
+    `    COALESCE(${MARKETPLACE_ORIGIN_SQL}, false) AS mkt`,
     `  FROM "Booking" b`,
     joinCancel ? `  ${joinCancel}` : "",
     `  WHERE ${conds.join("\n    AND ")}`,
@@ -202,17 +204,21 @@ export async function readFinanceAgg(spec: FinanceAggSpec, query: Query = multip
 /** Parques da Multipark (id, nome, cidade, marca) — para classificar e ligar ao centro. PURA. */
 export function buildParksSql(): { sql: string; params: SqlParam[] } {
   return {
-    sql: `SELECT p."id" AS id, p."name" AS name, p."city" AS city, NULLIF(p."firebaseBrand", '') AS firebase_brand, p."listingType"::text AS listing_type FROM "Park" p ORDER BY p."name" LIMIT 1000`,
+    sql: `SELECT p."id" AS id, p."name" AS name, p."city" AS city, NULLIF(p."address", '') AS address, NULLIF(p."firebaseBrand", '') AS firebase_brand, p."listingType"::text AS listing_type FROM "Park" p ORDER BY p."name" LIMIT 1000`,
     params: [],
   };
 }
 
-export interface MultiparkParkRow { id: string; name: string; city: string | null; firebaseBrand: string | null; listingType: string | null }
+export interface MultiparkParkRow {
+  id: string; name: string; city: string | null; firebaseBrand: string | null; listingType: string | null;
+  /** 8 out 2026: morada (último recurso para a cidade — resolveParkCity). */
+  address?: string | null;
+}
 
 export async function readParks(query: Query = multiparkDbQuery): Promise<MultiparkParkRow[]> {
   const { sql, params } = buildParksSql();
   return (await query<Record<string, unknown>>(sql, params)).map((r) => ({
-    id: String(r.id ?? ""), name: String(r.name ?? ""), city: s(r.city), firebaseBrand: s(r.firebase_brand), listingType: s(r.listing_type),
+    id: String(r.id ?? ""), name: String(r.name ?? ""), city: s(r.city), address: s(r.address), firebaseBrand: s(r.firebase_brand), listingType: s(r.listing_type),
   })).filter((p) => p.id);
 }
 

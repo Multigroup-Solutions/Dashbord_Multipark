@@ -202,9 +202,18 @@ export async function getZelloChannels(): Promise<ZelloChannel[]> {
 /** Get current GPS locations of all active users */
 export async function getZelloLocations(): Promise<ZelloLocation[]> {
   if (!isZelloConfigured()) return [];
+  // (máx. 100 por pedido: ZELLO_LOCATIONS_MAX — quem não couber pede-se à parte, getZelloUserLocationOf)
   const data = await zelloGet("location/get", { filter: "none", max: "100" });
   if (data.status !== "OK") throw new Error(`Zello location/get failed: ${data.status}`);
-  return (data.locations || []).map((l: any) => ({
+  return (data.locations || []).map(mapZelloLocation);
+}
+
+/** location/get devolve no máximo isto (o resto fica de fora da lista). */
+export const ZELLO_LOCATIONS_MAX = 100;
+
+/** Uma posição do Zello (location/get ou location/getuser) no formato da app. PURA. */
+export function mapZelloLocation(l: any): ZelloLocation {
+  return {
     username: l.username || l.name || "",
     displayName: l.displayName || l.display_name || l.username || "",
     latitude: parseFloat(l.latitude) || 0,
@@ -221,7 +230,32 @@ export async function getZelloLocations(): Promise<ZelloLocation[]> {
     status: l.status || "unknown",
     lastReport: parseInt(l.lastReport ?? l.last_report, 10) || 0,
     lastReportDelay: parseInt(l.lastReportDelay ?? l.last_report_delay, 10) || 0,
-  }));
+  };
+}
+
+/**
+ * Resposta de location/getuser/{username} → a posição desse utilizador, ou
+ * null. Aceita `location: {...}`, `locations: [...]` ou a posição no topo;
+ * outra pessoa (username diferente) ou sem latitude/longitude → null. PURA.
+ */
+export function parseZelloUserLocation(data: any, username: string): ZelloLocation | null {
+  if (!data || typeof data !== "object") return null;
+  if (data.status != null && String(data.status) !== "OK") return null;
+  const key = String(username ?? "").trim().toLowerCase();
+  const cands = [data.location, ...(Array.isArray(data.locations) ? data.locations : []), data].filter((x) => x && typeof x === "object");
+  for (const c of cands) {
+    if (c.latitude == null || c.longitude == null || c.latitude === "" || c.longitude === "") continue;
+    const u = c.username ?? c.name;
+    if (u != null && String(u).trim().toLowerCase() !== key) continue;
+    return mapZelloLocation({ ...c, username: c.username ?? c.name ?? username });
+  }
+  return null;
+}
+
+/** Posição de UM utilizador (para quem não coube nos 100 de location/get). null = sem posição. */
+export async function getZelloUserLocationOf(username: string): Promise<ZelloLocation | null> {
+  if (!isZelloConfigured()) return null;
+  return parseZelloUserLocation(await getZelloUserLocation(username), username);
 }
 
 /** Get location history for a specific user */

@@ -67,7 +67,11 @@ export function buildIdentityResolver(
 
 // ─── Resto do GPS de um PDA partilhado ───────────────────────────────────────
 
-export interface DayGpsRow { km: number; hoursMoving: number; hoursOnline: number; maxSpeed: number; violations: number }
+export interface DayGpsRow {
+  km: number; hoursMoving: number; hoursOnline: number; maxSpeed: number; violations: number;
+  /** horas paradas (troços parados entre reports < 1 h — a regra do Histórico Diário); opcional */
+  hoursStopped?: number;
+}
 export interface ShareGps { km: number; minutes: number; movingMinutes: number | null; maxSpeed: number; violations: number }
 
 /**
@@ -88,7 +92,13 @@ export function leftoverFromShares(day: DayGpsRow, shares: ShareGps[]): DayGpsRo
   const hoursMoving = Math.max(0, r2(day.hoursMoving - sumMoving));
   const violations = Math.max(0, day.violations - shares.reduce((s, x) => s + x.violations, 0));
   if (km < 0.05 && hoursOnline < 1 / 60 && violations === 0) return null;
-  return { km, hoursOnline, hoursMoving, maxSpeed: day.maxSpeed > maxShare + 0.01 ? day.maxSpeed : 0, violations };
+  const rest: DayGpsRow = { km, hoursOnline, hoursMoving, maxSpeed: day.maxSpeed > maxShare + 0.01 ? day.maxSpeed : 0, violations };
+  if (day.hoursStopped != null) {
+    // parado das partes = minutos com o PDA − em movimento (partes sem minutos em movimento não se sabem)
+    const sumStopped = shares.reduce((s, x) => s + (x.movingMinutes == null ? 0 : Math.max(0, x.minutes - x.movingMinutes)), 0) / 60;
+    rest.hoursStopped = Math.max(0, r2(day.hoursStopped - sumStopped));
+  }
+  return rest;
 }
 
 // ─── Turno de cada ação ──────────────────────────────────────────────────────

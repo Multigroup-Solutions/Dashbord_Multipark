@@ -5,9 +5,14 @@
  *
  * Escreve-se o nome e aparece a lista do RH, quem começa pelo que se escreveu
  * primeiro (shared/contactSearch.ts → sortByNameMatch). Secções: a cidade da
- * escala, outras cidades, (no TL) quem ainda não tem a permissão de TL, e no
- * fim quem não tem cidade na ficha — esses não se podem escolher (o servidor
- * recusa).
+ * escala, outras cidades e no fim quem não tem cidade na ficha — esses não se
+ * podem escolher (o servidor recusa).
+ *
+ * TL (Jorge, 14 out 2026: "ao escolher o TL ainda aparecem extras"): no TL só
+ * aparece quem o servidor dá como elegível (`extrasDia.candidates` com
+ * forTeamLeader → conta com papel Team Leader ou acima, ou a permissão "Pode
+ * ser Team Leader na escala"; shared/teamLeaderEligibility.ts). O resto do RH
+ * (`others`) já não se mostra — e o servidor recusa-o ao guardar.
  */
 import { useMemo, useState } from "react";
 import { CheckCircle2, ChevronsUpDown, Moon, Sun } from "lucide-react";
@@ -35,6 +40,13 @@ export interface PickerCandidate {
   hasAccount?: boolean;
   /** Jorge, 7 out 2026: estado da carta (só se mostra quando NÃO está validada). */
   licence?: LicenceStatus;
+  /**
+   * Dias livres HABITUAIS (8 out 2026) — só uma dica para quem não respondeu à
+   * semana: `text` = o que costuma ter livre nesse dia da semana ("Qui tarde";
+   * vazio = não costuma), `marked` = marcou algum dia (senão só tem nota),
+   * `morning`/`night` = cobre o turno, `summary` = o resumo todo (no title).
+   */
+  habitual?: { summary: string; text: string; marked?: boolean; morning: boolean; night: boolean } | null;
 }
 
 interface Section { key: string; label: string; rows: Array<{ c: PickerCandidate; other: boolean }>; disabled?: boolean }
@@ -42,23 +54,23 @@ interface Section { key: string; label: string; rows: Array<{ c: PickerCandidate
 /** Secções do seletor, já filtradas e ordenadas pela pesquisa. PURA (exportada para os testes). */
 export function pickerSections(
   candidates: readonly PickerCandidate[],
-  others: readonly PickerCandidate[],
   city: CityId,
   query: string,
 ): Section[] {
-  const all = [...candidates.map((c) => ({ c, other: false })), ...others.map((c) => ({ c, other: true }))];
+  const all = candidates.map((c) => ({ c, other: false }));
   const ranked = sortByNameMatch(query, all.filter((x) => matchesContactQuery(query, { name: x.c.fullName })), (x) => x.c.fullName);
   const noCity = (x: { c: PickerCandidate }) => x.c.city === null;
   const sections: Section[] = [
-    { key: "here", label: CITY_NAMES[city], rows: ranked.filter((x) => !x.other && !noCity(x) && (x.c.city === undefined || x.c.city === city)) },
-    { key: "elsewhere", label: "Outras cidades", rows: ranked.filter((x) => !x.other && !noCity(x) && x.c.city !== undefined && x.c.city !== city) },
-    { key: "notTl", label: "Do RH, ainda sem permissão de TL", rows: ranked.filter((x) => x.other && !noCity(x)) },
+    { key: "here", label: CITY_NAMES[city], rows: ranked.filter((x) => !noCity(x) && (x.c.city === undefined || x.c.city === city)) },
+    { key: "elsewhere", label: "Outras cidades", rows: ranked.filter((x) => !noCity(x) && x.c.city !== undefined && x.c.city !== city) },
     { key: "noCity", label: "Sem cidade na ficha — não pode ser escalado(a)", rows: ranked.filter(noCity), disabled: true },
   ];
   return sections.filter((s) => s.rows.length > 0);
 }
 
-export function CandidateLabel({ c }: { c: PickerCandidate }) {
+export function CandidateLabel({ c, shift }: { c: PickerCandidate; shift?: "morning" | "night" }) {
+  const habitual = c.availability?.status === "no_response" ? c.habitual ?? null : null;
+  const habitualCovers = habitual ? (shift ? habitual[shift] : !!habitual.text) : false;
   return (
     <span className="flex items-center gap-1.5 min-w-0">
       <Avatar className="h-5 w-5 shrink-0">
@@ -79,6 +91,14 @@ export function CandidateLabel({ c }: { c: PickerCandidate }) {
       {c.availability?.status === "no_response" && (
         <span className="h-2 w-2 inline-block rounded-full bg-muted-foreground/30 shrink-0" title="Sem resposta" />
       )}
+      {habitual && (habitual.text || habitual.summary) && (
+        <span
+          className={`shrink-0 rounded px-1 text-[11px] ${habitualCovers ? "bg-sky-50 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300" : "bg-muted text-muted-foreground"}`}
+          title={`Sem resposta para esta semana. Dias livres habituais (só uma dica): ${habitual.summary || "—"}`}
+        >
+          {habitual.text ? `habitual: ${habitual.text}` : habitual.marked === false ? "habitual: ver nota" : "habitual: não neste dia"}
+        </span>
+      )}
       {c.availability?.status === "unavailable" && (
         <span className="text-[11px] text-red-500 shrink-0" title="Disse que não está disponível">✕</span>
       )}
@@ -96,28 +116,34 @@ export function CandidateLabel({ c }: { c: PickerCandidate }) {
 
 export function PersonPicker({
   candidates,
-  others = [],
   city,
+  shift,
   value,
   onPick,
 }: {
   candidates: readonly PickerCandidate[];
-  /** Só no TL: gente do RH que ainda não tem a permissão (pode-se dar daqui). */
+  /**
+   * Já não se mostra (14 out 2026): no TL só entra quem tem conta com
+   * permissões de TL. Mantido só para quem ainda o passa; é ignorado.
+   * @deprecated
+   */
   others?: readonly PickerCandidate[];
   city: CityId;
+  /** Turno da escala (para a dica dos dias habituais). */
+  shift?: "morning" | "night";
   value: number | null;
   onPick: (c: PickerCandidate) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const selected = useMemo(() => [...candidates, ...others].find((c) => c.id === value) ?? null, [candidates, others, value]);
-  const sections = useMemo(() => pickerSections(candidates, others, city, query), [candidates, others, city, query]);
+  const selected = useMemo(() => candidates.find((c) => c.id === value) ?? null, [candidates, value]);
+  const sections = useMemo(() => pickerSections(candidates, city, query), [candidates, city, query]);
 
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQuery(""); }}>
       <PopoverTrigger asChild>
         <Button type="button" variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between font-normal">
-          {selected ? <CandidateLabel c={selected} /> : <span className="text-muted-foreground">Escreve o nome (RH)…</span>}
+          {selected ? <CandidateLabel c={selected} shift={shift} /> : <span className="text-muted-foreground">Escreve o nome (RH)…</span>}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -135,7 +161,7 @@ export function PersonPicker({
                     disabled={sec.disabled}
                     onSelect={() => { onPick(c); setOpen(false); setQuery(""); }}
                   >
-                    <CandidateLabel c={c} />
+                    <CandidateLabel c={c} shift={shift} />
                   </CommandItem>
                 ))}
               </CommandGroup>

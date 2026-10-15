@@ -16,6 +16,8 @@ import { sql } from "drizzle-orm";
 
 export interface RateLimitRule {
   perMinute?: number;
+  /** Plano 56: pedidos de código de entrada (por hora). */
+  perHour?: number;
   perDay?: number;
 }
 
@@ -25,10 +27,10 @@ export interface RateLimitResult {
   retryAfterSec: number;
   /** Pedidos que ainda cabem na janela mais apertada. */
   remaining: number;
-  limitedBy: "minute" | "day" | null;
+  limitedBy: "minute" | "hour" | "day" | null;
 }
 
-type Window = { kind: "minute" | "day"; limit: number; start: Date; end: Date };
+type Window = { kind: "minute" | "hour" | "day"; limit: number; start: Date; end: Date };
 
 /** Chave de um IP (sem o guardar em claro). PURA. */
 export function ipKey(ip: string | null | undefined): string {
@@ -46,6 +48,10 @@ export function windowsFor(rule: RateLimitRule, now: number): Window[] {
   if (rule.perMinute && rule.perMinute > 0) {
     const start = new Date(Math.floor(now / 60_000) * 60_000);
     out.push({ kind: "minute", limit: rule.perMinute, start, end: new Date(start.getTime() + 60_000) });
+  }
+  if (rule.perHour && rule.perHour > 0) {
+    const start = new Date(Math.floor(now / 3_600_000) * 3_600_000);
+    out.push({ kind: "hour", limit: rule.perHour, start, end: new Date(start.getTime() + 3_600_000) });
   }
   if (rule.perDay && rule.perDay > 0) {
     const d = new Date(now);

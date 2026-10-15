@@ -4,7 +4,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
-import { projectScope, assertEmployeeAccess } from './cityScope';
+import { projectScope, assertEmployeeAccess, scopedProjectIds } from './cityScope';
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { protectedProcedure, router } from "./_core/trpc";
@@ -17,11 +17,14 @@ import { validConsumptionPeriod } from "../shared/adInvoices";
 import { expenseTotals } from "../shared/expenseTotals";
 import { CREDIT_NOTE_STATES, creditNoteError } from "../shared/creditNotes";
 import { can } from "../shared/access";
-import { getAllCategories, listExpenses, summarizeExpenses, recordExpenseEvent, getExpenseEvents, findPossibleDuplicateExpense, projectExists, categoryExists, resolveProjectIds, getExpenseById, createExpense, updateExpense, softDeleteExpense, restoreExpense, getExpenseStats, getUpcomingPayments, getOverdueExpenses, markOverdueExpenses, logActivity, getEmployeeById, getEmployeeByUserId } from "./db";
+import { futurePaidMessage, isFuturePaidAt, paymentOnCreate } from "../shared/expenseCreatePayment";
+import { BUYER_NOT_ELIGIBLE_MESSAGE, expenseBuyerOptions, isExpenseBuyerEligible } from "../shared/expenseBuyers";
+import { getAllCategories, getAllEmployees, getAllUsers, getUserById, listExpenses, summarizeExpenses, recordExpenseEvent, getExpenseEvents, findPossibleDuplicateExpense, projectExists, categoryExists, resolveProjectIds, getExpenseById, createExpense, updateExpense, softDeleteExpense, restoreExpense, getExpenseStats, getUpcomingPayments, getOverdueExpenses, markOverdueExpenses, logActivity, getEmployeeById, getEmployeeByUserId } from "./db";
 import { requireRole, isPermissionDenied, requireFinanceTotals } from "./routerGuards";
 
 // ─── DESPESAS: âmbito único (ver server/expenseScope.ts) ─────────────────────
-async function expenseVisibilityFor(user: { id: number; role: string }): Promise<ExpenseVisibility> {
+// Exportada para a Passagem de turno saber quem pode abrir a despesa do turno nas Despesas.
+export async function expenseVisibilityFor(user: { id: number; role: string }): Promise<ExpenseVisibility> {
   return resolveExpenseVisibility(user, {
     denied: isPermissionDenied,
     employeeProjectId: async (uid) => {
@@ -88,11 +91,20 @@ function consumptionPeriodOrBadRequest(from: string | null | undefined, to: stri
 }
 
 /** Campos cuja alteração muda o valor financeiro (invalidam uma aprovação). */
-/** O comprador de uma despesa tem de existir e ser das cidades de quem lança. */
+/**
+ * O comprador de uma despesa tem de existir, ser das cidades de quem lança e
+ * (Jorge, 14 out 2026) ser team leader ou acima — shared/expenseBuyers.ts.
+ */
 async function assertExpenseBuyer(buyerId: number | null | undefined): Promise<void> {
   if (buyerId == null) return;
-  if (!(await getEmployeeById(buyerId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Comprador não encontrado." });
+  const found = await getEmployeeById(buyerId);
+  if (!found) throw new TRPCError({ code: "BAD_REQUEST", message: "Comprador não encontrado." });
   await assertEmployeeAccess(buyerId);
+  const emp: any = found.employee;
+  const account: any = emp?.userId != null ? await getUserById(emp.userId) : null;
+  if (!isExpenseBuyerEligible({ position: emp?.position ?? null, isActive: emp?.isActive ?? null, accountRole: account?.role ?? null, accountActive: account?.isActive ?? null })) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: BUYER_NOT_ELIGIBLE_MESSAGE });
+  }
 }
 
 const EXPENSE_FINANCIAL_FIELDS = ["amount", "currency", "expenseDate", "projectId", "categoryId", "supplier", "supplierNif", "documentNumber", "paidBy", "buyerId"] as const;
@@ -205,6 +217,20 @@ export const expensesRouter = router({
 
   // Possível duplicado ANTES de gravar: mesmo nº de documento do mesmo
   // fornecedor, ou o mesmo ficheiro. Não bloqueia — avisa.
+  // "Funcionário (quem comprou)": só team leader e acima, ativos, das cidades
+  // de quem lança, por ordem alfabética. Só id e nome (nunca a ficha de RH).
+  buyers: protectedProcedure.query(async ({ ctx }) => {
+    requireAccess(ctx.user, "despesas", "view", { allowOwn: true });
+    const rows = await getAllEmployees({ isActive: true });
+    const allowed = scopedProjectIds();
+    const accountById = new Map<number, { role: string; isActive: number | boolean | null }>();
+    for (const u of await getAllUsers()) accountById.set((u as any).id, { role: (u as any).role, isActive: (u as any).isActive ?? null });
+    return expenseBuyerOptions((rows as any[])
+      .map((r) => r.employee)
+      .filter((e) => e && (allowed === undefined || (e.projectId != null && allowed.includes(e.projectId))))
+      .map((e) => ({ id: e.id, fullName: e.fullName, position: e.position, isActive: e.isActive, accountRole: e.userId != null ? accountById.get(e.userId)?.role ?? null : null, accountActive: e.userId != null ? accountById.get(e.userId)?.isActive ?? null : null })));
+  }),
+
   checkDuplicate: protectedProcedure
     .input(z.object({
       excludeId: z.number().optional(),
@@ -249,6 +275,8 @@ export const expensesRouter = router({
         // 29f: período de consumo (faturas do Google/Meta) — substitui o gasto dos anúncios nesses dias
         consumptionFrom: z.string().nullable().optional(),
         consumptionTo: z.string().nullable().optional(),
+        // Lançar JÁ PAGA com data de pagamento no futuro (vencimento futuro) só com confirmação explícita.
+        confirmFuturePaid: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -272,6 +300,13 @@ export const expensesRouter = router({
       // Quem suportou: se há comprador (colaborador) e não foi dito, assume-se
       // que foi ele (dá origem a reembolso na fase de pagamentos).
       const paidBy = input.paidBy ?? (input.buyerId ? "employee" : "company");
+      // Jorge (14 out 2026): admin/super admin que escolhe o método lança-a JÁ
+      // PAGA (data = vencimento, senão a data da despesa). Os outros papéis
+      // ficam sempre pendentes — o método não marca pago (regra no servidor).
+      const payment = paymentOnCreate({ role: ctx.user.role, paymentMethod: input.paymentMethod ?? null, expenseDate, paymentDueDate });
+      if (payment.status === "paid" && isFuturePaidAt(payment.paidAt) && input.confirmFuturePaid !== true) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: futurePaidMessage(payment.paidAt) });
+      }
       const created = await createExpense({
         supplier: cleanText(input.supplier) ?? null,
         description: cleanText(input.description) ?? null,
@@ -292,7 +327,8 @@ export const expensesRouter = router({
         supplierNif: cleanText(input.supplierNif) ?? null,
         documentNumber: cleanText(input.documentNumber) ?? null,
         paidBy,
-        status: "pending",
+        status: payment.status,
+        paidAt: payment.paidAt ? dayToMysql(payment.paidAt) : null,
         approvalStatus: "legacy",
         ...consumptionPeriodOrBadRequest(input.consumptionFrom, input.consumptionTo),
       } as any);
@@ -300,8 +336,17 @@ export const expensesRouter = router({
       if (newId) {
         await recordExpenseEvent({
           expenseId: newId, type: "created", userId: ctx.user.id,
-          after: { amount: amountNorm, expenseDate: input.expenseDate, projectId: input.projectId, categoryId: input.categoryId ?? null, supplier: cleanText(input.supplier) ?? null, documentNumber: cleanText(input.documentNumber) ?? null, extractedByAi: input.extractedByAi },
+          after: { amount: amountNorm, expenseDate: input.expenseDate, projectId: input.projectId, categoryId: input.categoryId ?? null, supplier: cleanText(input.supplier) ?? null, documentNumber: cleanText(input.documentNumber) ?? null, extractedByAi: input.extractedByAi, status: payment.status, paymentMethod: input.paymentMethod ?? null },
         });
+        // O histórico mostra o pagamento como nas outras ("Pago"), com quem e em que dia.
+        if (payment.status === "paid") {
+          await recordExpenseEvent({
+            expenseId: newId, type: "paid", userId: ctx.user.id,
+            before: { status: null, paidAt: null },
+            after: { status: "paid", paidAt: payment.paidAt, paymentMethod: input.paymentMethod ?? null },
+            note: `Lançada já paga (método escolhido ao lançar; data = ${paymentDueDate ? "vencimento" : "data da despesa"})`,
+          });
+        }
       }
 
       await logActivity({
@@ -309,11 +354,12 @@ export const expensesRouter = router({
         action: "create",
         entity: "expense",
         entityId: newId ?? undefined,
-        details: `Despesa criada: ${input.supplier ?? "Sem fornecedor"} - ${amountNorm}€`,
+        details: `Despesa criada: ${input.supplier ?? "Sem fornecedor"} - ${amountNorm}€${payment.status === "paid" ? ` (já paga em ${payment.paidAt})` : ""}`,
       });
 
       // Aviso `expense_due` (supervisor da cidade da despesa + admin/super_admin).
-      if (paymentDueDate) {
+      // Já paga ao lançar → não há vencimento a avisar.
+      if (paymentDueDate && payment.status !== "paid") {
         const { notify } = await import("./notify");
         await notify({
           kind: "expense_due", projectId: input.projectId ?? null,
@@ -324,7 +370,7 @@ export const expensesRouter = router({
         });
       }
 
-      return { success: true, id: newId };
+      return { success: true, id: newId, status: payment.status, paidAt: payment.paidAt };
     }),
 
   update: protectedProcedure
@@ -380,7 +426,9 @@ export const expensesRouter = router({
       }
       if (input.paymentMethod !== undefined) patch.paymentMethod = input.paymentMethod;
       if (input.consumptionFrom !== undefined || input.consumptionTo !== undefined) Object.assign(patch, consumptionPeriodOrBadRequest(input.consumptionFrom, input.consumptionTo));
-      if (input.buyerId !== undefined) { await assertExpenseBuyer(input.buyerId); patch.buyerId = input.buyerId; }
+      // Só se valida quando MUDA: editar uma despesa antiga com um comprador de
+      // antes (ex.: condutor) não obriga a trocá-lo.
+      if (input.buyerId !== undefined) { if (input.buyerId !== (cur.buyerId ?? null)) await assertExpenseBuyer(input.buyerId); patch.buyerId = input.buyerId; }
       if (input.paidBy !== undefined) patch.paidBy = input.paidBy;
       if (input.categoryId !== undefined) {
         if (input.categoryId != null && !(await categoryExists(input.categoryId))) {

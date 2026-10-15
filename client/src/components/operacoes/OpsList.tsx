@@ -13,6 +13,7 @@ import { fmtBookingDateTime } from "@/lib/lisbonTime";
 import { addDays, lisbonDayOf } from "@shared/lisbonDay";
 import { BOOKING_STATUS_COLORS, statusLabel, type BookingStatus } from "@shared/reservasDoDia";
 import { BOOKING_CHANNEL_LABELS, type BookingChannel } from "@shared/multiparkParks";
+import { operatedLabel } from "@shared/marketplace";
 import {
   OPS_LIST_EVENT_LABELS, OPS_LIST_LABELS, OPS_LIST_MAX_DAYS, OPS_LIST_STATES, OPS_LIST_SUBTITLES, OPS_RANGE_PRESETS,
   OPS_RANGE_PRESET_LABELS, PARKING_TYPE_LABELS, deltaVs, matchPreset, presetRange, previousRange, rangeDays,
@@ -446,6 +447,9 @@ export default function OpsList({ kind, shared, onShared }: { kind: OpsListKind;
                         <span className="truncate">{b.channelBadge}</span>
                       </Badge>
                       <span className="truncate block text-[11px] text-muted-foreground" title={b.channelDetail}>{b.channelDetail}</span>
+                      {b.channel === "marketplace" && (
+                        <span className={`block text-[11px] ${b.operated ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`} title="Parque operado por nós ou não (comissão do Marketplace diferente)">{operatedLabel(b.operated)}</span>
+                      )}
                     </td>
                     <td className="p-2"><Badge className={BOOKING_STATUS_COLORS[b.status as BookingStatus] ?? "bg-gray-100 text-gray-800"}>{statusLabel(b.status)}</Badge></td>
                     <td className="p-2 text-xs whitespace-nowrap">{PARKING_TYPE_LABELS[b.parkingType ?? ""] ?? b.parkingType ?? "—"}</td>

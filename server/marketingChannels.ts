@@ -1,8 +1,9 @@
 /**
  * Marketing → Canais e clientes (Jorge, 24 set 2026).
  *
- *  1. De onde vêm as reservas. Canais próprios (Marketplace, site das marcas,
- *     telefone): reserva de CLIENTE NOVO (1.ª do email, ou sem email) =
+ *  1. De onde vêm as reservas. Canais próprios (Marketplace — TODAS as
+ *     reservas dos parques de terceiros e as dos nossos vindas pelo
+ *     multipark.pt —, site das marcas, telefone): reserva de CLIENTE NOVO (1.ª do email, ou sem email) =
  *     "Anúncios Google" (custo = gasto do Google Ads); de quem JÁ ERA cliente
  *     = "Orgânico". Parceiros (custo = comissões, mapa campanha → parceria da
  *     Faturação), campanhas sem parceiro e outros à parte. O gclid é só prova
@@ -89,7 +90,11 @@ export interface ChannelsResult {
 }
 
 // ─── Regras puras (testáveis) ────────────────────────────────────────────────
-export interface MixRow { origin: string | null; googlePaid: boolean; campaign: string | null; bookings: number; revenue: number; withEmail: number; /** 1.ª reserva do email (ou sem email) */ newClient: boolean }
+export interface MixRow {
+  origin: string | null; googlePaid: boolean; campaign: string | null; bookings: number; revenue: number; withEmail: number; /** 1.ª reserva do email (ou sem email) */ newClient: boolean;
+  /** reserva do Marketplace pela regra única (parque de terceiros, ou nosso com origem MARKETPLACE) */
+  marketplace?: boolean;
+}
 export interface ClientRowAgg { first: string | null; bookings: number; periodBookings: number; value: number }
 
 export function buildChannels(
@@ -182,13 +187,14 @@ export function buildChannels(
 }
 
 /** Reservas (ao vivo) → linhas do mix por origem × pago Google × campanha × cliente novo. PURA. */
-export function mixFromBookings(bookings: Array<{ origin: string | null; adAttribution: string; campaign: string | null; newClient: boolean; hasEmail: boolean; total: number }>): MixRow[] {
+export function mixFromBookings(bookings: Array<{ origin: string | null; adAttribution: string; campaign: string | null; newClient: boolean; hasEmail: boolean; total: number; marketplace?: boolean }>): MixRow[] {
   const m = new Map<string, MixRow>();
   for (const b of bookings) {
     const campaign = b.campaign?.trim() || null;
     const googlePaid = b.adAttribution === "google_paid";
-    const k = JSON.stringify([b.origin, googlePaid, campaign, b.newClient]);
-    const r = m.get(k) ?? { origin: b.origin, googlePaid, campaign, bookings: 0, revenue: 0, withEmail: 0, newClient: b.newClient };
+    const marketplace = !!b.marketplace;
+    const k = JSON.stringify([b.origin, googlePaid, campaign, b.newClient, marketplace]);
+    const r = m.get(k) ?? { origin: b.origin, googlePaid, campaign, bookings: 0, revenue: 0, withEmail: 0, newClient: b.newClient, marketplace };
     r.bookings++; r.revenue += b.total; if (b.hasEmail) r.withEmail++;
     m.set(k, r);
   }
@@ -204,14 +210,16 @@ export async function getChannels(db: any, f: { from: string; to: string; projec
   const key = JSON.stringify({ s: scopedProjectIds() ?? "all", p: f.projectIds ?? null, from: f.from, to: f.to, spend: f.adSpend, conv: f.adConversions ?? 0 });
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
-  // Reservas e clientes AO VIVO da BD da Multipark (server/marketingLive.ts).
-  // Parceiros pelo MESMO índice da Faturação (taxa em falta fica null, não 0).
+  // Reservas e clientes AO VIVO da BD da Multipark (server/marketingLive.ts),
+  // com TODAS as do Marketplace (8 out 2026: os parques de terceiros ficavam
+  // de fora dos Canais e clientes). Parceiros pelo MESMO índice da Faturação
+  // (taxa em falta fica null, não 0).
   const { loadMarketingBookings, loadMarketingClients } = await import("./marketingLive");
   const { loadPartnerIndex } = await import("./finance/partners");
   const { vatRateForPeriod } = await import("./finance/rates");
   const [bookings, clients, partnerIndex, vat] = await Promise.all([
-    loadMarketingBookings(f.from, f.to, f.projectIds),
-    loadMarketingClients(f.from, f.to, f.projectIds),
+    loadMarketingBookings(f.from, f.to, f.projectIds, { marketplace: true }),
+    loadMarketingClients(f.from, f.to, f.projectIds, { marketplace: true }),
     loadPartnerIndex(db),
     vatRateForPeriod(f.from, f.to),
   ]);

@@ -72,11 +72,11 @@ describe("SQL do estado do parque", () => {
 });
 
 describe("mapeadores", () => {
-  it("fase: malas e local de entrega dentro de PENDING_CHECKOUT", () => {
+  it("fase (tarefa 62, fluxo A): na fila = PENDING_CHECKOUT (malas e 'Cheguei' não mudam a fase); em entrega = CHECKING_OUT", () => {
     expect(livePhaseOf({ status: "CHECKED_IN" })).toBe("in_park");
     expect(livePhaseOf({ status: "PENDING_CHECKOUT" })).toBe("pending_checkout");
-    expect(livePhaseOf({ status: "PENDING_CHECKOUT", baggageWaitingAt: "2026-09-27T09:00:00.000Z" })).toBe("baggage_waiting");
-    expect(livePhaseOf({ status: "PENDING_CHECKOUT", arrivedAtDeliveryAt: "2026-09-27T09:00:00.000Z" })).toBe("at_delivery");
+    expect(livePhaseOf({ status: "PENDING_CHECKOUT", baggageWaitingAt: "2026-09-27T09:00:00.000Z" })).toBe("pending_checkout");
+    expect(livePhaseOf({ status: "PENDING_CHECKOUT", arrivedAtDeliveryAt: "2026-09-27T09:00:00.000Z" })).toBe("pending_checkout");
     expect(livePhaseOf({ status: "MOVING" })).toBe("moving");
     expect(livePhaseOf({ status: "CHECKING_OUT" })).toBe("checking_out");
   });
@@ -84,7 +84,7 @@ describe("mapeadores", () => {
     const c = mapLiveCar({ id: "b1", code: "15001", status: "CHECKED_IN", park_id: "p1", garage: "G1", spot: "A 12", plate: "AA-00-BB", client_first_name: "Ana", client_last_name: "Silva", check_out: "2026-09-27 08:00:00" }, { name: "Airpark Lisboa" }, NOW);
     expect(c).toMatchObject({ phase: "in_park", garage: "G1", spot: "A 12", covered: true, overdue: true, clientName: "Ana Silva", parkName: "Airpark Lisboa" });
     const d = mapLiveCar({ id: "b2", code: "10001", status: "PENDING_CHECKOUT", park_id: "p1", pending_checkout_at: "2026-09-27 09:30:00", parking_type: "UNCOVERED" }, undefined, NOW);
-    expect(d).toMatchObject({ phase: "pending_checkout", phaseSince: "2026-09-27T09:30:00.000Z", covered: false, overdue: false });
+    expect(d).toMatchObject({ phase: "pending_checkout", phaseSince: "2026-09-27T09:30:00.000Z", baggageWaiting: false, covered: false, overdue: false });
   });
   it("próximas: por pagar e já feita", () => {
     const u = mapLiveUpcoming("checkout", { id: "b1", status: "CHECKED_IN", at: "2026-09-27 12:00:00", price: 50, paid: 20, flight: "TP123", flight_eta: "2026-09-27 11:20:00" }, undefined);

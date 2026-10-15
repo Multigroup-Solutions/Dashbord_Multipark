@@ -69,6 +69,11 @@ export function lisbonDayRangeUtc(startDay: string, endDay: string = startDay): 
   return { start: mysql(startMs), end: mysql(endMs), startMs, endMs };
 }
 
+/** 49e: hora de RELÓGIO de Lisboa (0–23) de um instante (Date, ms ou "YYYY-MM-DD HH:MM:SS" UTC). */
+export function lisbonHourOf(at: Date | number | string): number {
+  return parts(utcMs(at)).h;
+}
+
 /** Dia de Lisboa de um instante (Date, ms ou "YYYY-MM-DD HH:MM:SS" UTC). */
 export function lisbonDayOf(at: Date | number | string): string {
   const ms = utcMs(at);

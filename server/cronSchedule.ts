@@ -55,10 +55,11 @@ const S = 1000;
 export const ZELLO_SAMEDAY_WINDOW = { from: "23:15", until: "23:55" } as const;
 
 /**
- * Tabela dos trabalhos (decisões do Jorge, 26 set 2026). Fora da agenda
- * (ficam só manuais): knowledge-sync (botão "Sincronizar agora" e
- * processamento imediato de cada carregamento) e google-business (em pausa
- * até a Google aprovar o acesso à API).
+ * Tabela dos trabalhos (decisões do Jorge, 26 set 2026). Fora da agenda do
+ * tick: knowledge-sync (botão "Sincronizar agora" e processamento imediato de
+ * cada carregamento; as alterações nas pastas do Drive chegam SOZINHAS pelos
+ * avisos da Google e pela verificação de 4 em 4 h do google-sync) e
+ * google-business (em pausa até a Google aprovar o acesso à API).
  */
 // Reservas (Jorge, 27 set 2026): nada vai buscar reservas à Multipark por
 // iniciativa própria — as páginas leem a BD deles ao vivo (server/multiparkDb).
@@ -68,6 +69,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "mail-sync", runName: "mail-sync", label: "Comunicação: sincronização do Gmail", cadence: { kind: "interval", minutes: 5 }, priority: 10, minMs: 10 * S, maxMs: 25 * S },
   { key: "multipark-deliveries", runName: "multipark-deliveries", label: "Fila do webhook Multipark (repescagem)", cadence: { kind: "interval", minutes: 60 }, priority: 20, minMs: 15 * S, maxMs: 30 * S },
   { key: "ai-comms", runName: "ai-comms", label: "IA na comunicação com clientes", cadence: { kind: "interval", minutes: 15 }, priority: 30, minMs: 20 * S, maxMs: 30 * S },
+  // 14 out 2026: casos de email que falharam (com o push o mail-sync só corre 1×/dia) + rever os emails das caixas (AI_MAIL_BACKFILL).
+  { key: "mail-backfill", runName: "mail-backfill", label: "Comunicação: casos por criar e emails das caixas revistos pela IA", cadence: { kind: "interval", minutes: 15 }, priority: 32, minMs: 15 * S, maxMs: 30 * S },
   // Google por eventos (26 set 2026): o que muda vai/vem logo (push da Google,
   // fila "sincronizar já", heartbeat do dashboard); aqui só a repetição do que
   // falhou (15 min), a rede de segurança completa (4 h) e a renovação diária
@@ -86,7 +89,11 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "services-tomorrow", runName: "services-tomorrow", label: "Serviços: aviso das tarefas de amanhã (team leaders + supervisor)", cadence: { kind: "daily", from: "18:00" }, priority: 84, minMs: 10 * S, maxMs: 30 * S },
   // Caixa, fase 2 (29 set 2026): varredura do dinheiro (BD Multipark ao vivo) → "Correção de caixa".
   { key: "ops-presence", runName: "ops-presence", label: "Operacional: a trabalhar sem PDA ou Zello ligado", cadence: { kind: "interval", minutes: 5 }, priority: 20, minMs: 10 * S, maxMs: 30 * S },
+  // Plano 56 B2: "Ainda estás no terminal?" — GPS do Zello de quem está no terminal (só com PONTO_TERMINAL).
+  { key: "terminal-watch", runName: "terminal-watch", label: "Terminal: \"Ainda estás no terminal?\" (GPS de 5 em 5 min)", cadence: { kind: "interval", minutes: 5 }, priority: 21, minMs: 10 * S, maxMs: 25 * S },
   { key: "cash-sweep", runName: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", cadence: { kind: "interval", minutes: 180 }, priority: 25, minMs: 15 * S, maxMs: 40 * S },
+  // Confirmação da caixa (13 out 2026): reler os dias já fechados (retomável) — se a Multipark mudou um dia selado, reabre.
+  { key: "cash-confirm-recheck", runName: "cash-confirm-recheck", label: "Caixa: reler os dias confirmados (reabre se a Multipark mudou)", cadence: { kind: "interval", minutes: 60 }, priority: 26, minMs: 15 * S, maxMs: 40 * S },
   { key: "cash-close", runName: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", cadence: { kind: "daily", from: "06:15" }, priority: 104, minMs: 20 * S, maxMs: 45 * S },
   // Caixa, fase 4: cruzar as saídas de ontem e anteontem com a InvoiceExpress e a Stripe (chaves só de leitura).
   { key: "cash-external", runName: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", cadence: { kind: "daily", from: "07:00" }, priority: 106, minMs: 20 * S, maxMs: 45 * S },
@@ -95,6 +102,9 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   { key: "partner-close", runName: "partner-close", label: "Parceiros: comparar o fecho do mês (Multipark vs memória do webhook)", cadence: { kind: "daily", from: "06:40" }, priority: 109, minMs: 20 * S, maxMs: 45 * S },
   { key: "crm-suggestions", runName: "crm-suggestions", label: "CRM: sugestões para juntar fichas", cadence: { kind: "daily", from: "05:15" }, priority: 84, minMs: 15 * S, maxMs: 45 * S },
   { key: "crm-pro-sync", runName: "crm-pro-sync", label: "CRM: conta corrente dos clientes Pro (BD Multipark)", cadence: { kind: "interval", minutes: 30 }, priority: 81, minMs: 15 * S, maxMs: 45 * S },
+  // Tarefa 62 (P1b): re-dividir uma vez o GPS dos últimos 31 dias com o limite de hoje — só a pedido do
+  // super admin (sem pedido não faz nada); retomável, até ~40 s por vez (server/gpsResplitBackfill.ts).
+  { key: "gps-resplit-backfill", runName: "gps-resplit-backfill", label: "GPS: re-dividir os últimos 31 dias (a pedido do super admin)", cadence: { kind: "interval", minutes: 5 }, priority: 96, minMs: 15 * S, maxMs: 40 * S },
   { key: "zello-sameday", runName: "zello-sameday", label: "GPS do Zello — recolha provisória do dia", cadence: { kind: "daily", from: ZELLO_SAMEDAY_WINDOW.from, until: ZELLO_SAMEDAY_WINDOW.until }, priority: 95, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-watch-renew", runName: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", cadence: { kind: "daily", from: "03:40" }, priority: 98, minMs: 15 * S, maxMs: 40 * S },
   { key: "daily-ops", runName: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", cadence: { kind: "daily", from: "04:30" }, priority: 100, minMs: 20 * S, maxMs: 45 * S },
@@ -105,12 +115,19 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // Pauta do Rafael (7 out 2026): pedir os documentos em falta aos extras (interruptor
   // EXTRAS_DOCS_REQUEST, desligado por omissão). De manhã, não de madrugada: escreve a pessoas.
   { key: "rh-docs-request", runName: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", cadence: { kind: "weekly", dow: 1, from: "10:00" }, priority: 103, minMs: 15 * S, maxMs: 45 * S },
+  // Jorge (14 out 2026): FAQs novas da base de conhecimento, 1×/semana (interruptor KB_FAQ_WEEKLY, desligado por omissão).
+  { key: "kb-faq-weekly", runName: "kb-faq-weekly", label: "Formação: FAQs novas da base de conhecimento (semanal)", cadence: { kind: "weekly", dow: 1, from: "09:30" }, priority: 107, minMs: 30 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },
+  // Plano 62 (P7): tempos de entrega e de recolha (D-3…D-1 + preenchimento para trás; interruptor SERVICE_TIMES, desligado).
+  { key: "service-times", runName: "service-times", label: "Tempos de entrega e de recolha (BD Multipark, chamadas e GPS)", cadence: { kind: "daily", from: "05:30", after: { job: "daily-ops", fallbackFrom: "07:00" } }, priority: 112, minMs: 30 * S, maxMs: 45 * S },
   { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads", runName: "google-ads", label: "Google Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 120, minMs: 15 * S, maxMs: 45 * S },
   { key: "google-ads-monthly", runName: "google-ads", label: "Google Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 121, minMs: 15 * S, maxMs: 45 * S },
   // 19b: conversões atrasadas — a Google acerta-as até semanas depois do clique.
   { key: "google-ads-recent", runName: "google-ads", label: "Google Ads (últimos 35 dias, conversões atrasadas)", cadence: { kind: "weekly", dow: 7, from: "06:15" }, priority: 124, minMs: 15 * S, maxMs: 45 * S },
+  // B1 (8 out 2026): de que campanha é cada clique (click_view) — liga as reservas só com gclid à campanha.
+  // Hoje e ontem em cada volta + até 10 dias em falta por conta (janela de 90 dias); o resto na hora seguinte.
+  { key: "google-ads-clicks", runName: "google-ads-clicks", label: "Google Ads: cliques (gclid → campanha)", cadence: { kind: "interval", minutes: 60 }, priority: 125, minMs: 15 * S, maxMs: 40 * S },
   { key: "meta-ads", runName: "meta-ads", label: "Meta Ads (última semana)", cadence: { kind: "daily", from: "05:45" }, priority: 122, minMs: 15 * S, maxMs: 45 * S },
   { key: "meta-ads-monthly", runName: "meta-ads", label: "Meta Ads (mês anterior)", cadence: { kind: "monthly", day: 2, from: "05:45" }, priority: 123, minMs: 15 * S, maxMs: 45 * S },
   { key: "web-analytics", runName: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", cadence: { kind: "daily", from: "09:00" }, priority: 130, minMs: 20 * S, maxMs: 45 * S },

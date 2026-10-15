@@ -176,14 +176,21 @@ export const mysqlPressureStore: PressureStore = {
     const days = windowDaysOf(w);
     for (const d of drivers) {
       // A célula da cidade já existe (passo do grupo, antes): só os campos por condutor. Sem ela, cria-se.
+      // 12 out 2026: + o tempo por carro separado (entregas / recolhas; colunas da migração 0615).
       await db.execute(sql`INSERT INTO ops_pressure_stats (windowEnd, windowDays, parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
-          cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90, driveN, driveP50, driveP75, driveP90, toParkN, toParkP50, toParkP75, crewAvg, computedAt)
+          cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90, driveN, driveP50, driveP75, driveP90, toParkN, toParkP50, toParkP75, crewAvg,
+          cycleOutN, cycleOutP50, cycleOutP60, cycleOutP75, cycleOutP85, cycleOutP90, cycleInN, cycleInP50, cycleInP60, cycleInP75, cycleInP85, cycleInP90, computedAt)
         VALUES (${windowEnd}, ${days}, ${chunk.key}, ${label}, 'slot', ${d.weekday}, ${d.hour}, 0, 0, ${w.weekdayDays[d.weekday] ?? 0},
           ${d.cycleN}, ${d.cycleP50}, ${d.cycleP60}, ${d.cycleP75}, ${d.cycleP85}, ${d.cycleP90}, ${d.driveN}, ${d.driveP50}, ${d.driveP75}, ${d.driveP90},
-          ${d.toParkN}, ${d.toParkP50}, ${d.toParkP75}, ${d.crewAvg}, ${computedAt})
+          ${d.toParkN}, ${d.toParkP50}, ${d.toParkP75}, ${d.crewAvg},
+          ${d.cycleOutN}, ${d.cycleOutP50}, ${d.cycleOutP60}, ${d.cycleOutP75}, ${d.cycleOutP85}, ${d.cycleOutP90},
+          ${d.cycleInN}, ${d.cycleInP50}, ${d.cycleInP60}, ${d.cycleInP75}, ${d.cycleInP85}, ${d.cycleInP90}, ${computedAt})
         ON DUPLICATE KEY UPDATE cycleN = VALUES(cycleN), cycleP50 = VALUES(cycleP50), cycleP60 = VALUES(cycleP60), cycleP75 = VALUES(cycleP75),
           cycleP85 = VALUES(cycleP85), cycleP90 = VALUES(cycleP90), driveN = VALUES(driveN), driveP50 = VALUES(driveP50), driveP75 = VALUES(driveP75),
-          driveP90 = VALUES(driveP90), toParkN = VALUES(toParkN), toParkP50 = VALUES(toParkP50), toParkP75 = VALUES(toParkP75), crewAvg = VALUES(crewAvg)`);
+          driveP90 = VALUES(driveP90), toParkN = VALUES(toParkN), toParkP50 = VALUES(toParkP50), toParkP75 = VALUES(toParkP75), crewAvg = VALUES(crewAvg),
+          cycleOutN = VALUES(cycleOutN), cycleOutP50 = VALUES(cycleOutP50), cycleOutP60 = VALUES(cycleOutP60), cycleOutP75 = VALUES(cycleOutP75),
+          cycleOutP85 = VALUES(cycleOutP85), cycleOutP90 = VALUES(cycleOutP90), cycleInN = VALUES(cycleInN), cycleInP50 = VALUES(cycleInP50),
+          cycleInP60 = VALUES(cycleInP60), cycleInP75 = VALUES(cycleInP75), cycleInP85 = VALUES(cycleInP85), cycleInP90 = VALUES(cycleInP90)`);
     }
     // Escalões: estatística derivada, refeita inteira em cada corrida.
     await db.execute(sql`DELETE FROM ops_pressure_stats WHERE windowEnd = ${windowEnd} AND parkGroup = ${chunk.key} AND kind = 'crew'`);
@@ -325,7 +332,8 @@ export async function runExtrasPressure(o: {
   while (i < chunks.length) {
     const chunk = chunks[i];
     const part: PressureDayPart = chunk.kind === "driver" ? "driver" : "group";
-    const sig = pressureDaySig(chunk.parkIds);
+    // 12 out 2026: a parte por condutor tem versão própria (entregas/recolhas separadas).
+    const sig = pressureDaySig(chunk.parkIds, part);
     const label = chunk.kind === "driver" ? `${chunk.key}:condutores` : chunk.key;
     // Sem tempo nem para juntar os dias: fica para o tick seguinte.
     if (o.deadlineAt - Date.now() < PRESSURE_COMBINE_MIN_MS) break;
@@ -435,7 +443,10 @@ export function pressureFallbacks(
   return out;
 }
 
-const DRIVER_FIELDS = ["cycleN", "cycleP50", "cycleP60", "cycleP75", "cycleP85", "cycleP90", "driveN", "driveP50", "driveP75", "driveP90", "toParkN", "toParkP50", "toParkP75", "crewAvg"] as const;
+const DRIVER_FIELDS = [
+  "cycleN", "cycleP50", "cycleP60", "cycleP75", "cycleP85", "cycleP90", "driveN", "driveP50", "driveP75", "driveP90", "toParkN", "toParkP50", "toParkP75", "crewAvg",
+  "cycleOutN", "cycleOutP50", "cycleOutP60", "cycleOutP75", "cycleOutP85", "cycleOutP90", "cycleInN", "cycleInP50", "cycleInP60", "cycleInP75", "cycleInP85", "cycleInP90",
+] as const;
 
 const numOrNull = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
@@ -463,6 +474,10 @@ export function mapStoredRow(r: Record<string, unknown>): { slot?: PressureSlot;
         cycleP85: numOrNull(r.cycleP85), cycleP90: numOrNull(r.cycleP90),
         driveN: Number(r.driveN ?? 0), driveP50: numOrNull(r.driveP50), driveP75: numOrNull(r.driveP75), driveP90: numOrNull(r.driveP90),
         toParkN: Number(r.toParkN ?? 0), toParkP50: numOrNull(r.toParkP50), toParkP75: numOrNull(r.toParkP75), crewAvg: numOrNull(r.crewAvg),
+        cycleOutN: Number(r.cycleOutN ?? 0), cycleOutP50: numOrNull(r.cycleOutP50), cycleOutP60: numOrNull(r.cycleOutP60), cycleOutP75: numOrNull(r.cycleOutP75),
+        cycleOutP85: numOrNull(r.cycleOutP85), cycleOutP90: numOrNull(r.cycleOutP90),
+        cycleInN: Number(r.cycleInN ?? 0), cycleInP50: numOrNull(r.cycleInP50), cycleInP60: numOrNull(r.cycleInP60), cycleInP75: numOrNull(r.cycleInP75),
+        cycleInP85: numOrNull(r.cycleInP85), cycleInP90: numOrNull(r.cycleInP90),
       },
     };
   }
@@ -476,6 +491,18 @@ export function mapStoredRow(r: Record<string, unknown>): { slot?: PressureSlot;
   }
   return {};
 }
+
+/** Colunas lidas de ops_pressure_stats até à migração 0430 (tempos por condutor). */
+const STATS_COLUMNS_0430 = sql.raw(`parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
+  checkinsDone, checkoutsDone, checkinsStarted, checkoutsStarted, concurrencyAvg, concurrencyMax,
+  deliveryN, deliveryP50, deliveryP75, deliveryP90, pickupN, pickupP50, pickupP75,
+  cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90, driveN, driveP50, driveP75, driveP90, toParkN, toParkP50, toParkP75, crewAvg, bandLabel`);
+/** + 0615 (12 out 2026): o tempo por carro separado em entregas e recolhas. */
+const STATS_COLUMNS = sql.raw(`parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
+  checkinsDone, checkoutsDone, checkinsStarted, checkoutsStarted, concurrencyAvg, concurrencyMax,
+  deliveryN, deliveryP50, deliveryP75, deliveryP90, pickupN, pickupP50, pickupP75,
+  cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90, driveN, driveP50, driveP75, driveP90, toParkN, toParkP50, toParkP75, crewAvg, bandLabel,
+  cycleOutN, cycleOutP50, cycleOutP60, cycleOutP75, cycleOutP85, cycleOutP90, cycleInN, cycleInP50, cycleInP60, cycleInP75, cycleInP85, cycleInP90`);
 
 /** Última janela completa (ou, sem nenhuma completa, a mais recente). `groups` limita (âmbito de cidade). */
 export async function getPressureView(allowedGroups?: (key: string) => boolean, o: { crewRules?: CrewRulesMap | null; percentiles?: TimesPercentileMap | null; useMeasured?: Partial<Record<"lisbon" | "porto" | "faro", boolean>> | null } = {}): Promise<PressureView> {
@@ -506,17 +533,20 @@ export async function getPressureView(allowedGroups?: (key: string) => boolean, 
   const windowDays = Number(latest.d ?? PRESSURE_WINDOW_DAYS) || PRESSURE_WINDOW_DAYS;
   let rows: any[];
   try {
-    rows = rowsOf(await db.execute(sql`SELECT parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
-        checkinsDone, checkoutsDone, checkinsStarted, checkoutsStarted, concurrencyAvg, concurrencyMax,
-        deliveryN, deliveryP50, deliveryP75, deliveryP90, pickupN, pickupP50, pickupP75,
-        cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90, driveN, driveP50, driveP75, driveP90, toParkN, toParkP50, toParkP75, crewAvg, bandLabel
+    rows = rowsOf(await db.execute(sql`SELECT ${STATS_COLUMNS}
       FROM ops_pressure_stats WHERE windowEnd = ${windowEnd} AND kind IN ('slot', 'load', 'crew') ORDER BY id LIMIT 20000`));
   } catch {
-    // Sem as colunas da migração 0430 (arranque a meio): como antes.
-    rows = rowsOf(await db.execute(sql`SELECT parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
-        checkinsDone, checkoutsDone, checkinsStarted, checkoutsStarted, concurrencyAvg, concurrencyMax,
-        deliveryN, deliveryP50, deliveryP75, deliveryP90, pickupN, pickupP50, pickupP75
-      FROM ops_pressure_stats WHERE windowEnd = ${windowEnd} AND kind IN ('slot', 'load') ORDER BY id LIMIT 20000`));
+    try {
+      // Sem as colunas da migração 0615 (arranque a meio): sem entregas/recolhas separadas.
+      rows = rowsOf(await db.execute(sql`SELECT ${STATS_COLUMNS_0430}
+        FROM ops_pressure_stats WHERE windowEnd = ${windowEnd} AND kind IN ('slot', 'load', 'crew') ORDER BY id LIMIT 20000`));
+    } catch {
+      // Sem as colunas da migração 0430 (arranque a meio): como antes.
+      rows = rowsOf(await db.execute(sql`SELECT parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
+          checkinsDone, checkoutsDone, checkinsStarted, checkoutsStarted, concurrencyAvg, concurrencyMax,
+          deliveryN, deliveryP50, deliveryP75, deliveryP90, pickupN, pickupP50, pickupP75
+        FROM ops_pressure_stats WHERE windowEnd = ${windowEnd} AND kind IN ('slot', 'load') ORDER BY id LIMIT 20000`));
+    }
   }
   const groups = new Map<string, string>();
   const slots: PressureSlot[] = [];
@@ -545,10 +575,7 @@ export async function getPressureView(allowedGroups?: (key: string) => boolean, 
     const present = new Set<string>([...loads.map((l) => l.group), ...slots.filter((x) => x.checkinsDone + x.checkoutsDone + x.deliveryN > 0).map((x) => x.group)]);
     const withDrivers = new Set<string>([...slots.filter((x) => (x.cycleN ?? 0) > 0).map((x) => x.group), ...crew.map((c) => c.group)]);
     for (const f of pressureFallbacks({ groups: present, withDrivers }, older, Object.keys(cities))) {
-      const old = rowsOf(await db.execute(sql`SELECT parkGroup, groupLabel, kind, weekday, hour, loadBucket, rush, days,
-          checkinsDone, checkoutsDone, checkinsStarted, checkoutsStarted, concurrencyAvg, concurrencyMax,
-          deliveryN, deliveryP50, deliveryP75, deliveryP90, pickupN, pickupP50, pickupP75,
-          cycleN, cycleP50, cycleP60, cycleP75, cycleP85, cycleP90, driveN, driveP50, driveP75, driveP90, toParkN, toParkP50, toParkP75, crewAvg, bandLabel
+      const old = rowsOf(await db.execute(sql`SELECT ${STATS_COLUMNS}
         FROM ops_pressure_stats WHERE windowEnd = ${f.w} AND parkGroup = ${f.group} AND kind IN ('slot', 'load', 'crew') ORDER BY id LIMIT 5000`));
       const here = new Map(slots.filter((x) => x.group === f.group).map((x) => [`${x.weekday}:${x.hour}`, x]));
       const hasCrew = crew.some((c) => c.group === f.group);

@@ -290,7 +290,7 @@ export function ExtrasMetricsSection() {
         open={deactivate != null}
         subjectName={deactivate?.name ?? ""}
         subjectKind="colaborador"
-        effectNote="Sai dos pedidos de disponibilidade e da escala; o login fica bloqueado."
+        effectNote="Sai dos pedidos de disponibilidade e da escala. O que acontece a seguir depende do motivo:"
         pending={setActive.isPending}
         onOpenChange={(o) => { if (!o) setDeactivate(null); }}
         onConfirm={(values) => deactivate && setActive.mutate({ id: deactivate.id, isActive: false, ...values })}

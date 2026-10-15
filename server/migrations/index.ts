@@ -167,6 +167,30 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0560", () => import("./migration_0560").then((m) => step(m.MIGRATION_0560_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0560))],
   ["0565", () => import("./migration_0565").then((m) => step(m.MIGRATION_0565_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0565))],
   ["0570", () => import("./migration_0570").then((m) => step(m.MIGRATION_0570_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0570))],
+  ["0575", () => import("./migration_0575").then((m) => step(m.MIGRATION_0575_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0575))],
+  ["0580", () => import("./migration_0580").then((m) => step(m.MIGRATION_0580_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0580))],
+  ["0585", () => import("./migration_0585").then((m) => step(m.MIGRATION_0585_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0585))],
+  ["0590", () => import("./migration_0590").then((m) => step(m.MIGRATION_0590_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0590))],
+  ["0595", () => import("./migration_0595").then((m) => step(m.MIGRATION_0595_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0595))],
+  ["0600", () => import("./migration_0600").then((m) => step(m.MIGRATION_0600_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0600))],
+  ["0605", () => import("./migration_0605").then((m) => step(m.MIGRATION_0605_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0605))],
+  ["0610", () => import("./migration_0610").then((m) => step(m.MIGRATION_0610_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0610))],
+  ["0615", () => import("./migration_0615").then((m) => step(m.MIGRATION_0615_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0615))],
+  ["0620", () => import("./migration_0620").then((m) => step(m.MIGRATION_0620_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0620))],
+  ["0625", () => import("./migration_0625").then((m) => step(m.MIGRATION_0625_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0625))],
+  ["0630", () => import("./migration_0630").then((m) => step(m.MIGRATION_0630_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0630))],
+  ["0635", () => import("./migration_0635").then((m) => step(m.MIGRATION_0635_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0635))],
+  ["0640", () => import("./migration_0640").then((m) => step(m.MIGRATION_0640_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0640))],
+  ["0645", () => import("./migration_0645").then((m) => step(m.MIGRATION_0645_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0645))],
+  ["0650", () => import("./migration_0650").then((m) => step(m.MIGRATION_0650_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0650))],
+  ["0655", () => import("./migration_0655").then((m) => step(m.MIGRATION_0655_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0655))],
+  ["0660", () => import("./migration_0660").then((m) => step(m.MIGRATION_0660_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0660))],
+  ["0665", () => import("./migration_0665").then((m) => step(m.MIGRATION_0665_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0665))],
+  ["0670", () => import("./migration_0670").then((m) => step(m.MIGRATION_0670_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0670))],
+  ["0675", () => import("./migration_0675").then((m) => step(m.MIGRATION_0675_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0675))],
+  ["0680", () => import("./migration_0680").then((m) => step(m.MIGRATION_0680_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0680))],
+  // Plano 62 (P6): service_times — tempos de entrega e de recolha por ciclo.
+  ["0685", () => import("./migration_0685").then((m) => step(m.MIGRATION_0685_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0685))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);
@@ -237,5 +261,21 @@ export async function ensureRecentSchema(db: Executor): Promise<void> {
     if (await runMigration0545Collation(db as any)) console.log("[Schema ensure] 0545 tasks.bookingRef: collation igual à de multipark_bookings.externalId");
   } catch (err: any) {
     console.warn("[Schema ensure] 0545 (collation de tasks.bookingRef) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    // Categorias de despesa: acentos certos + "Sinistros" — uma vez em toda a frota (marca em app_settings).
+    const { runMigration0675Data } = await import("./migration_0675");
+    const r = await runMigration0675Data(db as any);
+    if (r.status === "applied") console.log(`[Schema ensure] 0675 categorias: ${r.plan?.renames.length ?? 0} nome(s) corrigido(s)${r.plan?.renames.length ? ` (${r.plan.renames.map((x) => `${x.from} → ${x.to}`).join("; ")})` : ""}${r.plan?.skipped.length ? `, ${r.plan.skipped.length} ficaram (nome certo já existe)` : ""}${r.sinistrosAdded ? ", Sinistros acrescentada" : ""}`.slice(0, 600));
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0675 (nomes das categorias) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
+  try {
+    // Velocidade (tarefa 62): {120 km/h, 10 %} gravado → 0 % — uma vez em toda a frota (marca em app_settings).
+    const { runMigration0680Data, describe0680 } = await import("./migration_0680");
+    const line = describe0680(await runMigration0680Data(db as any));
+    if (line) console.log(`[Schema ensure] ${line}`);
+  } catch (err: any) {
+    console.warn("[Schema ensure] 0680 (tolerância da velocidade) falhou:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
 }

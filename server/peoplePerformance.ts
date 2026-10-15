@@ -28,13 +28,30 @@
  *  - a EQUIPA do TL (o turno dele) e do supervisor (as cidades dele):
  *    movimentos, custo, quem mexeu carros sem Zello, horas paradas e, no
  *    supervisor, extras a mais/a menos face à previsão (dia e semana).
+ *
+ * 49e (Jorge, 8 out 2026: "avança com o desempenho"):
+ *  - central Vodafone: também as perdidas, as devolvidas e os minutos ao
+ *    telefone, com a mesma regra das internas (shared → centralCallMetrics);
+ *  - emails: também os enviados da caixa Gmail PESSOAL ligada, cada linha uma
+ *    vez (shared → emailAuthorOf); as partilhadas fora da dashboard não têm autor;
+ *  - atividade por hora do dia (Lisboa): a Multipark vem da avaliação diária
+ *    (employee_day_metrics.actionsByHour, 0590 — nada se relê da History) e a
+ *    dashboard das MESMAS contagens por hora UTC, passadas a hora de Lisboa
+ *    aqui (sem CONVERT_TZ, que precisa das tabelas de fusos do MySQL).
+ *
+ * Pesos (Jorge, 8 out 2026: "avança com os pesos do ranking"): os pontos usam
+ * os pesos EM VIGOR — as omissões do código com a definição
+ * `perf.rankWeights` por cima (shared → effectiveWeights /
+ * effectiveTeamWeights), lida sem cache a cada pedido; se a leitura falhar,
+ * valem as omissões. Os pontos calculam-se sempre na hora (nada guardado).
  */
 import { sql, type SQL } from "drizzle-orm";
 import {
-  addTotals, bucketOf, emptyTotals, GROUP_VIEW, groupOf, kmWithoutMoves, perfRange, perHourOf, rosterGroup, teamDayPoints, utcHourMs, workPoints,
-  type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals,
+  addHours, addTotals, bucketOf, effectiveTeamWeights, effectiveWeights, emptyHours, emptyTotals, gpsDayOverLimit, GROUP_VIEW, groupOf, kmWithoutMoves, lisbonDaysTouched, lisbonHourOfUtcHour, parseHours,
+  perfRange, perHourOf, rosterGroup, signedWeight, teamDayPoints, utcHourMs, workPoints, CALLBACK_WINDOW_HOURS, PERF_RANK_WEIGHTS_KEY,
+  type PerfGroup, type PerfMetric, type PerfPeriod, type PerfTotals, type PerfWeights, type RankWeightOverrides, type TeamPointWeights,
 } from "../shared/peoplePerformance";
-import { applyAdjustments, emptyDayMetrics, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
+import { applyAdjustments, emptyDayMetrics, EVALUATION_RULES_VERSION, lateArrivalsOf, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
 import { operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
 import type { MultiparkRead } from "./multiparkDb/read";
 
@@ -43,6 +60,7 @@ const rowsOf = (res: unknown): any[] => {
   return Array.isArray(r) ? r : [];
 };
 const dayStr = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? "").slice(0, 10));
+const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /** 39g: chamadas da central com clientes e números de fora (sem colegas do RH nem extensões). */
 const CENTRAL_EXTERNAL_ONLY = sql`(contactRef IS NULL OR (contactRef NOT LIKE 'emp-%' AND contactRef NOT LIKE 'ext-%'))`;
@@ -56,15 +74,42 @@ const CENTRAL_SUPERVISOR_TO_EXTRA = sql`(central_calls.contactRef LIKE 'emp-%'
   AND (EXISTS (SELECT 1 FROM users su WHERE su.id = central_calls.userId AND su.role = 'supervisor')
     OR EXISTS (SELECT 1 FROM employees se WHERE se.userId = central_calls.userId AND se.position = 'supervisor')))`;
 
-/** Contas da dashboard → contagens por hora UTC (agrupadas no SQL). */
-function userSources(start: string, end: string): Array<{ key: PerfMetric; label: string; q: SQL }> {
+/** 49e: a mesma pessoa do outro lado — o mesmo contacto da consola ou o mesmo número (últimos 9 algarismos). */
+const sameParty = (x: string) => sql.raw(`((${x}.contactRef IS NOT NULL AND ${x}.contactRef = central_calls.contactRef)
+    OR (${x}.phone IS NOT NULL AND central_calls.phone IS NOT NULL AND RIGHT(${x}.phone, 9) = RIGHT(central_calls.phone, 9)))`);
+/**
+ * 49e: devolução de uma chamada da central — a 1.ª chamada feita para quem
+ * teve uma recebida NÃO atendida nas 24 h anteriores (de quem quer que fosse
+ * a perdida). Ligar outra vez à mesma pessoa já não é devolução.
+ */
+const CENTRAL_RETURNS_MISSED = sql`EXISTS (SELECT 1 FROM central_calls m WHERE m.direction = 'in' AND m.held = 0
+  AND m.startedAt < central_calls.startedAt AND m.startedAt >= central_calls.startedAt - INTERVAL ${sql.raw(String(CALLBACK_WINDOW_HOURS))} HOUR
+  AND ${sameParty("m")}
+  AND NOT EXISTS (SELECT 1 FROM central_calls o WHERE o.direction = 'out' AND o.startedAt > m.startedAt AND o.startedAt < central_calls.startedAt AND ${sameParty("o")}))`;
+
+/**
+ * 49e: o autor de um email enviado (shared/peoplePerformance.ts → emailAuthorOf):
+ * quem o mandou pela dashboard; senão o dono da caixa Gmail PESSOAL ligada
+ * ("user:N", fora das caixas partilhadas). Os enviados diretamente das caixas
+ * partilhadas fora da dashboard não têm autor. Cada linha conta uma vez.
+ */
+const EMAIL_AUTHOR = sql`COALESCE(sentById, CASE WHEN mailboxKey IS NULL AND accountKey LIKE 'user:%' THEN CAST(SUBSTRING(accountKey, 6) AS UNSIGNED) END)`;
+
+/**
+ * Contas da dashboard → contagens por hora UTC (agrupadas no SQL). 49e: a
+ * mesma hora dá a atividade por hora do dia (Lisboa); `hourly: false` = não
+ * é uma ação da pessoa (perdidas, minutos) ou já conta noutra (devoluções da
+ * central = chamadas feitas).
+ */
+export function userSources(start: string, end: string): Array<{ key: PerfMetric; label: string; q: SQL; hourly: boolean }> {
   const hour = (col: SQL) => sql`DATE_FORMAT(${col}, '%Y-%m-%d %H')`;
-  const src = (key: PerfMetric, label: string, table: SQL, userCol: SQL, timeCol: SQL, where: SQL = sql`1 = 1`) => ({
-    key, label,
-    q: sql`SELECT ${userCol} AS u, ${hour(timeCol)} AS h, COUNT(*) AS n FROM ${table}
+  const src = (key: PerfMetric, label: string, table: SQL, userCol: SQL, timeCol: SQL, where: SQL = sql`1 = 1`, opt: { agg?: SQL; hourly?: boolean } = {}) => ({
+    key, label, hourly: opt.hourly !== false,
+    q: sql`SELECT ${userCol} AS u, ${hour(timeCol)} AS h, ${opt.agg ?? sql`COUNT(*)`} AS n FROM ${table}
             WHERE ${userCol} IS NOT NULL AND ${timeCol} >= ${start} AND ${timeCol} < ${end} AND ${where}
             GROUP BY u, h`,
   });
+  const minutes = (col: SQL) => sql`SUM(COALESCE(${col}, 0)) / 60`;
   return [
     src("callsAnswered", "chamadas atendidas", sql`whatsapp_calls`, sql`answeredByUserId`, sql`answeredAt`, sql`direction = 'in' AND status <> 'rejected'`),
     src("callsMade", "chamadas feitas", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`),
@@ -73,8 +118,17 @@ function userSources(start: string, end: string): Array<{ key: PerfMetric; label
     // 39g: as internas — colegas do RH (emp-) e extensões (ext-) — não contam, exceto o supervisor a ligar aos extras
     src("callsAnswered", "chamadas da central (atendidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}`),
     src("callsMade", "chamadas da central (feitas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND (${CENTRAL_EXTERNAL_ONLY} OR ${CENTRAL_SUPERVISOR_TO_EXTRA})`),
+    // 49e: as perdidas (recebidas não atendidas), as devolvidas e o tempo ao telefone — com a mesma regra das internas
+    src("callsMissed", "chamadas da central (perdidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'in' AND held = 0 AND ${CENTRAL_EXTERNAL_ONLY}`, { hourly: false }),
+    src("callbacks", "chamadas da central (devolvidas)", sql`central_calls`, sql`userId`, sql`startedAt`, sql`direction = 'out' AND ${CENTRAL_EXTERNAL_ONLY} AND ${CENTRAL_RETURNS_MISSED}`, { hourly: false }),
+    src("callMinutes", "minutos da central", sql`central_calls`, sql`userId`, sql`startedAt`,
+      sql`((direction = 'in' AND held = 1 AND ${CENTRAL_EXTERNAL_ONLY}) OR (direction = 'out' AND (${CENTRAL_EXTERNAL_ONLY} OR ${CENTRAL_SUPERVISOR_TO_EXTRA})))`,
+      { agg: minutes(sql`durationS`), hourly: false }),
+    src("callMinutes", "minutos do WhatsApp (atendidas)", sql`whatsapp_calls`, sql`answeredByUserId`, sql`answeredAt`, sql`direction = 'in' AND status <> 'rejected'`, { agg: minutes(sql`durationSec`), hourly: false }),
+    src("callMinutes", "minutos do WhatsApp (feitas)", sql`whatsapp_calls`, sql`startedByUserId`, sql`startedAt`, sql`direction = 'out'`, { agg: minutes(sql`durationSec`), hourly: false }),
     src("waMessages", "mensagens WhatsApp", sql`whatsapp_messages`, sql`sentById`, sql`createdAt`, sql`direction = 'out'`),
-    src("emails", "emails", sql`mail_messages`, sql`sentById`, sql`COALESCE(sentAt, createdAt)`, sql`direction = 'out' AND automated = 0`),
+    // 49e: enviados pela dashboard + enviados da caixa Gmail pessoal ligada (sem contar duas vezes; partilhadas fora da dashboard não têm autor)
+    src("emails", "emails", sql`mail_messages`, EMAIL_AUTHOR, sql`sentAt`, sql`direction = 'out' AND automated = 0`),
     src("complaintMsgs", "respostas em reclamações", sql`complaint_messages`, sql`authorId`, sql`createdAt`, sql`isInternal = 0`),
     src("complaintsClosed", "reclamações fechadas", sql`complaints`, sql`closedById`, sql`closedAt`),
     src("reviewsReplied", "críticas Google", sql`google_reviews`, sql`respondedBy`, sql`respondedAt`),
@@ -109,6 +163,10 @@ export interface PerfPerson {
   byRoster: boolean;
   /** por balde, só as métricas do gráfico da aba */
   series: Partial<Record<PerfMetric, number[]>>;
+  /** 49e: ações por hora do dia (Lisboa, 0–23) no período: Multipark (pela avaliação) + dashboard */
+  byHour: number[];
+  /** 49e: a parte da Multipark de `byHour` */
+  byHourMultipark: number[];
 }
 export interface PerfResult {
   period: PerfPeriod; anchor: string; group: PerfGroup; from: string; to: string;
@@ -119,7 +177,63 @@ export interface PerfResult {
   speedLimit: number | null;
   /** 42c: cidades da escala do filtro (null = todas) */
   cities: string[] | null;
+  /** 49e: ações por hora do dia da aba (soma das pessoas mostradas) */
+  groupByHour: number[];
+  groupByHourMultipark: number[];
+  /**
+   * 49e: a Multipark por hora só existe desde que a avaliação diária a guarda
+   * (`since` = 1.º dia DO PERÍODO com contagens por hora; null = nenhum);
+   * `missingDays` = dias·pessoa do período com ações na Multipark mas sem as horas.
+   */
+  hourly: { since: string | null; missingDays: number };
+  /**
+   * Pesos (8 out 2026): os em vigor nesta aba e na equipa, e o que está
+   * gravado em `perf.rankWeights` (todas as abas) com o `updatedAt` — o
+   * editor do ecrã junta-lhe a aba e grava com esse `updatedAt`.
+   */
+  rankWeights: RankWeightsInfo;
+  /**
+   * 14 out 2026: dias·pessoa do período (os que contam nesta aba) calculados com
+   * regras antigas (employee_day_metrics.rulesVersion < EVALUATION_RULES_VERSION):
+   * o ecrã avisa "N dias calculados com as regras antigas — Recalcular".
+   */
+  oldRulesDays: number;
   notes: string[];
+}
+
+export interface RankWeightsInfo {
+  weights: PerfWeights;
+  team: TeamPointWeights;
+  overrides: RankWeightOverrides;
+  updatedAt: string | null;
+  updatedByName: string | null;
+  /** false = não deu para ler o que está gravado (valem as omissões; não se grava por cima às cegas) */
+  readable: boolean;
+}
+
+/**
+ * Pesos em vigor: a definição lida sem cache (o ranking recarrega logo depois
+ * de gravar, em qualquer instância); se falhar, a cache de getSetting; se
+ * também falhar, as omissões do código. Nunca lança.
+ */
+export async function loadRankWeights(group: PerfGroup, notes: string[] = []): Promise<RankWeightsInfo> {
+  let overrides: RankWeightOverrides = {};
+  let meta: { updatedAt: string | null; updatedByName: string | null } = { updatedAt: null, updatedByName: null };
+  let readable = false;
+  try {
+    const { getSetting, getSettingFresh } = await import("./appSettings");
+    const row = await getSettingFresh(PERF_RANK_WEIGHTS_KEY);
+    if (row) {
+      readable = true;
+      overrides = row.value ?? {};
+      meta = { updatedAt: row.updatedAt, updatedByName: row.updatedByName };
+      if (row.invalid) notes.push("Os pesos gravados do ranking já não são válidos: valem as omissões até se gravarem outra vez (Editar pesos).");
+    } else {
+      overrides = (await getSetting(PERF_RANK_WEIGHTS_KEY)) ?? {};
+    }
+  } catch { /* omissões */ }
+  if (!readable) notes.push("Não deu para ler os pesos gravados do ranking agora: os pontos podem estar com as omissões.");
+  return { weights: effectiveWeights(group, overrides), team: effectiveTeamWeights(overrides), overrides, ...meta, readable };
 }
 
 interface RosterRow { day: string; city: string; shift: string; employeeId: number; isTL: boolean; hours: number; level: string | null; startHour: number; endHour: number; sentHomeHour: number | null }
@@ -131,6 +245,8 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   const r = perfRange(o.period, o.anchor);
   const range = operationalDayRangeUtc(r.from, r.to);
   const notes: string[] = [];
+  // 8 out 2026: os pesos em vigor (omissões + Editar pesos)
+  const rankWeights = await loadRankWeights(o.group, notes);
 
   // ── 42c: cidade do topo (a marca vale a cidade dela) ──
   const { scopedDayCities } = await import("./evaluationEngine");
@@ -213,6 +329,8 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
 
   // acumuladores: pessoa → balde → totais
   const acc = new Map<number, Map<string, PerfTotals>>();
+  // 49e: pessoa → ações por hora do dia (Lisboa): todas e só as da Multipark
+  const hoursAcc = new Map<number, { all: number[]; mp: number[] }>();
   const teamSum = new Map<string, number>(); // `${emp}|${bucket}` → soma das equipas
   const cell = (emp: number, bucket: string) => {
     let m = acc.get(emp);
@@ -221,16 +339,34 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (!t) { t = emptyTotals(); m.set(bucket, t); }
     return t;
   };
-  const put = (emp: number, day: string, part: Partial<PerfTotals>) => {
+  /** O dia desta pessoa conta (aba, cidade escolhida, período)? Devolve o balde. */
+  const bucketFor = (emp: number, day: string): string | null => {
     const p = people.get(emp);
-    if (!p) return;
+    if (!p) return null;
     if (dayCities !== undefined) {
-      if (otherCityDays.get(emp)?.has(day)) return; // escalado noutra cidade nesse dia
-      if (!p.inScope && !allowedDays.get(emp)?.has(day)) return; // ficha de outra cidade: só os dias feitos aqui
+      if (otherCityDays.get(emp)?.has(day)) return null; // escalado noutra cidade nesse dia
+      if (!p.inScope && !allowedDays.get(emp)?.has(day)) return null; // ficha de outra cidade: só os dias feitos aqui
     }
-    const b = bucketOf(o.period, day, r);
+    return bucketOf(o.period, day, r);
+  };
+  const put = (emp: number, day: string, part: Partial<PerfTotals>) => {
+    const b = bucketFor(emp, day);
     if (b) addTotals(cell(emp, b), part);
   };
+  /** 49e: ações à hora `hour` (Lisboa) do dia operacional `day` — as mesmas regras do `put`. */
+  const putHours = (emp: number, day: string, hours: ReadonlyArray<number>, multipark: boolean) => {
+    if (!bucketFor(emp, day)) return;
+    let h = hoursAcc.get(emp);
+    if (!h) { h = { all: emptyHours(), mp: emptyHours() }; hoursAcc.set(emp, h); }
+    addHours(h.all, hours);
+    if (multipark) addHours(h.mp, hours);
+  };
+  let hourlyMissingDays = 0;
+  /** 14 out 2026: dias (que contam) com trabalho e com GPS, por pessoa — "N dias sem GPS (Zello não ligado)" */
+  const workDaySet = new Map<number, Set<string>>();
+  const gpsDaySet = new Map<number, Set<string>>();
+  const markDay = (m: Map<number, Set<string>>, emp: number, day: string) => { if (bucketFor(emp, day)) addDay(m, emp, day); };
+  let oldRulesDays = 0;
 
   // ── Avaliação diária (Multipark + horas + penalizações), com os ajustes ──
   const ids = [...people.keys()];
@@ -257,35 +393,87 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
       let byType: Record<string, number> = {};
       try { byType = m.actionsByType ? JSON.parse(m.actionsByType) : {}; } catch { byType = {}; }
       const hours = normalisationHours(d);
+      // 49e: as ações da Multipark por hora do dia, guardadas pela avaliação (dias antigos não as têm)
+      if (Number(m.rulesVersion ?? 1) < EVALUATION_RULES_VERSION && bucketFor(emp, day)) oldRulesDays += 1;
+      const byHour = parseHours(m.actionsByHour);
+      if (byHour) putHours(emp, day, byHour, true);
+      else if (d.actions > 0 && bucketFor(emp, day)) hourlyMissingDays += 1;
+      if (hours > 0 || d.actions > 0) markDay(workDaySet, emp, day);
       put(emp, day, {
         hours, workDays: hours > 0 || d.actions > 0 ? 1 : 0, evalPoints: scoreOf(d).totalPoints,
-        recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, cancels: d.cancels,
+        recolhas: d.recolhas, entregas: d.entregas, movements: d.movements, parkingMoves: d.parkingMoves, spotChanges: d.spotChanges ?? 0, cancels: d.cancels,
         checkingIn: Number(byType.CHECKING_IN ?? 0), checkingOut: Number(byType.CHECKING_OUT ?? 0),
         created: Number(byType.CREATED ?? 0), updated: Number(byType.UPDATE ?? 0),
-        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: d.delays, complaintsAgainst: d.complaints, accidents: d.accidents,
+        // tarefa 62: só os atrasos ao trabalho (lateArrivalsOf — nos dias antigos o delays incluía entregas); a entrega atrasada saiu
+        occurrences: d.incidentsReported, speedAlerts: d.speedingEvents, delays: lateArrivalsOf(d), complaintsAgainst: d.complaints, accidents: d.accidents,
       });
     }
     if (!mRows.length) notes.push("Sem avaliação diária guardada neste período (a Multipark e as horas entram pela avaliação, recalculada todas as noites).");
   }
 
   // ── GPS do Zello (km, velocidade) ──
+  // 14 out 2026: o limite vem de Definições (120 km/h por omissão — antes da tabela
+  // `speed_limits`, sem ecrã: sem ela o limite era nulo e os dias acima davam sempre 0).
+  // Tarefa 62: com a trava da linha GPS (o limiar com que cada linha foi recolhida; sem ele, 132).
   let speedLimit: number | null = null;
   try {
     const { speedThreshold } = await import("./dayActivity");
     speedLimit = await speedThreshold();
   } catch { /* sem limite */ }
+  let approxSpeedDays = 0;
+  let lockedSpeedDays = 0;
+  if (speedLimit == null && (o.group === "drivers" || o.group === "teamleaders")) notes.push("Não deu para ler o limite de velocidade: os dias acima do limite ficam a 0 nesta leitura.");
   if (ids.length && o.group !== "office" && o.group !== "supervision") {
     const idList = sql.join(ids.map((x) => sql`${x}`), sql`, `);
     const gps = [
-      ...rowsOf(await db.execute(sql`SELECT employeeId, day, km, maxSpeed FROM driver_day_shares
-          WHERE day >= ${r.from} AND day <= ${r.to} AND employeeId IN (${idList})`).catch(() => [[]])),
-      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.totalKm AS km, h.maxSpeed FROM daily_driver_history h
+      ...rowsOf(await db.execute(sql`SELECT s.employeeId, s.day, s.km, s.maxSpeed, s.violations, s.points, h.metricsVersion, h.speedThresholdKmh FROM driver_day_shares s
+          LEFT JOIN daily_driver_history h ON h.id = s.historyId
+          WHERE s.day >= ${r.from} AND s.day <= ${r.to} AND s.employeeId IN (${idList})`).catch(() => [[]])),
+      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.totalKm AS km, h.maxSpeed, h.speedViolations AS violations,
+            h.gpsPointsCount AS points, h.metricsVersion, h.speedThresholdKmh FROM daily_driver_history h
           WHERE h.employeeId IN (${idList}) AND DATE(h.date) >= ${r.from} AND DATE(h.date) <= ${r.to}
             AND NOT EXISTS (SELECT 1 FROM driver_day_shares s WHERE s.historyId = h.id)`).catch(() => [[]])),
     ];
+    // uma pessoa com dois PDAs (ou um PDA e o telemóvel) no mesmo dia: UM dia com GPS e UM dia acima do limite
+    const days = new Map<string, { emp: number; day: string; km: number; max: number; over: boolean; approx: boolean; locked: boolean; gps: boolean }>();
     for (const g of gps) {
+      const emp = Number(g.employeeId), day = dayStr(g.day);
+      const k = `${emp}|${day}`;
+      const x = days.get(k) ?? { emp, day, km: 0, max: 0, over: false, approx: false, locked: false, gps: false };
       const km = Number(g.km ?? 0), max = Number(g.maxSpeed ?? 0);
-      put(Number(g.employeeId), dayStr(g.day), { km: Math.round(km * 10) / 10, gpsDays: km > 0 ? 1 : 0, maxSpeed: max, overLimitDays: speedLimit != null && max > speedLimit ? 1 : 0 });
+      const over = gpsDayOverLimit({ metricsVersion: g.metricsVersion, maxSpeed: max, speedThresholdKmh: g.speedThresholdKmh }, speedLimit);
+      x.km += km;
+      x.max = Math.max(x.max, max);
+      x.over = x.over || over.over;
+      x.approx = x.approx || over.approx;
+      x.locked = x.locked || over.locked;
+      x.gps = x.gps || km > 0 || Number(g.points ?? 0) > 0;
+      days.set(k, x);
+    }
+    for (const x of days.values()) {
+      if (x.gps) markDay(gpsDaySet, x.emp, x.day);
+      if (x.approx && bucketFor(x.emp, x.day)) approxSpeedDays += 1;
+      if (x.locked && !x.over && bucketFor(x.emp, x.day)) lockedSpeedDays += 1;
+      put(x.emp, x.day, { km: Math.round(x.km * 10) / 10, gpsDays: x.gps ? 1 : 0, maxSpeed: x.max, overLimitDays: x.over ? 1 : 0 });
+    }
+    if (lockedSpeedDays) notes.push(`Dias acima do limite: ${lockedSpeedDays} dia(s) com a máxima acima do limite de hoje não contam porque foram recolhidos com um limite mais largo (antes de 120 km/h sem tolerância, a 132): esses excessos nunca foram confirmados. Contam depois de re-divididos (Atividade diária → Histórico Diário → Forçar re-divisão).`);
+    if (approxSpeedDays) notes.push(`Dias acima do limite: ${approxSpeedDays} dia(s) recolhido(s) antes de 14 out 2026 contam pela velocidade máxima do dia (sem o filtro de picos nem os pontos seguidos); os novos já vêm sem picos falsos e só com excessos confirmados. Para refazer um dia: Atividade diária → Histórico Diário → Forçar re-divisão.`);
+
+    // ── 14 out 2026: dias de trabalho sem GPS, e porquê (Zello não ligado à pessoa?) ──
+    const pdaDays = new Map<number, Set<string>>();
+    const fixedZello = new Set<number>();
+    try {
+      for (const e of rowsOf(await db.execute(sql`SELECT id FROM employees WHERE id IN (${idList}) AND zelloUsername IS NOT NULL AND zelloUsername <> ''`))) fixedZello.add(Number(e.id));
+      for (const c of rowsOf(await db.execute(sql`SELECT employeeId, checkinAt, checkoutAt FROM pda_checkins
+          WHERE employeeId IN (${idList}) AND checkinAt < ${range.end} AND (checkoutAt IS NULL OR checkoutAt >= ${range.start})`))) {
+        for (const d of lisbonDaysTouched(c.checkinAt, c.checkoutAt)) addDay(pdaDays, Number(c.employeeId), d);
+      }
+    } catch { /* sem a informação do Zello: só "sem GPS" */ }
+    for (const [emp, work] of workDaySet) {
+      for (const day of work) {
+        if (gpsDaySet.get(emp)?.has(day)) continue;
+        put(emp, day, { noGpsDays: 1, noZelloDays: !fixedZello.has(emp) && !pdaDays.get(emp)?.has(day) ? 1 : 0 });
+      }
     }
   }
 
@@ -299,7 +487,12 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
           if (emp == null) continue;
           const ms = utcHourMs(String(row.h));
           if (!Number.isFinite(ms)) continue;
-          put(emp, operationalDayOf(ms), { [s.key]: Number(row.n) || 0 });
+          const n = Number(row.n) || 0;
+          const day = operationalDayOf(ms);
+          put(emp, day, { [s.key]: n });
+          // 49e: a hora de Lisboa da hora UTC agrupada (a mudança de hora fica certa: o fuso é aplicado aqui, não no MySQL)
+          const lh = s.hourly && n > 0 ? lisbonHourOfUtcHour(String(row.h)) : null;
+          if (lh != null) { const one = emptyHours(); one[lh] = n; putHours(emp, day, one, false); }
         }
       } catch { failed.push(s.label); }
     }));
@@ -351,7 +544,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   // ── 42c: a equipa do TL (o turno dele) e do supervisor (as cidades dele) ──
   if ((o.group === "teamleaders" || o.group === "supervision") && rosterIn.length && people.size) {
     try {
-      await addTeams({ db, group: o.group, period: o.period, roster: rosterIn, people, supCities, put, notes });
+      await addTeams({ db, group: o.group, period: o.period, roster: rosterIn, people, supCities, put, notes, teamWeights: rankWeights.team });
     } catch (err) {
       notes.push(`Não deu para calcular a equipa: ${String((err as Error)?.message ?? err).slice(0, 160)}.`);
     }
@@ -361,6 +554,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
   const view = GROUP_VIEW[o.group];
   const groupTotals = emptyTotals();
   const groupSeries: Partial<Record<PerfMetric, number[]>> = Object.fromEntries(view.chart.map((k) => [k, r.buckets.map(() => 0)]));
+  const groupByHour = emptyHours(), groupByHourMultipark = emptyHours();
   const out: PerfPerson[] = [];
   let groupTeam = 0;
   for (const [emp, p] of people) {
@@ -380,6 +574,7 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     totals.teamPeople = totals.tlDays > 0 ? Math.round((teamTotal / totals.tlDays) * 10) / 10 : 0;
     totals.hours = Math.round(totals.hours * 10) / 10;
     totals.km = Math.round(totals.km * 10) / 10;
+    totals.callMinutes = Math.round(totals.callMinutes);
     totals.evalPoints = Math.round(totals.evalPoints * 10) / 10;
     totals.teamCost = Math.round(totals.teamCost * 100) / 100;
     totals.teamHoursStopped = Math.round(totals.teamHoursStopped * 10) / 10;
@@ -389,19 +584,32 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
     if (!active && (!p.active || o.group === "drivers")) continue;
     addTotals(groupTotals, { ...totals, teamPeople: 0, maxSpeed: totals.maxSpeed });
     groupTeam += teamTotal;
-    const points = workPoints(o.group, totals);
+    const points = workPoints(o.group, totals, rankWeights.weights);
     const { inScope: _inScope, ...shown } = p;
-    out.push({ employeeId: emp, ...shown, totals, points, perHour: perHourOf(points, totals.hours), series, kmNoMoves: o.group === "drivers" || o.group === "teamleaders" ? kmWithoutMoves(totals) : false });
+    const hrs = hoursAcc.get(emp) ?? { all: emptyHours(), mp: emptyHours() };
+    addHours(groupByHour, hrs.all);
+    addHours(groupByHourMultipark, hrs.mp);
+    out.push({ employeeId: emp, ...shown, totals, points, perHour: perHourOf(points, totals.hours), series, kmNoMoves: o.group === "drivers" || o.group === "teamleaders" ? kmWithoutMoves(totals) : false,
+      byHour: hrs.all.map(round1), byHourMultipark: hrs.mp.map(round1) });
   }
   groupTotals.teamPeople = groupTotals.tlDays > 0 ? Math.round((groupTeam / groupTotals.tlDays) * 10) / 10 : 0;
   groupTotals.hours = Math.round(groupTotals.hours * 10) / 10;
   groupTotals.km = Math.round(groupTotals.km * 10) / 10;
   groupTotals.evalPoints = Math.round(groupTotals.evalPoints * 10) / 10;
-  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões) — das internas só contam as do supervisor a ligar aos extras —, mais as chamadas do WhatsApp. Emails contam só os enviados pela dashboard.");
+  groupTotals.callMinutes = Math.round(groupTotals.callMinutes);
+  // 49e: desde quando (neste período) a avaliação tem a Multipark por hora — o 1.º dia com as horas
+  let hourlySince: string | null = null;
+  try {
+    const row = rowsOf(await db.execute(sql`SELECT MIN(day) AS d FROM employee_day_metrics WHERE day >= ${r.from} AND day <= ${r.to} AND actionsByHour IS NOT NULL`))[0];
+    hourlySince = row?.d ? dayStr(row.d) : null;
+  } catch { /* coluna ainda por criar (migração 0590) */ }
+  notes.push("Telefonemas da central: contam os que a consola da Vodafone registou na dashboard (Integrações → Central Vodafone), sem as chamadas internas (colegas e extensões) — das internas só contam as do supervisor a ligar aos extras —, mais as chamadas do WhatsApp. Perdidas = recebidas que não atenderam; devolvidas = a 1.ª chamada feita a um número com uma perdida nas 24 h anteriores.");
   if (dayCities !== undefined) notes.push("Cidade escolhida: conta o dia na cidade onde a pessoa trabalhou (escala ou avaliação do dia); quem tem a ficha noutra cidade entra só com os dias que fez nesta. A marca conta como a cidade dela (as ações da avaliação não estão separadas por parque).");
   if (out.some((x) => x.byRoster)) notes.push("Team leaders pela escala: quem tem posto de condutor ou extra mas foi team leader em pelo menos metade dos dias escalados do período conta aqui.");
   return { period: o.period, anchor: o.anchor, group: o.group, from: r.from, to: r.to, buckets: r.buckets, bucketLabels: r.bucketLabels,
-    people: out, groupTotals, groupSeries, speedLimit, cities: dayCities ?? null, notes };
+    people: out, groupTotals, groupSeries, speedLimit, cities: dayCities ?? null,
+    groupByHour: groupByHour.map(round1), groupByHourMultipark: groupByHourMultipark.map(round1),
+    hourly: { since: hourlySince, missingDays: hourlyMissingDays }, rankWeights, oldRulesDays, notes };
 }
 
 /**
@@ -412,12 +620,14 @@ export async function loadPeoplePerformance(o: { period: PerfPeriod; anchor: str
  * taxa do nível; o TL = salário ÷ dias de trabalho do mês), quem mexeu carros
  * sem GPS do Zello, horas paradas (GPS) e, no supervisor com dia ou semana, as
  * horas·pessoa a menos / a mais face à previsão do Extras Dia. Os pontos da
- * equipa são por pessoa (shared/peoplePerformance.ts → teamDayPoints).
+ * equipa são por pessoa (shared/peoplePerformance.ts → teamDayPoints), com os
+ * pesos em vigor (`teamWeights`).
  */
 async function addTeams(o: {
   db: any; group: "teamleaders" | "supervision"; period: PerfPeriod; roster: RosterRow[];
   people: Map<number, unknown>; supCities: Map<number, string[]>;
   put: (emp: number, day: string, part: Partial<PerfTotals>) => void; notes: string[];
+  teamWeights: TeamPointWeights;
 }): Promise<void> {
   const { db, roster } = o;
   const memberIds = Array.from(new Set(roster.map((a) => a.employeeId)));
@@ -486,7 +696,7 @@ async function addTeams(o: {
     const k = `${emp}|${day}`;
     const x = perDay.get(k) ?? { people: 0, actions: 0, cost: 0, noZello: 0, hoursStopped: 0, short: 0, over: 0, points: 0 };
     x.people += u.people; x.actions += u.actions; x.cost += u.cost; x.noZello += u.noZello; x.hoursStopped += u.hoursStopped; x.short += u.short; x.over += u.over;
-    x.points += teamDayPoints({ people: u.people, actions: u.actions, noZello: u.noZello, hoursStopped: u.hoursStopped });
+    x.points += teamDayPoints({ people: u.people, actions: u.actions, noZello: u.noZello, hoursStopped: u.hoursStopped }, o.teamWeights);
     perDay.set(k, x);
   };
   const byKey = new Map<string, RosterRow[]>();
@@ -544,5 +754,6 @@ async function addTeams(o: {
       teamShortHours: u.short, teamOverHours: u.over, teamPoints: Math.round(u.points * 10) / 10,
     });
   }
-  o.notes.push("Equipa: TL = o turno dele na escala (mesmo dia, cidade e turno); supervisor = todos os escalados das cidades da conta (dois supervisores da mesma cidade partilham a equipa). Pontos da equipa por dia, por pessoa: cada movimento +1, quem mexeu carros sem Zello −20, cada hora parada −2.");
+  const tw = o.teamWeights;
+  o.notes.push(`Equipa: TL = o turno dele na escala (mesmo dia, cidade e turno); supervisor = todos os escalados das cidades da conta (dois supervisores da mesma cidade partilham a equipa). Pontos da equipa por dia, por pessoa: cada movimento ${signedWeight(tw.actionsPerPerson)}, quem mexeu carros sem Zello ${signedWeight(tw.noZelloPerPerson)}, cada hora parada ${signedWeight(tw.stoppedHoursPerPerson)}.`);
 }

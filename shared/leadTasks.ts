@@ -20,8 +20,8 @@ import { LEAD_SLA } from "./extraLeadsFunnel";
 import { utcMs } from "./lisbonDay";
 
 export const LEAD_TASK_SOURCE = "lead";
-/** Origens do lead que são candidaturas (site Be a Driver + emails de recrutamento). */
-export const LEAD_TASK_LEAD_SOURCES = ["site", "email"] as const;
+/** Origens do lead que são candidaturas (site Be a Driver + emails de recrutamento + 1.º contacto por WhatsApp separado pela IA). */
+export const LEAD_TASK_LEAD_SOURCES = ["site", "email", "whatsapp"] as const;
 /** Estados em que a candidatura ainda está por tratar. */
 export const LEAD_TASK_OPEN_STATUSES = ["new", "contacted", "replied"] as const;
 /** Estados que fecham a tarefa (além de arquivar o lead). */

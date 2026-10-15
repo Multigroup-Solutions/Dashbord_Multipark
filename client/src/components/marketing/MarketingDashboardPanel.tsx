@@ -34,6 +34,7 @@ import { eurAxis, eurCompact } from "@/lib/financeFormat";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can } from "@shared/access";
+import { MARKETPLACE_NOT_OPERATED_LABEL, MARKETPLACE_OPERATED_LABEL } from "@shared/marketplace";
 
 function lisbonDay(d = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
@@ -44,6 +45,11 @@ const eur = (v: number | null | undefined, digits = 0) =>
   v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: digits, minimumFractionDigits: digits });
 const num = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("pt-PT"));
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+/** 8 out 2026: quantas ficaram fora do via net ("": nenhuma). */
+const viaNetOutText = (x: { pending?: number; pro?: number; plan?: number } | null | undefined) => {
+  const parts = [x?.pending ? `${x.pending} pendente(s)` : "", x?.pro ? `${x.pro} Pro` : "", x?.plan ? `${x.plan} de avença` : ""].filter(Boolean);
+  return parts.length ? `: ${parts.join(", ")} fora` : "";
+};
 const roas = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(2).replace(".", ",")}×`);
 const shortDay = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 const fmtDay = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
@@ -164,7 +170,7 @@ export default function MarketingDashboardPanel() {
             <Kpi icon={Target} label="Custo por conversão" value={eur(st.costPerConversionPlatforms, 2)}
               hint={noBookings ? "gasto ÷ conversões das plataformas · reservas indisponíveis" : `por reserva via net: ${eur(st.costPerWebBooking, 2)} · por reserva ligada: ${eur(st.costPerAttributedBooking, 2)}`} />
             <Kpi icon={ShoppingCart} label="Reservas via net" value={num(st.bookingsWeb)} warn={noBookings}
-              hint={noBookings ? "indisponíveis (BD da Multipark)" : `tudo o que não é parceiro · ${eur(st.revenueWeb)} · com link de origem ${num(st.webWithLink)} (${pct(st.webWithLink, st.bookingsWeb)}) · ligadas aos anúncios ${num(st.bookingsAttributed)}`} />
+              hint={noBookings ? "indisponíveis (BD da Multipark)" : `tudo o que não é parceiro (sem pendentes, Pro nem avenças${viaNetOutText(st.viaNetExcluded)}) · ${eur(st.revenueWeb)} (terceiros pela nossa comissão) · com link de origem ${num(st.webWithLink)} (${pct(st.webWithLink, st.bookingsWeb)}) · ligadas aos anúncios ${num(st.bookingsAttributed)}`} />
             <Kpi icon={TrendingUp} label="ROAS (s/ IVA)" value={roas(st.roasAttributedNet)}
               hint={`reservas ligadas, receita sem IVA ÷ gasto · todas as reservas: ${roas(st.roasTotalNet)}`} />
             <Kpi icon={TrendingUp} label="ROAS Google (reportado)" value={roas(st.roasGoogle)} hint="valor de conversão que a Google reporta ÷ gasto do Google Ads" />
@@ -174,6 +180,14 @@ export default function MarketingDashboardPanel() {
             <Kpi icon={ShoppingCart} label="Reservas" value={num(st.bookingsTotal)} hint={noBookings ? "indisponíveis (BD da Multipark)" : `todas as origens · ${num(st.bookingsGoogle)} Google · ${num(st.bookingsMeta)} Meta (ligadas)`} warn={noBookings} />
             <Kpi icon={ShoppingCart} label="Valor das reservas" value={eur(st.revenueTotal)} compact={st.revenueTotal == null ? "—" : eurCompact(st.revenueTotal)} hint="todas, c/ IVA, pela data de criação" />
           </div>
+          {/* 8 out 2026: todas as reservas do Marketplace, de qualquer parque, com a etiqueta operado / não operado */}
+          {!noBookings && st.marketplace && st.marketplace.bookings > 0 && (
+            <p className="text-xs text-muted-foreground" role="status">
+              <b>Marketplace</b> (todos os parques): {num(st.marketplace.bookings)} reserva(s), {eur(st.marketplace.revenue)} —{" "}
+              {MARKETPLACE_OPERATED_LABEL.toLowerCase()} {num(st.marketplace.operated.bookings)}, {MARKETPLACE_NOT_OPERATED_LABEL.toLowerCase()} {num(st.marketplace.notOperated.bookings)}
+              {st.marketplace.withoutCity.bookings > 0 && <> · <span className="text-amber-700 dark:text-amber-400">{num(st.marketplace.withoutCity.bookings)} de parques sem cidade (aviso em Anúncios)</span></>}.
+            </p>
+          )}
 
           {hasAttribution && <div className={`rounded-md border px-3 py-2.5 text-sm space-y-1.5 ${healthCls}`} role="status">
             <div className="flex items-center gap-2 font-medium"><HealthIcon className="w-4 h-4" /> {healthLabel}</div>

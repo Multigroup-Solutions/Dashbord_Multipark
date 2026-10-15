@@ -6,6 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import DashboardLayout from "./components/DashboardLayout";
+import { PdaSessionEndNotice } from "./components/PdaSessionEndNotice";
 import ExpensesPage from "./pages/ExpensesPage";
 import UsersPage from "./pages/UsersPage";
 import LogsPage from "./pages/LogsPage";
@@ -63,6 +64,7 @@ import OperacoesDashboard from "./pages/OperacoesDashboard";
 import PessoasDashboard from "./pages/PessoasDashboard";
 import RhDashboardPage from "./pages/RhDashboardPage";
 import SuporteDashboard from "./pages/SuporteDashboard";
+import MultisFalhasPage from "./pages/MultisFalhasPage";
 import { GlobalFiltersProvider } from "./contexts/GlobalFiltersContext";
 
 function Router() {
@@ -320,6 +322,10 @@ function Router() {
       <Route path="/definicoes">
         {() => (<DashboardLayout><DefinicoesPage /></DashboardLayout>)}
       </Route>
+      {/* Multis 2: perguntas que falharam (só admin/super_admin; a página e o servidor verificam). */}
+      <Route path="/multis/falhas">
+        {() => (<DashboardLayout><MultisFalhasPage /></DashboardLayout>)}
+      </Route>
       <Route path="/financeiro">
         {() => (<DashboardLayout><FinanceiroDashboard /></DashboardLayout>)}
       </Route>
@@ -355,6 +361,7 @@ function App() {
         <GlobalFiltersProvider>
           <TooltipProvider>
             <Toaster richColors position="top-right" />
+            <PdaSessionEndNotice />
             <Router />
           </TooltipProvider>
         </GlobalFiltersProvider>

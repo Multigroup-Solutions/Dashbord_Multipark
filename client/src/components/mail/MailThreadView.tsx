@@ -21,6 +21,7 @@ import { BrandChip, EmailHtmlFrame, MAIL_LINK_HREF, fullTime } from "./mailUi";
 import { MailComposer, type ComposeMode } from "./MailComposer";
 import { TriagePanel } from "./TriagePanel";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { AiRoutingNote } from "@/components/AiRoutingNote";
 
 function LinksPanel({ threadId, links, canAct, onChanged }: {
   threadId: number;
@@ -35,7 +36,7 @@ function LinksPanel({ threadId, links, canAct, onChanged }: {
     onError: (e) => toast.error(e.message),
   });
   const unlink = trpc.mail.threads.unlink.useMutation({ onSuccess: onChanged, onError: (e) => toast.error(e.message) });
-  const placeholder = { client: "email do cliente", booking: "referência / nº da reserva", complaint: "nº da reclamação", lost_found: "nº do caso", incident: "nº da ocorrência" }[type];
+  const placeholder = { client: "email do cliente", booking: "referência / nº da reserva", complaint: "nº da reclamação", lost_found: "nº do caso", incident: "nº da ocorrência antiga", occurrence: "id da ocorrência (app Multipark)" }[type];
   return (
     <div className="rounded-lg border bg-muted/40 p-2.5 space-y-2">
       <div className="text-xs font-semibold flex items-center gap-1"><Link2 className="h-3.5 w-3.5" /> Ligado a</div>
@@ -85,7 +86,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
   const assign = trpc.mail.threads.assign.useMutation({ onSuccess: () => { q.refetch(); onChanged(); }, onError: (e) => toast.error(e.message) });
   // 17f: mover para outra caixa (tema). Depois de mover, quem não vê a caixa nova deixa de ver a conversa.
   const move = trpc.mail.threads.move.useMutation({
-    onSuccess: () => { toast.success("Conversa movida."); onChanged(); q.refetch(); },
+    onSuccess: () => { toast.success("Conversa movida."); onChanged(); q.refetch(); void utils.commsRouting.note.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   // Só quem responde nesta caixa E vê a cidade desta conversa (17d).
@@ -125,6 +126,7 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
             </div>
           </div>
         </div>
+        <AiRoutingNote channel="email" id={threadId} className="text-[11.5px] leading-snug text-violet-900 dark:text-violet-200 flex items-start gap-1.5" />
         <div className="flex flex-wrap items-center gap-1.5">
           {t.canAct && (
             <Select value={t.thread.status} onValueChange={(v) => setStatus.mutate({ id: threadId, status: v as MailThreadStatus })}>

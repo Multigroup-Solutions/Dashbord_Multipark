@@ -58,7 +58,7 @@ vi.mock("./whatsappInbox", () => ({ listConversations: async () => [] }));
 
 import { appRouter } from "./routers";
 import { buildHandoverDraft } from "./shiftHandoverDraft";
-import { ackHandover, saveHandoverAiSummary } from "./shiftHandoverAutomation";
+import { ackHandover, summarizeSavedHandover } from "./shiftHandoverAutomation";
 import { buildHandoverLatestBefore } from "./shiftHandoverSql";
 import { buildUpcomingSql } from "./multiparkDb/shiftState";
 import { canEditOldHandover, findPersonShift } from "../shared/shiftHandover";
@@ -136,7 +136,7 @@ describe("Leitura falhada ≠ 0 (email, IA, notificação)", () => {
 
   it("draftKeyLines diz 'sem dados' em vez de 0", () => {
     const lines = draftKeyLines(counts, unavailableCounts(["pending deliveries", "speed"]));
-    expect(lines.find((l) => l.startsWith("Entregas pendentes"))).toBe("Entregas pendentes (sem check-out): sem dados (falhou a leitura)");
+    expect(lines.find((l) => l.startsWith("Entregas pendentes"))).toBe("Entregas pendentes (na fila): sem dados (falhou a leitura)");
     expect(lines.find((l) => l.startsWith("Alertas"))).toBe("Alertas de velocidade/GPS no turno: sem dados (falhou a leitura)/0");
     // 44b: reclamações, perdidos e ocorrências saíram da passagem de turno
     expect(lines.find((l) => l.startsWith("Reclamações") || l.startsWith("Perdidos") || l.startsWith("Ocorrências"))).toBeUndefined();
@@ -242,15 +242,13 @@ describe("Regra das 24h e 'Recebi'", () => {
     expect(state.saved.map((s) => s.opts.canEditOld)).toEqual([true, false]);
   });
 
-  it("o resumo IA não fura o prazo de 24h", async () => {
+  it("o resumo IA não fura o prazo de 24h (49g: recusa antes de chamar a IA)", async () => {
     state.currentRow = { id: 8, ageMinutes: 3000 };
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-09-28", shift: "night", city: "lisbon" }, "• ok", { canEditOld: false })).toBeNull();
+    expect(await summarizeSavedHandover({ handoverDate: "2026-09-28", shift: "night", city: "lisbon" }, { canEditOld: false, userId: 77 })).toEqual({ ok: false, reason: "locked" });
     expect(state.updates).toHaveLength(0);
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-09-28", shift: "night", city: "lisbon" }, "• ok", { canEditOld: true })).toBe(8);
-    state.currentRow = { id: 9, ageMinutes: 30 };
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-10-02", shift: "morning", city: "lisbon" }, "• ok", { canEditOld: false })).toBe(9);
     state.currentRow = null;
-    expect(await saveHandoverAiSummary({ handoverDate: "2026-10-02", shift: "night", city: "lisbon" }, "• ok", { canEditOld: true })).toBeNull();
+    expect(await summarizeSavedHandover({ handoverDate: "2026-10-02", shift: "night", city: "lisbon" }, { canEditOld: true, userId: 77 })).toEqual({ ok: false, reason: "not_saved" });
+    // O caminho com IA (grava com a versão) está em ia49g.test.ts.
   });
 
   it("'Recebi': nem quem a criou nem quem a editou por último", async () => {
@@ -284,9 +282,12 @@ describe("Ecrã: erro ≠ vazio, permissões e nada se perde", () => {
   const page = src("client/src/pages/ShiftHandoverPage.tsx");
   const panel = src("client/src/components/ShiftHandoverDraftPanel.tsx");
   it("cada leitura tem o seu aviso de erro com 'Tentar de novo'", () => {
-    for (const what of ["as tuas cidades", "o registo deste turno", "o resumo automático do turno", "o histórico de passagens", "o resumo do dia", "o cumprimento das passagens"]) {
+    for (const what of ["as tuas cidades", "o registo deste turno", "o resumo automático do turno", "o histórico de passagens"]) {
       expect(page).toContain(`what="${what}`);
     }
+    // 12 out 2026: o Resumo do dia passou para a Atividade diária (components/shiftDay/DaySummaryTab.tsx)
+    const resumo = src("client/src/components/shiftDay/DaySummaryTab.tsx");
+    for (const what of ["as tuas cidades", "o resumo do dia", "o cumprimento das passagens"]) expect(resumo).toContain(`what="${what}`);
     expect(panel).toContain(`{failed ? "erro" : count}`);
   });
   it("não grava uma passagem nova sem os pendentes do turno anterior (a não ser que se confirme)", () => {

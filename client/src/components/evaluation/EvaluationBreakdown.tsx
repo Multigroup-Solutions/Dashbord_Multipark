@@ -23,12 +23,16 @@ import {
   DISPUTE_STATUS_LABELS,
   EVALUATION_POINTS,
   EVALUATION_RULES,
+  LATE_ARRIVAL_FROM_MINUTES,
   METRIC_LABELS,
+  isRetiredMetric,
+  lateArrivalsOf,
   type DayMetrics,
   type DisputeStatus,
   type MetricKey,
   type RuleLine,
 } from "@shared/evaluationRules";
+import { isDayClosed } from "@shared/evaluationClose";
 
 // ─── Formatação ──────────────────────────────────────────────────────────────
 
@@ -97,7 +101,9 @@ export function RulesLegend() {
             <span className="text-muted-foreground">
               {r.label}
               {r.key === "firstMoveAfterPickup" && <span className="block text-[11px]">substitui os {fmtPts(EVALUATION_POINTS.movement)} desse movimento</span>}
-              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto depois da escala ou entrega &gt; 15 min</span>}
+              {r.key === "delay" && <span className="block text-[11px]">entrada no ponto {LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala ou do horário (no máximo 1 por dia)</span>}
+              {r.key === "spotChange" && <span className="block text-[11px]">o carro ficou na mesma garagem; não é movimento</span>}
+              {r.key === "speeding" && <span className="block text-[11px]">alertas e penalizações; ou 1 por dia com o GPS do Zello acima do limite</span>}
             </span>
             <span className={`font-semibold tabular-nums ${ptsClass(p)}`}>{fmtPts(p)}</span>
           </div>
@@ -105,6 +111,7 @@ export function RulesLegend() {
       })}
       <p className="sm:col-span-2 text-[11px] text-muted-foreground pt-1">
         Os totais podem ser negativos. Ponto marcado [SUSPEITO] não conta horas. Dia operacional: 03h→03h (manhã 03h–15h, noite 15h–03h).
+        Os tempos das entregas e das recolhas são da equipa, não de cada pessoa: já não há "entrega atrasada".
       </p>
     </div>
   );
@@ -113,23 +120,25 @@ export function RulesLegend() {
 // ─── Métricas ────────────────────────────────────────────────────────────────
 
 const SHOWN_METRICS: MetricKey[] = [
-  "hoursWorked", "scheduledHours", "suspiciousHours", "actions", "recolhas", "entregas", "movements", "parkingMoves",
-  "weightedActions", "delays", "lateServices", "speedingEvents", "complaints", "accidents", "incidentsReported", "penaltyPoints", "cost",
+  "hoursWorked", "scheduledHours", "suspiciousHours", "actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges",
+  "weightedActions", "delays", "speedingEvents", "complaints", "accidents", "incidentsReported", "penaltyPoints", "cost",
 ];
+/** Tarefa 62: os atrasos mostram-se sempre como atrasos ao trabalho (nos dias antigos o `delays` incluía entregas). */
+const shownMetric = (m: DayMetrics, k: MetricKey): number => (k === "delays" ? lateArrivalsOf(m) : m[k]);
 
 export function MetricsGrid({ metrics, base, hideZero = false }: { metrics: DayMetrics; base?: DayMetrics; hideZero?: boolean }) {
-  const keys = SHOWN_METRICS.filter((k) => !hideZero || metrics[k] !== 0 || (base && base[k] !== 0));
+  const keys = SHOWN_METRICS.filter((k) => !hideZero || shownMetric(metrics, k) !== 0 || (base && shownMetric(base, k) !== 0));
   if (keys.length === 0) return <p className="text-xs text-muted-foreground">Sem métricas.</p>;
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
       {keys.map((k) => {
-        const changed = base && base[k] !== metrics[k];
+        const changed = base && shownMetric(base, k) !== shownMetric(metrics, k);
         return (
           <div key={k} className="rounded-md border p-2">
             <div className="text-[11px] text-muted-foreground leading-tight">{METRIC_LABELS[k]}</div>
             <div className="font-semibold tabular-nums">
-              {k === "cost" ? `${fmtNum(metrics[k], 2)} €` : fmtNum(metrics[k], 2)}
-              {changed && <span className="ml-1 text-[11px] font-normal text-amber-700" title="Com ajuste manual">(calc. {fmtNum(base![k], 2)})</span>}
+              {k === "cost" ? `${fmtNum(metrics[k], 2)} €` : fmtNum(shownMetric(metrics, k), 2)}
+              {changed && <span className="ml-1 text-[11px] font-normal text-amber-700" title="Com ajuste manual">(calc. {fmtNum(shownMetric(base!, k), 2)})</span>}
             </div>
           </div>
         );
@@ -168,6 +177,9 @@ export function EmployeeEvaluationDetail({
   const [openDay, setOpenDay] = useState<string | null>(null);
   const [adjustDay, setAdjustDay] = useState<string | null>(null);
   const [disputeDay, setDisputeDay] = useState<string | null>(null);
+  // tarefa 62 (P2d): os dias fechados (fecho mensal) já não se ajustam nem se contestam
+  const closure = trpc.evaluation.closure.useQuery(undefined, { staleTime: 60_000, refetchOnWindowFocus: false });
+  const closedUntil = closure.data?.closedUntil ?? null;
   const voidMut = trpc.evaluation.voidAdjustment.useMutation({
     onSuccess: () => { toast.success("Ajuste anulado"); onChanged?.(); },
     onError: (e) => toast.error(e.message),
@@ -203,6 +215,7 @@ export function EmployeeEvaluationDetail({
           {days.map((d) => {
             const isOpen = openDay === d.day;
             const activeAdj = d.adjustments.filter((a: any) => !a.voidedAt).length;
+            const dayClosed = isDayClosed(d.day, closedUntil);
             return (
               <div key={d.day}>
                 <button type="button" className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/40" onClick={() => setOpenDay(isOpen ? null : d.day)}>
@@ -210,6 +223,7 @@ export function EmployeeEvaluationDetail({
                   <span className="font-medium tabular-nums">{fmtDay(d.day)}</span>
                   {d.shift && <Badge variant="outline" className="text-[11px]">{SHIFT_LABEL[d.shift] ?? d.shift}</Badge>}
                   {activeAdj > 0 && <Badge variant="secondary" className="text-[11px] bg-amber-100 text-amber-800">ajustado</Badge>}
+                  {dayClosed && <Badge variant="outline" className="text-[11px]" title="Fecho mensal: este dia já não muda">fechado</Badge>}
                   <span className="ml-auto text-xs text-muted-foreground tabular-nums hidden sm:inline">{d.metrics.actions} ações · {fmtNum(d.metrics.hoursWorked)} h</span>
                   <span className={`w-16 text-right font-semibold tabular-nums ${ptsClass(d.score.totalPoints)}`}>{fmtPts(d.score.totalPoints)}</span>
                 </button>
@@ -232,8 +246,9 @@ export function EmployeeEvaluationDetail({
                               <span className="text-muted-foreground"> · {a.authorName ?? "—"} · {a.createdAt.slice(0, 16)}</span>
                               <div className="text-muted-foreground break-words">{a.reason}</div>
                               {a.voidedAt && <div className="no-underline">Anulado{a.voidReason ? `: ${a.voidReason}` : ""}</div>}
+                              {!a.voidedAt && isRetiredMetric(a.metric) && <div className="text-amber-700 dark:text-amber-300">Sem efeito: regra retirada (a entrega atrasada já não conta pontos).</div>}
                             </div>
-                            {mode === "manage" && canAdjust && !a.voidedAt && (
+                            {mode === "manage" && canAdjust && !a.voidedAt && !dayClosed && (
                               <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" title="Anular ajuste" disabled={voidMut.isPending}
                                 onClick={() => { const reason = prompt("Motivo para anular (opcional)") ?? undefined; voidMut.mutate({ id: a.id, reason }); }}>
                                 <Undo2 className="h-3.5 w-3.5" />
@@ -244,10 +259,11 @@ export function EmployeeEvaluationDetail({
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2">
-                      {mode === "manage" && canAdjust && (
+                      {dayClosed && <p className="text-xs text-muted-foreground">Dia fechado (fecho mensal): já não se ajusta nem se contesta.</p>}
+                      {mode === "manage" && canAdjust && !dayClosed && (
                         <Button size="sm" variant="outline" onClick={() => setAdjustDay(d.day)}><Pencil className="h-3.5 w-3.5 mr-1" /> Ajustar</Button>
                       )}
-                      {mode === "self" && (
+                      {mode === "self" && !dayClosed && (
                         <Button size="sm" variant="outline" onClick={() => setDisputeDay(d.day)}><MessageSquareWarning className="h-3.5 w-3.5 mr-1" /> Contestar</Button>
                       )}
                     </div>
@@ -356,7 +372,7 @@ function DisputeDialog({ day, onClose, onDone }: { day: string; onClose: () => v
     onSuccess: () => { toast.success("Contestação enviada"); onDone(); },
     onError: (e) => toast.error(e.message),
   });
-  const keys: MetricKey[] = ["actions", "recolhas", "entregas", "movements", "parkingMoves", "hoursWorked", "delays", "speedingEvents", "complaints", "accidents"];
+  const keys: MetricKey[] = ["actions", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "hoursWorked", "delays", "speedingEvents", "complaints", "accidents"];
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent>

@@ -1,8 +1,10 @@
 /**
- * 41a: pop-up na lista de Utilizadores (quem gere o RH) — pessoas de ficha
- * ativa sem atividade (agente da Multipark, ponto, extras, login) há mais de
- * "rh.suspendAfterDays" dias. SUSPENDER, não desativar: fica sem acesso até
- * alguém desbloquear no RH; a ficha, a conta e o agente ficam ligados.
+ * 41a + 49c: pop-up na lista de Utilizadores (quem gere o RH) — pessoas de
+ * ficha ativa sem atividade (agente da Multipark, ponto, extras, login) há
+ * mais de "rh.suspendAfterDays" dias. PÔR INATIVO (Jorge, 8 out 2026): a ficha
+ * fica inativa com o motivo "Inatividade" — sai das listas, da escala e dos
+ * avisos, mas a pessoa pode voltar a entrar como utilizador e dizer "Voltei".
+ * A ficha, a conta e o agente ficam ligados; nada se apaga.
  * "Agora não" esconde o aviso durante 7 dias (neste browser).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -43,7 +45,7 @@ export function SuspendSuggestionsDialog({ enabled }: { enabled: boolean }) {
   }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const suspend = trpc.identityLinks.suspend.useMutation({
     onSuccess: (r) => {
-      toast.success(`${r.suspended} pessoa(s) suspensa(s). Desbloqueia-se na ficha do RH.`);
+      toast.success(`${r.suspended} pessoa(s) posta(s) como inativa(s). Podem voltar a entrar e dizer "Voltei"; reativa-se na ficha do RH.`);
       utils.identityLinks.suspendSuggestions.invalidate();
       utils.users.invalidate();
       setOpen(false);
@@ -67,10 +69,11 @@ export function SuspendSuggestionsDialog({ enabled }: { enabled: boolean }) {
       <Dialog open={open} onOpenChange={(o) => { if (!o) { snooze(); setOpen(false); } }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><PauseCircle className="h-5 w-5" /> Suspender quem está parado há mais de {span}?</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><PauseCircle className="h-5 w-5" /> Pôr inativo quem está parado há mais de {span}?</DialogTitle>
             <DialogDescription>
-              Ficha ativa, mas sem trabalho (agente da Multipark, ponto, extras) nem entrada na app desde a data indicada. <b>Suspender não é desativar</b>:
-              fica sem acesso à app até alguém desbloquear na ficha do RH; a ficha, a conta e o agente ficam ligados e nada é apagado.
+              Ficha ativa, mas sem trabalho (agente da Multipark, ponto, extras) nem entrada na app desde a data indicada. <b>Inativo não é desativado</b>:
+              a ficha fica inativa com o motivo "Inatividade" (sai das listas, da escala e dos avisos), mas a pessoa pode voltar a entrar como utilizador,
+              atualizar os dados e os dias livres e dizer "Voltei". A ficha, a conta e o agente ficam ligados e nada é apagado.
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-center justify-between gap-2 text-xs">
@@ -82,7 +85,7 @@ export function SuspendSuggestionsDialog({ enabled }: { enabled: boolean }) {
           <ul className="divide-y rounded-md border text-sm">
             {items.map((i) => (
               <li key={i.employeeId} className="flex items-start gap-2 p-2">
-                <Checkbox checked={picked.has(i.employeeId)} onCheckedChange={() => toggle(i.employeeId)} aria-label={`Suspender ${i.fullName}`} className="mt-0.5" />
+                <Checkbox checked={picked.has(i.employeeId)} onCheckedChange={() => toggle(i.employeeId)} aria-label={`Pôr inativo ${i.fullName}`} className="mt-0.5" />
                 <div className="min-w-0 flex-1">
                   <Link href={`/rh?employeeId=${i.employeeId}`} className="font-medium hover:underline [overflow-wrap:anywhere]">{i.fullName}</Link>
                   <p className="text-xs text-muted-foreground">
@@ -97,7 +100,7 @@ export function SuspendSuggestionsDialog({ enabled }: { enabled: boolean }) {
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => { snooze(); setOpen(false); }}>Agora não ({SNOOZE_DAYS} dias)</Button>
             <Button disabled={!picked.size || suspend.isPending} onClick={() => suspend.mutate({ employeeIds: [...picked].slice(0, 200), why: "inatividade" })}>
-              {suspend.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Suspender {picked.size}
+              {suspend.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Pôr inativo ({picked.size})
             </Button>
           </DialogFooter>
         </DialogContent>

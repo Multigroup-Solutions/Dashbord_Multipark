@@ -2,17 +2,25 @@
 modulo: passagem_turno
 titulo: Passagem de turno
 rotas: /passagem-turno
-palavras: mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, horas trabalhadas, tempo parado, quilómetros, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
+palavras: sem passagem de turno, resumir agora, resumo desatualizado, resumo ia, resumo da ia, entregar a passagem, mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
 ---
 # Passagem de turno
 
-Checklist de fim de turno dos team leaders e resumo do dia para a supervisão.
+Checklist de fim de turno dos team leaders e o histórico das passagens.
+
+**O Resumo do dia mudou de sítio** (12 out 2026): está agora em **Operações → Actividade Diária → Resumo do dia**, com tudo o que tinha (quem trabalhou, entregas lentas, passagens por chefe de turno). Quem o via aqui vê-o lá, com a mesma permissão. Na Passagem de turno fica uma ligação para lá.
 
 **Preencher** (Team Leader)
 1. Menu **Operações → Passagem de Turno**. Escolhe a cidade e o turno (manhã/noite). O dia operacional vai das 03:00 às 03:00 do dia seguinte.
 2. Preenche a caixa (caixa de check-out, fecho de caixa no cofre, valores das bolsas front/terminal, tickets/despesas pagos), o material (canetas, rolos MB, bateria), o fardamento e os **Pendentes para o turno seguinte**.
 3. Escreve observações e carrega em **Guardar passagem de turno**. Grava logo. O resumo IA, o aviso e o email ao team leader do turno seguinte seguem dentro de momentos, e o histórico atualiza-se sozinho.
 4. Quem entra confirma com **Recebi**. Nem quem criou a passagem nem quem a editou por último a podem confirmar.
+
+**Resumo IA para o turno seguinte**
+- A IA faz o resumo **quando entregas** a passagem (a 1.ª vez que carregas em **Guardar passagem de turno**). Antes disso a caixa diz "A IA faz o resumo quando guardares (entregares) a passagem."
+- **Atualizar** a passagem depois **não chama a IA** (cada resumo é uma chamada paga). O resumo fica como estava e aparece **Resumo desatualizado**; o email desse envio já não leva o resumo velho (leva as notas, os números e os pendentes).
+- **Resumir agora** (quem pode preencher passagens) refaz o resumo a partir da passagem **gravada**. Com alterações por gravar, grava primeiro.
+- No histórico, um resumo que ficou para trás aparece como "✨ resumo IA (desatualizado)"; na **Passagem recebida**, o turno seguinte vê as notas em vez do resumo velho.
 
 **Pendentes que passam de turno**
 - Só passam de turno os **PDAs ainda com check-in** e o que o team leader escreve (as notas). Reclamações, perdidos e achados, ocorrências e entregas pendentes **já não entram** nos pendentes: tratam-se nas páginas deles. Os que já estavam gravados em passagens antigas não se apagam, só deixam de passar e de aparecer.
@@ -39,11 +47,13 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
     - **Vermelho**: indoor (ou VIP) fora de uma garagem coberta, ou descoberto numa garagem coberta.
     - **Amarelo**: toldo numa garagem descoberta. Passa para a coberta quando houver lugar ("se der").
     - Garagem com outro nome, ou carro sem tipo: fica sem cor (não se adivinha).
-  - **Mal arrumados** (por baixo) lista esses carros, com matrícula, garagem, lugar e parque, para se irem buscar.
+  - **Mal arrumados** (por baixo): em cima, quantos estão mal arrumados e quantos toldos estão numa descoberta. Por baixo, **uma linha por tipo**, com quantos carros: por exemplo "Descoberto em COBERTO · 11 carros", "Interior em PD · 6 carros", "Toldo em PD (se der, coberta) · 8 carros". Primeiro os mal arrumados (a vermelho, com ⚠), depois os "se der" (a amarelo).
+    - Carrega numa linha para ver os carros dela (matrícula, lugar e parque) e ires buscá-los; carrega outra vez para fechar. Ao entrar estão todas fechadas.
   - **Ver por parque e garagem** abre a divisão antiga.
 - **Pendentes que se arrastam** e **Resumo da semana** contam só os pendentes da passagem: PDAs ainda com check-in e notas do team leader. Ocorrências, reclamações e perdidos não são da passagem e já não aparecem aqui. Os resumos de semanas anteriores, que ainda falavam deles, deixam de se mostrar; o próximo sai na segunda-feira.
 - Os que já passaram a hora de saída.
-- **Operações em curso**: a fazer check-in, em movimento, entrega pendente, à espera das malas, no local de entrega, a fazer check-out.
+- **Operações em curso** (com "desde" quando a hora existe): **Em recolha (cliente a caminho)** — o cliente ligou para a recolha; **Em movimento**; **Na fila** — o cliente ligou a pedir o carro (pendente); **Em entrega** — o condutor já pegou no carro e saiu do parque (a caminho do terminal ou lá à espera do cliente; sem GPS ao vivo não se sabe se já chegou); **No terminal** — só quando o condutor carregou em "Cheguei" nesta entrega (quase não se usa). **À espera das malas** aparece como etiqueta ao lado, quando é deste pedido.
+- Na lista **Entregas pendentes (na fila)** do rascunho só entram os carros **na fila**, com a hora do pedido: um carro em entrega já saiu do parque.
 - **Próximas entregas e recolhas** (4, 8, 12 ou 24 h) com voo e ETA do voo.
 - **Caixa do turno por fechar/validar** (caixa fechada, caixa validada, condutor validado).
 - **Bloqueios e horário de amanhã** dos parques. Às 02:30 "amanhã" ainda conta a partir da noite de ontem.
@@ -53,14 +63,23 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
 - Mudar de dia, turno ou cidade, ou recarregar, pergunta antes se há alterações **por gravar**.
 
 **Quando a leitura falha**
-- Cada parte (as tuas cidades, o registo do turno, o resumo automático, o histórico, o resumo do dia, o cumprimento) mostra **"Não foi possível carregar…"** com **Tentar de novo**.
+- Cada parte (as tuas cidades, o registo do turno, o resumo automático, o histórico) mostra **"Não foi possível carregar…"** com **Tentar de novo**.
 - Uma falha nunca aparece como "sem passagens" ou "sem cidade atribuída".
 
 **Notas**
-- Depois de 24 h só um supervisor, ou quem tem acesso ao **Resumo do dia**, pode alterar a passagem. A mesma regra vale para o resumo IA.
+- Depois de 24 h só um supervisor, ou quem tem acesso ao **Resumo do dia**, pode alterar a passagem. A mesma regra vale para o **Resumir agora**.
 - Não dá para registar passagens para depois de amanhã.
-- Quem só consulta vê a passagem, mas não grava, não gera o resumo nem confirma.
+- Quem só consulta vê a passagem, mas não grava, não pede o resumo nem confirma.
 - No telemóvel, o **Histórico** mostra um cartão por passagem.
-- A supervisão vê o **Resumo do dia** (entregas lentas, recolhas atrasadas, reclamações do dia). Em **Quem trabalhou** há, por pessoa, as **horas** trabalhadas (as do ponto; com "~" quando não há picagens e é o tempo com o Zello ligado), os **km** e o tempo **parado** (com o Zello ligado mas sem andar). Todas as colunas se ordenam. Num dia com movimentos a mais aparece o aviso de que os tempos são só de uma parte do dia.
+- O **Resumo do dia** (supervisão) está em **Operações → Actividade Diária → Resumo do dia**.
 
-**Despesas do turno** (em Valores): lança cada despesa paga com o dinheiro da caixa — descrição, valor e foto do talão. Entra logo nas **Despesas** (paga, dinheiro, centro da cidade) e abate à **caixa do dia** (Financeiro → Caixa → Por dia). **Anular** deixa-a cancelada (nunca se apaga).
+**Fecho da caixa do turno** (13 out 2026): depois de fechares a caixa na Multipark, escreve o **dinheiro recebido** dos condutores neste turno (antes das despesas), o **Multibanco recebido** e o **total que dava a caixa na Multipark**. O João usa estes valores no dia seguinte em **Caixa → Confirmação**; sem eles o dia não se fecha.
+
+**Despesas do turno** (em Valores): lança aqui cada despesa paga com o dinheiro da caixa — não é preciso ir ao Financeiro.
+1. Carrega em **Talão** e tira a foto (ou escolhe uma foto ou PDF). Enquanto aparece **A ler o talão…**, a IA (a mesma das Despesas) lê o talão e preenche a descrição, o valor e os dados do talão: fornecedor, NIF, n.º do documento, data, IVA e categoria.
+2. Abre **O que a IA leu do talão**, confirma e corrige o que for preciso e carrega em **Lançar**. A IA nunca escreve por cima do que já escreveste. Se a IA estiver desligada ou não conseguir ler, preenche à mão: descrição e valor chegam (os dados do talão são opcionais, em **Dados do talão**).
+3. A aplicação avisa quando o NIF não está certo, quando a data do talão está longe do turno (só aceita do dia seguinte até um mês antes), quando o talão parece já estar lançado nas Despesas e quando o documento parece uma fatura emitida pela Multipark.
+4. A despesa entra logo nas **Despesas** (paga, dinheiro, centro da cidade, com o talão e a data do talão) e abate à **caixa do dia** (Financeiro → Caixa → Por dia). O IVA lido fica nas notas da despesa.
+5. Cada despesa lançada tem **Abrir nas Despesas (n.º …)**: abre o detalhe dessa despesa num separador novo (a passagem que estás a preencher não se perde). Quem não pode ver essa despesa nas Despesas vê só "Já está nas Despesas (n.º …)".
+
+**Anular** deixa a despesa do turno cancelada (nunca se apaga).

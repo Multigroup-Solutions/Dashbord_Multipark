@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   EVALUATION_POINTS,
+  MAX_LATE_ARRIVALS_PER_DAY,
+  EVALUATION_RULES_VERSION,
+  ADJUSTABLE_METRICS,
+  LATE_ARRIVAL_FROM_MINUTES,
+  METRIC_LABELS,
+  RETIRED_METRICS,
+  isRetiredMetric,
+  lateArrivalsOf,
   actionPoints,
   applyAdjustments,
   emptyDayMetrics,
@@ -45,8 +53,38 @@ describe("regras do dono (pontos)", () => {
     expect(s.negativePoints).toBe(10 + 10 + 20 + 6000);
     expect(s.totalPoints).toBe(6 - 6040);
     expect(s.lines.map((l) => l.key)).toEqual([
-      "movement", "pickupOrDelivery", "firstMoveAfterPickup", "speeding", "delay", "confirmedComplaint", "accidentOrDamage",
+      "movement", "spotChange", "pickupOrDelivery", "firstMoveAfterPickup", "speeding", "delay", "confirmedComplaint", "accidentOrDamage",
     ]);
+    expect(EVALUATION_POINTS).not.toHaveProperty("lateDelivery");
+  });
+
+  it("tarefa 62: linha antiga com entregas atrasadas → só o atraso ao trabalho conta (−5); a entrega atrasada não tira pontos", () => {
+    // 3 atrasos no total, dos quais 2 entregas atrasadas (dia antigo) → 1 atraso ao trabalho
+    const s = scoreOf(m({ delays: 3, lateServices: 2 }));
+    const line = (k: string) => s.lines.find((l) => l.key === k);
+    expect(line("delay")).toMatchObject({ label: "Atraso ao trabalho (≥ 5 min)", points: -5, count: 1, subtotal: -5 });
+    expect(line("lateDelivery")).toBeUndefined();
+    expect(s.totalPoints).toBe(-5);
+    expect(lateArrivalsOf({ delays: 3, lateServices: 2 })).toBe(1);
+    expect(lateArrivalsOf({ delays: 2, lateServices: 2 })).toBe(0);
+    expect(lateArrivalsOf({ delays: 1, lateServices: 3 })).toBe(0); // nunca negativo
+    expect(MAX_LATE_ARRIVALS_PER_DAY).toBe(1);
+  });
+
+  it("14 out 2026: mudança de lugar +1 (não é movimento entre parques)", () => {
+    const s = scoreOf(m({ movements: 3, parkingMoves: 1, spotChanges: 2 }));
+    expect(s.lines.find((l) => l.key === "spotChange")).toMatchObject({ label: "Mudança de lugar (mesma garagem)", points: 1, count: 2, subtotal: 2 });
+    expect(s.lines.find((l) => l.key === "movement")!.count).toBe(2);
+    expect(actionPoints({ movements: 3, parkingMoves: 1, recolhas: 0, entregas: 0, spotChanges: 2 })).toBe(2 * 2 + 5 + 2);
+    expect(EVALUATION_POINTS.spotChange).toBe(1);
+  });
+
+  it("ajustar as entregas atrasadas mexe no total dos atrasos (os atrasos à entrada ficam)", () => {
+    const out = applyAdjustments(m({ delays: 3, lateServices: 2 }), [{ metric: "lateServices", delta: -1 }]);
+    expect(out).toMatchObject({ delays: 2, lateServices: 1 });
+    expect(lateArrivalsOf(out)).toBe(1);
+    const sp = applyAdjustments(m({ movements: 2, spotChanges: 1 }), [{ metric: "spotChanges", delta: 1 }]);
+    expect(sp.weightedActions).toBe(2 * 2 + 2 * 1);
   });
 
   it("é linear: a pontuação da soma é a soma das pontuações", () => {
@@ -146,5 +184,44 @@ describe("migração 0099", async () => {
       expect(s).not.toMatch(/\(\s*SELECT/i);
     }
     expect(MIGRATION_0099_STATEMENTS.some((s) => s.includes("uq_employee_day_metrics"))).toBe(true);
+  });
+});
+
+describe("14 out 2026 — limite de velocidade por omissão", () => {
+  it("sem valor gravado em Definições: 120 km/h sem tolerância (tarefa 62; antes 132); com valor, o dele", async () => {
+    // a omissão passou da tabela `speed_limits` (sem ecrã) para a definição gps.speedRule; a tarefa 62 tirou a tolerância
+    const { DEFAULT_SPEED_RULE, speedThresholdOf } = await import("../shared/speedRules");
+    const { MAX_PLAUSIBLE_KMH } = await import("../shared/gpsRules");
+    expect([DEFAULT_SPEED_RULE.limitKmh, DEFAULT_SPEED_RULE.tolerancePercent]).toEqual([120, 0]);
+    expect(speedThresholdOf(DEFAULT_SPEED_RULE)).toBe(120);
+    expect(speedThresholdOf({ limitKmh: 120, tolerancePercent: 10 })).toBe(132);
+    expect(speedThresholdOf({ limitKmh: 100, tolerancePercent: 5 })).toBe(105);
+    expect(speedThresholdOf({ limitKmh: 120, tolerancePercent: 0 })).toBe(120);
+    expect(MAX_PLAUSIBLE_KMH).toBe(150); // só para a média (a máxima usa o filtro de picos)
+  });
+});
+
+describe("14 out 2026 — ajustes e entregas sem hora marcada", () => {
+  it("ajustar as entregas atrasadas nunca apaga atrasos à entrada (o delta fica limitado)", () => {
+    const out = applyAdjustments(m({ delays: 3, lateServices: 2 }), [{ metric: "lateServices", delta: -5 }]);
+    expect(out).toMatchObject({ delays: 1, lateServices: 0 });
+    expect(lateArrivalsOf(out)).toBe(1);
+  });
+  it("as entregas sem hora marcada são informativas (não pontuam) e a versão das regras é 3 (tarefa 62)", () => {
+    expect(scoreOf(m({ deliveriesWithoutSchedule: 4 })).totalPoints).toBe(0);
+    expect(EVALUATION_RULES_VERSION).toBe(3);
+    expect(LATE_ARRIVAL_FROM_MINUTES).toBe(5);
+  });
+  it("tarefa 62: as métricas da regra retirada não se ajustam nem se contestam e têm o rótulo '(regra antiga)'", () => {
+    expect(RETIRED_METRICS).toEqual(["lateServices", "deliveriesWithoutSchedule"]);
+    expect(ADJUSTABLE_METRICS).not.toContain("lateServices");
+    expect(isRetiredMetric("lateServices")).toBe(true);
+    expect(isRetiredMetric("delays")).toBe(false);
+    expect(METRIC_LABELS.delays).toBe("Atrasos ao trabalho");
+    expect(METRIC_LABELS.lateServices).toMatch(/regra antiga/);
+    // um ajuste antigo de lateServices continua a ler-se, sem efeito na pontuação
+    const base = m({ delays: 3, lateServices: 2 });
+    const adj = applyAdjustments(base, [{ metric: "lateServices", delta: -1 }]);
+    expect(scoreOf(adj).totalPoints).toBe(scoreOf(base).totalPoints);
   });
 });

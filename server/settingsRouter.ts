@@ -8,10 +8,10 @@
  * marcados superAdminOnly). As integrações vivem no hub /integracoes (19d).
  */
 import { TRPCError } from "@trpc/server";
+import { GOOGLE_ON_PDAS_FLAG, googleOnPdasChangeError } from "../shared/pdaSession";
+import { TRIAGE_CORPUS_KEYS } from "../shared/mailTriage";
 import { z } from "zod";
-import { COOKIE_NAME } from "@shared/const";
 import { protectedProcedure, router } from "./_core/trpc";
-import { getSessionCookieOptions } from "./_core/cookies";
 import { requireAccess } from "./_core/access";
 import {
   AUTOMATION_FLAGS, SETTINGS, SETTING_KEYS, automationFlagSuperAdminOnly, flagSettingKey, isAutomationFlag, settingSuperAdminOnly,
@@ -46,16 +46,10 @@ async function log(userId: number, action: string, entity: string, details: stri
   } catch { /* o registo nunca parte a ação */ }
 }
 
-/** Novo cookie de sessão para ESTE dispositivo, com a versão atual. */
+/** Novo cookie de sessão para ESTE dispositivo, com a versão atual (num PDA continua presa ao PDA — plano 56 A2). */
 async function reissueSessionCookie(ctx: { req: any; res: any; user: { openId: string; name: string | null } }, sessionVersion: number) {
-  const { sdk } = await import("./_core/sdk");
-  const { SESSION_MAX_MS } = await import("./_core/oauth");
-  const token = await sdk.createSessionToken(ctx.user.openId, {
-    name: ctx.user.name || "Utilizador",
-    expiresInMs: SESSION_MAX_MS,
-    sessionVersion,
-  });
-  ctx.res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(ctx.req), maxAge: SESSION_MAX_MS });
+  const { reissueSessionCookie: reissue } = await import("./pdaSession");
+  await reissue(ctx.req, ctx.res, ctx.user, sessionVersion);
 }
 
 export const settingsRouter = router({
@@ -83,6 +77,43 @@ export const settingsRouter = router({
     return schedulerStatus();
   }),
 
+  /**
+   * 14 out 2026 — "Testar a triagem" (só o super admin): um lote do corpus
+   * rotulado pelo MESMO pedido e decisão de produção, com o modelo real. Não
+   * escreve nada nos casos (só o custo da IA). O ecrã pede os lotes um a um.
+   */
+  mailTriageEval: protectedProcedure
+    .input(z.object({ offset: z.number().int().min(0).max(1000), limit: z.number().int().min(1).max(20), corpus: z.enum(TRIAGE_CORPUS_KEYS).default("principal") }))
+    .mutation(async ({ ctx, input }) => {
+      requireSuperAdmin(ctx.user.role);
+      // Teto de custo: cada lote são até 20 leituras da IA. Por hora e por dia
+      // (na BD, vale para todas as instâncias) — umas 2 corridas completas por
+      // hora e 6 por dia dos dois corpora.
+      const { checkRateLimit } = await import("./_core/ai/rateLimit");
+      const { MAIL_TRIAGE_EVAL_LIMITS } = await import("./mailTriageEval");
+      const rl = await checkRateLimit(`triage-eval:user:${ctx.user.id}`, MAIL_TRIAGE_EVAL_LIMITS);
+      if (!rl.allowed) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `Já testaste muitas vezes (limite de custo da IA). Tenta daqui a ${Math.ceil(rl.retryAfterSec / 60)} min.` });
+      }
+      const { evalTriageSlice } = await import("./mailTriageEval");
+      return evalTriageSlice({ offset: input.offset, limit: input.limit, concurrency: 4, corpus: input.corpus });
+    }),
+  /** As contas finais (rótulos do servidor) e a linha "[triagem-eval]" nos logs. */
+  mailTriageEvalReport: protectedProcedure
+    .input(z.object({
+      rows: z.array(z.object({ id: z.string().min(1).max(40), predicted: z.string().max(40).nullable() })).max(500),
+      ms: z.number().int().min(0).max(3_600_000).nullish(),
+      model: z.string().max(120).nullish(),
+      corpus: z.enum(TRIAGE_CORPUS_KEYS).default("principal"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      requireSuperAdmin(ctx.user.role);
+      const { triageEvalReport, TRIAGE_CORPUS_LABELS } = await import("./mailTriageEval");
+      const r = triageEvalReport(input);
+      await log(ctx.user.id, "test", "mail_triage", `Testar a triagem (${TRIAGE_CORPUS_LABELS[input.corpus]}): reclamações ${r.recallComplaints ?? "—"}, perdidos ${r.recallLostFound ?? "—"} (${r.correct}/${r.total})`);
+      return r;
+    }),
+
   /** IA: gasto do mês por funcionalidade (ai_usage_log), orçamento e modelos em uso. */
   aiUsage: adminOnly.query(async () => {
     const { aiUsageSummary } = await import("./_core/ai/usage");
@@ -106,7 +137,16 @@ export const settingsRouter = router({
   flags: router({
     list: adminOnly.query(async () => {
       const { listAutomationFlags } = await import("./appSettings");
-      return listAutomationFlags();
+      const { aiWhere } = await import("./_core/ai/status");
+      const { EU_VERTEX_ONLY_FEATURES, euVertexNote, flagRequiresEuVertex } = await import("../shared/aiLimits");
+      const { AI_FEATURES } = await import("../shared/aiFeatures");
+      // Jorge (8 out 2026): ao lado dos interruptores dos documentos/CV do RH,
+      // "Só corre com a IA em Vertex AI na UE (hoje: …)".
+      const featureOf = (flag: string) => EU_VERTEX_ONLY_FEATURES.find((f) => AI_FEATURES[f].flag === flag);
+      return (await listAutomationFlags()).map((f) => {
+        const feature = flagRequiresEuVertex(f.name) ? featureOf(f.name) : undefined;
+        return feature ? { ...f, euVertex: euVertexNote(aiWhere(process.env, feature)) } : { ...f, euVertex: null };
+      });
     }),
     /**
      * `value: null` remove a sobreposição (volta à env / omissão).
@@ -119,6 +159,12 @@ export const settingsRouter = router({
         if (!isAutomationFlag(input.name)) throw new TRPCError({ code: "BAD_REQUEST", message: "Interruptor desconhecido." });
         // Ex.: MULTIPARK_SOURCE (fonte das reservas), CRM_AUTO_MERGE (20b).
         if (automationFlagSuperAdminOnly(input.name)) requireSuperAdmin(ctx.user.role);
+        // Plano 56 (A2): sem "Entrar com email e código" os PDAs só têm a Google — não se tira.
+        if (input.name === GOOGLE_ON_PDAS_FLAG) {
+          const { codeLoginEnabled } = await import("./loginCode");
+          const err = googleOnPdasChangeError(input.value, await codeLoginEnabled());
+          if (err) throw new TRPCError({ code: "PRECONDITION_FAILED", message: err });
+        }
         const { setSetting, SettingConflictError } = await import("./appSettings");
         let r: { changed: boolean; value: unknown };
         try {
@@ -211,6 +257,30 @@ export const settingsRouter = router({
         };
       });
     }),
+    /**
+     * Plano 62 (Q6): as garagens da Multipark com o centro do link do mapa — a
+     * base das Zonas da operação (as Definições guardam só as exceções). Só leitura.
+     */
+    multiparkGarages: adminOnly.query(async () => {
+      const [{ safeMultiparkRead }, { multiparkDbQuery }, { readGarageCoords }] = await Promise.all([
+        import("./multiparkDb/read"), import("./multiparkDb/client"), import("./multiparkDb/parkZonesSuggest"),
+      ]);
+      const r = await safeMultiparkRead("multiparkGarages", () => readGarageCoords(multiparkDbQuery));
+      return r.available ? { available: true as const, garages: r.data } : { available: false as const, reason: r.reason };
+    }),
+    /**
+     * Plano 62 (P5): "Sugerir" nas Zonas da operação — recurso para as garagens
+     * sem coordenadas na Multipark: link do mapa, mediana das posições da app nos
+     * movimentos das últimas 4 semanas, ou o parque. Só leitura; nada se grava.
+     */
+    parkZonesSuggest: adminOnly.query(async ({ ctx }) => {
+      requireSuperAdmin(ctx.user.role);
+      const [{ safeMultiparkRead }, { multiparkDbQuery }, { readZoneSuggestions }] = await Promise.all([
+        import("./multiparkDb/read"), import("./multiparkDb/client"), import("./multiparkDb/parkZonesSuggest"),
+      ]);
+      const r = await safeMultiparkRead("parkZonesSuggest", () => readZoneSuggestions(multiparkDbQuery, Date.now()));
+      return r.available ? { available: true as const, cities: r.data } : { available: false as const, reason: r.reason };
+    }),
     /** IVA/TSU em vigor HOJE nos cálculos (Definições; sem nada gravado = constantes do código). */
     codeConstants: adminOnly.query(async () => {
       const { financeRatesAt, lisbonTodayIso } = await import("./finance/rates");
@@ -254,6 +324,9 @@ export const settingsRouter = router({
       const { bumpSessionVersion } = await import("./appSettings");
       const version = await bumpSessionVersion(ctx.user.id);
       await reissueSessionCookie(ctx as any, version);
+      // (auditoria A2) as sessões desta pessoa noutros PDAs acabam também (avisos incluídos).
+      const { endPdaSessionsAfterSessionBump } = await import("./pdaSession");
+      await endPdaSessionsAfterSessionBump([ctx.user.id], ctx.req, ctx.user.id);
       await log(ctx.user.id, "update", "session", "Terminou as suas sessões nos outros dispositivos");
       return { success: true };
     }),
@@ -265,6 +338,9 @@ export const settingsRouter = router({
       // +1 à própria conta para ter a versão exata a pôr no novo cookie.
       const version = await bumpSessionVersion(ctx.user.id);
       await reissueSessionCookie(ctx as any, version);
+      // (auditoria A2) e as sessões de todos os PDAs (menos a deste aparelho, se for um PDA).
+      const { endPdaSessionsAfterSessionBump } = await import("./pdaSession");
+      await endPdaSessionsAfterSessionBump("all", ctx.req, ctx.user.id);
       await log(ctx.user.id, "update", "session", `Terminou as sessões de todas as contas (${affected})`);
       return { success: true, affected };
     }),

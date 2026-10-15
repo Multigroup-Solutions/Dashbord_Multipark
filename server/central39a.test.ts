@@ -115,7 +115,7 @@ describe("39d — regras de quem liga", () => {
     expect(callContactRef({ contacts: { add: [{ id: "emp-7" }] } })).toBe("emp-7");
     expect(callContactRef({ parent_id: "abc" })).toBeNull();
     expect(contactRedirect("#Contacts/crm-55")).toBe("/clientes/55");
-    expect(contactRedirect("#Contacts/emp-7")).toBe("/rh");
+    expect(contactRedirect("#Contacts/emp-7")).toBe("/rh?employeeId=7");
     expect(contactRedirect("#Contacts/tel-351913225918")).toBe("/clientes?q=%2B351913225918");
     expect(contactRedirect("#Calls/1")).toBe("/");
   });

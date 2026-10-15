@@ -10,9 +10,9 @@
 import { readGoogleAdsConfig } from "./config";
 import { getAccessToken } from "./oauth";
 import {
-  GAQL_CUSTOMER, GAQL_CUSTOMER_CLIENTS, gaqlCampaignDaily, gaqlConversionActions,
-  parseCampaignDailyRow, parseConversionActionRow, parseCustomerClientRow,
-  type CampaignDailyRow, type ConversionActionRow, type CustomerClientRow,
+  GAQL_CUSTOMER, GAQL_CUSTOMER_CLIENTS, gaqlCampaignDaily, gaqlClickView, gaqlConversionActions,
+  parseCampaignDailyRow, parseClickViewRow, parseConversionActionRow, parseCustomerClientRow,
+  type CampaignDailyRow, type ClickViewRow, type ConversionActionRow, type CustomerClientRow,
 } from "./gaql";
 import { normalizeCustomerId } from "./metrics";
 import { fetchWithTimeout } from "../../_core/fetchWithTimeout";
@@ -112,4 +112,10 @@ export async function fetchCampaignDaily(customerId: string, from: string, to: s
 export async function fetchConversionActions(customerId: string, from: string, to: string, loginCustomerId?: string | null): Promise<ConversionActionRow[]> {
   const rows = await searchStream(customerId, gaqlConversionActions(from, to), loginCustomerId);
   return rows.map(parseConversionActionRow).filter((r): r is ConversionActionRow => Boolean(r));
+}
+
+/** Cliques (gclid → campanha) de UM dia da conta — click_view, só leitura. */
+export async function fetchClickView(customerId: string, day: string, loginCustomerId?: string | null): Promise<ClickViewRow[]> {
+  const rows = await searchStream(customerId, gaqlClickView(day), loginCustomerId);
+  return rows.map(parseClickViewRow).filter((r): r is ClickViewRow => Boolean(r));
 }

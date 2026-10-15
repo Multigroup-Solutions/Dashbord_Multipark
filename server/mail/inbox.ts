@@ -520,6 +520,8 @@ export async function moveThread(viewer: MailViewer, threadId: number, boxKey: s
   if (!target || !target.active || !canSeeMailbox(viewer, target)) throw bad("Caixa desconhecida.");
   const { moveThreadToBox } = await import("./service");
   if (!(await moveThreadToBox(threadId, target.key, "manual"))) throw bad("A conversa já está nessa caixa.");
+  // Se foi a IA que a separou, fica registado que uma pessoa corrigiu (Jorge, 8 out 2026).
+  await (await import("../commsRouting")).noteManualBoxChange("email", threadId, target.key, viewer.id);
   try {
     const { logActivity } = await import("../db");
     await logActivity({ userId: viewer.id, action: "update", entity: "mail_thread", entityId: threadId, details: `Caixa ${acc.mailbox.key} → ${target.key}` } as any);
@@ -592,6 +594,15 @@ async function resolveEntity(type: MailLinkType, raw: string): Promise<string> {
     const r = await liveBookingByRef(id, { cities: "request" }).catch(() => { throw bad("Não foi possível confirmar a reserva (BD da Multipark sem resposta)."); });
     if (!r) throw bad("Reserva não encontrada (usa a referência ou o nº da reserva).");
     return r.id;
+  }
+  if (type === "occurrence") {
+    // Ao vivo na Multipark (só leitura), nas cidades de quem liga.
+    const { getMultiparkOccurrence } = await import("../multiparkDb/read");
+    const { scopedCityNamesLive } = await import("../cityScope");
+    const r = await getMultiparkOccurrence(id, scopedCityNamesLive());
+    if (!r.available) throw bad("Não foi possível confirmar a ocorrência (BD da Multipark sem resposta).");
+    if (!r.data) throw bad("Ocorrência não encontrada (ou fora da tua cidade).");
+    return r.data.id;
   }
   const table = type === "complaint" ? sql`complaints` : type === "lost_found" ? sql`lost_found_items` : sql`incidents`;
   const r = rowsOf(await d.execute(sql`SELECT id FROM ${table} WHERE id = ${Number(id)} LIMIT 1`))[0];
@@ -933,6 +944,12 @@ export async function assertEntityInScope(type: MailLinkType, entityId: string):
     // A reserva (ao vivo) é de um parque das cidades de quem pede?
     const { liveBookingByRef } = await import("../multiparkDb/bookingSearch");
     ok = !!(await liveBookingByRef(entityId, { cities: "request" }).catch(() => null));
+  } else if (type === "occurrence") {
+    // A ocorrência da app Multipark (ao vivo, só leitura) é de um parque das cidades de quem pede?
+    const { getMultiparkOccurrence } = await import("../multiparkDb/read");
+    const { scopedCityNamesLive } = await import("../cityScope");
+    const r = await getMultiparkOccurrence(entityId, scopedCityNamesLive());
+    ok = r.available && !!r.data;
   } else {
     const table = type === "complaint" ? sql`complaints` : type === "lost_found" ? sql`lost_found_items` : sql`incidents`;
     ok = rowsOf(await d.execute(sql`SELECT 1 AS x FROM ${table} WHERE id = ${Number(entityId)} AND projectId ${inScope} LIMIT 1`)).length > 0;

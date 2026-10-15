@@ -37,21 +37,25 @@ import {
   getSystemUserId,
   findComplaintByClientSignals,
   findOpenLostFoundByClient,
+  getLostFoundItemById,
   findComplaintByThread,
   findOpenComplaintBySubject,
+  findOpenComplaintByBookingRef,
   updateComplaint,
   addComplaintMessage,
   addLostFoundMessage,
 } from "../db";
 import {
+  boundedHtmlToText,
   clientSignalEmail,
   complaintSlaDeadline,
-  htmlToPlainText,
+  INBOUND_HTML_MAX,
   isGenericSenderName,
   isLivroReclamacoes,
   parseComplaintCaseTag,
   COMPLAINT_DEFAULT_SLA_HOURS,
 } from "../complaintEmail";
+import { aiMergeConflict, aiMergeSameClient, lostFoundMergeRecent, partnerSafeClientEmail } from "../../shared/complaintIntake";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
@@ -67,16 +71,23 @@ async function routeToModule(
     messageId: string;
     gmThreadId?: string | null;
     refs?: string[];
+    /** Lote 57: email de OUTRA caixa que a IA viu como reclamação (ver InboundEmailInput.aiIntake). */
+    aiIntake?: AiComplaintIntake | null;
   },
 ): Promise<{ targetModule: string; targetId?: number; taskId?: number; isNew?: boolean }> {
   // O remetente do cabeçalho é muitas vezes o BACKOFFICE que reencaminha
   // (reservas@/info@ "Multipark") — só conta como cliente se for externo e
   // com nome próprio; senão os reencaminhamentos misturavam clientes.
-  const senderEmail = clientSignalEmail(ctx.fromEmail);
+  // Ronda 2: um parceiro (agência, hotel…) que escreve em nome do cliente não É o cliente —
+  // o email dele nunca fica na reclamação/perdido nem junta casos de clientes diferentes.
+  const partnerSender = !!ctx.aiIntake?.partnerSender;
+  const senderEmail = partnerSender ? undefined : clientSignalEmail(ctx.fromEmail);
   const senderName = senderEmail && !isGenericSenderName(ctx.fromName) ? ctx.fromName?.trim() : undefined;
   const bodyName = parsed.clientName && !isGenericSenderName(parsed.clientName) ? parsed.clientName.trim() : undefined;
   const clientName = bodyName || senderName || "Desconhecido";
-  const clientEmail = clientSignalEmail(parsed.clientEmail) || senderEmail;
+  // Ronda 3: o email que vem do corpo também não pode ser o do parceiro (assinatura, colega em cópia).
+  const bodyEmail = clientSignalEmail(parsed.clientEmail);
+  const clientEmail = (partnerSender ? partnerSafeClientEmail(bodyEmail, ctx.fromEmail) : bodyEmail) || senderEmail;
   let desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
 
   if (alias === "criticas") {
@@ -175,11 +186,30 @@ async function routeToModule(
     //     nunca com endereços internos ou nomes genéricos ("Multipark")
     //  3) assunto normalizado (resposta reencaminhada que perdeu o thread)
     const taggedId = parseComplaintCaseTag(ctx.subject);
-    const existing =
-      (taggedId ? await getComplaintById(taggedId) : null) ||
-      (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
-      (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, clientName)) ||
-      (await findOpenComplaintBySubject(ctx.subject));
+    const ai = ctx.aiIntake ?? null;
+    // Lote 57 — email de outra caixa visto pela IA: só junta pela própria
+    // reclamação desta conversa, pelo fio do email, pelo email do cliente ou —
+    // sinais fracos — pela matrícula / MESMA reserva (aberta) quando essa
+    // reclamação é do mesmo email (ou não tem nenhum). Nunca só pelo nome nem
+    // pelo assunto ("Reclamação" juntava clientes diferentes).
+    const sameClient = <T extends { clientEmail?: string | null } | null | undefined>(c: T): T | null =>
+      c && aiMergeSameClient(c.clientEmail, clientEmail) ? c : null;
+    // Auditoria: o mesmo cliente com OUTRA reserva/matrícula no caso aberto → é outra reclamação.
+    const noConflict = <T extends { reservationRef?: string | null; vehiclePlate?: string | null } | null | undefined>(c: T): T | null =>
+      c && !aiMergeConflict({ ref: c.reservationRef, plate: c.vehiclePlate }, { ref: parsed.bookingRef, plate: parsed.vehiclePlate }) ? c : null;
+    const existing = ai
+      ? ((ai.forceComplaintId ? await getComplaintById(ai.forceComplaintId) : null) ||
+        (taggedId ? await getComplaintById(taggedId) : null) ||
+        (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
+        (clientEmail ? noConflict(await findComplaintByClientSignals(clientEmail, null, null)) : null) ||
+        (parsed.vehiclePlate ? noConflict(sameClient(await findComplaintByClientSignals(null, parsed.vehiclePlate, null))) : null) ||
+        (parsed.bookingRef ? sameClient(await findOpenComplaintByBookingRef(parsed.bookingRef)) : null))
+      : ((taggedId ? await getComplaintById(taggedId) : null) ||
+        (await findComplaintByThread({ gmThreadId: ctx.gmThreadId, refs: ctx.refs })) ||
+        (await findComplaintByClientSignals(clientEmail, parsed.vehiclePlate, clientName)) ||
+        (await findOpenComplaintBySubject(ctx.subject)));
+    // Resposta numa conversa ligada pela IA: junta-se SÓ à reclamação dessa conversa — nunca cria outra.
+    if (ai?.replyOnly && !existing) return { targetModule: "ignored" };
     if (existing) {
       await addComplaintMessage({
         complaintId: existing.id,
@@ -222,6 +252,19 @@ async function routeToModule(
       clientName,
     });
     const booking = match?.booking ?? null;
+    // Lote 57: a reserva de que o cliente fala já tem uma reclamação aberta → junta-se a essa (não duplica).
+    if (ai && booking?.externalId) {
+      const sameBooking = sameClient(await findOpenComplaintByBookingRef(String(booking.externalId)));
+      if (sameBooking) {
+        await addComplaintMessage({
+          complaintId: sameBooking.id,
+          message: `📧 ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
+          isInternal: 0,
+          authorName: (clientName || "").slice(0, 200) || null,
+        } as any);
+        return { targetModule: "complaint", targetId: sameBooking.id, isNew: false };
+      }
+    }
     // Livro de Reclamações oficial (nº ROR…): prazo legal de resposta —
     // entra logo como URGENTE. SLA igual ao da criação manual (48h por
     // omissão do formulário) — não há no código um prazo próprio para o ROR.
@@ -239,10 +282,68 @@ async function routeToModule(
       reservationRef: parsed.bookingRef ?? (booking?.externalId || undefined),
       reservationStart: booking?.checkIn ?? undefined,
       reservationEnd: booking?.checkOut ?? undefined,
-      projectId: booking?.projectId ?? undefined,
+      projectId: booking?.projectId ?? ai?.projectId ?? undefined,
       slaDeadline: complaintSlaDeadline(COMPLAINT_DEFAULT_SLA_HOURS),
+      // Lote 57: de onde veio (filtro "Origem"). A IA criada por uma pessoa (sugestão aceite) fica dela.
+      origin: ai ? "ia" : "email",
+      createdById: ai?.actorId ?? null,
+      // 14 out 2026: certeza média → "Por confirmar (IA)" (arquivar tira-a; nada se apaga).
+      ...(ai?.uncertain ? { aiUnconfirmed: 1 } : {}),
     } as any);
     return { targetModule: "complaint", targetId: id, isNew: true };
+  }
+
+  if (alias === "perdidos" && ctx.aiIntake) {
+    // 14 out 2026 — email de OUTRA caixa que a IA viu como objeto perdido.
+    // Junta só pelo próprio caso desta conversa, pelo email do cliente ou —
+    // sinal fraco — pela matrícula quando o caso é do mesmo email (ou não tem
+    // nenhum). Nunca escreve ao cliente; uma resposta nunca abre outro caso.
+    const ai = ctx.aiIntake;
+    const sameClientLf = <T extends { clientEmail?: string | null } | null | undefined>(c: T): T | null =>
+      c && aiMergeSameClient(c.clientEmail, clientEmail) ? c : null;
+    // Auditoria: um perdido aberto há meses (ou de outra reserva/matrícula) não engole o objeto de uma viagem nova.
+    const recentLf = <T extends { createdAt?: string | null; bookingRef?: string | null; vehiclePlate?: string | null } | null | undefined>(c: T): T | null =>
+      c && lostFoundMergeRecent(c.createdAt) && !aiMergeConflict({ ref: c.bookingRef, plate: c.vehiclePlate }, { ref: parsed.bookingRef, plate: parsed.vehiclePlate }) ? c : null;
+    const forced = ai.forceLostFoundId ? await getLostFoundItemById(ai.forceLostFoundId) : null;
+    const existing = forced
+      || (clientEmail ? recentLf(await findOpenLostFoundByClient(clientEmail, null)) : null)
+      || (parsed.vehiclePlate ? recentLf(sameClientLf(await findOpenLostFoundByClient(null, parsed.vehiclePlate))) : null);
+    if (ai.replyOnly && !existing) return { targetModule: "ignored" };
+    if (existing) {
+      await addLostFoundMessage({
+        itemId: existing.id,
+        userId: await getSystemUserId(),
+        userName: clientName,
+        message: `📧 ${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000),
+        isInternal: 0,
+      } as any);
+      if (!existing.bookingRef) {
+        try { await autoLinkLostFoundBooking(existing.id); } catch { /* best-effort */ }
+      }
+      return { targetModule: "lostfound", targetId: existing.id, isNew: false };
+    }
+    const lfMatch = await matchBookingForComplaint({
+      reservationRef: parsed.bookingRef, vehiclePlate: parsed.vehiclePlate, clientEmail, clientPhone: parsed.clientPhone, clientName,
+    });
+    const b = lfMatch?.booking ?? null;
+    const openComplaint = clientEmail ? await findComplaintByClientSignals(clientEmail, null, null) : null;
+    const id = await createLostFoundItem({
+      clientName,
+      clientEmail: clientEmail ?? (b?.clientEmail || undefined),
+      clientPhone: parsed.clientPhone ?? (b?.clientPhone || undefined),
+      vehiclePlate: parsed.vehiclePlate ?? (b?.licensePlate || undefined),
+      bookingRef: parsed.bookingRef ?? (b?.externalId || undefined),
+      projectId: b?.projectId ?? ai.projectId ?? undefined,
+      relatedComplaintId: openComplaint?.id ?? undefined,
+      itemType: "other",
+      description: desc || "(sem descrição)",
+      status: "new",
+      priority: "medium",
+      createdBy: ai.actorId ?? await getSystemUserId(),
+      origin: "ia",
+      ...(ai.uncertain ? { aiUnconfirmed: 1 } : {}),
+    } as any);
+    return { targetModule: "lostfound", targetId: id ?? undefined, isNew: true };
   }
 
   if (alias === "perdidos") {
@@ -298,8 +399,9 @@ async function routeToModule(
       status: "new",
       priority: "medium",
       createdBy: await getSystemUserId(),
+      origin: "email",
     } as any);
-    return { targetModule: "lostfound", targetId: id ?? undefined };
+    return { targetModule: "lostfound", targetId: id ?? undefined, isNew: true };
   }
 
   // ocorrencias → já NÃO cria ocorrências (incidents). As ocorrências vivem
@@ -402,7 +504,7 @@ async function routeToModule(
  */
 async function afterComplaintEmail(
   complaintId: number,
-  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string; fromName?: string; subject?: string; receivedAt?: string | null },
+  ctx: { isNew: boolean; attachments: InboundAttachment[]; messageId: string; fromEmail?: string; fromName?: string; subject?: string; receivedAt?: string | null; aiIntake?: boolean },
 ): Promise<void> {
   try {
     const systemUser = await getSystemUserId().catch(() => undefined);
@@ -436,6 +538,9 @@ async function afterComplaintEmail(
   } catch (err) {
     console.warn("[EmailInbound] notificação de reclamação falhou:", err);
   }
+  // Lote 57: a reclamação que a IA tirou de outra caixa NUNCA escreve ao
+  // cliente (nem o aviso de receção) — responder é sempre uma pessoa.
+  if (ctx.aiIntake) return;
   try {
     const c = await getComplaintById(complaintId);
     // In-Reply-To só quando o email veio DIRETAMENTE do cliente (num
@@ -472,6 +577,30 @@ export interface InboundEmailInput {
   html?: string | null;
   /** Só chamado DEPOIS de reservar o Message-ID (duplicados não descarregam nada). */
   loadAttachments: () => Promise<RawInboundAttachment[]>;
+  /**
+   * Lote 57: email de OUTRA caixa (info@, reservas@…) que a IA viu como
+   * reclamação (server/complaintMailIntake.ts). Sem aviso de receção ao
+   * cliente; só junta a uma reclamação pela conversa, email/matrícula do
+   * cliente ou mesma reserva (nunca só pelo nome/assunto); origem "ia".
+   * 14 out 2026: também perdidos (alias "perdidos") e "Por confirmar".
+   */
+  aiIntake?: AiComplaintIntake | null;
+}
+
+export interface AiComplaintIntake {
+  /** Quem carregou em "Criar reclamação" numa sugestão (null = a IA, sozinha). */
+  actorId?: number | null;
+  /** Cidade da conversa (quando a reserva não a dá). */
+  projectId?: number | null;
+  /** Resposta numa conversa já ligada: junta-se a ESTA reclamação e nunca cria outra. */
+  forceComplaintId?: number | null;
+  /** 14 out 2026: o mesmo para um perdido que a IA ligou à conversa. */
+  forceLostFoundId?: number | null;
+  replyOnly?: boolean;
+  /** 14 out 2026: certeza média → o caso nasce "Por confirmar (IA)". */
+  uncertain?: boolean;
+  /** Ronda 2: o remetente é um parceiro em nome do cliente (o email dele não é o do cliente). */
+  partnerSender?: boolean;
 }
 
 export type InboundOutcome =
@@ -520,7 +649,8 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 
     // HTML → texto com html-to-text (mantém quebras de linha para o
     // parsing "Etiqueta: valor", descodifica entidades, sem <style>).
-    const htmlText = typeof input.html === "string" && input.html ? htmlToPlainText(input.html) : "";
+    // Ronda 3: com teto (HTML muito aninhado bloqueava a sincronização segundos a fio).
+    const htmlText = typeof input.html === "string" && input.html && !input.text ? boundedHtmlToText(input.html, INBOUND_HTML_MAX) : "";
     const bodyText = (input.text || htmlText || "").slice(0, 20000);
     const parsed = parseInboundBody(bodyText);
     // Guarda os ficheiros no storage (antes só se registavam os nomes e o
@@ -552,6 +682,7 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 
     const routed = await routeToModule(alias, parsed, {
       subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
+      aiIntake: alias === "reclamacoes" || alias === "perdidos" ? input.aiIntake ?? null : null,
     });
     routedOk = true;
 
@@ -569,6 +700,8 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 
     if (routed.targetModule === "complaint" && routed.targetId) {
       await afterComplaintEmail(routed.targetId, {
+        // Lote 57: veio de outra caixa pela IA → nunca o aviso de receção ao cliente.
+        aiIntake: !!input.aiIntake,
         isNew: !!routed.isNew,
         attachments,
         messageId,

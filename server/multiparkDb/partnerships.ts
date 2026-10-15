@@ -24,6 +24,8 @@ import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, safeMultiparkRead, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
 import { lisbonDayOf, lisbonMidnightUtcMs } from "../../shared/lisbonDay";
+import { MARKETPLACE_COMMISSIONED_SQL, MARKETPLACE_ORIGIN_SQL } from "./marketplaceSql";
+import { marketplaceOperated } from "../../shared/multiparkParks";
 
 type Row = Record<string, unknown>;
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
@@ -32,8 +34,8 @@ type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => 
 export const LIVE = `b."status"::text NOT IN ('CANCELLED', 'PENDING')`;
 /** Valor da reserva de um parceiro: o que ele recebeu; sem isso, o preço. */
 export const PARTNER_VALUE = `COALESCE(b."partnerContributedAmount", b."bookingPrice")`;
-/** Reservas que NÓS levámos a um parque que não é nosso (marketplace). */
-export const OUR_SALE = `(b."origin"::text = 'MARKETPLACE' OR COALESCE(b."commissionAmount", 0) > 0)`;
+/** Reservas que NÓS levámos a um parque que não é nosso (com a nossa comissão) — marketplaceSql.ts. */
+export const OUR_SALE = MARKETPLACE_COMMISSIONED_SQL;
 export const PARTNER_ROWS_LIMIT = 5000;
 export const PARK_ROWS_LIMIT = 1000;
 
@@ -107,8 +109,9 @@ export function buildPartnerTotalsSql(parkIds: string[], p: LivePeriods): { sql:
 }
 
 /**
- * Totais do mês corrente por parque: todas as reservas (para os nossos) e só
- * as que NÓS levámos (para os de terceiros), com a nossa comissão.
+ * Totais do mês corrente por parque: todas as reservas, as que vieram pelo
+ * Marketplace (nossos: origem MARKETPLACE — a regra única) e as que NÓS
+ * levámos com a nossa comissão (terceiros: o dinheiro).
  */
 export function buildParkTotalsSql(parkIds: string[], p: LivePeriods): { sql: string; params: SqlParam[] } {
   if (!parkIds.length) throw new Error("Sem parques.");
@@ -122,6 +125,7 @@ export function buildParkTotalsSql(parkIds: string[], p: LivePeriods): { sql: st
       `  count(*) FILTER (WHERE ${LIVE}) AS bookings,`,
       `  SUM(b."bookingPrice") FILTER (WHERE ${LIVE}) AS value,`,
       `  count(*) FILTER (WHERE ${LIVE} AND b."partnerId" IS NOT NULL) AS partner_bookings,`,
+      `  count(*) FILTER (WHERE ${LIVE} AND ${MARKETPLACE_ORIGIN_SQL}) AS mkt_bookings,`,
       `  count(*) FILTER (WHERE ${LIVE} AND ${OUR_SALE}) AS sale_bookings,`,
       `  SUM(b."bookingPrice") FILTER (WHERE ${LIVE} AND ${OUR_SALE}) AS sale_value,`,
       `  SUM(b."commissionAmount") FILTER (WHERE ${LIVE} AND ${OUR_SALE}) AS sale_commission`,
@@ -207,7 +211,14 @@ export function groupLivePartners(rows: Row[], parks: Array<Pick<DayPark, "id" |
 
 export interface LivePark {
   id: string; name: string; city: string | null; label: string; ours: boolean; status: string | null; listingType: string | null;
-  /** Mês corrente: nossos = todas as reservas; terceiros = só as que NÓS levámos. */
+  /** 8 out 2026: operado por nós (os nossos sempre; terceiros fora da lista do dono e das Definições) — etiqueta da comissão. */
+  operated: boolean;
+  /**
+   * 8 out 2026 — reservas do Marketplace no mês pela regra única: nos de
+   * terceiros TODAS; nos nossos as que vieram pelo Marketplace (origem).
+   */
+  marketplaceBookings: number;
+  /** Mês corrente: nossos = todas as reservas; terceiros = só as que NÓS levámos (com a nossa comissão — o dinheiro). */
   bookings: number; value: number | null;
   /** Nossos: das quais vieram de parceiros. */
   partnerBookings: number;
@@ -224,22 +235,23 @@ export interface LivePark {
   rate: number | null;
 }
 
-/** Parques + totais do mês → linhas da tab "Parques". PURA. */
-export function mapLiveParks(parks: DayPark[], rows: Row[]): { ours: LivePark[]; third: LivePark[] } {
+/** Parques + totais do mês → linhas da tab "Parques". `excludedParkIds` só serve a etiqueta "não operado". PURA. */
+export function mapLiveParks(parks: DayPark[], rows: Row[], excludedParkIds: readonly string[] = []): { ours: LivePark[]; third: LivePark[] } {
   const byPark = new Map(rows.map((r) => [str(r.park_id) ?? "", r]));
+  const excluded = new Set(excludedParkIds);
   const ours: LivePark[] = [], third: LivePark[] = [];
   for (const p of parks) {
     const r = byPark.get(p.id) ?? {};
-    const base = { id: p.id, name: p.name, city: p.cityName, label: p.label, ours: p.ours, status: p.status, listingType: p.listingType };
+    const base = { id: p.id, name: p.name, city: p.cityName, label: p.label, ours: p.ours, status: p.status, listingType: p.listingType, operated: marketplaceOperated(p, excluded) };
     if (p.ours) {
-      ours.push({ ...base, bookings: num(r.bookings) ?? 0, value: round(num(r.value) ?? 0), partnerBookings: num(r.partner_bookings) ?? 0, ourShare: null, parkShare: null, commission: null, rate: null });
+      ours.push({ ...base, marketplaceBookings: num(r.mkt_bookings) ?? 0, bookings: num(r.bookings) ?? 0, value: round(num(r.value) ?? 0), partnerBookings: num(r.partner_bookings) ?? 0, ourShare: null, parkShare: null, commission: null, rate: null });
     } else {
       const value = round(num(r.sale_value) ?? 0);
       const commission = round(num(r.sale_commission) ?? 0);
-      third.push({ ...base, bookings: num(r.sale_bookings) ?? 0, value, partnerBookings: 0, ourShare: commission, parkShare: round(value - commission), commission, rate: value > 0 ? Math.round((commission / value) * 1000) / 10 : null });
+      third.push({ ...base, marketplaceBookings: num(r.bookings) ?? 0, bookings: num(r.sale_bookings) ?? 0, value, partnerBookings: 0, ourShare: commission, parkShare: round(value - commission), commission, rate: value > 0 ? Math.round((commission / value) * 1000) / 10 : null });
     }
   }
-  third.sort((a, b) => b.bookings - a.bookings || a.name.localeCompare(b.name, "pt"));
+  third.sort((a, b) => b.marketplaceBookings - a.marketplaceBookings || b.bookings - a.bookings || a.name.localeCompare(b.name, "pt"));
   return { ours, third };
 }
 
@@ -284,8 +296,12 @@ export interface PartnershipsLive {
   parks: { ours: LivePark[]; third: LivePark[] };
 }
 
-/** Parceiros e parques no âmbito de cidade (Park.city). `cities` undefined = todas. */
-export async function readPartnershipsLive(cities: string[] | undefined, query: Query = multiparkDbQuery, now: Date = new Date()): Promise<MultiparkRead<PartnershipsLive>> {
+/**
+ * Parceiros e parques no âmbito de cidade (Park.city). `cities` undefined =
+ * todas. `excludedParkIds` (Definições → "Parques que a operação não faz")
+ * só serve a etiqueta "não operado".
+ */
+export async function readPartnershipsLive(cities: string[] | undefined, query: Query = multiparkDbQuery, now: Date = new Date(), excludedParkIds: readonly string[] = []): Promise<MultiparkRead<PartnershipsLive>> {
   return safeMultiparkRead("parcerias", async () => {
     const periods = livePeriods(now);
     const parks = mapParks(await query(buildParksSql().sql), cities);
@@ -300,7 +316,7 @@ export async function readPartnershipsLive(cities: string[] | undefined, query: 
       const q = buildParkTotalsSql(parks.map((p) => p.id), periods);
       parkRows = await query(q.sql, q.params);
     }
-    return { periods: { thisMonth: periods.thisMonth, from12: periods.from12 }, partners, parks: mapLiveParks(parks, parkRows) };
+    return { periods: { thisMonth: periods.thisMonth, from12: periods.from12 }, partners, parks: mapLiveParks(parks, parkRows, excludedParkIds) };
   });
 }
 

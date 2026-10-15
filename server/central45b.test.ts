@@ -100,7 +100,7 @@ describe("Toque da central: que chamada está a tocar", () => {
 
   it("\"Abrir ficha\" leva ao mesmo sítio que o contacto aberto na consola", () => {
     expect(ringContactHref("crm-12")).toBe("/clientes/12");
-    expect(ringContactHref("emp-3")).toBe("/rh");
+    expect(ringContactHref("emp-3")).toBe("/rh?employeeId=3");
     expect(ringContactHref("tel-351913225918")).toBe("/clientes?q=%2B351913225918");
     expect(ringContactHref("ct-4")).toBe("/clientes");
     expect(ringContactHref("x")).toBeNull();

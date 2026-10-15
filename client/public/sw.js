@@ -1,7 +1,10 @@
 /*
- * Service worker do dashboard: SÓ notificações push (chamadas do WhatsApp a
- * tocar). Não faz cache nem interceta pedidos (sem handler de fetch), por isso
- * não muda nada no carregamento da app.
+ * Service worker do dashboard: SÓ notificações push — chamadas do WhatsApp a
+ * tocar e (plano 56) o código de entrada para o TL/supervisor de serviço
+ * (`type: "login_code"`), o terminal do aeroporto (`type: "terminal"`:
+ * "Ainda estás no terminal?", lugar libertado, aviso ao TL) e, num PDA, só
+ * "Tens um aviso" (`type: "pda"`). Não faz cache nem interceta pedidos (sem
+ * handler de fetch), por isso não muda nada no carregamento da app.
  */
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -13,6 +16,58 @@ self.addEventListener("push", (event) => {
   } catch (e) {
     data = {};
   }
+
+  // Código de entrada (plano 56): aviso normal (não toca como uma chamada).
+  // Não se fecha sozinho — o browser não deixa o service worker esperar os
+  // 10 minutos do código; o sino e o cartão "Códigos de entrada" dizem se ainda vale.
+  if (data.type === "login_code") {
+    event.waitUntil(
+      self.registration.showNotification(data.title || "Código de entrada", {
+        body: data.body || "Abre a app para veres o código.",
+        tag: data.tag || "login-code",
+        renotify: true,
+        icon: "/icon.png",
+        badge: "/icon.png",
+        data: { url: data.url || "/operacional?tab=live" },
+      }),
+    );
+    return;
+  }
+
+  // Terminal do aeroporto (plano 56 B2): fica no ecrã até a pessoa abrir (a
+  // pergunta precisa de resposta em 15 min). Texto sem nome (pode ser um PDA).
+  if (data.type === "terminal") {
+    event.waitUntil(
+      self.registration.showNotification(data.title || "Terminal do aeroporto", {
+        body: data.body || "Abre a app.",
+        tag: data.tag || "terminal",
+        renotify: true,
+        requireInteraction: true,
+        icon: "/icon.png",
+        badge: "/icon.png",
+        data: { url: data.url || "/perfil" },
+      }),
+    );
+    return;
+  }
+
+  // Plano 56 (A2): num PDA (aparelho partilhado) o aviso não diz nada de
+  // ninguém — "Tens um aviso" — e abre a app. Outros tipos com nome (ex.:
+  // "terminal") também são avisos normais, nunca o toque de uma chamada.
+  if (data.type === "pda" || (data.type && data.type !== "wa_call")) {
+    event.waitUntil(
+      self.registration.showNotification(data.title || "Multipark", {
+        body: data.body || "Tens um aviso",
+        tag: data.tag || "aviso",
+        renotify: true,
+        icon: "/icon.png",
+        badge: "/icon.png",
+        data: { url: data.url || "/" },
+      }),
+    );
+    return;
+  }
+
   const title = data.title || "Chamada WhatsApp";
   const tag = data.tag || "wa-call";
   event.waitUntil(

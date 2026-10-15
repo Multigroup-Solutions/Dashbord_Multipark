@@ -187,7 +187,8 @@ describe("Disponibilidade: a semana começa à segunda, em Lisboa", () => {
 });
 
 describe("Ecrãs: erro ≠ vazio e as mesmas regras do servidor", () => {
-  const aval = src("client/src/pages/AvaliacaoPage.tsx");
+  // 12 out 2026: o separador "Mês" vive em MonthEvaluationTab (também na Atividade diária).
+  const aval = src("client/src/pages/AvaliacaoPage.tsx") + src("client/src/components/evaluation/MonthEvaluationTab.tsx");
   const dia = src("client/src/components/evaluation/DayEvaluationTab.tsx");
   const pessoas = src("client/src/pages/PessoasDashboard.tsx");
   const disp = src("client/src/pages/DisponibilidadePage.tsx");

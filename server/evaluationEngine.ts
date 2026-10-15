@@ -6,7 +6,7 @@
  *    intervalo que deixaram de existir). Fontes:
  *      · BD da Multipark AO VIVO (server/multiparkDb/movements.ts): os
  *        movimentos de cada agente ("History", já agregados no Postgres com
- *        as regras de "levar ao parque" e entregas atrasadas) e as
+ *        a regra de "levar ao parque"; a "entrega atrasada" saiu na tarefa 62) e as
  *        ocorrências que criou na app ("Occurrence");
  *      · a nossa BD: ponto, escala, ocorrências/reclamações nossas, alertas
  *        de velocidade (GPS Zello), penalizações e os acidentes confirmados
@@ -44,6 +44,7 @@ import {
 } from "./evaluationCore";
 import { loadEvaluationIdentity } from "./evaluationIdentity";
 import {
+  EVALUATION_RULES_VERSION,
   METRIC_KEYS,
   RANKING_POSITIONS,
   RECOMPUTE_WINDOW_DAYS,
@@ -57,9 +58,10 @@ import {
   type PerHourMetrics,
   type Score,
 } from "../shared/evaluationRules";
-import { addDays, operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
+import { addDays, lisbonDayRangeUtc, operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
+
 const toUtcStr = (v: any): string => {
   if (v == null) return "";
   if (v instanceof Date) return v.toISOString().slice(0, 19).replace("T", " ");
@@ -80,6 +82,11 @@ export type MovementSource = "multipark" | "copia";
 
 export interface ComputeResult extends EngineOutput {
   source: MovementSource;
+  /**
+   * Versão das regras a gravar (employee_day_metrics.rulesVersion): EVALUATION_RULES_VERSION,
+   * ou 1 quando faltou uma parte das regras novas (o limite de velocidade não se leu) — o aviso continua.
+   */
+  rulesVersion: number;
   /** Aviso para a página quando a BD da Multipark não respondeu. */
   notice: string | null;
 }
@@ -95,7 +102,7 @@ const defaultLiveReader: LiveInputsReader = async (s, e) => (await import("./mul
 export async function computeRange(startDay: string, endDay: string, readLive: LiveInputsReader = defaultLiveReader): Promise<ComputeResult> {
   if (!DAY_RE.test(startDay) || !DAY_RE.test(endDay) || endDay < startDay) throw new Error("Intervalo inválido");
   const db = await getDb();
-  const empty: ComputeResult = { rows: [], unresolved: new Map(), source: "copia", notice: null };
+  const empty: ComputeResult = { rows: [], unresolved: new Map(), source: "copia", notice: null, rulesVersion: EVALUATION_RULES_VERSION };
   if (!db) return empty;
 
   // Movimentos + ocorrências da app: AO VIVO; sem BD deles, a cópia local.
@@ -119,10 +126,13 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     monthlySalary: e.monthlySalary != null ? Number(e.monthlySalary) : null, projectId: e.projectId ?? null,
   }]));
 
-  const [actions, ponto, assignments, incidents, speed, penalties] = await Promise.all([
+  // 14 out 2026: o GPS é por dia de CALENDÁRIO — para a deduplicação do 1.º dia é preciso saber dos alertas e
+  // penalizações de velocidade das 00h às 03h desse dia (ainda do dia operacional anterior). Só para isso: não contam aqui.
+  const calendarStart = lisbonDayRangeUtc(startDay).start;
+  const [actions, ponto, assignments, incidents, speed, penalties, speedContext] = await Promise.all([
     live.available
       ? Promise.resolve([] as any[])
-      : db.execute(sql`SELECT bookingExternalId, historyId, changeType, actionTime, agentUserId, agentName
+      : db.execute(sql`SELECT bookingExternalId, historyId, changeType, actionTime, agentUserId, agentName, modifiedFields
                      FROM multipark_booking_history
                     WHERE actionTime >= ${lookback} AND actionTime < ${range.end}`),
     db.execute(sql`SELECT id, employeeId, type, recordedAt, hoursWorked, notes, reviewStatus
@@ -138,11 +148,33 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
                     WHERE employeeId IS NOT NULL AND createdAt >= ${range.start} AND createdAt < ${range.end}`),
     db.execute(sql`SELECT employeeId, points, reason, relatedId, createdAt FROM employee_penalties
                     WHERE status = 'confirmed' AND createdAt >= ${range.start} AND createdAt < ${range.end}`),
+    db.execute(sql`SELECT employeeId, createdAt FROM speed_alerts
+                    WHERE employeeId IS NOT NULL AND createdAt >= ${calendarStart} AND createdAt < ${range.start}
+                   UNION ALL
+                   SELECT employeeId, createdAt FROM employee_penalties
+                    WHERE status = 'confirmed' AND reason = 'speeding' AND createdAt >= ${calendarStart} AND createdAt < ${range.start}`).catch(() => [[]] as any),
   ]);
+  // Tarefa 62 (Q8): horários fixos do RH (fichas ativas, funcionários — os extras regem-se pela escala) e
+  // férias/baixas — o atraso conta para quem tem horário. A cidade da ficha só serve para o feriado municipal.
+  let fixedSchedules: any[] = [], leaveRows: any[] = [];
+  try {
+    fixedSchedules = rowsOf(await db.execute(sql`
+      SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
+             DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
+        FROM schedules s JOIN employees e ON e.id = s.employeeId
+       WHERE e.isActive = 1 AND s.isWorkDay = 1
+         AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+    leaveRows = rowsOf(await db.execute(sql`
+      SELECT employeeId, fromDate, toDate FROM employee_leaves
+       WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)}`));
+  } catch { /* sem horários: só a escala (como antes) */ }
+  const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
+    ? await (await import("./aiOps/cities")).projectCityResolver(db)
+    : () => null;
   let complaintRows: any[] = [];
   try {
     complaintRows = rowsOf(await db.execute(sql`
-      SELECT d.complaintId, d.employeeId, c.createdAt AS at, c.penaltyPoints, c.complaint_status AS status
+      SELECT d.complaintId, d.employeeId, c.createdAt AS at, c.penaltyPoints, c.complaint_status AS status, d.penaltyPointsApplied AS driverPoints
         FROM complaint_drivers_on_duty d
         JOIN complaints c ON c.id = d.complaintId
        WHERE d.employeeId IS NOT NULL AND c.archivedAt IS NULL AND c.createdAt >= ${range.start} AND c.createdAt < ${range.end}`));
@@ -157,11 +189,11 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     const cIds = relIds("complaint_investigation");
     if (cIds.length) {
       const rel = rowsOf(await db.execute(sql`
-        SELECT d.complaintId, d.employeeId, c.penaltyPoints, c.complaint_status AS status
+        SELECT d.complaintId, d.employeeId, c.penaltyPoints, c.complaint_status AS status, d.penaltyPointsApplied AS driverPoints
           FROM complaint_drivers_on_duty d JOIN complaints c ON c.id = d.complaintId
          WHERE d.employeeId IS NOT NULL AND c.archivedAt IS NULL AND d.complaintId IN (${sql.join(cIds.map((id) => sql`${id}`), sql`, `)})`));
       for (const r of rel) {
-        if (complaintIsConfirmed({ penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null })) relatedCountedElsewhere.complaints.push(`${Number(r.employeeId)}|${Number(r.complaintId)}`);
+        if (complaintIsConfirmed({ penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null, driverPenaltyPoints: Number(r.driverPoints ?? 0) })) relatedCountedElsewhere.complaints.push(`${Number(r.employeeId)}|${Number(r.complaintId)}`);
       }
     }
     const aIds = relIds("speeding");
@@ -171,6 +203,30 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       for (const r of rel) relatedCountedElsewhere.speedAlerts.push(`${Number(r.employeeId)}|${Number(r.id)}`);
     }
   } catch { /* sem a tabela das reclamações: fica a regra antiga (dentro do período) */ }
+
+  // 14 out 2026: a velocidade máxima do GPS do Zello por pessoa e dia (as partes do PDA; sem partes, a linha
+  // do dia) e o limiar (Definições → "Limite de velocidade (GPS do Zello)", acima de 120 km/h por omissão)
+  // — um dia acima conta 1 excesso de velocidade. Desde a recolha com metricsVersion 5 a máxima já vem sem
+  // picos falsos e, acima do limite, só de um excesso confirmado (shared/speedRules.ts).
+  // Tarefa 62 (a "trava da linha GPS"): com o limiar com que a linha foi recolhida (as partes pela historyId);
+  // sem ele, a linha conta como recolhida a 132 — nunca se conta um excesso que a recolha não confirmou.
+  let gpsRows: any[] = [];
+  try {
+    gpsRows = [
+      ...rowsOf(await db.execute(sql`SELECT s.employeeId, s.day, s.maxSpeed, h.speedThresholdKmh FROM driver_day_shares s
+          LEFT JOIN daily_driver_history h ON h.id = s.historyId
+          WHERE s.employeeId IS NOT NULL AND s.day >= ${startDay} AND s.day <= ${endDay}`)),
+      ...rowsOf(await db.execute(sql`SELECT h.employeeId, DATE_FORMAT(h.date, '%Y-%m-%d') AS day, h.maxSpeed, h.speedThresholdKmh FROM daily_driver_history h
+          WHERE h.employeeId IS NOT NULL AND DATE(h.date) >= ${startDay} AND DATE(h.date) <= ${endDay}
+            AND NOT EXISTS (SELECT 1 FROM driver_day_shares s WHERE s.historyId = h.id)`)),
+    ];
+  } catch { /* sem GPS: só os alertas */ }
+  let speedLimitKmh: number | null = null;
+  try {
+    const { speedThreshold } = await import("./dayActivity");
+    speedLimitKmh = await speedThreshold();
+  } catch { /* sem limiar: o GPS não conta */ }
+  const speedNote = speedLimitKmh == null ? "Não deu para ler o limite de velocidade: os excessos do GPS do Zello não contaram (só os alertas)." : null;
 
   // Acidentes confirmados pelo TL (D15): o dia operacional da ocorrência já vem gravado.
   let accidentRows: any[] = [];
@@ -192,6 +248,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       bookingExternalId: String(r.bookingExternalId), historyId: r.historyId != null ? String(r.historyId) : null,
       changeType: r.changeType ?? null, actionTime: toUtcStr(r.actionTime),
       agentUserId: r.agentUserId != null ? String(r.agentUserId) : null, agentName: r.agentName != null ? String(r.agentName) : null,
+      modifiedFields: r.modifiedFields != null ? String(r.modifiedFields) : null,
     })).filter((r) => r.actionTime),
     ponto: rowsOf(ponto).map((r) => ({
       id: Number(r.id), employeeId: Number(r.employeeId), type: r.type, recordedAt: toUtcStr(r.recordedAt),
@@ -211,7 +268,20 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     complaints: complaintRows.map((r) => ({
       complaintId: Number(r.complaintId), employeeId: r.employeeId != null ? Number(r.employeeId) : null,
       at: toUtcStr(r.at), penaltyPoints: Number(r.penaltyPoints ?? 0), status: r.status ?? null,
+      driverPenaltyPoints: Number(r.driverPoints ?? 0),
     })),
+    fixedSchedules: fixedSchedules.map((r) => ({
+      employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
+      isWorkDay: Number(r.isWorkDay) === 1, contractStart: r.contractStart ? String(r.contractStart).slice(0, 10) : null, contractEnd: r.contractEnd ? String(r.contractEnd).slice(0, 10) : null,
+      city: cityOfProjectId(r.projectId != null ? Number(r.projectId) : null),
+    })),
+    leaves: leaveRows.map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) })),
+    gpsDays: gpsRows.map((r) => ({
+      employeeId: Number(r.employeeId), day: typeof r.day === "string" ? r.day.slice(0, 10) : r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day ?? "").slice(0, 10),
+      maxSpeed: Number(r.maxSpeed ?? 0), collectedThresholdKmh: r.speedThresholdKmh != null ? Number(r.speedThresholdKmh) : null,
+    })),
+    speedThresholdKmh: speedLimitKmh,
+    speedCalendarContext: rowsOf(speedContext).filter((r) => r.employeeId != null).map((r) => ({ employeeId: Number(r.employeeId), at: toUtcStr(r.createdAt) })),
     speedAlerts: rowsOf(speed).map((r) => ({ id: Number(r.id), employeeId: r.employeeId != null ? Number(r.employeeId) : null, createdAt: toUtcStr(r.createdAt) })),
     relatedCountedElsewhere,
     penalties: penRows.map((r) => ({
@@ -222,10 +292,14 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     rate: (level) => rateFor(rates, level),
     tlWorkingDaysPerMonth: TL_WORKING_DAYS_PER_MONTH,
   });
-  return { ...out, source, notice };
+  return {
+    ...out, source, notice: [notice, speedNote].filter(Boolean).join(" ") || null,
+    // sem limiar de velocidade, o dia não ficou com as regras novas todas: fica 1 (o aviso "regras antigas" continua)
+    rulesVersion: speedLimitKmh == null ? 1 : EVALUATION_RULES_VERSION,
+  };
 }
 
-function metricsRow(r: EmployeeDayRow, stamp: string) {
+function metricsRow(r: EmployeeDayRow, stamp: string, rulesVersion: number) {
   const m = r.metrics;
   const s = scoreOf(m);
   return {
@@ -234,29 +308,32 @@ function metricsRow(r: EmployeeDayRow, stamp: string) {
     hoursWorked: String(m.hoursWorked), suspiciousHours: String(m.suspiciousHours), scheduledHours: String(m.scheduledHours),
     pontoEvents: m.pontoEvents, cost: String(m.cost),
     actions: m.actions, actionsMorning: m.actionsMorning, actionsNight: m.actionsNight,
-    recolhas: m.recolhas, entregas: m.entregas, movements: m.movements, parkingMoves: m.parkingMoves,
+    recolhas: m.recolhas, entregas: m.entregas, movements: m.movements, parkingMoves: m.parkingMoves, spotChanges: m.spotChanges,
     cancels: m.cancels, otherActions: m.otherActions, weightedActions: String(m.weightedActions),
     actionsByType: JSON.stringify(r.actionsByType),
-    speedingEvents: m.speedingEvents, delays: m.delays, lateServices: m.lateServices, complaints: m.complaints, accidents: m.accidents,
+    // 49e: ações por hora (Lisboa) — só quando houve ações; dias antigos ficam NULL (o Desempenho diz "por hora desde…")
+    actionsByHour: r.actionsByHour && r.actionsByHour.some((n) => n > 0) ? JSON.stringify(r.actionsByHour) : null,
+    speedingEvents: m.speedingEvents, delays: m.delays, lateServices: m.lateServices, deliveriesWithoutSchedule: m.deliveriesWithoutSchedule, complaints: m.complaints, accidents: m.accidents,
     incidentsReported: m.incidentsReported, incidentsAgainst: m.incidentsAgainst, penaltyPoints: m.penaltyPoints,
     positivePoints: String(s.positivePoints), negativePoints: String(s.negativePoints), totalPoints: String(s.totalPoints),
+    rulesVersion,
     computedAt: stamp,
   };
 }
 
 const UPSERT_COLUMNS = [
   "projectId", "city", "shift", "isTeamLeader", "level", "hoursSource", "hoursWorked", "suspiciousHours", "scheduledHours",
-  "pontoEvents", "cost", "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves",
-  "cancels", "otherActions", "weightedActions", "actionsByType", "speedingEvents", "delays", "lateServices", "complaints", "accidents",
-  "incidentsReported", "incidentsAgainst", "penaltyPoints", "positivePoints", "negativePoints", "totalPoints", "computedAt",
+  "pontoEvents", "cost", "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges",
+  "cancels", "otherActions", "weightedActions", "actionsByType", "actionsByHour", "speedingEvents", "delays", "lateServices", "deliveriesWithoutSchedule", "complaints", "accidents",
+  "incidentsReported", "incidentsAgainst", "penaltyPoints", "positivePoints", "negativePoints", "totalPoints", "rulesVersion", "computedAt",
 ] as const;
 
 /** Grava as linhas de [start, end] e apaga as desse intervalo que deixaram de existir. */
-export async function persistRows(rows: EmployeeDayRow[], startDay: string, endDay: string): Promise<{ written: number; removed: number }> {
+export async function persistRows(rows: EmployeeDayRow[], startDay: string, endDay: string, rulesVersion: number = EVALUATION_RULES_VERSION): Promise<{ written: number; removed: number }> {
   const db = await getDb();
   if (!db) return { written: 0, removed: 0 };
   const stamp = mysqlStamp(Math.floor(Date.now() / 1000) * 1000);
-  const values = rows.map((r) => metricsRow(r, stamp));
+  const values = rows.map((r) => metricsRow(r, stamp, rulesVersion));
   const set: Record<string, any> = {};
   for (const c of UPSERT_COLUMNS) set[c] = sql.raw(`VALUES(\`${c}\`)`);
   for (let i = 0; i < values.length; i += 200) {
@@ -269,15 +346,31 @@ export async function persistRows(rows: EmployeeDayRow[], startDay: string, endD
   return { written: values.length, removed };
 }
 
-/** Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional). */
-export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number; skipped: boolean }> {
+/**
+ * Recalcula e grava [start, end]. Devolve também as ações por ligar (operacional).
+ * Tarefa 62 (P2d): os dias FECHADOS (≤ evaluation.closedUntil) nunca se escrevem — o
+ * intervalo começa no 1.º dia aberto; todo fechado → nada; o fecho não se leu → nada.
+ */
+export async function recomputeRange(startDay: string, endDay: string, readLive?: LiveInputsReader): Promise<ComputeResult & { written: number; removed: number; skipped: boolean; closedUntil?: string | null }> {
+  const { readEvaluationClosedUntil, CLOSED_READ_FAILED_MESSAGE } = await import("./evaluationClose");
+  const { openFrom, fmtClosedUntil } = await import("../shared/evaluationClose");
+  const closed = await readEvaluationClosedUntil();
+  const nothing = (notice: string, skipped: boolean, closedUntil: string | null) =>
+    ({ rows: [], unresolved: new Map(), source: "multipark" as const, notice, rulesVersion: EVALUATION_RULES_VERSION, written: 0, removed: 0, skipped, closedUntil });
+  if (!closed.ok) return nothing(CLOSED_READ_FAILED_MESSAGE, true, null);
+  const from = openFrom(startDay, endDay, closed.closedUntil);
+  if (from == null) return nothing(`Fechado até ${fmtClosedUntil(closed.closedUntil!)} (fecho mensal): nada a recalcular.`, false, closed.closedUntil);
+  if (from !== startDay) {
+    const r = await recomputeRange(from, endDay, readLive);
+    return { ...r, closedUntil: closed.closedUntil };
+  }
   const out = await computeRange(startDay, endDay, readLive);
   // Sem a BD da Multipark os movimentos vêm da cópia local (congelada): gravar
   // por cima punha zeros nos dias bons e apagava linhas. Fica o que estava.
   if (out.source === "copia") {
     return { ...out, written: 0, removed: 0, skipped: true, notice: `${out.notice ?? "BD da Multipark indisponível."} Nada foi gravado: ficam os valores anteriores.` };
   }
-  const p = await persistRows(out.rows, startDay, endDay);
+  const p = await persistRows(out.rows, startDay, endDay, out.rulesVersion);
   return { ...out, ...p, skipped: false };
 }
 
@@ -333,6 +426,8 @@ export interface EvaluatedDay {
   hoursSource: string | null;
   actionsByType: Record<string, number>;
   computedAt: string | null;
+  /** 0670: versão das regras com que o dia foi calculado (1 = antigas; null = só ajustes, sem cálculo) */
+  rulesVersion: number | null;
   /** calculado (sem ajustes) */
   base: DayMetrics;
   /** calculado + ajustes */
@@ -430,7 +525,7 @@ export async function loadEvaluatedDays(opts: {
     days.set(`${m.employeeId}|${m.day}`, {
       employeeId: m.employeeId, employeeName: fullName, position: position ?? null, day: m.day, shift: m.shift ?? null,
       city: m.city ?? null, isTeamLeader: m.isTeamLeader === 1, hoursSource: m.hoursSource ?? null, actionsByType: byType,
-      computedAt: m.computedAt ? toUtcStr(m.computedAt) : null, base, metrics: base, score: scoreOf(base),
+      computedAt: m.computedAt ? toUtcStr(m.computedAt) : null, rulesVersion: Number((m as any).rulesVersion ?? 1) || 1, base, metrics: base, score: scoreOf(base),
       perHour: perHourMetrics(base), adjustments: [],
     });
   }
@@ -441,7 +536,7 @@ export async function loadEvaluatedDays(opts: {
       const base = emptyDayMetrics();
       d = {
         employeeId: a.employeeId, employeeName: fullName, position: position ?? null, day: a.day, shift: null, city: null,
-        isTeamLeader: false, hoursSource: null, actionsByType: {}, computedAt: null, base, metrics: base,
+        isTeamLeader: false, hoursSource: null, actionsByType: {}, computedAt: null, rulesVersion: null, base, metrics: base,
         score: scoreOf(base), perHour: perHourMetrics(base), adjustments: [],
       };
       days.set(k, d);

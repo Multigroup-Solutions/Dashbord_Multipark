@@ -6,19 +6,29 @@
  * Decisão do dono (29 set 2026): só pelo QR, e o dashboard fica INSTALADO no
  * PDA como app (PWA, sempre no mesmo browser, abre em ecrã inteiro) — a
  * seguir ao registo aparece o botão "Instalar a app neste PDA".
+ *
+ * Plano 56 (A2), com "Entrar com email e código" ligado: sem sessão, o QR abre
+ * a página de entrada nova (e não a Google); só o TL ou acima regista; depois
+ * do registo a sessão de quem registou fica presa a este PDA. Desligado: a
+ * Google, como sempre. Um extra que lê o QR no PDA onde já está (este aparelho
+ * já é esse PDA) vê "Este PDA já está registado" em vez do erro.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { loginPageUrl, loginUrlForDevice, loginUrlWithReturn } from "@shared/loginReturn";
+import { useCodeLoginOption } from "@/lib/loginOptions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Download, Loader2, Smartphone, XCircle } from "lucide-react";
-import { setPdaToken, setPendingQr, markClaimed } from "@/lib/pdaDevice";
+import { getPdaToken, setPdaToken, setPendingQr, markClaimed, getPersonalToken, setPersonalToken } from "@/lib/pdaDevice";
+import { PDA_ON_PERSONAL_MSG } from "@shared/personalDevice";
 
 export default function PdaRegisterPage() {
   const { user, loading } = useAuth();
+  const { codeLogin } = useCodeLoginOption();
+  const utils = trpc.useUtils();
   const [, setLocation] = useLocation();
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const pdaId = Number(params.get("pda"));
@@ -34,25 +44,64 @@ export default function PdaRegisterPage() {
   }, []);
   const register = trpc.operational.pdas.registerByQr.useMutation({
     onSuccess: (r) => {
+      // Lido no PDA onde já estás (este aparelho já é esse PDA): nada muda.
+      if (r.alreadyRegistered && !r.pdaSession) {
+        setState({ ok: true, message: `Este PDA já está registado — estás no ${r.name}. Não precisas de fazer mais nada.` });
+        return;
+      }
       setPdaToken(r.token);
       markClaimed(null);
-      setState({ ok: true, message: `Este aparelho é agora o ${r.name}. Quem fizer login aqui fica com ele (e com o Zello) até sair.` });
+      if (r.alreadyRegistered) {
+        setState({ ok: true, message: `Este PDA já está registado — estás no ${r.name}. Nada mudou.` });
+        if (r.pdaSession) void utils.auth.me.invalidate();
+        return;
+      }
+      setState({ ok: true, message: r.pdaSession
+        ? `Este aparelho é agora o ${r.name}. Quem entrar aqui fica com ele (e com o Zello) até dar saída do ponto, sair ou entrar outra pessoa.`
+        : `Este aparelho é agora o ${r.name}. Quem fizer login aqui fica com ele (e com o Zello) até sair.` });
+      // A2: a sessão de quem registou passou a sessão deste PDA.
+      if (r.pdaSession) void utils.auth.me.invalidate();
     },
     onError: (e) => setState({ ok: false, message: e.message }),
   });
 
+  // Telemóvel pessoal (shared/personalDevice.ts): não passa a PDA partilhado pelo QR.
+  const personalCheck = trpc.operational.personalDevices.seen.useMutation();
+
   useEffect(() => {
     if (loading) return;
     if (!user) {
-      // guarda o QR para continuar depois de entrar
+      if (codeLogin === undefined) return; // ainda a saber por onde se entra
+      // guarda o QR para continuar depois de entrar. O destino também vai no
+      // state assinado do login, por isso o registo continua mesmo que a Google
+      // acabe noutro browser (QR lido por uma app de leitura). Isto É um PDA:
+      // a Google pede sempre a conta (D61), mesmo antes de haver token.
       setPendingQr(window.location.search);
-      window.location.href = getLoginUrl(`${window.location.pathname}${window.location.search}`);
+      const back = `${window.location.pathname}${window.location.search}`;
+      // A2: com a entrada com código ligada, o QR abre a página de entrada nova.
+      window.location.href = codeLogin ? loginPageUrl(back) : loginUrlForDevice(loginUrlWithReturn(back), true);
       return;
     }
+    // Já estamos no registo: o QR pendente deixa de ser preciso.
+    setPendingQr(null);
     if (!pdaId || !code) { setState({ ok: false, message: "QR incompleto." }); return; }
-    if (!register.isPending && !state) register.mutate({ pdaId, code });
+    const personal = getPersonalToken();
+    if (personal) {
+      if (personalCheck.isPending || state) return;
+      personalCheck.mutate({ token: personal }, {
+        onSuccess: (r) => {
+          if (r.kind === "pessoal") { setState({ ok: false, message: PDA_ON_PERSONAL_MSG }); return; }
+          setPersonalToken(null); // já não era pessoal: segue o registo do PDA
+          if (!register.isPending) register.mutate({ pdaId, code, currentToken: getPdaToken(), personalToken: getPersonalToken() });
+        },
+        onError: (e) => setState({ ok: false, message: e.message }),
+      });
+      return;
+    }
+    // (o servidor também recusa num telemóvel pessoal ativo: `personalToken`)
+    if (!register.isPending && !state) register.mutate({ pdaId, code, currentToken: getPdaToken(), personalToken: getPersonalToken() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, user?.id]);
+  }, [loading, user?.id, codeLogin]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">

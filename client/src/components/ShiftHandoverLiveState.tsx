@@ -4,29 +4,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { fmtPTDate, fmtPTDateTime, fmtPTTime } from "@/lib/lisbonTime";
 import type { HandoverCity } from "@shared/shiftHandover";
-import { GARAGE_FIT_LABEL, garageFit } from "@shared/garageFit";
-import type { LiveCar, LivePhase, LiveUpcoming, ShiftState } from "../../../server/multiparkDb/shiftState";
+import { GARAGE_FIT_LABEL, groupMisplaced } from "@shared/garageFit";
+import type { LiveCar, LiveUpcoming, ShiftState } from "../../../server/multiparkDb/shiftState";
+import { BAGGAGE_WAITING_LABEL, LIVE_PHASE_LABELS, type LivePhase } from "@shared/livePhases";
 
 // ─── "Estado do parque (ao vivo)" — separador da Passagem de turno ──────────
 // Lido AO VIVO da BD da Multipark (só leitura): carros no parque por
 // garagem/lugar, operações em curso, próximas recolhas/entregas (com voo e
 // ETA), ocorrências por resolver, caixa por fechar e bloqueios de amanhã.
 
-const PHASE_LABELS: Record<LivePhase, string> = {
-  checking_in: "A fazer check-in",
-  in_park: "No parque",
-  moving: "Em movimento",
-  pending_checkout: "Entrega pendente",
-  baggage_waiting: "À espera das malas",
-  at_delivery: "No local de entrega",
-  checking_out: "A fazer check-out",
-};
+// Tarefa 62 (P2c): os rótulos vêm de shared/livePhases.ts (fluxo A) — o cliente deixou de ter a sua cópia.
 const PHASE_TONE: Partial<Record<LivePhase, string>> = {
   pending_checkout: "border-red-300 text-red-700",
-  baggage_waiting: "border-amber-300 text-amber-700",
   at_delivery: "border-blue-300 text-blue-700",
   checking_out: "border-blue-300 text-blue-700",
   checking_in: "border-emerald-300 text-emerald-700",
@@ -202,10 +194,11 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
       </Card>
 
       <div className="space-y-2">
-        <Section title="Operações em curso (check-in, movimento, entrega pendente, malas, check-out)" count={d.inProgress.length} tone="warn" open={d.inProgress.length > 0}>
+        <Section title="Operações em curso (em recolha, em movimento, na fila, em entrega)" count={d.inProgress.length} tone="warn" open={d.inProgress.length > 0}>
           {d.inProgress.map((c) => (
             <div key={c.id} className="flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className={`text-[11px] ${PHASE_TONE[c.phase] ?? ""}`}>{PHASE_LABELS[c.phase]}{c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}</Badge>
+              <Badge variant="outline" className={`text-[11px] ${PHASE_TONE[c.phase] ?? ""}`}>{LIVE_PHASE_LABELS[c.phase]}{c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}</Badge>
+              {c.baggageWaiting && <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-700">{BAGGAGE_WAITING_LABEL}</Badge>}
               <CarLine c={c} />
             </div>
           ))}
@@ -247,28 +240,63 @@ function LiveBody({ d, hours }: { d: ShiftState; hours: number }) {
   );
 }
 
-/** Lista dos carros mal arrumados (garagem × tipo de lugar), para se irem buscar. */
+/**
+ * Mal arrumados, resumidos por tipo (Jorge, 14 out 2026): uma linha por tipo de
+ * lugar × garagem com a contagem ("Descoberto em COBERTO · 11 carros"); clicar
+ * abre os carros dessa linha (matrícula, lugar, parque). Vermelho só para o mal
+ * arrumado, amarelo para o "se der, coberta". Agrupamento em shared/garageFit.ts.
+ */
 function MisplacedCars({ cars }: { cars: LiveCar[] }) {
-  const rows = cars.filter((c) => c.phase === "in_park")
-    .map((c) => ({ c, fit: garageFit(c.spotType, c.garage) }))
-    .filter((x) => x.fit === "bad" || x.fit === "warn")
-    .sort((a, b) => (a.fit === b.fit ? 0 : a.fit === "bad" ? -1 : 1) || String(a.c.garage).localeCompare(String(b.c.garage), "pt"));
-  if (!rows.length) return null;
-  const bad = rows.filter((x) => x.fit === "bad").length;
+  const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
+  const groups = groupMisplaced(cars);
+  if (!groups.length) return null;
+  const bad = groups.filter((g) => g.fit === "bad").reduce((s, g) => s + g.items.length, 0);
+  const warn = groups.filter((g) => g.fit === "warn").reduce((s, g) => s + g.items.length, 0);
+  const toggle = (k: string) => setOpenKeys((prev) => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+  const carros = (n: number) => `${n} carro${n === 1 ? "" : "s"}`;
   return (
-    <details className="text-xs" open={bad > 0}>
-      <summary className="cursor-pointer select-none font-semibold text-rose-700 dark:text-rose-300">
-        Mal arrumados: {bad}{rows.length > bad ? ` · ${rows.length - bad} toldos numa descoberta` : ""}
-      </summary>
-      <ul className="mt-1.5 space-y-1">
-        {rows.map(({ c, fit }) => (
-          <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <Badge variant="outline" className={fit === "bad" ? "border-rose-400 text-rose-700 dark:text-rose-300" : "border-amber-400 text-amber-700 dark:text-amber-300"}>{fit === "bad" ? "mal arrumado" : "se der, coberta"}</Badge>
-            <span className="font-medium">{c.plate ?? c.code ?? "—"}</span>
-            <span className="text-muted-foreground">{({ uncovered: "Descoberto", covered: "Toldo", indoor: "Interior", vip: "VIP", unknown: "Sem tipo" } as const)[c.spotType]} em {c.garage}{c.spot ? ` · lugar ${c.spot}` : ""}{c.parkName ? ` · ${c.parkName}` : ""}</span>
-          </li>
-        ))}
+    <section className="rounded-[14px] border border-slate-200 dark:border-slate-700 bg-card p-3 space-y-2">
+      <h4 className="flex flex-wrap items-baseline gap-x-2 text-sm font-semibold text-secondary-foreground dark:text-slate-100">
+        <span>Mal arrumados: <span className={bad ? "text-rose-700 dark:text-rose-300 tabular-nums" : "tabular-nums"}>{bad}</span></span>
+        {warn > 0 && <span className="text-xs font-medium text-amber-700 dark:text-amber-300 tabular-nums">· {warn} toldo{warn === 1 ? "" : "s"} numa descoberta</span>}
+      </h4>
+      <ul className="space-y-1.5">
+        {groups.map((g) => {
+          const open = openKeys.has(g.key);
+          const isBad = g.fit === "bad";
+          return (
+            <li key={g.key}>
+              <button
+                type="button"
+                onClick={() => toggle(g.key)}
+                aria-expanded={open}
+                className={`w-full flex items-center gap-2 rounded-[10px] border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${isBad ? "border-rose-200 bg-rose-50/60 hover:bg-rose-50 dark:border-rose-900/60 dark:bg-rose-950/20" : "border-amber-200 bg-amber-50/60 hover:bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/20"}`}
+              >
+                <ChevronRight className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${open ? "rotate-90" : ""}`} />
+                {isBad
+                  ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-400" aria-label="mal arrumado" />
+                  : <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden />}
+                <span className="min-w-0 flex-1 truncate font-medium text-slate-800 dark:text-slate-100">{g.label}</span>
+                <span className={`shrink-0 tabular-nums text-xs font-semibold ${isBad ? "text-rose-700 dark:text-rose-300" : "text-amber-700 dark:text-amber-300"}`}>{carros(g.items.length)}</span>
+              </button>
+              {open && (
+                <ul className="mt-1 ml-3 border-l border-slate-200 dark:border-slate-700 pl-3 py-1 space-y-1 text-xs max-h-72 overflow-y-auto">
+                  {g.items.map((c) => (
+                    <li key={c.id} className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="font-semibold text-slate-800 dark:text-slate-100">{c.plate ?? c.code ?? "—"}</span>
+                      <span className="text-muted-foreground">{c.spot ? `lugar ${c.spot}` : "sem lugar"}{c.parkName ? ` · ${c.parkName}` : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
       </ul>
-    </details>
+    </section>
   );
 }

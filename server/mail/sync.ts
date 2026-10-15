@@ -152,6 +152,8 @@ async function processIds(
   const now = opts.now ?? Date.now;
   const known = ids.length ? await store.knownMessageIds(account.key, ids) : new Set<string>();
   const autoSenders = [...AUTO_MAIL_SENDERS, ...(opts.autoSenders ?? [])];
+  // As nossas listas (Grupos Google da empresa a distribuir um alias) não fazem de um cliente "envio em massa".
+  const ownListDomains = [...(opts.workspaceDomains ?? []), ...Object.values(opts.brandDomains ?? {}).flat()];
   const todo = ids.filter((id) => !known.has(id));
   res.duplicates += ids.length - todo.length;
   const batch = Math.max(1, opts.concurrency ?? 4);
@@ -169,6 +171,9 @@ async function processIds(
       res.fetched++;
       const parsed = parseGmailMessage(m, { accountEmail: account.email });
       if (parsed.labelIds.some((l) => SKIP_LABELS.has(l))) continue;
+      // Plano 56 (A2): o email com o código de entrada (X-Multipark-Login) nunca
+      // fica guardado — leva o código em claro.
+      if (parsed.loginMail) continue;
       const company = (a: string) => isCompanyAddress(a, opts.brandDomains);
       const classification = classifyMessage(
         { deliveredTo: parsed.deliveredTo, xOriginalTo: parsed.xOriginalTo, to: parsed.to, cc: parsed.cc, bcc: parsed.bcc, from: parsed.fromEmail },
@@ -193,7 +198,9 @@ async function processIds(
         autoSenders,
       );
       const systemMail = !!autoKind;
-      const automated = systemMail || reservationNotice || (!parsed.outbound && isAutomatedSender(parsed.fromEmail, { autoSubmitted: parsed.autoSubmitted, precedence: parsed.precedence }));
+      const automated = systemMail || reservationNotice || (!parsed.outbound && isAutomatedSender(parsed.fromEmail, {
+        autoSubmitted: parsed.autoSubmitted, precedence: parsed.precedence, listUnsubscribe: parsed.listUnsubscribe, listId: parsed.listId,
+      }, { ownListDomains }));
       const result = await store.storeMessage(account.key, parsed, classification, {
         ownerUserId: classification.personal ? account.ownerUserId : null,
         automated,

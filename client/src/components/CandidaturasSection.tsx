@@ -14,6 +14,7 @@ import { cityKeyFromText, matchCityKey } from "@shared/city";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
 import { ViewToggle } from "@/components/ViewToggle";
+import { AccountRequestsPanel } from "@/components/AccountRequestsPanel";
 import { useViewPref } from "@/hooks/useViewPref";
 
 // ─── Candidaturas de condutores vindas do website multidriver ────────────────
@@ -186,6 +187,9 @@ export function CandidaturasSection() {
   };
 
   return (
+    <>
+    {/* 49c: o que vem da app (pedidos de ligação, duplicados, quer voltar, candidatos) */}
+    <AccountRequestsPanel />
     <Card className="border-emerald-200">
       <CardHeader>
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -406,5 +410,6 @@ export function CandidaturasSection() {
         </DialogContent>
       </Dialog>
     </Card>
+    </>
   );
 }

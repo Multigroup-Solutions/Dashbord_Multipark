@@ -172,3 +172,50 @@ export function cityTeamTotals(days: readonly TeamDayInput[]): CityTeamRow[] {
   return Array.from(out.values()).map(({ daySet, ...r }) => ({ ...r, days: daySet.size, avgPoints: r.personDays ? r1(r.points / r.personDays) : 0 }))
     .sort((a, b) => a.city.localeCompare(b.city));
 }
+
+// ─── A equipa de cada pessoa no período (Avaliação → Mês, "Equipa (TL)") ─────
+
+export interface TeamLeaderDay { employeeId: number; employeeName: string; day: string; city: string | null; shift: string | null }
+
+/**
+ * O TL com quem cada pessoa mais trabalhou no período: nos dias em que NÃO foi
+ * TL, o TL do mesmo dia, cidade e turno (como em teamLeaderTotals). Empate →
+ * o nome primeiro (ordem estável). Quem só foi TL fica na própria equipa;
+ * sem escala (sem cidade/turno) fica sem equipa. PURA.
+ */
+export function mainTeamLeaders(
+  days: ReadonlyArray<{ employeeId: number; employeeName: string; day: string; city: string | null; shift: string | null; isTeamLeader: boolean }>,
+  tlDays: readonly TeamLeaderDay[],
+): Map<number, { id: number; name: string } | null> {
+  const tlByKey = new Map<string, TeamLeaderDay[]>();
+  for (const t of tlDays) {
+    if (!t.city || !Number.isFinite(t.employeeId)) continue;
+    const k = teamKey({ day: t.day, city: t.city, shift: t.shift } as TeamDayInput);
+    const cur = tlByKey.get(k) ?? [];
+    if (!cur.some((x) => x.employeeId === t.employeeId)) cur.push(t);
+    tlByKey.set(k, cur);
+  }
+  const counts = new Map<number, Map<number, { name: string; n: number }>>();
+  const selfName = new Map<number, string>();
+  const ledOwn = new Set<number>();
+  for (const d of days) {
+    selfName.set(d.employeeId, d.employeeName);
+    if (d.isTeamLeader) { ledOwn.add(d.employeeId); continue; }
+    if (!d.city) continue;
+    const per = counts.get(d.employeeId) ?? new Map<number, { name: string; n: number }>();
+    for (const t of tlByKey.get(teamKey(d as TeamDayInput)) ?? []) {
+      if (t.employeeId === d.employeeId) continue;
+      const c = per.get(t.employeeId) ?? { name: t.employeeName, n: 0 };
+      c.n += 1;
+      per.set(t.employeeId, c);
+    }
+    counts.set(d.employeeId, per);
+  }
+  const out = new Map<number, { id: number; name: string } | null>();
+  for (const [id, name] of selfName) {
+    const best = Array.from(counts.get(id)?.entries() ?? [])
+      .sort((a, b) => b[1].n - a[1].n || a[1].name.localeCompare(b[1].name, "pt"))[0];
+    out.set(id, best ? { id: best[0], name: best[1].name } : ledOwn.has(id) ? { id, name } : null);
+  }
+  return out;
+}

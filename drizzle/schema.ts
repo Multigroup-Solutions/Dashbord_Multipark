@@ -228,6 +228,33 @@ export const integrationSyncRuns = mysqlTable("integration_sync_runs", {
 	index("idx_integration_sync_runs_provider").on(table.provider, table.startedAt),
 ]);
 
+// 0610 — cliques do Google Ads (click_view): gclid → campanha. É o que liga
+// uma reserva com só o gclid no link (auto-tagging) à campanha. `gclid` é a
+// chave, comparada à letra (utf8mb4_bin). Sem purga.
+export const googleAdsClicks = mysqlTable("google_ads_clicks", {
+	gclid: varchar({ length: 128 }).primaryKey(),
+	customerId: varchar({ length: 32 }).notNull(),
+	campaignId: varchar({ length: 64 }).notNull(),
+	adGroupId: varchar({ length: 64 }),
+	clickDate: date({ mode: 'string' }).notNull(),
+	fetchedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	index("idx_google_ads_clicks_day").on(table.customerId, table.clickDate),
+	index("idx_google_ads_clicks_campaign").on(table.campaignId, table.clickDate),
+]);
+
+// 0610 — dias de cada conta já lidos no click_view (com quantos cliques): os "dias em falta".
+export const googleAdsClickDays = mysqlTable("google_ads_click_days", {
+	customerId: varchar({ length: 32 }).notNull(),
+	clickDate: date({ mode: 'string' }).notNull(),
+	clicks: int().default(0).notNull(),
+	fetchedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+},
+(table) => [
+	primaryKey({ columns: [table.customerId, table.clickDate] }),
+]);
+
 // ─── Marketing (0093) ─────────────────────────────────────────────────────────
 // Orçamento mensal por nó cidade/marca (provider 'all' = todos os fornecedores).
 export const marketingBudgets = mysqlTable("marketing_budgets", {
@@ -492,7 +519,47 @@ export const complaints = mysqlTable("complaints", {
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedById: int(),
 	archiveReason: varchar({ length: 255 }),
+	// 0630 (lote 57) — de onde veio: email | ia | whatsapp | critica | conversao | manual | api (shared/complaintFilters.ts).
+	origin: varchar({ length: 16 }),
+	// 0655 — a IA criou-a com certeza média: "Por confirmar (IA)" até alguém confirmar (ou arquivar).
+	aiUnconfirmed: tinyint().default(0).notNull(),
 });
+
+/**
+ * 0630 (lote 57) — a IA viu uma reclamação num email de OUTRA caixa: o que se
+ * decidiu (criada, junta a uma aberta, sugerida, ignorada e porquê, falhou).
+ * Uma linha por conversa (threadId UNIQUE): nunca duas reclamações da mesma
+ * conversa. Nada se apaga ("Não é reclamação" só marca).
+ */
+export const complaintMailIntake = mysqlTable("complaint_mail_intake", {
+	id: int().autoincrement().primaryKey(),
+	threadId: int().notNull(),
+	messageId: int(),
+	fromBoxKey: varchar({ length: 40 }),
+	aiBoxKey: varchar({ length: 40 }),
+	confidence: decimal({ precision: 4, scale: 3 }),
+	reason: varchar({ length: 300 }),
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	skipReason: varchar({ length: 32 }),
+	complaintId: int(),
+	projectId: int(),
+	attempts: int().default(0).notNull(),
+	error: varchar({ length: 300 }),
+	decidedById: int(),
+	decidedAt: datetime({ mode: 'string' }),
+	dismissReason: varchar({ length: 255 }),
+	// 0655 — também os perdidos: complaint | lost_found; o caso de perdidos; criado "Por confirmar".
+	caseKind: varchar({ length: 12 }).default('complaint').notNull(),
+	lostFoundId: int(),
+	uncertain: tinyint().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_complaint_mail_intake_thread").on(table.threadId),
+	index("idx_complaint_mail_intake_status").on(table.status, table.createdAt),
+	index("idx_complaint_mail_intake_complaint").on(table.complaintId),
+]);
 
 /** 0340 — o que se tira de um caso (foto, condutor associado…), com a linha inteira. Nada se apaga de vez. */
 export const removedRecords = mysqlTable("removed_records", {
@@ -527,6 +594,12 @@ export const dailyDriverHistory = mysqlTable("daily_driver_history", {
 	notes: text(),
 	/** 2 = km/h corrigidos + funcionário resolvido (migração 0078). */
 	metricsVersion: int().default(1).notNull(),
+	/**
+	 * Limiar (km/h, já com a tolerância) com que a linha foi recolhida ou re-dividida
+	 * (migração 0680, tarefa 62). NULL = antes disso (a omissão era 132): a "trava da
+	 * linha GPS" (shared/speedRules.ts → gpsDayOverThreshold) conta-o como 132.
+	 */
+	speedThresholdKmh: decimal({ precision: 6, scale: 2 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	/** 'sameday' = provisório (23h do próprio dia) | 'final' = D-2 (migração 0190). */
 	collectionPass: varchar({ length: 12 }).default('final').notNull(),
@@ -608,6 +681,169 @@ export const opsPressureDays = mysqlTable("ops_pressure_days", {
 },
 (table) => [
 	uniqueIndex("uq_ops_pressure_day").on(table.parkGroup, table.part, table.day),
+]);
+
+// 0685 (plano 62, P6): tempos de entrega e de recolha — uma linha por ciclo
+// fechado (entrega: CHECK_OUT/CANCEL; recolha: CHECK_IN/CANCEL), feita pelo
+// trabalho noturno service-times a partir da History da Multipark, das
+// chamadas e do GPS. Upsert; `voidedAt` quando o ciclo deixa de aparecer.
+// Q7: cada tempo guarda o seu condutor (médias por condutor e período).
+// Nunca coordenadas, telefones nem dados do cliente.
+export const serviceTimes = mysqlTable("service_times", {
+	id: int().autoincrement().primaryKey(),
+	/** entrega | recolha */
+	kind: varchar({ length: 8 }).notNull(),
+	bookingId: varchar({ length: 64 }).notNull(),
+	/** A linha da History que fecha o ciclo. */
+	anchorHistoryId: varchar({ length: 64 }).notNull(),
+	anchorAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	/** entregue | reaberta | recebido | cancelado */
+	outcome: varchar({ length: 12 }).notNull(),
+	bookingCode: varchar({ length: 40 }),
+	parkId: varchar({ length: 64 }),
+	cityKey: varchar({ length: 8 }),
+	parkGroup: varchar({ length: 40 }),
+	terminalClass: varchar({ length: 8 }),
+	/** Dia operacional (03h→03h de Lisboa) da hora de referência. */
+	opDay: date({ mode: 'string' }).notNull(),
+	refHour: tinyint(),
+	callAt: datetime({ mode: 'string', fsp: 3 }),
+	callSource: varchar({ length: 10 }),
+	callHeld: tinyint(),
+	/** Pendente (entregas) ou "em recolha" (recolhas). */
+	requestAt: datetime({ mode: 'string', fsp: 3 }),
+	requestCount: int().default(0).notNull(),
+	startSource: varchar({ length: 12 }),
+	customerMs: int(),
+	customerStatus: varchar({ length: 32 }),
+	zelloUsername: varchar({ length: 255 }),
+	gpsPoints: int(),
+	gpsMaxGapS: int(),
+	/** none | sameday | final */
+	gpsPass: varchar({ length: 10 }).default('none').notNull(),
+	flags: varchar({ length: 600 }),
+	startedAt: datetime({ mode: 'string', fsp: 3 }),
+	startAgentId: varchar({ length: 64 }),
+	startEmployeeId: int(),
+	startPlatform: varchar({ length: 10 }),
+	startRole: varchar({ length: 16 }),
+	arrivedAt: datetime({ mode: 'string', fsp: 3 }),
+	arrivedSource: varchar({ length: 24 }),
+	arrivedPrecisionS: int(),
+	buttonArrivedAt: datetime({ mode: 'string', fsp: 3 }),
+	buttonGapS: int(),
+	baggageWaitingAt: datetime({ mode: 'string', fsp: 3 }),
+	deliveredAt: datetime({ mode: 'string', fsp: 3 }),
+	deliverAgentId: varchar({ length: 64 }),
+	/** Q7: quem fez o check-out (o Cliente da entrega é dele). */
+	deliverEmployeeId: int(),
+	queueMs: int(),
+	transitMs: int(),
+	ourMs: int(),
+	totalMs: int(),
+	queueStatus: varchar({ length: 32 }),
+	transitStatus: varchar({ length: 32 }),
+	ourStatus: varchar({ length: 32 }),
+	checkInAt: datetime({ mode: 'string', fsp: 3 }),
+	checkInAgentId: varchar({ length: 64 }),
+	/** Q7: quem fez o check-in (Cliente da recolha e T2). */
+	checkInEmployeeId: int(),
+	/** Quem tirou o carro do terminal (no terminal, até à 1.ª garagem). */
+	driverEmployeeId: int(),
+	terminalExitAt: datetime({ mode: 'string', fsp: 3 }),
+	terminalExitSource: varchar({ length: 24 }),
+	terminalMs: int(),
+	terminalStatus: varchar({ length: 32 }),
+	firstGarage: varchar({ length: 80 }),
+	firstGarageRole: varchar({ length: 12 }),
+	firstGarageAt: datetime({ mode: 'string', fsp: 3 }),
+	toFirstGarageMs: int(),
+	p2ExitAt: datetime({ mode: 'string', fsp: 3 }),
+	p2Ms: int(),
+	p2Status: varchar({ length: 32 }),
+	/** Q7: quem tirou o carro do P2. */
+	p2EmployeeId: int(),
+	parkedGarage: varchar({ length: 80 }),
+	parkedAt: datetime({ mode: 'string', fsp: 3 }),
+	toParkedMs: int(),
+	/** arrumado | por_arrumar | sem_garagem | cancelado */
+	parkedStatus: varchar({ length: 16 }),
+	/** Q7: quem o arrumou no parque certo. */
+	parkedEmployeeId: int(),
+	spotType: varchar({ length: 12 }),
+	t2DriverArrivedAt: datetime({ mode: 'string', fsp: 3 }),
+	t2LateMs: int(),
+	t2Status: varchar({ length: 32 }),
+	calcVersion: int().notNull(),
+	/** Impressão digital das zonas, papéis das garagens e janela das chamadas. */
+	paramsHash: char({ length: 16 }).notNull(),
+	computedAt: datetime({ mode: 'string' }).notNull(),
+	voidedAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	uniqueIndex("uq_service_times_cycle").on(table.kind, table.bookingId, table.anchorHistoryId),
+	index("idx_service_times_day_city").on(table.kind, table.opDay, table.cityKey),
+	index("idx_service_times_driver_day").on(table.startEmployeeId, table.opDay),
+	index("idx_service_times_deliver_day").on(table.deliverEmployeeId, table.opDay),
+	index("idx_service_times_pickup_driver_day").on(table.driverEmployeeId, table.opDay),
+	index("idx_service_times_checkin_day").on(table.checkInEmployeeId, table.opDay),
+	index("idx_service_times_p2_day").on(table.p2EmployeeId, table.opDay),
+	index("idx_service_times_parked_day").on(table.parkedEmployeeId, table.opDay),
+	index("idx_service_times_anchor").on(table.anchorAt),
+]);
+
+// 0595 (lote 41 + Jorge, 8 out 2026): o que a IA decidiu ao separar emails das
+// caixas partilhadas e conversas novas do WhatsApp pelas caixas — uma linha por
+// mensagem/conversa (sourceRef UNIQUE: nunca se classifica duas vezes), com a
+// caixa aplicada (info quando não percebeu ou falhou), o recrutamento em 1.º
+// contacto (lead/candidatura) e quem corrigiu depois. Histórico: nada se apaga.
+export const commsAiRouting = mysqlTable("comms_ai_routing", {
+	id: int().autoincrement().primaryKey(),
+	/** email | whatsapp */
+	channel: varchar({ length: 10 }).notNull(),
+	/** "mail_message:<id>" | "whatsapp_conversation:<id>" */
+	sourceRef: varchar({ length: 64 }).notNull(),
+	threadId: int(),
+	messageId: int(),
+	conversationId: int(),
+	fromBoxKey: varchar({ length: 40 }),
+	/** O que a IA respondeu (null = não percebeu). */
+	aiBoxKey: varchar({ length: 40 }),
+	/** Caixa aplicada (info / Geral quando não percebeu ou falhou). */
+	boxKey: varchar({ length: 40 }),
+	confidence: decimal({ precision: 4, scale: 3 }),
+	reason: varchar({ length: 300 }),
+	/** ai | triage | rule | fallback */
+	via: varchar({ length: 12 }).default('ai').notNull(),
+	/** pending | moved | kept | failed */
+	status: varchar({ length: 12 }).default('pending').notNull(),
+	error: varchar({ length: 200 }),
+	candidateJson: text(),
+	/** created | existing | employee | invalid */
+	recruitOutcome: varchar({ length: 16 }),
+	leadId: int(),
+	applicationId: int(),
+	correctedBoxKey: varchar({ length: 40 }),
+	correctedById: int(),
+	correctedAt: datetime({ mode: 'string' }),
+	decidedAt: datetime({ mode: 'string' }),
+	// 0655 — triagem: categoria final, certezas de reclamação/perdido, tentativas (a IA falhou),
+	// aviso reconhecido pela regra (review | occurrence | livro), lido pela regra, lido pelo varrimento.
+	category: varchar({ length: 20 }),
+	complaintScore: decimal({ precision: 4, scale: 3 }),
+	lostScore: decimal({ precision: 4, scale: 3 }),
+	attempts: int().default(0).notNull(),
+	notice: varchar({ length: 16 }),
+	markedReadAt: datetime({ mode: 'string' }),
+	sweptAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_comms_ai_routing_ref").on(table.sourceRef),
+	index("idx_comms_ai_routing_thread").on(table.threadId),
+	index("idx_comms_ai_routing_conv").on(table.conversationId),
+	index("idx_comms_ai_routing_status").on(table.status, table.createdAt),
+	index("idx_comms_ai_routing_lead").on(table.leadId),
 ]);
 
 // 0535 (Jorge, 7 out 2026): notas internas da ficha — team leader e acima, no
@@ -699,7 +935,37 @@ export const employees = mysqlTable("employees", {
 	deactivationNotes: text(),
 	deactivatedAt: timestamp({ mode: 'string' }),
 	deactivatedById: int(),
+	// 0585 (49c): a pessoa INATIVA carregou em "Voltei, quero trabalhar" (o RH vê "Quer voltar").
+	comebackRequestedAt: datetime({ mode: 'string' }),
 });
+
+// 0585 (49c): "Liga a tua conta" — conta Google sem ficha diz com que email/
+// telefone se candidatou (kind "link"), ou possível duplicado criado pelo
+// próprio candidato (kind "duplicate"). Código só em hash. Nada se apaga.
+export const accountLinkRequests = mysqlTable("account_link_requests", {
+	id: int().autoincrement().primaryKey(),
+	kind: varchar({ length: 16 }).default('link').notNull(),
+	userId: int().notNull(),
+	googleEmail: varchar({ length: 320 }),
+	claimedEmail: varchar({ length: 320 }),
+	claimedPhone: varchar({ length: 32 }),
+	employeeId: int(),
+	matchedEmployeeId: int(),
+	matchedApplicationId: int(),
+	status: varchar({ length: 16 }).default('pending').notNull(),
+	codeHash: varchar({ length: 128 }),
+	codeExpiresAt: datetime({ mode: 'string' }),
+	attempts: int().default(0).notNull(),
+	note: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	resolvedById: int(),
+	resolvedAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	index("idx_account_link_user").on(table.userId, table.createdAt),
+	index("idx_account_link_status").on(table.status, table.createdAt),
+	index("idx_account_link_employee").on(table.matchedEmployeeId),
+]);
 
 // 0400 (19c): mudar o IBAN é um PEDIDO aprovado pelo RH; o novo fica cifrado
 // até à aprovação (o antigo continua na ficha). Nada se apaga.
@@ -1109,6 +1375,12 @@ export const shiftHandovers = mysqlTable("shift_handovers", {
 	frontPouchValue: decimal({ precision: 10, scale: 2 }),
 	terminalPouchValue: decimal({ precision: 10, scale: 2 }),
 	ticketsExpensesPaid: decimal({ precision: 10, scale: 2 }),
+	// 0645 — fecho da caixa do turno (team leader, depois de fechar na Multipark):
+	// dinheiro recebido dos condutores (antes das despesas), MB recebido e o total que dava a caixa na Multipark.
+	cashierCashReceived: decimal({ precision: 10, scale: 2 }),
+	cashierMbReceived: decimal({ precision: 10, scale: 2 }),
+	cashierMultiparkTotal: decimal({ precision: 10, scale: 2 }),
+	cashierDeclaredById: int(),
 	mbRolls: int(),
 	mbRollsInPouch: int(),
 	pensInPouch: int(),
@@ -1124,6 +1396,8 @@ export const shiftHandovers = mysqlTable("shift_handovers", {
 	openItems: text(),
 	autoSummary: mediumtext(),
 	aiSummary: text(),
+	// 0600 — versão da passagem para a qual o resumo IA foi feito (< version = desatualizado)
+	aiSummaryVersion: int(),
 	filledById: int(),
 	filledByName: varchar({ length: 255 }),
 	createdById: int(),
@@ -1173,6 +1447,23 @@ export const extrasAvailability = mysqlTable("extras_availability", {
 	index("extras_availability_emp_idx").on(table.employeeId),
 ]);
 
+// 0580 (Jorge, 8 out 2026): dias livres HABITUAIS — um esboço, não datas.
+// Uma linha por ficha; `slots` = JSON em texto (dia da semana → períodos
+// manhã/tarde/noite), regras em shared/availabilityPattern.ts. Gravar
+// substitui a linha; "Limpar" grava a grelha vazia (nunca se apaga).
+export const extrasAvailabilityPattern = mysqlTable("extras_availability_pattern", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	slots: text().notNull(),
+	note: varchar({ length: 300 }),
+	updatedById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("extras_availability_pattern_emp_unique").on(table.employeeId),
+]);
+
 export const faqs = mysqlTable("faqs", {
 	id: int().autoincrement().primaryKey(),
 	categoryId: int(),
@@ -1181,9 +1472,16 @@ export const faqs = mysqlTable("faqs", {
 	sortOrder: int().default(0),
 	// 0385 — arquivada em vez de apagada.
 	archivedAt: timestamp({ mode: 'string' }),
+	// 0660 — FAQ feita pela IA ('ai'; NULL = escrita por uma pessoa), documento de
+	// origem na base de conhecimento e a pergunta normalizada quando nasceu (não
+	// muda com edições; uma arquivada continua a impedir que a IA a repita).
+	source: varchar({ length: 16 }),
+	sourceKbDocId: int(),
+	aiKey: varchar({ length: 190 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
-});
+},
+(table) => [index("idx_faqs_kb_doc").on(table.sourceKbDocId)]);
 
 export const googleReviews = mysqlTable("google_reviews", {
 	googleReviewKey: varchar({ length: 64 }).unique('uq_google_review_key'),
@@ -1370,6 +1668,9 @@ export const lostFoundItems = mysqlTable("lost_found_items", {
 	archivedAt: timestamp({ mode: 'string' }),
 	archivedById: int(),
 	archiveReason: varchar({ length: 255 }),
+	// 0655 — de onde veio (email | ia | manual…) e "Por confirmar (IA)" (certeza média).
+	origin: varchar({ length: 16 }),
+	aiUnconfirmed: tinyint().default(0).notNull(),
 	createdBy: int().notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -1825,9 +2126,52 @@ export const pdas = mysqlTable("pdas", {
 	notes: text(),
 	// Cidade fixa do PDA (migração 0280): nó `level='city'` de `projects`.
 	projectId: int(),
+	// Sessão de PDA (plano 56 A2, migração 0635): quem tem a sessão AGORA e o
+	// nonce que vai no cookie. Limpa-se (nonce NULL) quando outra pessoa entra,
+	// no logout, na saída do ponto e no fecho automático; dura no máximo 16 h.
+	sessionUserId: int(),
+	sessionNonce: varchar({ length: 64 }),
+	sessionStartedAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
+
+// Telemóveis pessoais (migração 0650, Jorge 13 out 2026): o telemóvel de UMA
+// pessoa (TL, supervisor, qualquer um), registado por ela no próprio aparelho.
+// NÃO é um PDA partilhado: não tem sessão presa, não acaba na saída do ponto,
+// não tem check-ins de PDA nem Zello próprio — usa o Zello da ficha de quem lá
+// está (`employees.zelloUsername`). O token vive no localStorage do aparelho
+// com outra chave (`mp.device.personalToken`), por isso nunca se cruza com os
+// PDAs. Nada se apaga: deixar de ser pessoal = `status = 'inactive'`.
+export const personalDevices = mysqlTable("personal_devices", {
+	id: int().autoincrement().primaryKey(),
+	deviceToken: varchar({ length: 64 }).notNull(),
+	// "Android · Chrome" (do browser que registou), ou o nome do PDA convertido.
+	label: varchar({ length: 255 }),
+	status: mysqlEnum(['active','inactive']).default('active').notNull(),
+	// Quem o registou (o dono): a conta e a ficha dessa conta.
+	ownerUserId: int(),
+	ownerEmployeeId: int(),
+	// Quem tem sessão nele AGORA (limpa no Sair) e quem lá esteve por último.
+	currentUserId: int(),
+	currentEmployeeId: int(),
+	currentSince: datetime({ mode: 'string' }),
+	lastUserId: int(),
+	lastEmployeeId: int(),
+	lastSeenAt: datetime({ mode: 'string' }),
+	// Era um PDA (registado por engano como PDA) convertido em telemóvel pessoal.
+	convertedFromPdaId: int(),
+	deactivatedAt: datetime({ mode: 'string' }),
+	deactivatedById: int(),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_personal_devices_token").on(table.deviceToken),
+	index("idx_personal_devices_owner").on(table.ownerEmployeeId),
+	index("idx_personal_devices_current").on(table.currentEmployeeId),
+]);
 
 export const performanceEvaluations = mysqlTable("performance_evaluations", {
 	id: int().autoincrement().primaryKey(),
@@ -1876,13 +2220,19 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	entregas: int().default(0).notNull(),
 	movements: int().default(0).notNull(),
 	parkingMoves: int().default(0).notNull(),
+	// 0670 (14 out 2026): mudanças de lugar (MOVEMENT na mesma garagem) — não são movimentos.
+	spotChanges: int().default(0).notNull(),
 	cancels: int().default(0).notNull(),
 	otherActions: int().default(0).notNull(),
 	weightedActions: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	actionsByType: text(),
+	// 0590 (49e): ações na Multipark por hora de Lisboa, "[n0,…,n23]"; NULL = dia sem ações ou de antes da 0590.
+	actionsByHour: varchar({ length: 255 }),
 	speedingEvents: int().default(0).notNull(),
 	delays: int().default(0).notNull(),
 	lateServices: int().default(0).notNull(),
+	// 0670: entregas sem hora marcada (medidas pelo pedido + 30 min)
+	deliveriesWithoutSchedule: int().default(0).notNull(),
 	complaints: int().default(0).notNull(),
 	accidents: int().default(0).notNull(),
 	incidentsReported: int().default(0).notNull(),
@@ -1891,6 +2241,8 @@ export const employeeDayMetrics = mysqlTable("employee_day_metrics", {
 	positivePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	negativePoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
 	totalPoints: decimal({ precision: 10, scale: 2 }).default('0').notNull(),
+	// 0670: versão das regras com que o dia foi calculado (1 = antigas; EVALUATION_RULES_VERSION = 2)
+	rulesVersion: int().default(1).notNull(),
 	computedAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 },
 (table) => [
@@ -2200,9 +2552,12 @@ export const timeRecords = mysqlTable("time_records", {
 	locationName: varchar({ length: 256 }),
 	// 0555 — terminal no ponto (aeroporto), shared/pontoTerminal.ts:
 	// atAirport 1/0/NULL (GPS no aeroporto da cidade do extra); terminalStatus
-	// na entrada "start", na saída "auto" | "pending" | "confirmed" | "rejected"
+	// na entrada "start", na saída "auto" | "pending" | "partial" | "confirmed" | "rejected"
 	atAirport: tinyint(),
 	terminalStatus: varchar({ length: 16 }),
+	// 0575 — "partial": o terminal conta até à última recolha/entrega do extra
+	// na Multipark dentro do troço (UTC); o resto da saída é hora normal
+	terminalUntil: datetime({ mode: 'string' }),
 	terminalReviewedById: int(),
 	terminalReviewedAt: timestamp({ mode: 'string' }),
 	terminalNote: varchar({ length: 255 }),
@@ -2222,6 +2577,91 @@ export const timeRecords = mysqlTable("time_records", {
 	reviewNote: varchar({ length: 255 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 });
+
+// ─── Terminal pelo perfil (0625, plano 56 B; shared/terminalSession.ts) ──────
+// Uma linha por estadia no terminal. `activeCityKey`/`activeEmployeeId` só
+// estão preenchidos com a sessão aberta e são UNIQUE: 1 por cidade, 1 por
+// pessoa (a BD recusa a segunda). Fechar = pô-los a NULL; nada se apaga.
+// Instantes em UTC ("YYYY-MM-DD HH:MM:SS").
+export const terminalSessions = mysqlTable("terminal_sessions", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	userId: int(),
+	cityKey: varchar({ length: 8 }).notNull(), // lisbon | porto | faro
+	startedAt: datetime({ mode: 'string' }).notNull(),
+	startLat: decimal({ precision: 10, scale: 7 }),
+	startLng: decimal({ precision: 10, scale: 7 }),
+	startAccuracy: int(),
+	startSource: mysqlEnum(['button','checkin','handover','tl','takeover','reopen']).notNull(),
+	startedByUserId: int(),
+	endedAt: datetime({ mode: 'string' }),
+	endReason: mysqlEnum(['button','handover','tl','checkout','no_answer','stale_checkout']),
+	endedByUserId: int(),
+	endLat: decimal({ precision: 10, scale: 7 }),
+	endLng: decimal({ precision: 10, scale: 7 }),
+	endNote: varchar({ length: 255 }),
+	// B2: GPS de 5 em 5 min e "Ainda estás no terminal?"
+	lastInsideAt: datetime({ mode: 'string' }),
+	outsideSince: datetime({ mode: 'string' }),
+	outsideCount: int().default(0).notNull(),
+	askedAt: datetime({ mode: 'string' }),
+	stillHereAt: datetime({ mode: 'string' }),
+	// Horas que contam: até quando e porquê
+	countedUntil: datetime({ mode: 'string' }),
+	countedBasis: mysqlEnum(['gps_close','last_gps','last_service','confirmed','pending','rejected']),
+	// Nível +1 no pagamento: só extras
+	payUplift: tinyint().default(0).notNull(),
+	note: varchar({ length: 255 }),
+	timeRecordId: int(),
+	activeCityKey: varchar({ length: 8 }),
+	activeEmployeeId: int(),
+	// 0640 (B2): última leitura do Zello usada (instante, estado, distância) e
+	// quando se olhou; reabrir sem buraco; início do que conta (reabertura/RH);
+	// decisão do RH (quem, quando, motivo) e o resultado automático de antes.
+	lastFixAt: datetime({ mode: 'string' }),
+	lastFixState: varchar({ length: 8 }), // inside | outside | no_gps
+	lastFixDistanceM: int(),
+	lastCheckAt: datetime({ mode: 'string' }),
+	countedFrom: datetime({ mode: 'string' }),
+	prevSessionId: int(),
+	reviewedByUserId: int(),
+	reviewedAt: datetime({ mode: 'string' }),
+	reviewNote: varchar({ length: 255 }),
+	autoCountedUntil: datetime({ mode: 'string' }),
+	autoCountedBasis: varchar({ length: 16 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_terminal_sessions_active_city").on(table.activeCityKey),
+	uniqueIndex("uq_terminal_sessions_active_employee").on(table.activeEmployeeId),
+	index("idx_terminal_sessions_employee").on(table.employeeId, table.startedAt),
+	index("idx_terminal_sessions_city").on(table.cityKey, table.startedAt),
+]);
+
+/** 0625 — "Pedir ao João para passar": pendente até Passar / Ainda estou (ou caducar). */
+export const terminalHandoverRequests = mysqlTable("terminal_handover_requests", {
+	id: int().autoincrement().primaryKey(),
+	sessionId: int().notNull(),
+	cityKey: varchar({ length: 8 }).notNull(),
+	holderEmployeeId: int().notNull(),
+	requesterEmployeeId: int().notNull(),
+	requesterUserId: int(),
+	requestedAt: datetime({ mode: 'string' }).notNull(),
+	reqLat: decimal({ precision: 10, scale: 7 }),
+	reqLng: decimal({ precision: 10, scale: 7 }),
+	reqAccuracy: int(),
+	status: mysqlEnum(['pending','passed','declined','expired','cancelled']).default('pending').notNull(),
+	answeredAt: datetime({ mode: 'string' }),
+	answeredByUserId: int(),
+	newSessionId: int(),
+	note: varchar({ length: 255 }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_terminal_handover_session").on(table.sessionId, table.status),
+	index("idx_terminal_handover_requester").on(table.requesterEmployeeId, table.requestedAt),
+]);
 
 // ─── Fecho mensal de ordenados (0064): apuramento → aprovado → pago ───────────
 // Cada fecho é uma VERSÃO imutável do cálculo (linhas em JSON). O cálculo ao
@@ -2292,6 +2732,9 @@ export const trainingManuals = mysqlTable("training_manuals", {
 	fileName: varchar({ length: 255 }),
 	fileMimeType: varchar({ length: 100 }),
 	careerLevel: varchar({ length: 32 }), // módulo de um nível de carreira (opcional)
+	// 0660 — área (multipark|dashboard|operacional|comunicacao) e subsecção; NULL = proposta pelas regras.
+	area: varchar({ length: 24 }),
+	subarea: varchar({ length: 80 }),
 });
 
 export const trainingVideos = mysqlTable("training_videos", {
@@ -2309,6 +2752,9 @@ export const trainingVideos = mysqlTable("training_videos", {
 	archivedAt: timestamp({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+	// 0660 — área e subsecção (como nos manuais).
+	area: varchar({ length: 24 }),
+	subarea: varchar({ length: 80 }),
 });
 
 // ─── Formação: percursos obrigatórios (migration 0090) ───────────────────────
@@ -2385,8 +2831,44 @@ export const trainingAttemptSessions = mysqlTable("training_attempt_sessions", {
 	resultId: int(),
 	score: int(),
 	passed: tinyint(),
+	// 0660 — 'ai' = perguntas feitas pela IA para esta tentativa (training_quiz_ai_questions);
+	// NULL/'bank' = lista fixa; 'void' = reserva anulada (não conta no limite do dia).
+	// Tema pedido e respostas dadas (JSON, para rever).
+	source: varchar({ length: 8 }),
+	topic: varchar({ length: 160 }),
+	answersJson: text(),
 },
 (table) => [index("training_attempt_sessions_emp_idx").on(table.employeeId, table.kind, table.startedAt)]);
+
+// 0660 — perguntas que a IA fez para uma tentativa de quiz (a resposta certa
+// fica só no servidor). Só acréscimo.
+export const trainingQuizAiQuestions = mysqlTable("training_quiz_ai_questions", {
+	id: int().autoincrement().primaryKey(),
+	sessionId: int().notNull(),
+	employeeId: int().notNull(),
+	ord: int().default(0).notNull(),
+	question: text().notNull(),
+	optionA: text().notNull(),
+	optionB: text().notNull(),
+	optionC: text().notNull(),
+	optionD: text().notNull(),
+	correctOption: char({ length: 1 }).notNull(),
+	explanation: text(),
+	difficulty: varchar({ length: 8 }).default('medium').notNull(),
+	points: int().default(10).notNull(),
+	questionKey: varchar({ length: 190 }),
+	sourceKbDocId: int(),
+	sourceManualId: int(),
+	sourceTitle: varchar({ length: 300 }),
+	// 1 = pode ter saído de um documento restrito (papel/cidade): quem gere só a vê
+	// se puder ver o documento; "Guardar nas fixas" pede confirmação.
+	restricted: tinyint().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	index("idx_tqai_session").on(table.sessionId, table.ord),
+	index("idx_tqai_employee").on(table.employeeId, table.createdAt),
+]);
 
 export const trainingPromotions = mysqlTable("training_promotions", {
 	id: int().autoincrement().primaryKey(),
@@ -2447,9 +2929,45 @@ export const users = mysqlTable("users", {
 	notificationPrefs: json(),
 	// 0525 — caixa de email por onde a pessoa entra na Comunicação (chave ou "me"; NULL = automática).
 	mailHomeBox: varchar({ length: 64 }),
+	// 0620 — identificador da conta Google (sem "google_"); o login Google
+	// procura por aqui primeiro, depois pelo openId e pelo email (plano 56).
+	googleSub: varchar({ length: 64 }),
+	// 0620 — a palavra-passe (passwordHash, passwordSetAt, passwordFailedDay,
+	// passwordFailedCount, passwordLockedUntil) existe na tabela mas NÃO está
+	// aqui de propósito: `select().from(users)` chega ao cliente (auth.me,
+	// Utilizadores). Só server/loginStore.ts a lê e escreve, por SQL.
 },
 (table) => [
 	uniqueIndex("users_openId_unique").on(table.openId),
+	uniqueIndex("users_googleSub_unique").on(table.googleSub),
+]);
+
+// 0620 — pedidos de código de entrada (plano 56): o código só em HMAC, preso
+// ao aparelho que o pediu (hash do cookie app_login_nonce). `deliveredTo` =
+// contas a quem foi o código (TL/supervisor de serviço, ou RH/admins). Nada se apaga.
+export const loginCodes = mysqlTable("login_codes", {
+	id: int().autoincrement().primaryKey(),
+	emailNorm: varchar({ length: 320 }).notNull(),
+	userId: int(),
+	employeeId: int(),
+	codeHash: char({ length: 64 }).notNull(),
+	deviceNonceHash: char({ length: 64 }).notNull(),
+	deviceLabel: varchar({ length: 120 }),
+	pdaId: int(),
+	cityKey: varchar({ length: 16 }),
+	deliveredTo: json(),
+	deliveryMode: mysqlEnum(['duty','email']).default('duty').notNull(),
+	expiresAt: datetime({ mode: 'string' }).notNull(),
+	attempts: int().default(0).notNull(),
+	usedAt: datetime({ mode: 'string' }),
+	usedByUserId: int(),
+	ipHash: varchar({ length: 32 }),
+	createdAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	index("idx_login_codes_device").on(table.emailNorm, table.deviceNonceHash, table.id),
+	index("idx_login_codes_created").on(table.createdAt),
+	index("idx_login_codes_user").on(table.usedByUserId, table.usedAt),
 ]);
 
 export const vehicleMovements = mysqlTable("vehicle_movements", {
@@ -2516,6 +3034,8 @@ export const inboundEmails = mysqlTable("inbound_emails", {
 	uniqueIndex("inbound_emails_message_id_unique").on(table.messageId),
 	index("inbound_emails_alias_idx").on(table.alias),
 	index("inbound_emails_gm_thread_idx").on(table.gmThreadId),
+	// 0630 (lote 57): emails de uma reclamação/perdido sem ler a tabela toda.
+	index("idx_inbound_emails_target").on(table.targetModule, table.targetId),
 ]);
 
 // ─── WhatsApp (integração Cloud API) ────────────────────────────────────────
@@ -2781,12 +3301,18 @@ export const webPushSubscriptions = mysqlTable("web_push_subscriptions", {
 	userAgent: varchar({ length: 255 }),
 	lastSuccessAt: datetime({ mode: 'string' }),
 	lastFailureAt: datetime({ mode: 'string' }),
+	// Plano 56 A2 (migração 0635): subscrição de um PDA — é de quem tem a
+	// sessão nesse PDA (muda de dono em cada entrada) e fica desligada quando a
+	// sessão acaba (`disabledAt`). No PDA o aviso diz só "Tens um aviso".
+	pdaId: int(),
+	disabledAt: datetime({ mode: 'string' }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	uniqueIndex("uq_web_push_endpoint").on(table.endpointHash),
 	index("idx_web_push_user").on(table.userId),
+	index("idx_web_push_pda").on(table.pdaId),
 ]);
 
 // ─── Leads de extras (2026-09-17) ───────────────────────────────────────────
@@ -3186,11 +3712,64 @@ export const aiChatMessages = mysqlTable("ai_chat_messages", {
 	role: varchar({ length: 12 }).notNull(),
 	content: text().notNull(),
 	tools: varchar({ length: 255 }),
+	// 0605: ficheiros de ajuda usados no turno e a página onde se perguntou (para o 👍/👎).
+	helpFiles: varchar({ length: 255 }),
+	path: varchar({ length: 200 }),
 	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
 },
 (table) => [
 	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),
 	index("idx_ai_chat_msg_created").on(table.createdAt),
+]);
+
+// ─── Multis 2 (0605): memória e 👍/👎 ─────────────────────────────────────────
+// Notas que o Multis segue: 'user' (da pessoa, até 30 ativas) ou 'company'
+// (userId NULL; só admin/super_admin; até 100). Arquivar marca; nada se apaga.
+export const assistantMemories = mysqlTable("assistant_memories", {
+	id: int().autoincrement().primaryKey(),
+	/** user | company */
+	scope: varchar({ length: 10 }).notNull(),
+	userId: int(),
+	text: varchar({ length: 300 }).notNull(),
+	createdById: int().notNull(),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	archivedAt: datetime({ mode: 'string', fsp: 3 }),
+	archivedById: int(),
+},
+(table) => [
+	index("idx_assistant_memories_scope").on(table.scope, table.userId, table.archivedAt),
+]);
+
+// 👍/👎 (auto = 0) e marcas automáticas das respostas que não responderam
+// (auto = 1). Cópia da pergunta/resposta (as conversas apagam-se aos 30 dias;
+// isto não). Sem purga.
+export const assistantFeedback = mysqlTable("assistant_feedback", {
+	id: int().autoincrement().primaryKey(),
+	/** ai_chat_messages.id da resposta */
+	messageId: bigint({ mode: "number" }).notNull(),
+	conversationId: bigint({ mode: "number" }),
+	userId: int().notNull(),
+	/** 1 = 👍, -1 = 👎 */
+	rating: tinyint().notNull(),
+	/** errada | incompleta | nao_percebeu | sem_dados | outro (shared/assistantFeedback.ts) */
+	reason: varchar({ length: 20 }),
+	comment: varchar({ length: 500 }),
+	question: text(),
+	answer: text(),
+	path: varchar({ length: 200 }),
+	tools: varchar({ length: 255 }),
+	helpFiles: varchar({ length: 255 }),
+	auto: tinyint().default(0).notNull(),
+	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	updatedAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	resolvedAt: datetime({ mode: 'string', fsp: 3 }),
+	resolvedById: int(),
+	resolvedNote: varchar({ length: 500 }),
+},
+(table) => [
+	uniqueIndex("uq_assistant_feedback_msg").on(table.messageId, table.userId, table.auto),
+	index("idx_assistant_feedback_created").on(table.createdAt),
+	index("idx_assistant_feedback_open").on(table.rating, table.resolvedAt, table.createdAt),
 ]);
 
 // ─── Automações internas com IA (migração 0125) ─────────────────────────────
@@ -3991,12 +4570,15 @@ export const crmSavedFilters = mysqlTable("crm_saved_filters", {
 	payloadJson: text().notNull(),
 	shared: tinyint().default(0).notNull(),
 	isDefault: tinyint().default(0).notNull(),
+	// 0665: a página do filtro — "crm" (Clientes) ou "avaliacao" (Avaliação → Mês).
+	page: varchar({ length: 24 }).default('crm').notNull(),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 },
 (table) => [
 	index("idx_crm_filters_user").on(table.userId),
 	index("idx_crm_filters_shared").on(table.shared),
+	index("idx_crm_filters_user_page").on(table.userId, table.page),
 ]);
 
 /** Email/telefone/matrícula retirados à mão de uma ficha: a carga não os volta a pôr. */

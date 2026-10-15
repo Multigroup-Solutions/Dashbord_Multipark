@@ -38,6 +38,7 @@ import { multiparkDbQuery, redactSecrets, type SqlParam } from "./client";
 import { ParamList, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
 import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
 import { excludeParks } from "../../shared/reservasDoDia";
+import { LIVE_PHASE_LABELS, baggageWaitingOf, livePhaseOf, livePhaseSince, type LivePhase } from "../../shared/livePhases";
 import { classifyAllocation } from "../spotClassification";
 import { addDays, lisbonDayOf } from "../../shared/lisbonDay";
 import { garageFit, type GarageFit } from "../../shared/garageFit";
@@ -211,17 +212,10 @@ export function buildOperatingHoursSql(parkIds: string[]): { sql: string; params
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 
-export type LivePhase = "checking_in" | "in_park" | "moving" | "pending_checkout" | "baggage_waiting" | "at_delivery" | "checking_out";
-
-export const LIVE_PHASE_LABELS: Record<LivePhase, string> = {
-  checking_in: "A fazer check-in",
-  in_park: "No parque",
-  moving: "Em movimento",
-  pending_checkout: "Entrega pendente",
-  baggage_waiting: "À espera das malas",
-  at_delivery: "No local de entrega",
-  checking_out: "A fazer check-out",
-};
+// Tarefa 62 (P2c): as fases e os rótulos passaram para shared/livePhases.ts (fluxo A: "Na fila", "Em entrega",
+// "No terminal" só com um "Cheguei" deste ciclo, "Em recolha"; "À espera das malas" é uma etiqueta). Ficam
+// re-exportados daqui para quem já os importava.
+export { LIVE_PHASE_LABELS, livePhaseOf, type LivePhase };
 
 export interface LiveCar {
   id: string;
@@ -230,6 +224,8 @@ export interface LiveCar {
   phase: LivePhase;
   /** Desde quando está na fase atual (ISO) — null em "No parque". */
   phaseSince: string | null;
+  /** Etiqueta "À espera das malas" (deste pedido: baggageWaitingAt ≥ pendingCheckoutAt). */
+  baggageWaiting: boolean;
   parkId: string;
   parkName: string | null;
   garage: string | null;
@@ -408,41 +404,32 @@ export interface ShiftState {
 type Row = Record<string, unknown>;
 type ParkRef = Pick<DayPark, "name">;
 
-/** Fase de uma reserva no parque (a mais específica primeiro). PURA. */
-export function livePhaseOf(r: { status: string | null; baggageWaitingAt?: string | null; arrivedAtDeliveryAt?: string | null }): LivePhase {
-  const st = String(r.status ?? "").toUpperCase();
-  if (st === "CHECKING_IN") return "checking_in";
-  if (st === "MOVING") return "moving";
-  if (st === "CHECKING_OUT") return "checking_out";
-  if (st === "PENDING_CHECKOUT") return r.baggageWaitingAt ? "baggage_waiting" : r.arrivedAtDeliveryAt ? "at_delivery" : "pending_checkout";
-  return "in_park";
-}
-
 const isCovered = (parkingType: unknown, code: string | null) =>
   String(parkingType ?? "").toUpperCase() === "COVERED" || classifyAllocation(code).spotType === "covered";
 
 export function mapLiveCar(r: Row, park: ParkRef | undefined, nowMs: number): LiveCar {
   const code = str(r.code);
   const status = str(r.status) ?? "";
-  const baggageWaitingAt = toIsoUtc(r.baggage_waiting_at);
-  const arrivedAtDeliveryAt = toIsoUtc(r.arrived_at_delivery_at);
-  const phase = livePhaseOf({ status, baggageWaitingAt, arrivedAtDeliveryAt });
-  const since: Record<LivePhase, string | null> = {
-    checking_in: toIsoUtc(r.checking_in_at),
-    in_park: null,
-    moving: toIsoUtc(r.moving_at),
-    pending_checkout: toIsoUtc(r.pending_checkout_at),
-    baggage_waiting: baggageWaitingAt,
-    at_delivery: arrivedAtDeliveryAt,
-    checking_out: toIsoUtc(r.checking_out_at),
+  // tarefa 62 (P2c): fluxo A — "Na fila" desde o pendente, "Em entrega" desde o início da entrega, "Em recolha"
+  // desde o checkingInAt; "No terminal" só com um "Cheguei" deste ciclo (shared/livePhases.ts)
+  const times = {
+    status,
+    checkingInAt: toIsoUtc(r.checking_in_at),
+    movingAt: toIsoUtc(r.moving_at),
+    pendingCheckoutAt: toIsoUtc(r.pending_checkout_at),
+    checkingOutAt: toIsoUtc(r.checking_out_at),
+    arrivedAtDeliveryAt: toIsoUtc(r.arrived_at_delivery_at),
+    baggageWaitingAt: toIsoUtc(r.baggage_waiting_at),
   };
+  const phase = livePhaseOf(times);
   const checkOut = toIsoUtc(r.check_out);
   return {
     id: String(r.id ?? ""),
     code,
     status,
     phase,
-    phaseSince: since[phase],
+    phaseSince: livePhaseSince(phase, times),
+    baggageWaiting: baggageWaitingOf(times),
     parkId: String(r.park_id ?? ""),
     parkName: park?.name ?? null,
     garage: str(r.garage),

@@ -83,7 +83,14 @@ export default function MarketingBudgetsPanel() {
       </div>
 
       {ruleQ.data && (ruleQ.data.ok
-        ? <p className="text-xs text-muted-foreground" role="status">Regra 20 % sobre {monthLabel(ruleQ.data.baseMonth)}: {ruleQ.data.count} marca(s)/cidade(s), {eur(ruleQ.data.total)} no Google Ads.</p>
+        ? <>
+            <p className="text-xs text-muted-foreground" role="status">Regra 20 % sobre {monthLabel(ruleQ.data.baseMonth)}: {ruleQ.data.count} marca(s)/cidade(s), {eur(ruleQ.data.total)} no Google Ads.</p>
+            {ruleQ.data.marketplaceWithoutCity && (
+              <p className="text-xs text-amber-700" role="status">
+                {eur(ruleQ.data.marketplaceWithoutCity.base)} de comissões do Marketplace em parques sem cidade reconhecida ({ruleQ.data.marketplaceWithoutCity.parks.join(", ")}) não dão orçamento a nenhuma cidade — corrige a cidade do parque na Multipark.
+              </p>
+            )}
+          </>
         : <p className="text-xs text-amber-700" role="status">Não deu para calcular a regra 20 % ({ruleQ.data.reason}) — a BD da Multipark não respondeu; aparecem só os orçamentos postos à mão.</p>)}
 
       {isAdmin && (

@@ -56,7 +56,8 @@ export async function loadMovementPeople(opts: { from: string; to: string; citie
       total: t.total, byType: t.byType, lastAt: t.lastAt, km: null,
     };
   });
-  if (opts.drivers) rows = rows.filter((x) => x.recolhas + x.entregas + x.movements > 0);
+  // 14 out 2026: quem só fez mudanças de lugar também mexeu em carros (é condutor)
+  if (opts.drivers) rows = rows.filter((x) => x.recolhas + x.entregas + x.movements + x.spotChanges > 0);
 
   // km do GPS (as partes de PDA partilhado de cada pessoa; sem partes, a linha do dia)
   const ids = Array.from(new Set(rows.map((x) => x.employeeId).filter((x): x is number => x != null)));

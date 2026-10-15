@@ -89,7 +89,9 @@ describe("44a — Pressão: mapa maior, botões em cima, métricas explicadas", 
   });
   it("explica o p75 e tem legenda (rampa de um só tom, sem dados, hora apertada)", () => {
     expect(s).toContain("O que é o p75");
-    expect(s).toContain('const RAMP = ["#86b6ef", "#5598e7", "#256abf", "#104281"] as const;');
+    // 12 out 2026: a rampa é partilhada com a Semana da Atividade diária (mesma legenda).
+    expect(src("client/src/components/heatRamp.ts")).toContain('export const RAMP = ["#86b6ef", "#5598e7", "#256abf", "#104281"] as const;');
+    expect(s).toContain('import { cellStyle, rampLegend } from "@/components/heatRamp";');
     expect(s).toContain("hora apertada (top 20 %)");
     expect(s).toContain("h-12 md:h-14");
   });
@@ -124,18 +126,16 @@ describe("44a — escala só com gente do RH", () => {
     expect(p).not.toContain('placeholder="Nome da pessoa"');
     expect(p).toContain("<PersonPicker");
   });
-  it("seletor: cidade da escala primeiro, depois outras, quem não pode ser TL, e sem cidade (bloqueado)", () => {
+  it("seletor: cidade da escala primeiro, depois outras, e sem cidade (bloqueado); quem não pode ser TL já não aparece", () => {
     const c = (id: number, fullName: string, city: PickerCandidate["city"]): PickerCandidate => ({ id, fullName, city });
     const secs = pickerSections(
       [c(1, "Bruno Alves", "lisbon"), c(2, "Ana Sousa", "porto"), c(3, "Anabela Reis", null), c(4, "Mariana Costa", "lisbon")],
-      [c(5, "Paulo Ana", "lisbon")],
       "lisbon",
       "ana",
     );
     expect(secs.map((s) => [s.key, s.rows.map((r) => r.c.id)])).toEqual([
       ["here", [4]],
       ["elsewhere", [2]],
-      ["notTl", [5]],
       ["noCity", [3]],
     ]);
     expect(secs.find((s) => s.key === "noCity")?.disabled).toBe(true);
@@ -166,9 +166,10 @@ describe("44a — pesquisa por relevância (\"começa sempre com o A e o B\")", 
     expect(sortByNameMatch("ana", rows, (x) => x)).toEqual(["Ana Sousa", "Bruno Ana", "Mariana Costa", "Joana Ramos"]);
     expect(sortByNameMatch("", rows, (x) => x)).toEqual(rows);
   });
-  it("Disponibilidade: a pesquisar, ordena por relevância; sem pesquisa, separadores por estado", () => {
-    const s = src("client/src/pages/ExtrasDiaPage.tsx");
-    expect(s).toContain("nameMatchScore(trimmedSearch, e.fullName)");
-    expect(s).toContain("const divider = !availSort.sortKey && !searching");
+  it("Disponibilidade: a pesquisar, ordena por relevância; sem pesquisa, secções por estado", () => {
+    // 14 out 2026: a regra está em shared/availabilityFilters.ts e a grelha em extrasDia/AvailabilityGrid.tsx.
+    expect(src("shared/availabilityFilters.ts")).toContain("const score = (e: T) => nameMatchScore(q, e.fullName) || 1;");
+    const g = src("client/src/pages/extrasDia/AvailabilityGrid.tsx");
+    expect(g).toContain("const sections = searching ? null : splitByStatus(g.rows);");
   });
 });

@@ -322,6 +322,24 @@ export async function opsPresenceCron(): Promise<CronJobRun> {
   }
 }
 
+/**
+ * Terminal pelo perfil (plano 56 B2): "Ainda estás no terminal?" — GPS do
+ * Zello de quem está no terminal, pergunta, liberta sem resposta. Interruptor
+ * PONTO_TERMINAL desligado → não lê o Zello nem a BD do terminal.
+ */
+export async function terminalWatchCron(): Promise<CronJobRun> {
+  try {
+    const { pontoTerminalEnabled } = await import("./pontoTerminal");
+    if (!(await pontoTerminalEnabled())) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "off" }, done: true };
+    const [{ realTerminalDeps }, { runTerminalWatch }] = await Promise.all([import("./terminalSessions"), import("./terminalWatch")]);
+    const r = await runTerminalWatch(await realTerminalDeps());
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron terminal-watch] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 /** Caixa: fecho do dia — todas as saídas de ontem e anteontem, com as mesmas regras. */
 export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
@@ -330,6 +348,18 @@ export async function cashCloseCron(o: { deadlineAt: number }): Promise<CronJobR
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: !r.partial };
   } catch (err) {
     console.error("[cron cash-close] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
+/** Confirmação da caixa: reler os dias já fechados (os há mais tempo por reler primeiro); reabre os que a Multipark mudou. */
+export async function cashConfirmRecheckCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { recheckClosedConfirmDays } = await import("./cashConfirm");
+    const r = await recheckClosedConfirmDays({ deadlineAt: o.deadlineAt - 2_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: true };
+  } catch (err) {
+    console.error("[cron cash-confirm-recheck] falhou:", msg(err, 200));
     return fail(err);
   }
 }
@@ -437,6 +467,21 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const r = await autoCloseStaleCheckIns();
         if (r.closed > 0) console.log(`[daily-ops] auto-checkout de ${r.closed} ponto(s) esquecido(s)`);
       });
+      // Terminal no ponto (interruptor PONTO_TERMINAL; desligado → nada): os
+      // troços "por confirmar" dos últimos 7 dias voltam a ler a Multipark (só
+      // leitura) — terminal até à última recolha/entrega feita pelo extra no
+      // troço ("partial"). Sem ações → ficam para o RH. Nada se apaga.
+      await step("terminal-pending", "terminal por confirmar", async () => {
+        const { retryPendingTerminalShifts } = await import("./pontoTerminal");
+        const r = await retryPendingTerminalShifts({ deadlineAt: cap(15_000) });
+        const t = r.sessions;
+        if (t && t.pending > 0) {
+          console.log(`[daily-ops] terminal (sessões) por confirmar: ${t.resolved} de ${t.pending} até à última recolha/entrega (${t.noActions} sem ações, ${t.noAgent} sem agente ligado${t.closedMonth ? `, ${t.closedMonth} em meses fechados` : ""}${t.deferred ? `, ${t.deferred} para amanhã` : ""}${t.readFailed ? " — Multipark não lida" : ""})`);
+        }
+        if (!r.skipped && r.pending > 0) {
+          console.log(`[daily-ops] terminal antigo por confirmar: ${r.resolved} de ${r.pending} até à última recolha/entrega (${r.noActions} sem ações, ${r.noAgent} sem agente ligado${r.deferred ? `, ${r.deferred} para amanhã` : ""}${r.readFailed ? " — Multipark não lida" : ""})`);
+        }
+      });
       // RH: "possíveis faltas" de ontem (pendentes de validação; não
       // bloqueiam). A regra documental passou para o trabalho semanal
       // rh-docs-weekly (segunda-feira, rhDocsWeeklyCron).
@@ -445,6 +490,15 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
         const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() - 86400000));
         const n = await detectExtraDiaNoShows(yesterday);
         console.log(`[daily-ops] RH: possíveis faltas ${yesterday}: ${n.created} novas (${n.alreadyPending} já registadas; fora: ${n.skipped.proposed} só propostos, ${n.skipped.sent_home} mandados para casa, ${n.skipped.multipark} com movimentos na Multipark${n.multiparkRead ? "" : " — Multipark não lida"})`);
+        // Tarefa 62 (Q8): também quem tem horário fixo no RH (interruptor RH_FALTAS_HORARIO, desligado por omissão)
+        const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }, { FIXED_SCHEDULE_NO_SHOWS_FLAG, detectFixedScheduleNoShows }] = await Promise.all([
+          import("./_core/featureFlags"), import("../shared/appSettings"), import("./rhService"),
+        ]);
+        await ensureFeatureFlagOverrides();
+        if (isFeatureEnabled(FIXED_SCHEDULE_NO_SHOWS_FLAG, { defaultEnabled: automationFlagDefault(FIXED_SCHEDULE_NO_SHOWS_FLAG) })) {
+          const f = await detectFixedScheduleNoShows(yesterday);
+          console.log(`[daily-ops] RH: possíveis faltas (horário fixo) ${yesterday}: ${f.created} novas de ${f.scanned} com horário (${f.alreadyPending} já registadas; fora: ${f.skipped.escala} na escala, ${f.skipped.check_in} com entrada, ${f.skipped.multipark} com movimentos na Multipark${f.multiparkRead ? "" : " — Multipark não lida"})`);
+        }
       });
       // Retenções, em lotes e com prazo curto — o resto fica para o dia seguinte.
       // Fila de notificações Multipark: apaga concluídos com mais de 30 dias.
@@ -542,6 +596,24 @@ export async function dailyOpsCron(o: { deadlineAt: number; collectOnly?: boolea
  * passagem final (D-2, daily-ops) substitui estas linhas. Retomável dentro
  * da janela; nunca passa da meia-noite (prazo cortado 1 min antes).
  */
+/**
+ * Tarefa 62 (P1b): re-divisão do GPS dos últimos 31 dias com o limite de hoje, a pedido do super admin
+ * (sem pedido → nada). Retomável: o cursor fica em app_settings (gps.resplitBackfillV1). Não avisa ninguém.
+ */
+export async function gpsResplitBackfillCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { realResplitBackfillDeps, runResplitBackfillStep } = await import("./gpsResplitBackfill");
+    const r = await runResplitBackfillStep(await realResplitBackfillDeps(), { deadlineAt: o.deadlineAt - 2_000 });
+    if (r.idle) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "sem pedido" }, done: true };
+    const st = r.state;
+    console.log(`[gps-resplit-backfill] ${st.state === "done" ? "concluído" : `a correr (próximo ${st.day})`}: ${st.daysDone} dia(s), ${st.rowsDone} linha(s) (${r.rowsNow} agora)${st.daysClosed ? `, ${st.daysClosed} dia(s) fechado(s) saltado(s)` : ""}${st.errors.length ? `, ${st.errors.length} erro(s)` : ""}`);
+    return { httpStatus: 200, body: { ranAt: ranAt(), state: st.state, day: st.day, daysDone: st.daysDone, rowsDone: st.rowsDone, rowsNow: r.rowsNow }, done: true };
+  } catch (err) {
+    console.error("[cron gps-resplit-backfill] falhou:", msg(err, 200));
+    return fail(err);
+  }
+}
+
 export async function zelloSameDayCron(o: { deadlineAt: number }): Promise<CronJobRun> {
   try {
     const { isZelloConfigured } = await import("./zello");
@@ -592,6 +664,25 @@ export async function rhDocsRequestCron(o: { deadlineAt: number; cursor?: string
   } catch (err) { return fail(err); }
 }
 
+/**
+ * Formação — FAQs novas da base de conhecimento, à segunda a partir das 09:30
+ * de Lisboa (trabalho kb-faq-weekly). Interruptor KB_FAQ_WEEKLY (desligado por
+ * omissão) + IA AI_KB_FAQ. Escolhe 2–3 documentos e publica até 3 FAQs sem
+ * repetir as que existem nem as eliminadas.
+ */
+export async function kbFaqWeeklyCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runKbFaqGeneration } = await import("./trainingFaqAuto");
+    const r = await runKbFaqGeneration({ trigger: "weekly", userId: null, deadlineAt: o.deadlineAt });
+    return {
+      httpStatus: 200,
+      body: { ok: r.ok, ranAt: ranAt(), ...(r.skipped ? { skipped: r.skipped } : {}), docs: r.docs.length, created: r.created.length, ...(r.ok ? {} : { error: r.errors.join(" · ").slice(0, 300) || "falhou" }) },
+      // Outra corrida (um "Gerar agora") tinha o cadeado: tenta no tick seguinte, não dá a semana por feita.
+      done: r.skipped !== "locked",
+    };
+  } catch (err) { return fail(err); }
+}
+
 /** Avaliação (motor único): recalcula o último mês (31 dias) em fatias de 7 dias. */
 export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDays: number }): Promise<CronJobRun> {
   try {
@@ -599,6 +690,30 @@ export async function evaluationRecomputeCron(o: { deadlineAt: number; offsetDay
     const result = await runEvaluationRecompute({ offsetDays: o.offsetDays, deadlineAt: o.deadlineAt - 5_000 });
     return { httpStatus: 200, body: { ok: true, ranAt: ranAt(), ...result }, done: result.done, cursor: result.nextOffset != null ? String(result.nextOffset) : null };
   } catch (err) { return fail(err); }
+}
+
+/**
+ * Tempos de entrega e de recolha (plano 62, P7): os ciclos que fecharam em
+ * D-3…D-1 e o preenchimento para trás (server/serviceTimesJob.ts). Interruptor
+ * SERVICE_TIMES (desligado por omissão); `reprocess` (só à mão) corre mesmo
+ * desligado. A Multipark em baixo → ok:false (o agendador repete).
+ */
+export async function serviceTimesCron(o: { deadlineAt: number; reprocess?: { from: string; to: string } | null }): Promise<CronJobRun> {
+  try {
+    const { serviceTimesEnabled, realServiceTimesDeps } = await import("./serviceTimesDeps");
+    if (!o.reprocess && !(await serviceTimesEnabled())) return { httpStatus: 200, body: { ranAt: ranAt(), skipped: "SERVICE_TIMES desligado" }, done: true };
+    const { runServiceTimes } = await import("./serviceTimesJob");
+    const r = await runServiceTimes(await realServiceTimesDeps(), { deadlineAt: o.deadlineAt - 2_000, reprocess: o.reprocess ?? null });
+    return {
+      httpStatus: 200,
+      body: { ok: r.ok, ranAt: ranAt(), ...(r.error ? { error: r.error } : {}), ...(r.skipped ? { skipped: r.skipped } : {}), done: r.done, ...(r.cursor ? { next: r.cursor } : {}), ranges: r.ranges, lines: r.lines },
+      done: r.done,
+      cursor: r.cursor,
+    };
+  } catch (err) {
+    console.error("[cron service-times] falhou:", msg(err, 200));
+    return fail(err);
+  }
 }
 
 // ─── Extras, briefing, emails, IA ───────────────────────────────────────────
@@ -659,6 +774,15 @@ export async function aiCommsCron(o: { deadlineAt: number }): Promise<CronJobRun
   try {
     const { runCommsAiSweep } = await import("./commsAiSweep");
     const report = await runCommsAiSweep({ deadlineAt: o.deadlineAt });
+    return { httpStatus: 200, body: { ok: report.errors.length === 0, ranAt: ranAt(), ...report }, done: true };
+  } catch (err) { return fail(err); }
+}
+
+/** 14 out 2026: casos dos pipelines que falharam + rever os emails que já estão nas caixas (AI_MAIL_BACKFILL). */
+export async function mailBackfillCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runMailBackfillJob } = await import("./commsAiSweep");
+    const report = await runMailBackfillJob({ deadlineAt: o.deadlineAt });
     return { httpStatus: 200, body: { ok: report.errors.length === 0, ranAt: ranAt(), ...report }, done: true };
   } catch (err) { return fail(err); }
 }
@@ -743,6 +867,20 @@ export async function googleAdsCron(o: { deadlineAt: number; kind: string }): Pr
     // 19b: trinco ocupado (outra recolha a correr ou uma que morreu a meio) ≠ feita —
     // repete no tick seguinte; antes o período (ex.: o mês do dia 2) ficava dado por fechado.
     return { httpStatus: 200, body: { ranAt: ranAt(), ...r }, done: adsCronDone(r) };
+  } catch (err) { return { httpStatus: 500, body: { ok: false, done: true, error: msg(err) } }; }
+}
+
+/**
+ * Google Ads: cliques (click_view, gclid → campanha) de hora a hora — hoje,
+ * ontem e, aos poucos, os dias em falta até 90 dias para trás. Interruptor
+ * GOOGLE_ADS_CLICK_SYNC. Fica sempre "feita": o que o prazo cortou segue na
+ * hora seguinte (não retoma de 5 em 5 min à frente dos outros trabalhos).
+ */
+export async function googleAdsClicksCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runGoogleAdsClickSync } = await import("./integrations/googleAds/clicks");
+    const r = await runGoogleAdsClickSync({ deadlineAt: o.deadlineAt });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...r, done: true }, done: true };
   } catch (err) { return { httpStatus: 500, body: { ok: false, done: true, error: msg(err) } }; }
 }
 

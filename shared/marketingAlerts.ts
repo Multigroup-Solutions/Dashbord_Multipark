@@ -6,9 +6,11 @@
  *    Google — nesse caso não se acusa campanha nenhuma de "não trazer
  *    reservas" (seria culpa da medição, não da campanha).
  *  - Campanha a gastar sem trazer nada: ≥ WASTE_MIN_SPEND € nos últimos
- *    ALERT_WINDOW_DAYS dias, zero reservas atribuídas E zero conversões Google.
- *    Todas numa só entrada, com a lista e "sugestão: pausar" (nada é pausado
- *    automaticamente).
+ *    ALERT_WINDOW_DAYS dias, zero reservas ligadas E zero reservas VIA NET
+ *    (8 out 2026: o via net da marca/cidade repartido pelas campanhas —
+ *    shared/viaNet.ts). Campanha sem marca/cidade (não se reparte): zero
+ *    conversões na plataforma, como antes. Todas numa só entrada, com a lista
+ *    e "sugestão: pausar" (nada é pausado automaticamente).
  *  - Ritmo do mês: projeção do mês corrente (gasto até ONTEM ÷ dias completos
  *    × dias do mês — hoje está a meio e não conta) ≥ PACE_MAX_RATIO × gasto
  *    do mês passado.
@@ -46,7 +48,11 @@ export interface SyncHealth {
 }
 
 export interface AlertsInput {
-  windowCampaigns: Array<{ name: string; accountName: string | null; cost: number; conversions: number; attributedBookings: number }>;
+  windowCampaigns: Array<{
+    name: string; accountName: string | null; cost: number; conversions: number; attributedBookings: number;
+    /** 8 out 2026: reservas via net repartidas (null/omisso = campanha sem marca/cidade: conta a regra das conversões) */
+    viaNetBookings?: number | null;
+  }>;
   /** null = reservas da Multipark indisponíveis (19a): sem alertas que dependem delas */
   attribution: AttributionQuality | null;
   windowSpend: number;
@@ -112,16 +118,20 @@ export function computeMarketingAlerts(i: AlertsInput): MarketingAlert[] {
     });
   }
 
+  // 8 out 2026: sem via net (repartido) E sem ligadas; sem marca/cidade (não se reparte) → sem conversões.
+  const noViaNet = (c: AlertsInput["windowCampaigns"][number]) => (c.viaNetBookings == null ? c.conversions <= 0 : c.viaNetBookings <= 0);
   const wasting = bookingsUnavailable ? [] : i.windowCampaigns
-    .filter((c) => c.cost >= WASTE_MIN_SPEND && c.conversions <= 0 && (attributionBroken || c.attributedBookings === 0))
+    .filter((c) => c.cost >= WASTE_MIN_SPEND && noViaNet(c) && (attributionBroken || c.attributedBookings === 0))
     .sort((a, b) => b.cost - a.cost);
   if (wasting.length) {
     const total = wasting.reduce((t, c) => t + c.cost, 0);
+    const split = wasting.some((c) => c.viaNetBookings != null);
+    const what = split ? "sem reservas via net (o via net da marca/cidade repartido pelas conversões ou cliques)" : "sem conversões na plataforma";
     out.push({
       level: "critical", code: "campaign_no_results",
       title: wasting.length === 1 ? `Campanha a gastar sem resultados: ${wasting[0].name}` : `${wasting.length} campanhas a gastar sem resultados`,
-      detail: `${eur(total)} nos últimos ${ALERT_WINDOW_DAYS} dias sem conversões na plataforma${attributionBroken ? "" : " nem reservas atribuídas"}. Sugestão: pausar (nada é pausado automaticamente).`,
-      items: wasting.slice(0, 15).map((c) => `${c.name}${c.accountName ? ` (${c.accountName})` : ""} — ${eur(c.cost)}`),
+      detail: `${eur(total)} nos últimos ${ALERT_WINDOW_DAYS} dias ${what}${attributionBroken ? "" : " nem reservas ligadas"}. Sugestão: pausar (nada é pausado automaticamente).`,
+      items: wasting.slice(0, 15).map((c) => `${c.name}${c.accountName ? ` (${c.accountName})` : ""} — ${eur(c.cost)}${c.viaNetBookings == null && split ? " · sem marca/cidade: sem conversões" : ""}`),
       link: "/marketing/google-ads",
     });
   }

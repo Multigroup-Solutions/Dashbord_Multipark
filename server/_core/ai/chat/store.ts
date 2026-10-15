@@ -96,26 +96,50 @@ export async function loadMessages(channel: ChatChannel, ownerKey: string, conve
   }));
 }
 
-/** Guarda a pergunta e a resposta (e atualiza o título/data da conversa). */
+/** Lista de nomes para uma coluna VARCHAR(255) ("a,b,c"; vazia → null). PURA. */
+export const joinNames = (names: readonly string[] | undefined | null): string | null =>
+  [...new Set((names ?? []).filter(Boolean))].join(",").slice(0, 255) || null;
+
+/**
+ * Guarda a pergunta e a resposta (e atualiza o título/data da conversa).
+ * Devolve o id da resposta guardada (para o 👍/👎) — duas inserções para o
+ * id ser certo. `helpFiles`/`path` (0605) vão com a resposta; sem essas
+ * colunas (migração por aplicar) guarda-se na mesma, sem elas.
+ */
 export async function appendExchange(
   conversationId: number,
   question: string,
   answer: string,
-  opts: { tools?: string[]; now?: number } = {},
-): Promise<void> {
+  opts: { tools?: string[]; helpFiles?: string[]; path?: string | null; now?: number } = {},
+): Promise<{ answerId: number | null }> {
   const d = await db();
-  if (!d) return;
+  if (!d) return { answerId: null };
   const now = opts.now ?? Date.now();
   const t1 = mysqlNow(new Date(now));
   const t2 = mysqlNow(new Date(now + 1));
-  const tools = [...new Set(opts.tools ?? [])].join(",").slice(0, 255) || null;
+  const tools = joinNames(opts.tools);
+  const helpFiles = joinNames(opts.helpFiles);
+  const path = opts.path ? String(opts.path).split("?")[0].slice(0, 200) : null;
   await d.execute(sql`
     INSERT INTO ai_chat_messages (conversationId, role, content, tools, createdAt)
-    VALUES (${conversationId}, 'user', ${question}, NULL, ${t1}), (${conversationId}, 'assistant', ${answer}, ${tools}, ${t2})`);
+    VALUES (${conversationId}, 'user', ${question}, NULL, ${t1})`);
+  let res: unknown;
+  try {
+    res = await d.execute(sql`
+      INSERT INTO ai_chat_messages (conversationId, role, content, tools, helpFiles, path, createdAt)
+      VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${helpFiles}, ${path}, ${t2})`);
+  } catch (err: any) {
+    if ((err?.code ?? err?.cause?.code) !== "ER_BAD_FIELD_ERROR") throw err;
+    res = await d.execute(sql`
+      INSERT INTO ai_chat_messages (conversationId, role, content, tools, createdAt)
+      VALUES (${conversationId}, 'assistant', ${answer}, ${tools}, ${t2})`);
+  }
   const title = question.replace(/\s+/g, " ").trim().slice(0, 120);
   await d.execute(sql`
     UPDATE ai_chat_conversations SET updatedAt = ${t2}, title = COALESCE(title, ${title})
      WHERE id = ${conversationId}`);
+  const id = insertIdOf(res);
+  return { answerId: id > 0 ? id : null };
 }
 
 /** Conversas recentes do dono (para o histórico). */

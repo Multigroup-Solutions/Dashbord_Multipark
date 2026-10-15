@@ -60,13 +60,15 @@ describe("37a — períodos e baldes", () => {
 });
 
 describe("37a — pontos e ranking", () => {
-  it("pontos = soma ponderada da aba; condutores pelos pontos da avaliação, excessos descontam", () => {
+  it("pontos = soma ponderada da aba; condutores pelos pontos da avaliação (onde os excessos descontam)", () => {
     const t = emptyTotals();
     t.callsAnswered = 10; t.emails = 5; t.created = 2; t.updated = 4;
-    expect(workPoints("office", t)).toBe(10 * 2 + 5 * 2 + 2 * 3 + 4 * 1);
+    // pesos de 8 out 2026 (1 ponto ≈ 5 min): atendida 0,5, email 1, reserva criada 2, alteração 0,5
+    expect(workPoints("office", t)).toBe(10 * 0.5 + 5 * 1 + 2 * 2 + 4 * 0.5);
     const d = emptyTotals();
     d.evalPoints = 120; d.overLimitDays = 2; d.occurrences = 3;
-    expect(workPoints("drivers", d)).toBe(120 - 20 + 3);
+    // 14 out 2026: os dias acima do limite já descontam −10 na avaliação (evalPoints) — aqui não repetem
+    expect(workPoints("drivers", d)).toBe(120 + 3);
     // as horas e os km nunca dão pontos
     for (const g of Object.keys(GROUP_VIEW) as Array<keyof typeof GROUP_VIEW>) {
       expect(GROUP_VIEW[g].weights.hours).toBeUndefined();
@@ -130,7 +132,8 @@ vi.mock("./db", () => ({
       ]];
       if (/FROM employee_metric_adjustments/.test(text)) return [[]];
       if (/FROM daily_driver_history/.test(text)) return [[]];
-      if (/FROM driver_day_shares/.test(text)) return [[{ employeeId: 1, day: "2026-10-05", km: 84.4, maxSpeed: 131 }]];
+      // tarefa 62: recolhida com o limite de hoje (100) — a trava da linha GPS deixa contar o 131
+      if (/FROM driver_day_shares/.test(text)) return [[{ employeeId: 1, day: "2026-10-05", km: 84.4, maxSpeed: 131, speedThresholdKmh: "100.00" }]];
       // chamadas atendidas pela conta extra da Bea, às 01h UTC de 6 out = 02h Lisboa → dia operacional 5 out
       if (/FROM whatsapp_calls/.test(text) && /answeredByUserId/.test(text)) return [[{ u: 22, h: "2026-10-06 01", n: 3 }]];
       if (/FROM mail_messages/.test(text)) return [[{ u: 12, h: "2026-10-05 10", n: 4 }]];
@@ -168,7 +171,11 @@ describe("37a — juntar as fontes por pessoa", () => {
     // 37d: Pro (1) e avenças (2) noutra coluna
     expect(r.people[0].totals).toMatchObject({ partnerCharges: 3, proPlanCharges: 3, returnFlights: 1 });
     expect(r.people[0].series.callsAnswered).toHaveLength(7);
-    expect(r.people[0].points).toBe(3 * 2 + 4 * 2 + 2 * 3 + 1 + 3 * 1 + 1 * 2 + 2 * 3 + 3 * 3 + 3 * 3 + 1 * 1);
+    expect(r.people[0].totals.callMinutes).toBe(3);
+    // pesos de 8 out 2026: atendidas 3 × 0,5 + minutos 3 × 0,2 + emails 4 × 1 + criadas 2 × 2 + alteração 0,5 + CRM 3 × 0,5
+    // + perdidos 1 × 2 + fechos de parceiros 2 × 6 + cobranças de parceiros 3 × 1 + Pro/avenças 3 × 1 + voo de regresso 0,5
+    expect(r.people[0].points).toBe(32.6);
+    expect(r.people[0].points).toBeCloseTo(3 * 0.5 + 3 * 0.2 + 4 * 1 + 2 * 2 + 0.5 + 3 * 0.5 + 1 * 2 + 2 * 6 + 3 * 1 + 3 * 1 + 0.5, 6);
     expect(r.notes.join(" ")).toMatch(/Não deu para ler: .*correções de caixa/);
   });
 });
@@ -178,9 +185,11 @@ describe("37a — só o super admin", () => {
     const r = src("server/evaluationRouter.ts");
     expect(r).toMatch(/peoplePerformance: protectedProcedure[\s\S]{0,400}if \(ctx\.user\.role !== "super_admin"\) throw new TRPCError\(\{ code: "FORBIDDEN"/);
     const p = src("client/src/pages/CondutoresAgentesPage.tsx");
-    expect(p).toContain('const isSuper = (user as any).role === "super_admin";');
-    expect(p).toContain('{isSuper && <TabsTrigger value="performance">');
-    expect(p).toContain('{isSuper && <TabsContent value="performance"');
+    // 14 out 2026: a regra está em shared/condutoresAccess.ts (Desempenho = papel super_admin)
+    expect(p).toContain("condutoresTabs(user as any)");
+    expect(p).toContain('{has("performance") && <TabsTrigger value="performance">');
+    expect(p).toContain('{has("performance") && <TabsContent value="performance"');
+    expect(src("shared/condutoresAccess.ts")).toContain('if (user.role === "super_admin") tabs.push("performance");');
     // só leitura
     expect(src("server/peoplePerformance.ts")).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b\s+(INTO|\w+\s+SET|FROM)/);
   });
@@ -254,7 +263,7 @@ describe("37c — quem regista as cobranças de parceiros (vem da Multipark)", (
     for (const g of ["office", "supervision"] as const) {
       for (const k of ["partnerCharges", "proPlanCharges"] as const) {
         expect(GROUP_VIEW[g].columns).toContain(k);
-        expect(GROUP_VIEW[g].weights[k]).toBe(3);
+        expect(GROUP_VIEW[g].weights[k]).toBe(1); // 8 out 2026: 1 ponto ≈ 5 min (antes 3)
       }
     }
     expect(GROUP_VIEW.drivers.columns).not.toContain("partnerCharges");

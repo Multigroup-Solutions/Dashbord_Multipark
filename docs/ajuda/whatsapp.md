@@ -2,7 +2,7 @@
 modulo: whatsapp
 titulo: WhatsApp
 rotas: /whatsapp
-palavras: whatsapp, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
+palavras: whatsapp, movido pela ia, geral, sem cidade, cidade de cima, conversa nova, parar promoções, criar reclamação, criar perdido, proposta de caso, aceite, enviado, entregue, lido, confirmar envio, 24 horas, quem é, nome do cliente, crm, histórico, caixas, caixa, tema, mover, recursos humanos, alterações, serviços extra, parcerias, faturação, mensagem, mensagens, conversa, conversas, não lidas, responder, template, modelo, janela de 24h, respostas rápidas, responsável, atribuir, resolvida, pendente, stop, sugerir resposta, sem confirmação, duplicada, enviar outra vez, cidade, cidade do template, lisboa, porto, turno confirmado, preciso de alterar, arquivar, ficheiro, documento, imagem, pesquisa
 ---
 # WhatsApp
 
@@ -20,7 +20,10 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 - Por baixo do número aparece uma linha **quem é**: "Colaborador · Condutor · Lisboa", "Candidato a extra · respondeu" ou "Cliente · 3 reservas (1 por vir) · última 12/09/2026" (carrega para abrir a ficha do cliente). Número sem nada: "Número sem ficha, candidatura nem cliente no CRM".
 
 **Responder**
-1. Menu **Comunicação → WhatsApp** (o WhatsApp tem a página dele; as **Caixas de email** são só de email). Filtra por estado, responsável, **Não lidas** ou só conversas com alerta; pesquisa por nome, número ou texto (tecla `/`).
+1. Menu **Comunicação → WhatsApp** (o WhatsApp tem a página dele; as **Caixas de email** são só de email). Está organizada como as caixas de email: no computador o menu da esquerda recolhe ao entrar (abre-se à mão quando quiseres) e ficam três colunas — **caixas** | **conversas** | **a conversa aberta**.
+   - **Caixas** (à esquerda): **Todas as caixas**, **Geral (por separar)** e cada caixa por tema, com o número de conversas por ler. No telemóvel é um seletor no topo da lista.
+   - **Cidade**: segue a cidade escolhida **na barra de cima** do dashboard (não há outro seletor aqui). Com uma cidade escolhida vês as conversas dessa cidade **e as sem cidade** (números sem ficha, lead nem reserva) — assim ninguém as perde. O chip **Sem cidade** (com a contagem) mostra só essas.
+   - No topo da lista: pesquisa por nome, número ou texto (tecla `/`), o botão **Filtros** (estado, responsável, intenção da IA…) e os chips rápidos **Não lidas**, **Minhas**, **Urgentes**, alertas e **Sem cidade**.
 2. A lista mostra as **300 conversas mais recentes**; a pesquisa procura também nas mais antigas.
 3. Abre a conversa e escreve a resposta. No computador, **Enter** envia e **Shift+Enter** muda de linha; **no telemóvel, Enter muda de linha** e só o botão verde envia. Há **Respostas rápidas** para textos frequentes.
 4. **Janela de 24 h**: só podes escrever texto livre até 24 h depois da última mensagem do contacto. Com a janela fechada, usa **Enviar template**; o texto livre só volta quando o contacto responder.
@@ -50,8 +53,12 @@ Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e client
 
 **Caixas por tema**
 - Cada conversa fica numa caixa: **Recursos Humanos**, **Reservas**, **Alterações**, **Cancelamentos**, **Serviços extra**, **Reclamações**, **Perdidos e Achados**, **Parcerias**, **Faturação**… ou **Geral** (ainda por separar). São as mesmas caixas do email.
-- Colaboradores e candidatos vão sozinhos para **Recursos Humanos**. Os clientes vão para a caixa que a **IA** escolhe pela conversa (com a triagem por IA ligada).
-- Escolhe **Todas as caixas** ou uma caixa no topo da lista. Na conversa, o seletor da caixa **move-a** — e a IA deixa de a mudar.
+- Colaboradores e candidatos vão sozinhos para **Recursos Humanos**.
+- **Conversa nova** (a 1.ª mensagem tem menos de 48 h e ainda não tem caixa): a **IA** usa a triagem (intenção) — sem uma segunda leitura — e põe-na na caixa do tema; o que não percebe fica na **Geral**. Interruptor **"IA: separar emails e WhatsApp pelas caixas"** (ligado por omissão; precisa também da triagem por IA).
+- **Conversa que já tem caixa** (ou antiga): fica onde está — a IA não a volta a mudar.
+- Na conversa aparece **"Movido pela IA → caixa (motivo · certeza)"**. Se estiver errado, muda a caixa no seletor: fica "corrigido à mão".
+- Alguém a pedir trabalho pela 1.ª vez entra também nos **Leads de Extras** (lead com o telefone e o nome do perfil). A IA nunca responde.
+- Escolhe **Todas as caixas** ou uma caixa na coluna da esquerda (no telemóvel, no topo da lista). Na conversa, o seletor da caixa **move-a** — e a IA deixa de a mudar.
 - Só vês as caixas do teu módulo (ex.: RH, Reclamações) e, como sempre, a tua cidade e as conversas sem cidade.
 
 **Organizar**

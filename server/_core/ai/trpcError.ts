@@ -10,6 +10,7 @@ export function aiTrpcError(err: unknown): TRPCError {
     case "disabled":
     case "not_configured":
     case "budget":
+    case "eu_only":
       return new TRPCError({ code: "PRECONDITION_FAILED", message });
     case "rate_limited":
       return new TRPCError({ code: "TOO_MANY_REQUESTS", message });

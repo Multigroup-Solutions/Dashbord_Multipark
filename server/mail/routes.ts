@@ -57,7 +57,11 @@ export function registerMailRoutes(app: Express, opts: { defer?: (p: Promise<unk
       // Sincroniza já essas contas (o tick de 5 min apanha o que falhar).
       const { runMailSync } = await import("./service");
       for (const key of keys) {
-        const p = runMailSync({ deadlineAt: Date.now() + 40_000, onlyAccountKey: key }).catch(() => undefined);
+        // 14 out 2026: a corrida do push já não falha em silêncio — com o push saudável o
+        // mail-sync agendado só corre 1×/dia, e estes erros não ficavam em lado nenhum.
+        const p = runMailSync({ deadlineAt: Date.now() + 40_000, onlyAccountKey: key })
+          .then((r) => { if (!r.ok || r.errors.length) console.warn(`[mail-push] ${key}: ${r.errors.slice(0, 3).join(" | ").slice(0, 400) || "a sincronização não ficou bem"}`); })
+          .catch((err: any) => console.warn(`[mail-push] ${key}: a sincronização falhou:`, String(err?.message ?? err).slice(0, 200)));
         if (opts.defer) opts.defer(p);
       }
     } catch {

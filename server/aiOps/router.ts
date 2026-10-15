@@ -14,6 +14,7 @@ import { getDb, logActivity } from "../db";
 import { lisbonDayOf } from "../../shared/lisbonDay";
 import { HANDOVER_CITIES } from "../../shared/shiftHandover";
 import { OPS_CITIES, opsCityOf, type OpsCity } from "./cities";
+import { seesAiAlertExplanations } from "../../shared/aiLimits";
 
 const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
 
@@ -63,7 +64,10 @@ export const aiOpsRouter = router({
     .query(async ({ ctx, input }) => {
       if (!canSeeAnomalies(ctx.user, input.domain)) return [];
       const { listAnomalies } = await import("./anomalies");
-      return listAnomalies(input.domain, { days: input.days, today: lisbonDayOf(Date.now()), dismissed: input.dismissed });
+      const list = await listAnomalies(input.domain, { days: input.days, today: lisbonDayOf(Date.now()), dismissed: input.dismissed });
+      // Jorge (8 out 2026): condutores e extras veem o alerta, não a linha da IA.
+      // (A explicação é feita 1× por dia no ops-briefing — ver quem a vê não a dispara.)
+      return seesAiAlertExplanations(ctx.user.role) ? list : list.map((a) => ({ ...a, explanation: null }));
     }),
 
   /**
@@ -112,9 +116,12 @@ export const aiOpsRouter = router({
       const { scoreLeads } = await import("./leadScoring");
       return scoreLeads(ids);
     }),
-    /** Resumo de uma linha (IA, lite, máx. 10 por pedido). */
+    /**
+     * Resumo de uma linha (IA, lite, máx. 10 por pedido). Jorge (8 out 2026):
+     * tem custo — só quem edita as leads (os recrutadores), não quem só as lê.
+     */
     summarize: protectedProcedure.input(leadIdsInput).mutation(async ({ ctx, input }) => {
-      requireAccess(ctx.user, "leads_extras", "view");
+      requireAccess(ctx.user, "leads_extras", "edit");
       const ids = (await visibleLeadIds(input.leadIds)).slice(0, 10);
       const { scoreLeads } = await import("./leadScoring");
       const { AiCallCap } = await import("./aiCall");

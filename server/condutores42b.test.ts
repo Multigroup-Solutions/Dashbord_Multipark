@@ -71,11 +71,11 @@ describe("42b: uma linha por pessoa", () => {
 });
 
 describe("42b: rotas e página", () => {
-  it("rota: Críticas (como a página), no máximo 62 dias, filtro de cidade e marca", () => {
+  it("rota: módulo condutores_agentes (como a página), no máximo 62 dias, filtro de cidade e marca", () => {
     const r = read("server/routers.ts");
     const i = r.indexOf("movementPeople: protectedProcedure");
     const block = r.slice(i, i + 1400);
-    expect(block).toContain('requireAccess(ctx.user, "criticas", "view")');
+    expect(block).toContain('requireAccess(ctx.user, "condutores_agentes", "view")');
     expect(block).toContain("days > 62");
     expect(block).toContain("cities: scopedCityNamesLive(), parkIds: await brandParkIdsFor(input.projectId)");
     // o detalhe também de agentes sem ficha (só nas cidades de quem vê — getAgentHistoryFromDb usa scopedCityNamesLive)

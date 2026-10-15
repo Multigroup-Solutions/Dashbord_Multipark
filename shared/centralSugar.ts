@@ -155,7 +155,7 @@ export function contactRedirect(hash: string): string {
   const ref = m ? parseContactRef(m[1]) : null;
   if (!ref || ref.kind === "ext") return "/";
   if (ref.kind === "crm") return `/clientes/${ref.id}`;
-  if (ref.kind === "emp") return "/rh";
+  if (ref.kind === "emp") return `/rh?employeeId=${ref.id}`;
   if (ref.kind === "tel") return `/clientes?q=${encodeURIComponent(`+${ref.id}`)}`;
   return "/clientes";
 }

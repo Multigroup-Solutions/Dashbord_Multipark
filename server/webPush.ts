@@ -1,8 +1,9 @@
 /**
- * Notificações push do browser (Web Push + VAPID) — só para as chamadas do
- * WhatsApp a tocar: "Chamada WhatsApp de <nome>" mesmo com o separador do
- * dashboard em segundo plano (o toque dentro da página continua a ser o
- * `WhatsAppCallManager`).
+ * Notificações push do browser (Web Push + VAPID) — as chamadas do WhatsApp a
+ * tocar ("Chamada WhatsApp de <nome>" mesmo com o separador do dashboard em
+ * segundo plano; o toque dentro da página continua a ser o
+ * `WhatsAppCallManager`) e, desde o plano 56, avisos para qualquer pessoa
+ * (`pushToUsers`: o código de entrada ao TL/supervisor de serviço).
  *
  *  - envs `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`
  *    (gerar com `pnpm exec web-push generate-vapid-keys`); faltam → tudo
@@ -21,7 +22,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { users, webPushSubscriptions } from "../drizzle/schema";
 import { maskPhone } from "../shared/maskPhone";
 import {
-  buildCallPushPayload, isGonePushStatus, pickPushDeliveries, vapidConfigFrom,
+  buildCallPushPayload, isGonePushStatus, isPushDisabled, payloadForSubscription, pickPushDeliveries, vapidConfigFrom,
   type PushSubscriptionInput, type VapidConfig,
 } from "../shared/webPush";
 
@@ -40,6 +41,21 @@ export function vapidConfig(): VapidConfig | null {
 const endpointHash = (endpoint: string): string => crypto.createHash("sha256").update(endpoint).digest("hex");
 const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace("T", " ");
 
+/**
+ * Auditoria A2: as subscrições de um PDA só recebem enquanto a sessão nesse PDA
+ * for de quem as tem (nonce, mesma conta, < 16 h, PDA ativo — lido em `pdas`).
+ * Sem confirmar (BD em falha) → o PDA não recebe (é um aparelho partilhado).
+ * As subscrições sem PDA ficam como sempre.
+ */
+async function onlyLivePdaSubs<T extends { pdaId?: number | null; userId: number }>(subs: T[], now = Date.now()): Promise<T[]> {
+  const pdaIds = Array.from(new Set(subs.map((s) => s.pdaId).filter((x): x is number => x != null)));
+  if (!pdaIds.length) return subs;
+  const [{ pdaSessionStore }, { pdaPushLive }] = await Promise.all([import("./pdaSessionStore"), import("../shared/pdaSession")]);
+  const rows = new Map<number, Awaited<ReturnType<ReturnType<typeof pdaSessionStore>["read"]>>>();
+  for (const id of pdaIds) rows.set(id, await pdaSessionStore().read(id).catch(() => null));
+  return subs.filter((s) => s.pdaId == null || pdaPushLive(rows.get(s.pdaId), s.userId, now));
+}
+
 async function dbOrThrow() {
   const { getDb } = await import("./db");
   const db = await getDb();
@@ -47,9 +63,14 @@ async function dbOrThrow() {
   return db;
 }
 
-/** Guarda (ou passa para esta pessoa) a subscrição deste browser. */
-export async function savePushSubscription(userId: number, sub: PushSubscriptionInput, userAgent: string | null): Promise<void> {
+/**
+ * Guarda (ou passa para esta pessoa) a subscrição deste browser. Plano 56
+ * (A2): numa sessão de PDA fica com o `pdaId` (passa a quem entrar no PDA e
+ * desliga-se quando a sessão acaba); fora de um PDA, `pdaId` fica vazio.
+ */
+export async function savePushSubscription(userId: number, sub: PushSubscriptionInput, userAgent: string | null, opts: { pdaId?: number | null } = {}): Promise<void> {
   const db = await dbOrThrow();
+  const pdaId = opts.pdaId ?? null;
   await db.insert(webPushSubscriptions).values({
     userId,
     endpointHash: endpointHash(sub.endpoint),
@@ -57,8 +78,13 @@ export async function savePushSubscription(userId: number, sub: PushSubscription
     p256dh: sub.keys.p256dh,
     auth: sub.keys.auth,
     userAgent: userAgent ? userAgent.slice(0, 255) : null,
+    ...(pdaId != null ? { pdaId } : {}),
   }).onDuplicateKeyUpdate({
-    set: { userId, p256dh: sub.keys.p256dh, auth: sub.keys.auth, userAgent: userAgent ? userAgent.slice(0, 255) : null, lastFailureAt: null },
+    set: {
+      userId, p256dh: sub.keys.p256dh, auth: sub.keys.auth, userAgent: userAgent ? userAgent.slice(0, 255) : null, lastFailureAt: null,
+      // Num PDA fica do PDA; fora dele é uma subscrição normal (sem PDA, ligada).
+      pdaId, disabledAt: null,
+    },
   });
 }
 
@@ -71,9 +97,9 @@ export async function deletePushSubscription(userId: number, endpoint: string): 
 /** A pessoa tem esta subscrição registada? */
 export async function hasPushSubscription(userId: number, endpoint: string): Promise<boolean> {
   const db = await dbOrThrow();
-  const rows = await db.select({ id: webPushSubscriptions.id }).from(webPushSubscriptions)
+  const rows = await db.select({ id: webPushSubscriptions.id, disabledAt: webPushSubscriptions.disabledAt }).from(webPushSubscriptions)
     .where(and(eq(webPushSubscriptions.endpointHash, endpointHash(endpoint)), eq(webPushSubscriptions.userId, userId))).limit(1);
-  return rows.length > 0;
+  return rows.length > 0 && !isPushDisabled(rows[0]);
 }
 
 interface CallForPush {
@@ -116,7 +142,8 @@ export async function pushRingingCalls(callIds: string[]): Promise<void> {
     const db = await dbOrThrow();
     const calls = await loadRingingCalls(callIds);
     if (!calls.length) return;
-    const subs = await db.select().from(webPushSubscriptions);
+    // Plano 56 (A2): as de um PDA só enquanto a sessão nesse PDA for de quem as tem.
+    const subs = await onlyLivePdaSubs((await db.select().from(webPushSubscriptions)).filter((s) => !isPushDisabled(s)));
     if (!subs.length) return;
 
     // Quem vê cada chamada no toque: o âmbito de cada pessoa com subscrição é
@@ -138,11 +165,14 @@ export async function pushRingingCalls(callIds: string[]): Promise<void> {
     let sent = 0;
     let removed = 0;
     for (const call of calls) {
-      const payload = JSON.stringify(buildCallPushPayload({ callId: call.id, name: call.name, phoneE164: call.phoneE164, conversationId: call.conversationId }));
+      const callPayload = buildCallPushPayload({ callId: call.id, name: call.name, phoneE164: call.phoneE164, conversationId: call.conversationId });
+      const payload = JSON.stringify(callPayload);
       for (const sub of pickPushDeliveries(subs, visibleByCall.get(call.id) ?? new Set())) {
         try {
           // TTL curto: um aviso de chamada com mais de 1 min já não serve.
-          await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload, { TTL: 60, urgency: "high" });
+          // Num PDA (A2): "Tens um aviso", sem nome nem telefone.
+          const body = sub.pdaId != null ? JSON.stringify(payloadForSubscription(sub, callPayload)) : payload;
+          await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body, { TTL: 60, urgency: "high" });
           sent++;
           await db.update(webPushSubscriptions).set({ lastSuccessAt: nowUtc() }).where(eq(webPushSubscriptions.id, sub.id));
         } catch (err: any) {
@@ -162,4 +192,52 @@ export async function pushRingingCalls(callIds: string[]): Promise<void> {
   } catch (err: any) {
     console.warn("[WebPush] aviso de chamada falhou:", String(err?.message ?? err).slice(0, 160));
   }
+}
+
+/** Aviso push genérico (plano 56: o código de entrada vai ao TL/supervisor). */
+export interface UserPushPayload {
+  /** O service worker escolhe o aspeto pelo tipo (`login_code`, `terminal`; sem tipo = chamada do WhatsApp). */
+  type: string;
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+}
+
+/**
+ * Push para TODAS as subscrições (browsers) destas pessoas — sem depender do
+ * WhatsApp. Sem chaves VAPID não faz nada. Nunca lança; devolve quantos saíram.
+ */
+export async function pushToUsers(userIds: readonly number[], payload: UserPushPayload, opts: { ttlSec?: number; urgency?: "high" | "normal" } = {}): Promise<{ sent: number }> {
+  const out = { sent: 0 };
+  const ids = Array.from(new Set(userIds.filter((x) => Number.isInteger(x) && x > 0)));
+  if (!ids.length) return out;
+  const cfg = vapidConfig();
+  if (!cfg) return out;
+  try {
+    const db = await dbOrThrow();
+    // Plano 56 (A2): as de um PDA cuja sessão acabou (logout, saída, outra pessoa, 16 h, PDA retirado) não recebem nada.
+    const subs = await onlyLivePdaSubs((await db.select().from(webPushSubscriptions).where(inArray(webPushSubscriptions.userId, ids))).filter((s) => !isPushDisabled(s)));
+    if (!subs.length) return out;
+    const webpush = (await import("web-push")).default;
+    webpush.setVapidDetails(cfg.subject, cfg.publicKey, cfg.privateKey);
+    for (const sub of subs) {
+      try {
+        // Num PDA (partilhado) o aviso não diz nada de ninguém: "Tens um aviso", abre a app.
+        const body = JSON.stringify(payloadForSubscription(sub, payload));
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, body, { TTL: opts.ttlSec ?? 600, urgency: opts.urgency ?? "high" });
+        out.sent++;
+        await db.update(webPushSubscriptions).set({ lastSuccessAt: nowUtc() }).where(eq(webPushSubscriptions.id, sub.id));
+      } catch (err: any) {
+        if (isGonePushStatus(err?.statusCode)) {
+          await db.delete(webPushSubscriptions).where(eq(webPushSubscriptions.id, sub.id)).catch(() => undefined);
+        } else {
+          await db.update(webPushSubscriptions).set({ lastFailureAt: nowUtc() }).where(eq(webPushSubscriptions.id, sub.id)).catch(() => undefined);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn("[WebPush] aviso falhou:", String(err?.message ?? err).slice(0, 160));
+  }
+  return out;
 }

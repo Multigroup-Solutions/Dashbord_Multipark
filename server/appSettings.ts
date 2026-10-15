@@ -11,6 +11,9 @@ import { sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   AUTOMATION_FLAGS,
+  PARK_ZONES_SETTING_KEY,
+  TERMINAL_AIRPORTS_SETTING_KEY,
+  parkZonesConflictError,
   settingSuperAdminOnly,
   FLAG_SETTING_PREFIX,
   SETTINGS,
@@ -21,6 +24,7 @@ import {
   isSettingKey,
   normalizeFlagEnv,
   validateSetting,
+  validateSettingForWrite,
   type SettingKey,
   type SettingValue,
 } from "../shared/appSettings";
@@ -72,6 +76,34 @@ export async function getSetting<K extends SettingKey>(key: K): Promise<SettingV
     if (!values.has(key)) return null;
     const v = validateSetting(key, values.get(key));
     return v.ok ? (v.value as SettingValue<K>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Valor gravado de uma definição lido SEM a cache, com quem e quando a mudou
+ * — para um ecrã que a edita fora das Definições (ex.: os pesos do ranking
+ * no Desempenho) ver logo o que gravou e mandar o `updatedAt` certo ao
+ * gravar (sem pisar ninguém). `value` null = sem valor gravado ou inválido
+ * (`invalid`). Nunca lança: `null` quando não deu para ler.
+ */
+export async function getSettingFresh<K extends SettingKey>(key: K): Promise<{ value: SettingValue<K> | null; invalid: boolean; updatedAt: string | null; updatedByName: string | null } | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const res = await db.execute(sql`
+      SELECT s.\`value\`, DATE_FORMAT(s.updatedAt, '%Y-%m-%d %H:%i:%s') AS updatedAt, u.name AS updatedByName
+        FROM app_settings s LEFT JOIN users u ON u.id = s.updatedById WHERE s.settingKey = ${key} LIMIT 1`);
+    const row = rowsOf(res)[0];
+    if (!row) return { value: null, invalid: false, updatedAt: null, updatedByName: null };
+    const v = validateSetting(key, parseJsonValue(row.value));
+    return {
+      value: v.ok ? (v.value as SettingValue<K>) : null,
+      invalid: !v.ok,
+      updatedAt: row.updatedAt ? String(row.updatedAt) : null,
+      updatedByName: row.updatedByName ? String(row.updatedByName) : null,
+    };
   } catch {
     return null;
   }
@@ -178,6 +210,19 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
+/** Q6: as garagens da Multipark com coordenadas (só leitura; sem ligação → nenhuma). */
+async function multiparkGarageCoords() {
+  try {
+    const [{ safeMultiparkRead }, { multiparkDbQuery }, { readGarageCoords }] = await Promise.all([
+      import("./multiparkDb/read"), import("./multiparkDb/client"), import("./multiparkDb/parkZonesSuggest"),
+    ]);
+    const r = await safeMultiparkRead("garageCoords", () => readGarageCoords(multiparkDbQuery));
+    return r.available ? r.data : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Outra pessoa gravou entretanto (20b): quem grava tem de ver o valor novo primeiro. */
 export class SettingConflictError extends Error {
   constructor(public readonly current: { updatedAt: string | null; updatedByName: string | null }) {
@@ -196,9 +241,17 @@ export async function setSetting(key: string, value: unknown, userId: number, op
   if (!isSettingKey(key) && !isFlagSettingKey(key)) throw new Error(`Definição desconhecida: ${key}`);
   let normalized: unknown = null;
   if (value !== null) {
-    const v = validateSetting(key, value);
+    const v = validateSettingForWrite(key, value);
     if (!v.ok) throw new Error(v.error);
     normalized = v.value;
+  }
+  // Plano 62 (§5.2): uma zona P2 a tocar numa zona do terminal é recusada. As zonas
+  // em vigor = garagens da Multipark (Q6; sem ligação, só as exceções) + estas exceções.
+  if (key === PARK_ZONES_SETTING_KEY && normalized !== null) {
+    const airports = (await getSettingFresh(TERMINAL_AIRPORTS_SETTING_KEY))?.value ?? SETTINGS[TERMINAL_AIRPORTS_SETTING_KEY].defaultValue;
+    const [{ effectiveParkZones }, garages] = await Promise.all([import("../shared/serviceGps"), multiparkGarageCoords()]);
+    const conflict = parkZonesConflictError(effectiveParkZones(garages, normalized as SettingValue<typeof PARK_ZONES_SETTING_KEY>).zones, airports);
+    if (conflict) throw new Error(conflict);
   }
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível.");

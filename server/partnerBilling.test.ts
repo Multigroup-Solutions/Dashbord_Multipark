@@ -32,7 +32,7 @@ describe("faturação de parceiros ← Multipark: números", () => {
   ], new Map([["pk-x", { name: "Top Parking", city: "Porto" }]]));
   it("mapas por entidade e marketplace com a taxa efetiva", () => {
     expect(live.partners.get("u-lets")).toMatchObject({ n: 3, value: 402, ours: 301.5, missing: 1 });
-    expect(live.marketplace).toEqual([{ parkId: "pk-x", parkName: "Top Parking", city: "Porto", bookings: 2, value: 200, commission: 50, missing: 0, rate: 25 }]);
+    expect(live.marketplace).toEqual([{ parkId: "pk-x", parkName: "Top Parking", city: "Porto", cityKey: null, bookings: 2, value: 200, commission: 50, missing: 0, rate: 25 }]);
   });
   it("registo ligado: parceiro fatura o nosso; Pro o preço; avença o plano pelos meses", () => {
     expect(recordBillingFromMp({ partnerType: "agencia_viagem", multiparkKind: "partner", multiparkPartnerId: "u-lets", multiparkSnapshot: null }, live, "2026-09-01", "2026-09-30"))

@@ -3,7 +3,6 @@ import {
   AVAILABILITY_PAGE_SIZE,
   availabilityStatus,
   countAvailabilityStatuses,
-  defaultOpenGroups,
   groupByCity,
   matchesAvailabilityStatus,
   visibleSlice,
@@ -35,15 +34,6 @@ describe("disponibilidade — secções por cidade", () => {
     const groups = groupByCity(rows);
     expect(groups.map((g) => g.key)).toEqual(["lisboa", "porto", "none"]);
     expect(groups[1].rows.map((r) => r.id)).toEqual([1, 4, 5]);
-  });
-
-  it("abre só a mais relevante: a do filtro, senão a maior; com pesquisa abre todas", () => {
-    const groups = groupByCity(rows);
-    expect([...defaultOpenGroups(groups)]).toEqual(["porto"]);
-    expect([...defaultOpenGroups(groups, { preferred: "lisboa" })]).toEqual(["lisboa"]);
-    expect([...defaultOpenGroups(groups, { preferred: "faro" })]).toEqual(["porto"]);
-    expect([...defaultOpenGroups(groups, { searching: true })]).toEqual(["lisboa", "porto", "none"]);
-    expect([...defaultOpenGroups([])]).toEqual([]);
   });
 
   it("mostrar mais: fatias limitadas e o que falta", () => {

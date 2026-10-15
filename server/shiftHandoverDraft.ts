@@ -35,6 +35,7 @@ import {
   openItemKey,
   parseOpenItems,
   PREVIOUS_HANDOVER_MAX_DAYS,
+  handoverAiSummaryStale,
   shiftsBetween,
   shiftSince,
   unavailableCounts,
@@ -48,6 +49,7 @@ import {
   type ShiftRef,
 } from "../shared/shiftHandoverAuto";
 import type { LiveUpcoming, ShiftState } from "./multiparkDb/shiftState";
+import { QUEUE_PHASES } from "../shared/livePhases";
 
 // ─── Helpers puros ───────────────────────────────────────────────────────────
 
@@ -135,6 +137,8 @@ export interface HandoverDraft {
     id: number; date: string; shift: HandoverShift; authorName: string | null; createdById: number | null;
     filledById: number | null;
     notes: string | null; aiSummary: string | null; openItems: OpenItem[];
+    /** O resumo IA é de antes de uma edição (não se mostra como atual). */
+    aiSummaryStale: boolean;
     ackByName: string | null; acked: boolean;
     /** Turnos sem passagem entre essa e esta (0 = é mesmo a do turno anterior). */
     missingShifts: number;
@@ -186,7 +190,9 @@ export function draftPartsFromLive(st: ShiftState): {
       } satisfies DraftBookingRow,
     };
   };
-  const pendingPhases = new Set(["pending_checkout", "baggage_waiting", "at_delivery"]);
+  // tarefa 62 (P2c, fluxo A): pendentes = só os que estão NA FILA (PENDING_CHECKOUT). Um carro "Em entrega"
+  // ou "No terminal" já saiu do parque — não é pendente da passagem de turno.
+  const pendingPhases = QUEUE_PHASES;
   return {
     ciRows: st.upcoming.checkins.map(up),
     coRows: st.upcoming.checkouts.map(up),
@@ -419,7 +425,7 @@ export async function buildHandoverDraft(key: { date: string; shift: HandoverShi
       id: Number(r.id), date: ref.date, shift: ref.shift,
       authorName: r.createdByName ?? r.filledByName ?? null, createdById: r.createdById == null ? null : Number(r.createdById),
       filledById: r.filledById == null ? null : Number(r.filledById),
-      notes: r.notes ?? null, aiSummary: r.aiSummary ?? null, ackByName: r.ackByName ?? null, acked: r.ackAt != null,
+      notes: r.notes ?? null, aiSummary: r.aiSummary ?? null, aiSummaryStale: handoverAiSummaryStale(r), ackByName: r.ackByName ?? null, acked: r.ackAt != null,
       openItems: [...items, ...notesItems].filter((i) => !i.resolved && isHandoverItem(i)),
       missingShifts: shiftsBetween(ref, cur),
     };

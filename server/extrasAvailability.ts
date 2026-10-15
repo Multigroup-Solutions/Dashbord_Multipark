@@ -351,6 +351,13 @@ export interface OverviewExtra {
   contactedWithin24h: boolean;
   availableDays: number;
   days: { day: string; morning: boolean; night: boolean; fromHour: number | null; toHour: number | null; note: string | null }[];
+  /**
+   * Dias livres HABITUAIS (8 out 2026), resumo curto — "Ter tarde · Fins de
+   * semana". Só uma dica (a tabela mostra-o a quem não preencheu a semana);
+   * null = a pessoa não indicou.
+   */
+  habitual: string | null;
+  habitualNote: string | null;
 }
 
 export interface WeekOverview {
@@ -467,6 +474,10 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
   // Último contacto por extra (WhatsApp/email) — duas queries agregadas, não
   // uma por linha. Alimenta o filtro "sem mensagem nas últimas 24h".
   const contacts = db ? await resolveLastContactForEmployeeIds(db, ids) : new Map<number, LastContact>();
+  // Dias livres habituais (só dica; tolerante — falhar a leitura não parte a página).
+  const { patternsForEmployees } = await import("./availabilityPattern");
+  const { summarizePattern } = await import("../shared/availabilityPattern");
+  const patterns = await patternsForEmployees(ids);
 
   const overviewExtras: OverviewExtra[] = extras.map(e => {
     const empRows = byEmp.get(e.id) ?? [];
@@ -497,6 +508,8 @@ export async function getWeekOverview(weekStart: string, projectId?: number | nu
       contactedWithin24h: contacts.get(e.id)?.within24h ?? false,
       availableDays,
       days,
+      habitual: patterns.has(e.id) ? summarizePattern(patterns.get(e.id)!.slots, { short: true }) || null : null,
+      habitualNote: patterns.get(e.id)?.note ?? null,
     };
   });
 

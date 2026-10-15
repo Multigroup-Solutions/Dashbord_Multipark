@@ -2,7 +2,7 @@
 modulo: reservas_operacoes
 titulo: Reservas, Recolhas, Entregas e Cancelados (listas por período)
 rotas: /operacoes
-palavras: dashboard das operações, número diferente, pendentes, compras por acabar, reservas criadas, lista de reservas por período, recolhas, entregas, cancelados, canceladas, cancelamentos, cancelamento, motivo do cancelamento, reembolso, quem cancelou, período, comparar, período anterior, por parque, canal, direto, parceiro, marketplace, falta pagar, csv, multipark, toldo, toldos, coberto, tipo de lugar
+palavras: operado por nós, não operado, dashboard das operações, número diferente, pendentes, compras por acabar, reservas criadas, lista de reservas por período, recolhas, entregas, cancelados, canceladas, cancelamentos, cancelamento, motivo do cancelamento, reembolso, quem cancelou, período, comparar, período anterior, por parque, canal, direto, parceiro, marketplace, falta pagar, csv, multipark, toldo, toldos, coberto, tipo de lugar
 ---
 # Reservas, Recolhas, Entregas e Cancelados
 
@@ -28,6 +28,7 @@ Quatro listas por **período**, nas **Operações → Reservas & Operações**, 
 - Recolhas e Entregas: quantas estão **feitas** e quantas **por fazer**.
 - Cancelados: valor cancelado, quantas com **reembolso** (e o valor reembolsado) e a contagem por **motivo**.
 - Por **canal** (Direto, Parceiro, Marketplace — clicar filtra), por grupo (Airpark/Redpark/Skypark × cidade e Marketplace) e **por parque**, sempre com o período anterior ao lado.
+- **Marketplace** = a regra única (a mesma do Marketing, das Reservas do dia e das Parcerias): **todas** as reservas dos parques que não são nossos e as dos nossos que vieram pelo Marketplace (origem Marketplace). Cada linha do Marketplace diz por baixo se o parque é **Operado por nós** ou **Não operado** (os da lista do dono e os de Definições → Parques que a operação não faz) — a comissão é diferente. É só uma etiqueta: a lista não muda.
 
 **Porque é que o número é diferente do Dashboard?**
 - O **Dashboard** (primeira aba) conta só os **parques nossos**; as listas mostram **todos os parques das tuas cidades**, também os Marketplace. Nos Cancelados, o Dashboard também deixa de fora os de **data aproximada (≈)**.

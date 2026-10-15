@@ -65,7 +65,7 @@ export function resolveCityFromProjects(
 }
 
 /** Carrega a tabela `projects` indexada por id (tabela pequena, sem cache). */
-async function loadProjectIndex(): Promise<Map<number, ProjectNode>> {
+export async function loadProjectIndex(): Promise<Map<number, ProjectNode>> {
   const db = await getDb();
   if (!db) return new Map();
   const rows = await db
@@ -89,16 +89,17 @@ export interface EmployeeCity {
  *
  * Recebe as fichas (id + projectId + address) para não voltar a lê-las da BD —
  * quem chama (o overview dos extras) já as tem em mãos. Faz no máximo duas
- * queries adicionais: `projects` (tabela pequena) e, só para quem ficou sem
- * cidade, as candidaturas do website.
+ * queries adicionais: `projects` (tabela pequena; dispensada se quem chama já
+ * passar o `index`) e, só para quem ficou sem cidade, as candidaturas do website.
  */
 export async function resolveEmployeeCities(
   people: { id: number; projectId: number | null; address?: string | null }[],
+  preloadedIndex?: Map<number, ProjectNode>,
 ): Promise<Map<number, EmployeeCity>> {
   const out = new Map<number, EmployeeCity>();
   if (people.length === 0) return out;
 
-  const index = await loadProjectIndex();
+  const index = preloadedIndex ?? (await loadProjectIndex());
   const unresolved: number[] = [];
   for (const p of people) {
     const city = resolveCityFromProjects(index, p.projectId);

@@ -7,8 +7,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  GENERAL_BOX_KEY, INTENT_BOX, TOPIC_BOX_SEEDS, availableTargets, canSeeBoxModule, parseRoutingAnswer, whatsappBoxFor,
+  GENERAL_BOX_KEY, INTENT_BOX, TOPIC_BOX_SEEDS, canSeeBoxModule, whatsappBoxFor,
 } from "../shared/commsBoxes";
+import { decideMailTriage, parseTriageCategory } from "../shared/mailTriage";
 import { WHATSAPP_INTENTS, mapWhatsappIntent } from "../shared/commsAi";
 import { mailboxConfigSchema, sourceAccountKey } from "../shared/mail";
 import { matchesBoxFilter } from "../shared/whatsappInboxView";
@@ -40,11 +41,12 @@ describe("WhatsApp: em que caixa fica a conversa", () => {
     expect(mapWhatsappIntent("parceria")).toBe("parcerias");
     expect(src("server/_core/ai/prompts/comms.ts")).toContain("servicos_extra (lavagem, carregamento, outros serviços ao carro), parcerias");
   });
-  it("a regra corre a cada mensagem e a IA aplica a caixa na triagem", () => {
+  it("a regra corre a cada mensagem e a IA aplica a caixa na triagem (só conversas novas, 49f)", () => {
     expect(src("server/whatsappInbound.ts")).toContain("await assignBoxByRule(w.conversationId);");
     const t = src("server/whatsappTriage.ts");
-    expect(t).toContain("await applyBoxFromIntent(conversationId, intent);");
-    expect(t).toContain("sql`COALESCE(${whatsappConversations.boxSource}, '') <> 'manual'`");
+    expect(t).toContain("await routeAfterTriage(conversationId, { intent, confidence: normalizeConfidence(r.output.confidence), reason: r.output.reason ?? null });");
+    // Jorge (8 out 2026): conversa que já tem caixa fica onde está (nem à mão nem pela IA muda sozinha).
+    expect(src("server/commsRouting.ts")).toContain("WHERE id = ${conversationId} AND boxKey IS NULL AND boxSource IS NULL");
   });
 });
 
@@ -76,23 +78,31 @@ describe("Quem vê cada caixa", () => {
 });
 
 describe("Email: a IA separa as caixas gerais; mover à mão; responder pelo alias de origem", () => {
-  it("destinos da IA só entre as caixas ativas; resposta inválida = fica", () => {
-    const t = availableTargets([{ key: "rh", active: true }, { key: "faturacao", active: true }, { key: "parcerias", active: false }]);
-    expect(t.map((x) => x.key)).toEqual(["rh", "faturacao"]);
-    expect(parseRoutingAnswer("Faturacao", t)).toBe("faturacao");
-    expect(parseRoutingAnswer("geral", t)).toBeNull();
-    expect(parseRoutingAnswer("parcerias", t)).toBeNull();
+  it("destinos da IA só entre as caixas ativas; caixa inativa ou resposta inválida = info", () => {
+    // 14 out 2026: a decisão é shared/mailTriage.ts (a mesma leitura dá a caixa e o caso).
+    const active = new Set(["info", "rh", "faturacao"]);
+    const facts = { sender: "external" as const, forwardedExternal: false, newThread: true, mode: "sync" as const };
+    const t = { minConfidence: 0.7, createMinConfidence: 0.85, suggestMinConfidence: 0.5 };
+    const f = { complaints: true, lostFound: true, notices: true };
+    expect(parseTriageCategory("Faturacao")).toBe("faturacao");
+    expect(parseTriageCategory("marketing")).toBeNull();
+    expect(decideMailTriage({ box: "Faturacao", confidence: 0.9 }, facts, t, f, active).routeBox).toBe("faturacao");
+    expect(decideMailTriage({ box: "parcerias", confidence: 0.9 }, facts, t, f, active).routeBox).toBe(GENERAL_BOX_KEY);
+    expect(decideMailTriage({ box: "marketing", confidence: 0.9 }, facts, t, f, active).routeBox).toBe(GENERAL_BOX_KEY);
   });
-  it("só emails NOVOS de caixa geral (aiRoute) e com o interruptor (desligado por omissão); o aviso vai à caixa nova", () => {
+  it("emails das caixas partilhadas, pela triagem, com o interruptor (ligado por omissão desde 8 out 2026); o aviso vai à caixa nova", () => {
     const svc = src("server/mail/service.ts");
-    expect(svc).toContain("if (fresh && e.result.newThread && mailbox?.aiRoute && !createdCase && !e.classification.personal) {");
-    expect(svc).toContain('if (!(await aiFeatureAvailableFresh("mail_routing"))) return null;');
+    // 14 out 2026: pré-triagem (regras) e depois a IA — também nas respostas (só mudam de caixa com um caso).
+    expect(svc).toContain("const target = await triageNewMessage(e, mailbox, {");
+    expect(svc).toContain("const pre = preTriageMail({");
+    expect(src("server/commsRouting.ts")).toContain('return aiFeatureAvailableFresh("mail_routing");');
     expect(svc).toContain("await notifyNewMail(e, noticeBox, projectId)");
-    expect(automationFlagDefault("AI_MAIL_ROUTING")).toBe(false);
+    expect(automationFlagDefault("AI_MAIL_ROUTING")).toBe(true);
   });
   it("a IA nunca muda uma conversa já movida; quem moveu fica registado", () => {
     const svc = src("server/mail/service.ts");
-    expect(svc).toContain('const guard = by === "ai" ? sql`AND routedBy IS NULL` : sql``;');
+    // 14 out 2026: só com um caso aberto (reroute) a IA muda uma conversa que ELA já separou — nunca uma movida à mão.
+    expect(svc).toContain('const guard = by === "ai" ? (opts.reroute ? sql`AND (routedBy IS NULL OR routedBy = \'ai\')` : sql`AND routedBy IS NULL`) : sql``;');
     expect(svc).toContain("SET routedFromKey = COALESCE(routedFromKey, mailboxKey), mailboxKey = ${boxKey}, routedBy = ${by}");
   });
   it("responder numa caixa por tema sai pelo endereço por onde o cliente escreveu", () => {

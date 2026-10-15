@@ -47,7 +47,8 @@ describe("29c — módulo Caixa", () => {
   });
 
   it("os avisos da Caixa vão para quem tem a Caixa e abrem /caixa", () => {
-    expect(src("shared/notificationRouting.ts").match(/module: "caixa", action: "view"/g)).toHaveLength(2);
+    // + 13 out 2026: "Caixa: justificação recusada" (pessoal, para quem fechou o dia na Confirmação).
+    expect(src("shared/notificationRouting.ts").match(/module: "caixa", action: "view"/g)).toHaveLength(3);
     const sweep = src("server/cashSweep.ts");
     expect(sweep).toContain("/caixa?tab=correcao&case=");
     expect(sweep).not.toContain("/faturacao?tab=cash-check");

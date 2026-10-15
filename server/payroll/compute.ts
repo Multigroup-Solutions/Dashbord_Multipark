@@ -15,13 +15,19 @@
  *  - extras: taxa por nível; nível sem taxa → aviso (não cai em silêncio para
  *    a mais baixa);
  *  - extras, terminal (aeroporto, interruptor PONTO_TERMINAL): os troços de
- *    terminal pagam à taxa do nível SEGUINTE (shared/pontoTerminal.ts); os
- *    "por confirmar" pagam como normais até o RH confirmar. Desligado → igual
- *    a antes;
+ *    terminal pagam à taxa do nível SEGUINTE (shared/pontoTerminal.ts); o
+ *    "partial" (saída fora do aeroporto) divide-se — terminal até à última
+ *    recolha/entrega, o resto normal (terminalSplitOfShift, a mesma do custo
+ *    dos extras); os "por confirmar" pagam como normais até o RH confirmar.
+ *    Plano 56 B2 (terminal pelo perfil): sem estado antigo no troço, as horas
+ *    de terminal são as das sessões (`terminal_sessions`, só extras —
+ *    payUplift = 1) na interseção com o turno do ponto, até ao countedUntil,
+ *    só as que contam (base ≠ pendente/desmarcado). Desligado → igual a antes;
  *  - IRS/TSU do trabalhador: ESTIMATIVA rotulada (não é apuramento fiscal).
  */
 import { countableShifts, type Shift } from "./shifts";
 import { normalizeExtraLevel, splitTerminalHours, terminalLevelOf } from "../../shared/pontoTerminal";
+import type { TerminalPaySessionLike } from "../../shared/terminalWatch";
 
 export const PAYROLL_PARAMS = {
   standardMonthlyHours: 176,
@@ -55,6 +61,8 @@ export interface EmployeeMonthInput {
   extraRateByName: Map<string, number>;
   /** interruptor PONTO_TERMINAL (omissão: desligado = como antes) */
   terminalEnabled?: boolean;
+  /** Plano 56 B2: sessões do terminal pelo perfil da pessoa (só lidas com o interruptor ligado) */
+  terminalSessions?: ReadonlyArray<TerminalPaySessionLike> | null;
 }
 
 export interface EmployeeMonthResult {
@@ -168,8 +176,9 @@ export function computeEmployeeMonth(inp: EmployeeMonthInput): EmployeeMonthResu
       warnings.push(`nível de extra ${level} sem taxa configurada — 0 € (configurar em Taxas Extra)`);
       hourlyRate = 0;
     } else hourlyRate = own;
-    // Terminal (aeroporto): troços pagos ao nível seguinte. Desligado → tudo normal.
-    const split = splitTerminalHours(countable, !!inp.terminalEnabled);
+    // Terminal (aeroporto): troços (ou a parte "partial") pagos ao nível seguinte. Desligado → tudo normal.
+    const sessions = inp.terminalSessions?.length ? inp.terminalSessions : null;
+    const split = splitTerminalHours(sessions ? countable.map((c) => ({ ...c, sessions })) : countable, !!inp.terminalEnabled);
     terminalHours = split.terminalHours;
     terminalPendingHours = split.pendingHours;
     if (terminalHours > 0) {

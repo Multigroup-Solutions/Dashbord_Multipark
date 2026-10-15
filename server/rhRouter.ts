@@ -10,7 +10,7 @@ import { protectedProcedure, router } from "./_core/trpc";
 import { canAccess, requireAccess } from "./_core/access";
 import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
-import { DEACTIVATION_NOTES_MAX, DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
+import { DEACTIVATION_NOTES_MAX, DIALOG_DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
 import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
 import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
@@ -182,8 +182,9 @@ export const rhRouter = router({
       for (const a of extra as Array<{ agentUserId: string; agentName: string | null }>) {
         agents.push({ agentUserId: String(a.agentUserId), agentName: a.agentName ?? null, principal: false, url: multiparkAgentUrl(template, String(a.agentUserId)) });
       }
-      // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo Críticas)
-      return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'criticas', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
+      // "Abrir agente" leva a Pessoas → Condutores e agentes (módulo próprio desde 14 out 2026:
+      // supervisor, back office, admin e super admin — quem não o tem não vê o botão)
+      return { agents, canManageLinks: canAccess(ctx.user, 'rh', 'manage'), canOpenAgent: canAccess(ctx.user, 'condutores_agentes', 'view'), hasAgentUrl: !!String(template ?? '').trim() };
     }),
   /**
    * Lote 46 (Jorge, 7 out 2026): com que conta(s) Google a pessoa entra
@@ -215,14 +216,28 @@ export const rhRouter = router({
         : [];
       const warnings: string[] = [];
       const principal = logins.find((l) => l.principal && l.isActive) ?? null;
-      if (principal?.role === 'user' && ['extra', 'driver', 'senior_driver'].includes(String(e.position ?? ''))) {
+      const fichaActive = Number((person.employee as any).isActive) === 1;
+      if (fichaActive && principal?.role === 'user' && ['extra', 'driver', 'senior_driver'].includes(String(e.position ?? ''))) {
         warnings.push('A conta está como "Utilizador": abre a própria ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Se é extra, muda o papel para Extra em Utilizadores.');
+      }
+      // 49c: inativo/candidato entra como utilizador de propósito; ao reativar/aprovar passa ao papel do posto.
+      if (!fichaActive && principal?.role === 'user') {
+        warnings.push('Ficha não ativa: a pessoa entra como "Utilizador" (vê a ficha, atualiza os dados e os dias livres). Ao reativar ou aprovar, a conta passa sozinha ao papel do posto.');
       }
       return { fichaEmails, logins, candidates, canLink, national, warnings };
     }),
   // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
   me: protectedProcedure.query(async ({ ctx }) => {
     return getEmployeeByUserId(ctx.user.id);
+  }),
+  /**
+   * 49c: "Voltei, quero trabalhar" — quem está INATIVO (motivo que não
+   * bloqueia) avisa o RH (sino aos recrutadores/supervisores da cidade e à
+   * pessoa do recrutamento). Só a própria ficha; sem WhatsApp nem email.
+   */
+  comeback: protectedProcedure.mutation(async ({ ctx }) => {
+    const { requestComeback } = await import("./accountLink");
+    return requestComeback({ id: ctx.user.id, email: ctx.user.email ?? null });
   }),
 
   // ── RECRUTAMENTO (emails recebidos em recursos-humanos@) ───────────────────
@@ -467,11 +482,13 @@ export const rhRouter = router({
       // (também para admins: a ficha de um super_admin fica mascarada a um admin, como no detalhe)
       const roleByUserId = new Map<number, string>();
       for (const u of await getAllUsers()) roleByUserId.set(u.id, u.role);
+      // 49c: "Candidato" é um estado (não o motivo, que é sensível) — calcula-se antes de limpar.
+      const candidateIds = new Set((rows as any[]).filter((r) => !r.employee.isActive && r.employee.deactivationReason === "candidato").map((r) => r.employee.id));
       const visible = sanitizeEmployeeRows(viewer, rows as any[], (emp) => (emp.userId != null ? roleByUserId.get(emp.userId) : null));
       // Jorge (7 out 2026): estado da carta em cada ficha (etiqueta e filtro da lista).
       const { licenceStatusesOrNull } = await import("./rhDocuments");
       const licences = await licenceStatusesOrNull(visible.map((r: any) => r.employee));
-      return visible.map((r: any) => ({ ...r, licence: licences?.get(r.employee.id) ?? null }));
+      return visible.map((r: any) => ({ ...r, licence: licences?.get(r.employee.id) ?? null, candidate: candidateIds.has(r.employee.id) }));
     }),
 
   byId: protectedProcedure
@@ -749,6 +766,14 @@ export const rhRouter = router({
       let nibPending: string | null = null;
       if (nibAct.kind === "apply") await supersedePendingForEmployee(id, ctx.user.id);
       if (nibAct.kind === "request") nibPending = (await createBankChangeRequest(id, nibAct.value, ctx.user.id)).masked;
+      // 49c: o CANDIDATO gravou telefone/NIF iguais aos de outra ficha ou
+      // candidatura → "possível duplicado" para o RH decidir (nunca bloqueia).
+      if (isOwn(viewer, id) && (input.phone !== undefined || input.nif !== undefined)) {
+        try {
+          const { flagCandidateDuplicates } = await import("./accountLink");
+          await flagCandidateDuplicates(id);
+        } catch (err) { console.warn("[rh.update] possíveis duplicados:", String((err as any)?.message ?? err).slice(0, 160)); }
+      }
       // Fase 1: mudou o email → volta a tentar ligar ao utilizador com esse email
       if (input.email !== undefined || input.personalEmail !== undefined) {
         try {
@@ -861,8 +886,9 @@ export const rhRouter = router({
       id: z.number(),
       isActive: z.boolean(),
       // Mesmo contrato de `users.toggleActive`: motivo + notas opcionais, só
-      // lidos na desativação (ver shared/deactivationReasons.ts).
-      reason: z.enum(DEACTIVATION_REASON_CODES).optional(),
+      // lidos na desativação (ver shared/deactivationReasons.ts). "Candidato"
+      // é só do sistema (49c) — não se escolhe aqui.
+      reason: z.enum(DIALOG_DEACTIVATION_REASON_CODES).optional(),
       reasonOther: z.string().max(DEACTIVATION_REASON_OTHER_MAX).optional(),
       notes: z.string().max(DEACTIVATION_NOTES_MAX).optional(),
     }))
@@ -878,47 +904,19 @@ export const rhRouter = router({
       if (!canManageEmployee(await rhViewer(ctx.user), await rhEmployeeRefOrThrow(input.id))) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para alterar o estado desta ficha." });
       }
-      const deactivation = input.isActive ? null : resolveDeactivationOrThrow(input);
-      const meta = deactivation ? { ...deactivation, byUserId: ctx.user.id } : null;
-      // Desativar a ficha desativa a conta: vale a mesma guarda do ecrã Utilizadores
-      // (não te desativas a ti próprio nem tiras o último super_admin).
-      const userId = found.employee.userId;
-      if (!input.isActive && userId) {
-        const acct = await getUserById(userId);
-        const guard = acct ? superAdminGuard(ctx.user.id, acct, null, await countActiveSuperAdmins()) : null;
-        if (guard) throw new TRPCError({ code: "FORBIDDEN", message: guard });
-        if (acct && acct.id === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Não podes desativar a tua própria ficha." });
-        // A conta desativa-se PRIMEIRO, dentro da tranca do último super_admin
-        // (atómico); se a guarda recusar, a ficha fica como estava.
-        if (acct) {
-          const locked = await guardedAccountChange(userId, (t, n) => superAdminGuard(ctx.user.id, t, null, n), (tx) => toggleUserActive(userId, false, meta, tx));
-          if (locked) throw new TRPCError({ code: "FORBIDDEN", message: locked });
-        }
+      // A cascata (conta principal + contas extra, guarda do último
+      // super_admin, a tua nunca) vive em server/employeeActivation.ts — a
+      // mesma do "Pôr inativo" das sugestões (49c).
+      const { activateEmployeeCascade, deactivateEmployeeCascade } = await import("./employeeActivation");
+      if (input.isActive) {
+        // 49c: aprovar um candidato / reativar quem voltou — sem perguntar
+        // readmissão; a conta "utilizador" passa ao papel do posto.
+        const r = await activateEmployeeCascade(ctx.user, input.id);
+        return { success: true, cascadedUser: r.cascadedUser, extraAccounts: 0, reasonLabel: null, promotedRole: r.promotedRole };
       }
-      // 41a: as contas EXTRA da pessoa também saem (a mesma guarda; a tua nunca)
-      let extraOff = 0;
-      if (!input.isActive) {
-        const { activeExtraAccounts } = await import("./personIdentity");
-        for (const xid of await activeExtraAccounts(input.id).catch(() => [] as number[])) {
-          if (xid === ctx.user.id || xid === userId) continue;
-          const locked = await guardedAccountChange(xid, (t, n) => superAdminGuard(ctx.user.id, t, null, n), (tx) => toggleUserActive(xid, false, meta, tx));
-          if (!locked) extraOff++;
-        }
-      }
-      await updateEmployee(input.id, {
-        isActive: input.isActive ? 1 : 0,
-        ...deactivationColumns(input.isActive, meta),
-      });
-      // O motivo segue para a conta: a ficha e o login contam a MESMA história.
-      if (userId && input.isActive) await toggleUserActive(userId, true, meta);
-      await logActivity({
-        userId: ctx.user.id,
-        action: input.isActive ? "activate" : "deactivate",
-        entity: "employee",
-        entityId: input.id,
-        details: `${input.isActive ? "Ativado" : "Desativado"} colaborador ${found.employee.fullName}${userId ? " + utilizador" : ""}${extraOff ? ` + ${extraOff} conta(s) extra` : ""}${deactivation ? ` — ${deactivation.summary}` : ""}`,
-      });
-      return { success: true, cascadedUser: !!userId, extraAccounts: extraOff, reasonLabel: deactivation?.label ?? null };
+      const deactivation = resolveDeactivationOrThrow(input);
+      const r = await deactivateEmployeeCascade(ctx.user, input.id, deactivation);
+      return { success: true, cascadedUser: r.cascadedUser, extraAccounts: r.extraAccounts, reasonLabel: deactivation.label, promotedRole: null };
     }),
 
   uploadPhoto: protectedProcedure
@@ -1260,11 +1258,16 @@ export const rhRouter = router({
       if (!me) return { employeeId: null as number | null, status: null as "in" | "out" | null, since: null as string | null, terminal: false };
       const records = await getTimeRecords(me.employee.id);
       const last = records[0];
-      // Troço de terminal aberto (entrada no aeroporto) — só com o interruptor ligado.
+      // Terminal pelo perfil (plano 56 B1): sessão aberta — só com o interruptor ligado.
       let terminal = false;
-      if (last?.type === "check_in" && last.terminalStatus === "start") {
+      if (last?.type === "check_in") {
         const { pontoTerminalEnabled } = await import("./pontoTerminal");
-        terminal = await pontoTerminalEnabled();
+        if (await pontoTerminalEnabled()) {
+          try {
+            const { mysqlTerminalStore } = await import("./terminalSessions");
+            terminal = !!(await (await mysqlTerminalStore()).openByEmployee(me.employee.id));
+          } catch { terminal = false; }
+        }
       }
       return {
         employeeId: me.employee.id as number | null,
@@ -1314,6 +1317,10 @@ export const rhRouter = router({
     // Terminal à mão (quem revê o ponto desta ficha): confirma ou desmarca o
     // troço de terminal de uma SAÍDA, com motivo. Não apaga nada: muda o estado
     // e regista quem, quando e porquê (também no registo de atividade).
+    // Plano 56 B2: num turno SEM estado antigo, os botões atuam nas sessões do
+    // terminal pelo perfil desse turno (server/terminalReview.ts rhSetShift —
+    // sem sobreposição, nunca em meses fechados). Os troços do método antigo
+    // (histórico) continuam como estavam.
     setTerminal: protectedProcedure
       .input(z.object({ id: z.number().int().positive(), terminal: z.boolean(), note: z.string().trim().min(3, "Escreve o motivo (mín. 3 letras).").max(255) }))
       .mutation(async ({ ctx, input }) => {
@@ -1324,6 +1331,18 @@ export const rhRouter = router({
         const empId = await employeeIdOfRecord("time_records", input.id);
         if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Registo de ponto não encontrado" });
         await assertCanManageEmployee(ctx.user, empId, "Sem permissão para rever o ponto desta pessoa.");
+        const shift = await (await import("./rhService")).shiftOfCheckOut(input.id);
+        if (shift && !shift.legacyStatus) {
+          if (!shift.inAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta saída não tem entrada: não há turno para rever." });
+          const [{ realTerminalDeps, TerminalError }, { rhSetShift }] = await Promise.all([import("./terminalSessions"), import("./terminalReview")]);
+          try {
+            const r = await rhSetShift(await realTerminalDeps(), { userId: ctx.user.id }, { employeeId: empId, inAt: shift.inAt, outAt: shift.outAt, terminal: input.terminal, note: input.note });
+            return { success: true, terminalStatus: (input.terminal ? "confirmed" : "rejected") as "confirmed" | "rejected", sessions: r.changed, message: r.message };
+          } catch (err) {
+            if (err instanceof TerminalError) throw new TRPCError({ code: err.code, message: err.message });
+            throw err;
+          }
+        }
         const { setTimeRecordTerminal } = await import("./rhService");
         const emp = await getEmployeeById(empId);
         if (!isExtraEmployee(emp?.employee)) throw new TRPCError({ code: "BAD_REQUEST", message: "O terminal é só para extras." });
@@ -1348,6 +1367,9 @@ export const rhRouter = router({
         // Token do aparelho (localStorage do browser do PDA) — liga a pessoa
         // ao PDA/Zello automaticamente no check-in do ponto
         pdaDeviceToken: z.string().optional(),
+        // Plano 56 B1: "Estou no terminal" marcado na entrada (+ imprecisão do GPS, metros)
+        terminal: z.boolean().optional(),
+        accuracy: z.number().min(0).max(1_000_000).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         // admin pode picar a qualquer um; outros só ao próprio
@@ -1362,6 +1384,10 @@ export const rhRouter = router({
         if (!empForPonto) throw new TRPCError({ code: "NOT_FOUND", message: "Colaborador não encontrado" });
         if (!empForPonto.employee.userId) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Este colaborador ainda não tem utilizador associado. Associa um utilizador na ficha do colaborador antes de picar o ponto." });
+        }
+        // 49c: quem está inativo (ou é candidato) entra para atualizar a ficha, não para picar o ponto.
+        if ((empForPonto.employee as any).isActive != null && Number((empForPonto.employee as any).isActive) === 0) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "A ficha está inativa: o RH tem de a reativar antes de picares o ponto." });
         }
         if (!empForPonto.employee.photoUrl) {
           throw new TRPCError({ code: "FORBIDDEN", message: "É preciso uma foto de perfil para picar o ponto. Adiciona a foto na ficha do colaborador." });
@@ -1380,16 +1406,24 @@ export const rhRouter = router({
         const missingAgentWarning = !empForPonto.employee.multiparkAgentName
           ? "Falta ligar o agente Multipark a este colaborador — pede à administração para o associar na ficha."
           : null;
-        // Terminal (aeroporto), interruptor PONTO_TERMINAL: entrada de um extra
-        // no aeroporto da cidade dele abre um troço de terminal (desligado → nada).
-        const { evaluateCheckInTerminal } = await import("./pontoTerminal");
-        const terminalIn = await evaluateCheckInTerminal({
-          employee: empForPonto.employee,
-          latitude: input.latitude, longitude: input.longitude,
-          prev: last ? { type: last.type, recordedAt: last.recordedAt, terminalStatus: last.terminalStatus ?? null } : null,
-        });
+        // Terminal pelo perfil (plano 56 B1, interruptor PONTO_TERMINAL; desligado → nada):
+        // o método antigo (saída + entrada no aeroporto) já não corre. "Estou no
+        // terminal" marcado → a sessão abre a seguir à entrada (ocupado → a
+        // entrada fica feita e responde-se "ocupado").
+        const terminalFix = input.latitude != null && input.longitude != null
+          ? { lat: Number(input.latitude), lng: Number(input.longitude), accuracy: input.accuracy ?? null } : null;
+        let terminalDeps: import("./terminalSessions").TerminalDeps | null = null;
+        if (input.terminal) {
+          try {
+            const d = await (await import("./terminalSessions")).realTerminalDeps();
+            terminalDeps = (await d.enabled()) ? d : null; // desligado → nada muda
+          } catch { terminalDeps = null; }
+        }
+        const terminalIn: { atAirport: 0 | 1 | null } = {
+          atAirport: terminalDeps ? await (await import("./terminalSessions")).airportFlagFor(terminalDeps, input.employeeId, terminalFix) : null,
+        };
         // Geofence do centro de custos (se configurado): fora do raio fica marcado.
-        // No aeroporto (terminal ligado) não se marca: é sítio de trabalho do extra.
+        // No aeroporto (entrada com "Estou no terminal") não se marca: é sítio de trabalho.
         const geoNoteIn = terminalIn.atAirport === 1 ? null : await checkGeofenceNote(input.employeeId, input.latitude, input.longitude);
         let photoUrl: string | null = null;
         let photoKey: string | null = null;
@@ -1416,12 +1450,22 @@ export const rhRouter = router({
             locationName: input.locationName ?? null,
             notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
             ...(terminalIn.atAirport != null ? { atAirport: terminalIn.atAirport } : {}),
-            ...(terminalIn.terminalStatus ? { terminalStatus: terminalIn.terminalStatus } : {}),
           });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
         }
-        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}${terminalIn.terminal === "start" ? " · terminal (aeroporto)" : terminalIn.terminal === "return" ? " · regresso do terminal" : ""}` });
+        await logActivity({ userId: ctx.user.id, action: "check_in", entity: "time_record", entityId: input.employeeId, details: `Check-in: ${input.locationName ?? ""}${input.terminal && terminalDeps ? " · \"Estou no terminal\"" : ""}` });
+        // Abre a sessão do terminal A SEGUIR à entrada (nunca desfaz a entrada).
+        let terminalSession: import("./terminalSessions").TerminalOpenResult | null = null;
+        if (terminalDeps) {
+          try {
+            const { startTerminal } = await import("./terminalSessions");
+            terminalSession = await startTerminal(terminalDeps, { employeeId: input.employeeId, actorUserId: ctx.user.id, fix: terminalFix, source: "checkin" });
+          } catch (err) {
+            console.warn("[terminal] entrada com terminal: sessão não aberta:", String((err as any)?.message ?? err).slice(0, 160));
+            terminalSession = { status: "refused", reason: "error", message: "A entrada ficou feita, mas o terminal não abriu. Tenta \"Estou no terminal\" outra vez." };
+          }
+        }
         // Ponto→PDA automático: se o check-in veio do browser de um PDA
         // registado, liga já a pessoa ao PDA/Zello (e troca quem lá estava).
         let pdaAttached: { pdaName: string; zelloUsername: string | null; replacedName: string | null } | null = null;
@@ -1438,7 +1482,7 @@ export const rhRouter = router({
             console.warn("[pda] ponto→PDA automático (check-in) falhou:", err);
           }
         }
-        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached, terminal: terminalIn.terminal };
+        return { success: true, warning: missingAgentWarning, outsideGeofence: !!geoNoteIn, pdaAttached, terminalSession };
       }),
 
     checkOut: protectedProcedure
@@ -1480,31 +1524,35 @@ export const rhRouter = router({
           photoUrl = result.url;
           photoKey = key;
         }
-        const diff = (new Date().getTime() - new Date(last.recordedAt).getTime()) / 3600000;
         // Regra do Jorge (turnos máx. 12h): entrada aberta há >16h = esquecimento
         // de check-out. Corta às 12h (sem extraordinárias) e marca a VERMELHO
         // para revisão — não paga dias inteiros de horas fantasma.
-        let hoursWorked: string;
-        let autoNote: string | null = null;
-        let outAt = new Date();
-        if (diff > 16) {
-          hoursWorked = "12.00";
-          outAt = new Date(new Date(last.recordedAt).getTime() + 12 * 3600000);
-          autoNote = "[SUSPEITO] check-out esquecido — cortado a 12h";
-        } else {
-          hoursWorked = diff.toFixed(2);
+        // A entrada vem da BD em UTC: lida como UTC, nunca na hora local do servidor.
+        const { checkoutHours } = await import("./payroll/shifts");
+        const { inAt, outAt, hoursWorked, forgotten } = checkoutHours(String(last.recordedAt), Date.now());
+        const autoNote: string | null = forgotten ? "[SUSPEITO] check-out esquecido — cortado a 12h" : null;
+        // Terminal pelo perfil (plano 56 B1): o método antigo (saída + entrada no
+        // aeroporto) já não corre. A saída do ponto liberta o lugar no terminal
+        // (a seguir à saída, mais abaixo). Um troço antigo ainda aberto ("start",
+        // de antes desta mudança) fecha como "por confirmar": tenta-se a última
+        // recolha/entrega e o RH decide — nunca se paga sem prova.
+        const { pontoTerminalEnabled } = await import("./pontoTerminal");
+        const terminalOn = await pontoTerminalEnabled();
+        const legacyTerminal = terminalOn && last.terminalStatus === "start";
+        const terminalFixOut = input.latitude != null && input.longitude != null ? { lat: Number(input.latitude), lng: Number(input.longitude) } : null;
+        let terminalDepsOut: import("./terminalSessions").TerminalDeps | null = null;
+        let openTerminalCity: import("../shared/terminalSession").TerminalCityKey | null = null;
+        if (terminalOn) {
+          try {
+            terminalDepsOut = await (await import("./terminalSessions")).realTerminalDeps();
+            openTerminalCity = (await terminalDepsOut.store.openByEmployee(input.employeeId))?.cityKey ?? null;
+          } catch { terminalDepsOut = null; }
         }
-        // Terminal (aeroporto), interruptor PONTO_TERMINAL: se a entrada aberta
-        // abriu um troço de terminal, a saída no aeroporto fecha-o como terminal;
-        // fora ou sem GPS fica "por confirmar" (não paga terminal até o RH ver).
-        const { evaluateCheckOutTerminal } = await import("./pontoTerminal");
-        const empForOut = last.terminalStatus ? await getEmployeeById(input.employeeId) : null;
-        const terminalOut: import("./pontoTerminal").PontoTerminalEval = empForOut
-          ? await evaluateCheckOutTerminal({ employee: empForOut.employee, latitude: input.latitude, longitude: input.longitude, openCheckInStatus: last.terminalStatus })
-          : { atAirport: null, terminalStatus: null, terminal: null };
-        // Saída esquecida (cortada às 12 h): o GPS desta saída não diz nada do
-        // troço → fica sempre "por confirmar" (o RH decide).
-        if (autoNote && terminalOut.terminalStatus === "auto") { terminalOut.terminalStatus = "pending"; terminalOut.terminal = "pending"; }
+        const terminalOut: { atAirport: 0 | 1 | null; terminalStatus: "pending" | null; terminal: "pending" | null } = {
+          atAirport: terminalDepsOut && openTerminalCity ? await (await import("./terminalSessions")).airportFlagFor(terminalDepsOut, input.employeeId, terminalFixOut, openTerminalCity) : null,
+          terminalStatus: legacyTerminal ? "pending" : null,
+          terminal: legacyTerminal ? "pending" : null,
+        };
         // Geofence: se o centro de custos do colaborador tem raio definido e o
         // check-out veio com GPS fora dele, fica marcado (permitido, mas visível).
         // No aeroporto (fim de um troço de terminal) não se marca.
@@ -1519,11 +1567,11 @@ export const rhRouter = router({
         // pessoa fez check-in nesse dia (cada dia é um PDA diferente),
         // depois a ligação fixa da ficha (telemóveis pessoais).
         const { resolveZelloUsernameForShift } = await import("./db");
-        const empZello = await resolveZelloUsernameForShift(input.employeeId, new Date(last.recordedAt), outAt);
+        const empZello = await resolveZelloUsernameForShift(input.employeeId, inAt, outAt);
         if (empZello) {
           try {
             const { summarizeZelloShift } = await import("./zello");
-            zello = await summarizeZelloShift(empZello, new Date(last.recordedAt), outAt);
+            zello = await summarizeZelloShift(empZello, inAt, outAt);
           } catch (err) {
             console.warn("[checkOut] snapshot Zello falhou:", err);
           }
@@ -1531,9 +1579,11 @@ export const rhRouter = router({
         // Inserção ATÓMICA (linha do colaborador bloqueada) + estado de
         // revisão: um check-out cortado a 12h nasce "suspicious" e não paga
         // até ser aprovado.
+        const outAtDb = outAt.toISOString().slice(0, 19).replace("T", " ");
+        let outRecordId = 0;
         try {
-          await insertTimeRecordAtomic(input.employeeId, "check_out", {
-            recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
+          ({ id: outRecordId } = await insertTimeRecordAtomic(input.employeeId, "check_out", {
+            recordedAt: outAtDb,
             photoUrl,
             photoKey,
             latitude: input.latitude ?? null,
@@ -1551,9 +1601,37 @@ export const rhRouter = router({
               zelloOfflineMinutes: zello.offlineMinutes,
               zelloOnlineMinutes: zello.onlineMinutes,
             } : {}),
-          });
+          }));
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
+        }
+        // Terminal fechado FORA do aeroporto (ou sem GPS / esquecido), Jorge 7 out
+        // 2026: conta até à ÚLTIMA recolha/entrega dele na Multipark dentro do
+        // troço ("partial"). O registo já está gravado como "pending": tenta-se
+        // já (teto curto) e, se a Multipark não responder ou não houver ações,
+        // fica "pending" — o trabalho diário repete e o RH decide.
+        let terminalPartial: { until: string; label: string } | null = null;
+        if (terminalOut.terminalStatus === "pending" && outRecordId > 0) {
+          const { resolvePendingAtCheckout } = await import("./pontoTerminal");
+          const res = await resolvePendingAtCheckout({ recordId: outRecordId, employeeId: input.employeeId, inAt: String(last.recordedAt), outAt: outAtDb });
+          if (res.status === "partial") {
+            const { terminalPartialLabel } = await import("../shared/pontoTerminal");
+            terminalPartial = { until: res.terminalUntil, label: terminalPartialLabel(res.terminalUntil) };
+          }
+        }
+        // Terminal pelo perfil: a saída do ponto liberta o lugar (corre mesmo com o
+        // interruptor desligado — uma sessão que ficou aberta não prende a cidade).
+        let terminalReleased: { message: string } | null = null;
+        try {
+          const deps = terminalDepsOut ?? await (await import("./terminalSessions")).realTerminalDeps();
+          const { releaseOnCheckout } = await import("./terminalSessions");
+          const rel = await releaseOnCheckout(deps, {
+            employeeId: input.employeeId, actorUserId: ctx.user.id, endedAtMs: outAt.getTime(), fix: terminalFixOut,
+            reason: "checkout", forgotten: !!autoNote, settle: terminalOn,
+          });
+          terminalReleased = rel ? { message: rel.message } : null;
+        } catch (err) {
+          console.warn("[terminal] lugar não libertado no check-out:", String((err as any)?.message ?? err).slice(0, 160));
         }
         // Fecha o check-in de PDA da pessoa (o aparelho fica livre para o
         // próximo turno — quando outro picar o ponto, a app troca sozinha)
@@ -1564,8 +1642,21 @@ export const rhRouter = router({
         } catch (err) {
           console.warn("[pda] fecho do PDA no check-out do ponto falhou:", err);
         }
-        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalOut.terminal === "auto" ? " · troço de terminal" : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}` });
-        return { success: true, hoursWorked, zello, terminal: terminalOut.terminal === "auto" || terminalOut.terminal === "pending" ? terminalOut.terminal : null };
+        // Plano 56 (A2): a saída do ponto acaba as sessões de PDA da pessoa (as
+        // contas da ficha, em qualquer PDA, feita em qualquer aparelho). Sem
+        // sessões de PDA (interruptor desligado) não muda nada. O resumo vai
+        // nesta resposta: depois disto a sessão do PDA já não pede mais nada.
+        let pdaSessionEnded = false;
+        try {
+          const { endPdaSessionsOfEmployee, requestSessionEnded } = await import("./pdaSession");
+          const ended = await endPdaSessionsOfEmployee(input.employeeId, "checkout", ctx.user.id);
+          pdaSessionEnded = await requestSessionEnded(ctx.req, ended);
+        } catch (err) {
+          console.warn("[pda] sessão de PDA não terminada no check-out:", String((err as any)?.message ?? err).slice(0, 160));
+        }
+        await logActivity({ userId: ctx.user.id, action: "check_out", entity: "time_record", entityId: input.employeeId, details: `Check-out: ${hoursWorked}h${zello ? ` · ${zello.km}km GPS · ${zello.offlineMinutes}min offline` : ""}${terminalPartial ? ` · ${terminalPartial.label.toLowerCase()}` : terminalOut.terminal === "pending" ? " · terminal por confirmar" : ""}${terminalReleased ? " · saiu do terminal" : ""}` });
+        const terminalResult: "auto" | "pending" | "partial" | null = terminalPartial ? "partial" : terminalOut.terminal;
+        return { success: true, hoursWorked, zello, terminal: terminalResult, terminalUntil: terminalPartial?.until ?? null, terminalLabel: terminalPartial?.label ?? null, terminalReleased, pdaSessionEnded };
       }),
 
     // ── Geofence por centro de custos (raio de picagem) ───────────────────

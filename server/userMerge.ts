@@ -121,6 +121,11 @@ export async function mergeUserAccounts(d: Db, o: { keepId: number; dropId: numb
   const role = (ROLE_RANK[String(x.role)] ?? 0) > (ROLE_RANK[String(k.role)] ?? 0) ? String(x.role) : String(k.role);
   await d.execute(sql`UPDATE users SET role = ${role}, department = COALESCE(department, ${x.department ?? null}),
     notificationPrefs = COALESCE(notificationPrefs, ${x.notificationPrefs ?? null}) WHERE id = ${o.keepId}`);
+  // 3b. Plano 56: a palavra-passe da que sai passa para a que fica (se esta não tiver).
+  try {
+    const [pw] = rowsOf(await d.execute(sql`SELECT passwordHash, passwordSetAt FROM users WHERE id = ${o.dropId} AND passwordHash IS NOT NULL LIMIT 1`));
+    if (pw?.passwordHash) await d.execute(sql`UPDATE users SET passwordHash = ${pw.passwordHash}, passwordSetAt = ${pw.passwordSetAt ?? null} WHERE id = ${o.keepId} AND passwordHash IS NULL`);
+  } catch { /* coluna ainda por criar nesta BD */ }
   // 4. A conta antiga fica desativada (nunca apagada) e a sessão dela termina.
   await d.execute(sql`UPDATE users SET isActive = 0, loginMethod = ${`merged_into_${o.keepId}`}, deactivationReason = 'conta_duplicada',
     deactivatedAt = ${o.nowDb}, deactivatedById = ${o.byUserId}, sessionVersion = COALESCE(sessionVersion, 0) + 1 WHERE id = ${o.dropId}`)

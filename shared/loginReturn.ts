@@ -42,6 +42,16 @@ export function loginUrlWithReturn(path?: string | null): string {
 }
 
 /**
+ * Plano 56: com "Entrar com email e código" ligado, entrar é na página de
+ * entrada (email + palavra-passe, código, ou Google), com o regresso em
+ * `?next=`. PURA.
+ */
+export function loginPageUrl(path?: string | null): string {
+  const next = safeReturnPath(path);
+  return next ? `/?next=${encodeURIComponent(next)}` : "/";
+}
+
+/**
  * D61 (Jorge, 3 out 2026): num PDA (aparelho partilhado) o login da Google
  * pede SEMPRE para escolher a conta — senão entra com a conta de quem usou o
  * PDA antes. O servidor não sabe que é um PDA (o token do aparelho vive no
@@ -58,7 +68,8 @@ export function loginUrlForDevice(url: string, isPda: boolean): string {
  * só precisa da identidade; com "consent" + offline a Google emitia um token de
  * longa duração a CADA entrada e, no mesmo cliente OAuth, guarda no máximo 100
  * por conta — o mais antigo (o da ligação do Gmail/Calendário) caía sem aviso
- * e aparecia "Religar". PURA.
+ * e aparecia "Religar"; e nos PDA o ecrã de consentimento levava a
+ * "Cancelar" → access_denied. PURA.
  */
 export function googlePromptFor(pdaParam: unknown): string | null {
   return pdaParam === "1" ? "select_account" : null;

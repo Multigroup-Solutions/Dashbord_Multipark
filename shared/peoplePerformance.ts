@@ -12,7 +12,10 @@
  * Regras PURAS: grupos (abas), períodos e baldes, catálogo de métricas e o
  * ranking (pontos de trabalho = soma ponderada; por hora quando há horas).
  */
-import { addDays } from "./lisbonDay";
+import { z } from "zod";
+import { addDays, lisbonDayOf, lisbonHourOf, OPERATIONAL_DAY_START_HOUR } from "./lisbonDay";
+import { SPEED_EXCESS_METRICS_VERSION, gpsDayOverThreshold } from "./speedRules";
+import { LATE_ARRIVAL_FROM_MINUTES } from "./evaluationRules";
 
 // ─── Grupos (abas) ──────────────────────────────────────────────────────────
 
@@ -121,9 +124,11 @@ export function periodTitle(period: PerfPeriod, anchor: string): string {
 
 export type PerfMetric =
   | "hours" | "workDays" | "evalPoints"
-  | "recolhas" | "entregas" | "movements" | "parkingMoves" | "cancels" | "checkingIn" | "checkingOut"
+  | "recolhas" | "entregas" | "movements" | "parkingMoves" | "spotChanges" | "cancels" | "checkingIn" | "checkingOut"
   | "created" | "updated" | "occurrences" | "speedAlerts" | "delays" | "complaintsAgainst" | "accidents"
   | "km" | "gpsDays" | "overLimitDays" | "maxSpeed"
+  // 14 out 2026 (Jorge: "2 dias com GPS e 8 de trabalho?"): dias de trabalho sem GPS e porquê
+  | "noGpsDays" | "noZelloDays"
   | "callsAnswered" | "callsMade" | "callbacks" | "waMessages" | "emails"
   | "complaintMsgs" | "complaintsClosed" | "reviewsReplied"
   | "expenses" | "expensesApproved" | "cashCounts" | "cashCorrections"
@@ -135,7 +140,11 @@ export type PerfMetric =
   // 37d (Jorge, 6 out 2026): "os Pro ficam numa coluna à parte junto com as avenças"
   | "proPlanCharges"
   // 42c (Jorge, 7 out 2026): a equipa do TL (o turno dele) e do supervisor (a cidade) — "os movimentos da equipa e quanto é que a equipa gastou… extras a mais, extras a menos… se a equipa não anda com o Zello… não mexe… está muito tempo parada"
-  | "teamDays" | "teamPersonDays" | "teamActions" | "teamCost" | "teamNoZello" | "teamHoursStopped" | "teamShortHours" | "teamOverHours" | "teamPoints";
+  | "teamDays" | "teamPersonDays" | "teamActions" | "teamCost" | "teamNoZello" | "teamHoursStopped" | "teamShortHours" | "teamOverHours" | "teamPoints"
+  // 49e (Jorge, 8 out 2026: "avança com o desempenho"): da central Vodafone também as perdidas e o tempo ao telefone
+  | "callsMissed" | "callMinutes"
+  // 14 out 2026 (Jorge): atrasos à entrada e entregas atrasadas separados; mudanças de lugar (mesma garagem) à parte dos movimentos
+  | "lateDeliveries" | "spotChanges";
 
 export interface PerfMetricDef {
   key: PerfMetric;
@@ -156,18 +165,24 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   entregas: { key: "entregas", label: "Entregas", source: "multipark" },
   movements: { key: "movements", label: "Movimentos", source: "multipark" },
   parkingMoves: { key: "parkingMoves", label: "Levar ao parque", source: "multipark" },
+  spotChanges: { key: "spotChanges", label: "Mudanças de lugar", source: "multipark" },
   cancels: { key: "cancels", label: "Cancelamentos", source: "multipark" },
   checkingIn: { key: "checkingIn", label: "Pôs em recolha", source: "multipark" },
   checkingOut: { key: "checkingOut", label: "Pôs em entrega", source: "multipark" },
   created: { key: "created", label: "Reservas criadas", source: "multipark" },
   updated: { key: "updated", label: "Alterações de reserva", source: "multipark" },
-  occurrences: { key: "occurrences", label: "Ocorrências registadas", source: "multipark" },
-  speedAlerts: { key: "speedAlerts", label: "Alertas de velocidade", source: "zello", bad: true },
-  delays: { key: "delays", label: "Atrasos", source: "avaliação", bad: true },
+  occurrences: { key: "occurrences", label: "Ocorrências que registou", source: "multipark" },
+  // 14 out 2026: os excessos da avaliação — alertas manuais/penalizações RH + 1 por dia com o Zello acima do limiar
+  speedAlerts: { key: "speedAlerts", label: "Excessos de velocidade", source: "avaliação", bad: true },
+  delays: { key: "delays", label: "Atrasos ao trabalho", source: "avaliação", bad: true },
+  // tarefa 62: regra retirada (os tempos das entregas são da organização) — já não se calcula nem aparece nas colunas
+  lateDeliveries: { key: "lateDeliveries", label: "Entregas atrasadas (regra antiga)", source: "avaliação", bad: true },
   complaintsAgainst: { key: "complaintsAgainst", label: "Reclamações contra", source: "avaliação", bad: true },
   accidents: { key: "accidents", label: "Acidentes", source: "avaliação", bad: true },
   km: { key: "km", label: "Km (GPS)", source: "zello" },
   gpsDays: { key: "gpsDays", label: "Dias com GPS", source: "zello" },
+  noGpsDays: { key: "noGpsDays", label: "Dias de trabalho sem GPS", source: "zello", bad: true },
+  noZelloDays: { key: "noZelloDays", label: "…sem Zello ligado à pessoa", source: "zello", bad: true },
   overLimitDays: { key: "overLimitDays", label: "Dias acima do limite", source: "zello", bad: true },
   maxSpeed: { key: "maxSpeed", label: "Velocidade máxima", source: "zello", max: true },
   callsAnswered: { key: "callsAnswered", label: "Chamadas atendidas", source: "dashboard" },
@@ -204,6 +219,8 @@ export const PERF_METRICS: Record<PerfMetric, PerfMetricDef> = {
   teamShortHours: { key: "teamShortHours", label: "Extras a menos (h·pessoa)", source: "dashboard", bad: true },
   teamOverHours: { key: "teamOverHours", label: "Extras a mais (h·pessoa)", source: "dashboard", bad: true },
   teamPoints: { key: "teamPoints", label: "Pontos da equipa", source: "avaliação" },
+  callsMissed: { key: "callsMissed", label: "Chamadas perdidas", source: "dashboard", bad: true },
+  callMinutes: { key: "callMinutes", label: "Minutos ao telefone", source: "dashboard" },
 };
 
 export type PerfTotals = Record<PerfMetric, number>;
@@ -218,44 +235,78 @@ export function addTotals(a: PerfTotals, b: Partial<PerfTotals>): PerfTotals {
   return a;
 }
 
+/** Peso de cada métrica nos pontos de trabalho (métrica sem peso = não conta). */
+export type PerfWeights = Partial<Record<PerfMetric, number>>;
+
+/**
+ * Pesos por omissão do escritório (a supervisão usa os mesmos e mais os da
+ * equipa). 1 ponto ≈ 5 minutos de trabalho — ver GROUP_VIEW.
+ */
+const OFFICE_WEIGHTS: PerfWeights = {
+  created: 2, updated: 0.5, returnFlights: 0.5,
+  callsAnswered: 0.5, callsMade: 0.5, callMinutes: 0.2, callbacks: 1,
+  emails: 1, waMessages: 0.2,
+  complaintMsgs: 1, complaintsClosed: 2, reviewsReplied: 1, lostFound: 2, crmUpdates: 0.5,
+  partnerAccounts: 1, partnerClosings: 6, partnerCharges: 1, proPlanCharges: 1,
+  expenses: 1, expensesApproved: 0.5, cashCounts: 2, cashCorrections: 1,
+  tasksDone: 1, leadsActions: 1,
+};
+
 /**
  * O que cada aba mostra (cartões, colunas, gráfico) e o peso de cada coisa
  * nos "pontos de trabalho" do ranking. Pesos negativos = descontam. Nos
  * condutores e team leaders o trabalho na rua conta pelos pontos da
  * avaliação (as mesmas regras de sempre: recolhas, entregas, movimentos,
  * levar ao parque, atrasos, reclamações, acidentes…).
+ *
+ * Pesos (8 out 2026, Jorge: "avança com os pesos do ranking"): 1 ponto ≈ 5
+ * minutos de trabalho, a mesma escala da avaliação (recolha/entrega = 3,
+ * movimento = 2, levar ao parque = 5). Horas e km continuam a não dar pontos
+ * (o "por hora" já divide pelas horas). As chamadas perdidas aparecem mas não
+ * contam (a chamada toca em várias consolas). Estes são as OMISSÕES: o super
+ * admin muda-os sem deploy em Desempenho → "Como se contam os pontos desta
+ * aba" → Editar pesos (definição `perf.rankWeights`; ver effectiveWeights).
  */
-export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfMetric[]; chart: PerfMetric[]; weights: Partial<Record<PerfMetric, number>> }> = {
+export const GROUP_VIEW: Record<PerfGroup, { cards: PerfMetric[]; columns: PerfMetric[]; chart: PerfMetric[]; weights: PerfWeights }> = {
   office: {
     cards: ["hours", "callsAnswered", "emails", "waMessages", "created", "updated", "complaintMsgs", "reviewsReplied"],
-    columns: ["hours", "callsAnswered", "callsMade", "emails", "waMessages", "created", "updated", "returnFlights", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "cashCorrections", "tasksDone", "leadsActions"],
+    columns: ["hours", "callsAnswered", "callsMade", "callbacks", "callsMissed", "callMinutes", "emails", "waMessages", "created", "updated", "returnFlights", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "cashCorrections", "tasksDone", "leadsActions"],
     chart: ["callsAnswered", "emails", "created", "updated"],
-    weights: { callsAnswered: 2, callsMade: 1, callbacks: 1, emails: 2, waMessages: 0.5, created: 3, updated: 1, returnFlights: 1, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, proPlanCharges: 3, expenses: 1, expensesApproved: 1, cashCorrections: 2, cashCounts: 1, tasksDone: 1, leadsActions: 1 },
+    weights: { ...OFFICE_WEIGHTS },
   },
   supervision: {
     cards: ["hours", "leadsActions", "created", "updated", "cashCorrections", "complaintsClosed", "tasksDone", "callsAnswered"],
-    columns: ["hours", "teamPoints", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
+    columns: ["hours", "teamPoints", "leadsActions", "extrasDia", "created", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "emails", "waMessages", "complaintMsgs", "complaintsClosed", "reviewsReplied", "lostFound", "crmUpdates", "partnerAccounts", "partnerClosings", "partnerCharges", "proPlanCharges", "expenses", "expensesApproved", "cashCounts", "cashCorrections", "handovers", "tasksDone"],
     chart: ["leadsActions", "created", "cashCorrections", "complaintsClosed"],
-    weights: { teamPoints: 1, leadsActions: 2, extrasDia: 1, created: 3, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, emails: 2, waMessages: 0.5, complaintMsgs: 2, complaintsClosed: 3, reviewsReplied: 2, lostFound: 2, crmUpdates: 1, partnerAccounts: 1, partnerClosings: 3, partnerCharges: 3, proPlanCharges: 3, expenses: 1, expensesApproved: 2, cashCounts: 2, cashCorrections: 2, handovers: 2, tasksDone: 1 },
+    weights: { teamPoints: 1, ...OFFICE_WEIGHTS, extrasDia: 0.5, handovers: 2 },
   },
   teamleaders: {
     cards: ["hours", "recolhas", "entregas", "checkingIn", "checkingOut", "callsAnswered", "tlDays", "teamPeople"],
-    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "complaintsAgainst"],
+    columns: ["hours", "evalPoints", "teamPoints", "recolhas", "entregas", "movements", "spotChanges", "checkingIn", "checkingOut", "updated", "returnFlights", "callsAnswered", "callsMade", "callsMissed", "callMinutes", "waMessages", "cashCounts", "handovers", "extrasDia", "lostFound", "tlDays", "teamPeople", "occurrences", "delays", "speedAlerts", "complaintsAgainst"],
     chart: ["recolhas", "entregas", "checkingIn", "checkingOut"],
-    weights: { evalPoints: 1, teamPoints: 1, checkingIn: 1, checkingOut: 1, updated: 1, returnFlights: 1, callsAnswered: 2, callsMade: 1, waMessages: 0.5, cashCounts: 3, handovers: 3, extrasDia: 1, lostFound: 2, occurrences: 1 },
+    weights: { evalPoints: 1, teamPoints: 1, checkingIn: 0.5, checkingOut: 0.5, updated: 0.5, returnFlights: 0.5, callsAnswered: 0.5, callsMade: 0.5, callMinutes: 0.2, waMessages: 0.2, cashCounts: 2, handovers: 2, extrasDia: 0.5, lostFound: 2, occurrences: 1 },
   },
   drivers: {
     cards: ["hours", "recolhas", "entregas", "movements", "km", "overLimitDays", "occurrences", "evalPoints"],
-    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "km", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "complaintsAgainst", "accidents"],
+    columns: ["hours", "workDays", "evalPoints", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "km", "gpsDays", "noGpsDays", "maxSpeed", "overLimitDays", "speedAlerts", "occurrences", "delays", "complaintsAgainst", "accidents"],
     chart: ["recolhas", "entregas", "movements"],
-    weights: { evalPoints: 1, overLimitDays: -10, occurrences: 1 },
+    // 14 out 2026: os dias acima do limite já descontam −10 nos pontos da avaliação (excesso de velocidade) — aqui não repetem
+    weights: { evalPoints: 1, occurrences: 1 },
   },
 };
 
-/** Pontos de trabalho = soma ponderada (as horas e os km não contam). PURA. */
-export function workPoints(group: PerfGroup, t: PerfTotals): number {
+/**
+ * Pontos de trabalho = soma ponderada (as horas e os km não contam). Sem
+ * `weights`, as omissões da aba; o servidor passa os pesos em vigor
+ * (effectiveWeights). PURA.
+ */
+export function workPoints(group: PerfGroup, t: PerfTotals, weights: PerfWeights = GROUP_VIEW[group].weights): number {
   let s = 0;
-  for (const [k, w] of Object.entries(GROUP_VIEW[group].weights) as Array<[PerfMetric, number]>) s += (t[k] ?? 0) * w;
+  const skip = unweightedMetricsFor(group);
+  for (const [k, w] of Object.entries(weights) as Array<[PerfMetric, number]>) {
+    if (skip.has(k) || !Number.isFinite(w)) continue;
+    s += (t[k] ?? 0) * w;
+  }
   return Math.round(s * 10) / 10;
 }
 
@@ -272,19 +323,225 @@ export const TEAM_COLUMNS: PerfMetric[] = ["teamDays", "teamPersonDays", "teamAc
  * conta — Lisboa não ganha ao Porto só por ser maior): cada movimento
  * (recolha, entrega ou movimento) por pessoa +1; cada pessoa que mexeu
  * carros sem o Zello ligado −20 a dividir pela equipa (a equipa toda sem
- * Zello apaga um dia normal); cada hora parada por pessoa −2. Propostos
- * (Jorge decide os pesos).
+ * Zello apaga um dia normal); cada hora parada por pessoa −2. São as
+ * omissões; o super admin muda-as em Editar pesos (`perf.rankWeights` → team).
  */
-export const TEAM_POINT_WEIGHTS = { actionsPerPerson: 1, noZelloPerPerson: -20, stoppedHoursPerPerson: -2 } as const;
+export interface TeamPointWeights { actionsPerPerson: number; noZelloPerPerson: number; stoppedHoursPerPerson: number }
+export const TEAM_POINT_WEIGHTS: Readonly<TeamPointWeights> = { actionsPerPerson: 1, noZelloPerPerson: -20, stoppedHoursPerPerson: -2 };
+export const TEAM_WEIGHT_KEYS: ReadonlyArray<keyof TeamPointWeights> = ["actionsPerPerson", "noZelloPerPerson", "stoppedHoursPerPerson"];
+export const TEAM_WEIGHT_LABELS: Record<keyof TeamPointWeights, string> = {
+  actionsPerPerson: "Movimento da equipa (recolha, entrega ou movimento)",
+  noZelloPerPerson: "Pessoa que mexeu carros sem Zello",
+  stoppedHoursPerPerson: "Hora parada (GPS)",
+};
 
 export interface TeamDay { people: number; actions: number; noZello: number; hoursStopped: number }
 
-/** Pontos da equipa num dia (0 sem gente). PURA. */
-export function teamDayPoints(t: TeamDay): number {
+/** Pontos da equipa num dia (0 sem gente). Sem `w`, as omissões; o servidor passa os em vigor (effectiveTeamWeights). PURA. */
+export function teamDayPoints(t: TeamDay, w: TeamPointWeights = TEAM_POINT_WEIGHTS): number {
   if (!(t.people > 0)) return 0;
-  const w = TEAM_POINT_WEIGHTS;
   const v = (t.actions / t.people) * w.actionsPerPerson + (t.noZello / t.people) * w.noZelloPerPerson + (t.hoursStopped / t.people) * w.stoppedHoursPerPerson;
   return Math.round(v * 10) / 10;
+}
+
+// ─── Pesos editáveis (Jorge, 8 out 2026: "avança com os pesos do ranking") ──
+
+/**
+ * Definição com as sobreposições dos pesos (Definições → Parâmetros, ou o
+ * botão Editar pesos do Desempenho). Só o que difere das omissões do código:
+ * `{ "office": { "created": 3 }, "team": { "noZelloPerPerson": -10 } }`.
+ * Um peso 0 = "não conta"; uma métrica ausente = a omissão. `{}` = omissões.
+ */
+export const PERF_RANK_WEIGHTS_KEY = "perf.rankWeights" as const;
+/** Limite de cada peso (para os dois lados). */
+export const RANK_WEIGHT_LIMIT = 10_000;
+/** Nunca dão pontos: o "por hora" já divide pelas horas, e os km não são trabalho feito. */
+export const UNWEIGHTED_METRICS: ReadonlySet<PerfMetric> = new Set<PerfMetric>(["hours", "km"]);
+
+/**
+ * 14 out 2026: o que JÁ está dentro dos pontos da avaliação (evalPoints) —
+ * nas abas que contam por evalPoints (condutores e team leaders) não podem ter
+ * peso próprio, senão contavam duas vezes (ex.: um dia acima do limite já
+ * desconta −10 como excesso de velocidade).
+ */
+export const EVAL_INCLUDED_METRICS: ReadonlySet<PerfMetric> = new Set<PerfMetric>([
+  "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "speedAlerts", "overLimitDays",
+  "delays", "lateDeliveries", "complaintsAgainst", "accidents",
+]);
+/** A aba conta pelos pontos da avaliação? */
+export const usesEvalPoints = (group: PerfGroup): boolean => (GROUP_VIEW[group].weights.evalPoints ?? 0) !== 0;
+/** Métricas sem peso nesta aba: horas e km sempre; nas abas da avaliação, também o que já está nos evalPoints. PURA. */
+export function unweightedMetricsFor(group: PerfGroup): ReadonlySet<PerfMetric> {
+  return usesEvalPoints(group) ? new Set<PerfMetric>([...UNWEIGHTED_METRICS, ...EVAL_INCLUDED_METRICS]) : UNWEIGHTED_METRICS;
+}
+
+export const isPerfMetric = (k: string): k is PerfMetric => Object.prototype.hasOwnProperty.call(PERF_METRICS, k);
+const oneDecimal = (n: number) => Math.abs(n * 10 - Math.round(n * 10)) < 1e-6;
+
+/** Um peso: número entre −10 000 e 10 000, no máximo 1 casa decimal. */
+export const rankWeightSchema = z.number({ error: "O peso tem de ser um número." })
+  .min(-RANK_WEIGHT_LIMIT, "O peso tem de estar entre −10 000 e 10 000.")
+  .max(RANK_WEIGHT_LIMIT, "O peso tem de estar entre −10 000 e 10 000.")
+  .refine(oneDecimal, "O peso só pode ter 1 casa decimal (ex.: 0,5).")
+  .transform((n) => Math.round(n * 10) / 10);
+
+const groupWeightsSchemaFor = (group: PerfGroup) => z.record(z.string(), rankWeightSchema).superRefine((rec, ctx) => {
+  for (const k of Object.keys(rec)) {
+    if (!isPerfMetric(k)) ctx.addIssue({ code: "custom", message: `Métrica desconhecida: ${k}.` });
+    else if (UNWEIGHTED_METRICS.has(k)) ctx.addIssue({ code: "custom", message: `${PERF_METRICS[k].label}: horas e km não dão pontos.` });
+    else if (usesEvalPoints(group) && EVAL_INCLUDED_METRICS.has(k)) ctx.addIssue({ code: "custom", message: `${PERF_METRICS[k].label}: já conta nos pontos da avaliação desta aba (não pode ter peso próprio).` });
+  }
+});
+
+const teamWeightsSchema = z.strictObject({
+  actionsPerPerson: rankWeightSchema.optional(),
+  noZelloPerPerson: rankWeightSchema.optional(),
+  stoppedHoursPerPerson: rankWeightSchema.optional(),
+}, { error: (iss) => (iss.code === "unrecognized_keys" ? `Peso da equipa desconhecido: ${iss.keys.join(", ")} (usa actionsPerPerson, noZelloPerPerson ou stoppedHoursPerPerson).` : undefined) });
+
+/** Sobreposições dos pesos do ranking, por aba, e os da equipa. */
+export const rankWeightsSchema = z.strictObject({
+  office: groupWeightsSchemaFor("office").optional(),
+  supervision: groupWeightsSchemaFor("supervision").optional(),
+  teamleaders: groupWeightsSchemaFor("teamleaders").optional(),
+  drivers: groupWeightsSchemaFor("drivers").optional(),
+  team: teamWeightsSchema.optional(),
+}, {
+  error: (iss) => (iss.code === "unrecognized_keys" ? `Aba desconhecida: ${iss.keys.join(", ")} (usa office, supervision, teamleaders, drivers ou team).`
+    : iss.code === "invalid_type" ? 'Tem de ser um objeto, ex.: {"office": {"created": 3}}.' : undefined),
+});
+export type RankWeightOverrides = z.output<typeof rankWeightsSchema>;
+
+/**
+ * Tira de um valor gravado os pesos que já não podem existir (EVAL_INCLUDED_METRICS
+ * nas abas da avaliação). PURA: devolve uma cópia; o resto fica como está.
+ */
+export function stripEvalIncludedWeights(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const out: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  for (const g of Object.keys(GROUP_VIEW) as PerfGroup[]) {
+    const rec = out[g];
+    if (!usesEvalPoints(g) || !rec || typeof rec !== "object" || Array.isArray(rec)) continue;
+    out[g] = Object.fromEntries(Object.entries(rec as Record<string, unknown>).filter(([k]) => !EVAL_INCLUDED_METRICS.has(k as PerfMetric)));
+  }
+  return out;
+}
+
+/**
+ * Para LER o valor gravado (14 out 2026): um peso que passou a ser proibido
+ * (ex.: drivers.overLimitDays, gravado antes) é ignorado — o resto vale. Para
+ * GRAVAR usa-se o rankWeightsSchema, que o recusa.
+ */
+export const rankWeightsReadSchema = z.preprocess(stripEvalIncludedWeights, rankWeightsSchema);
+
+/**
+ * Pesos em vigor numa aba: as omissões do código com as sobreposições por
+ * cima. Um 0 fica (= não conta, e o ecrã mostra-o como alterado); métricas
+ * desconhecidas, horas e km são ignoradas. PURA.
+ */
+export function effectiveWeights(group: PerfGroup, overrides?: RankWeightOverrides | null): PerfWeights {
+  const out: PerfWeights = { ...GROUP_VIEW[group].weights };
+  const skip = unweightedMetricsFor(group);
+  for (const [k, v] of Object.entries(overrides?.[group] ?? {})) {
+    if (isPerfMetric(k) && !skip.has(k) && typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+/** Pesos da equipa em vigor (omissões + sobreposições). PURA. */
+export function effectiveTeamWeights(overrides?: RankWeightOverrides | null): TeamPointWeights {
+  const out: TeamPointWeights = { ...TEAM_POINT_WEIGHTS };
+  const t = overrides?.team ?? {};
+  for (const k of TEAM_WEIGHT_KEYS) {
+    const v = t[k];
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * O que o editor grava para uma aba: só os pesos que diferem da omissão (uma
+ * métrica sem omissão com 0 não é sobreposição — já não contava). PURA.
+ */
+export function weightOverridesOf(group: PerfGroup, edited: PerfWeights): PerfWeights {
+  const defaults = GROUP_VIEW[group].weights;
+  const out: PerfWeights = {};
+  const skip = unweightedMetricsFor(group);
+  for (const [k, v] of Object.entries(edited) as Array<[PerfMetric, number]>) {
+    if (!isPerfMetric(k) || skip.has(k) || typeof v !== "number" || !Number.isFinite(v)) continue;
+    if ((defaults[k] ?? 0) === v) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/** O mesmo para os pesos da equipa. PURA. */
+export function teamWeightOverridesOf(edited: Partial<TeamPointWeights>): Partial<TeamPointWeights> {
+  const out: Partial<TeamPointWeights> = {};
+  for (const k of TEAM_WEIGHT_KEYS) {
+    const v = edited[k];
+    if (typeof v === "number" && Number.isFinite(v) && v !== TEAM_POINT_WEIGHTS[k]) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Junta o que se grava de uma aba (e, se vier, da equipa) às sobreposições
+ * que já lá estão das outras abas. Vazio sai (volta à omissão). PURA.
+ */
+export function withTabOverrides(all: RankWeightOverrides | null | undefined, group: PerfGroup, groupOverrides: PerfWeights, team?: Partial<TeamPointWeights>): RankWeightOverrides {
+  const next: RankWeightOverrides = { ...(all ?? {}) };
+  if (Object.keys(groupOverrides).length) next[group] = { ...groupOverrides } as Record<string, number>;
+  else delete next[group];
+  if (team !== undefined) {
+    if (Object.keys(team).length) next.team = { ...team };
+    else delete next.team;
+  }
+  return next;
+}
+
+/**
+ * 14 out 2026 (Jorge: "a tabela fica toda apertada à esquerda"): reparte uma
+ * lista por `cols` colunas seguidas e equilibradas (a 1.ª fica com o resto),
+ * para a tabela dos pesos ocupar a largura toda no computador; no telemóvel
+ * as colunas ficam umas por baixo das outras, pela mesma ordem. PURA.
+ */
+export function balancedColumns<T>(list: readonly T[], cols: number): T[][] {
+  const n = Math.max(1, Math.floor(cols) || 1);
+  if (list.length === 0) return [];
+  const per = Math.ceil(list.length / n);
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += per) out.push(list.slice(i, i + per));
+  return out;
+}
+
+/**
+ * 14 out 2026 (Jorge sobre o detalhe de uma pessoa: "8 dias, 80 atrasos, 141
+ * km/h, 2 dias com GPS — de onde vem isto?"): o porquê dos números que não se
+ * explicam sozinhos — de que são feitos os atrasos e porque faltam dias de GPS. PURA.
+ */
+export function explainPersonTotals(t: Partial<Record<PerfMetric, number>>): string[] {
+  const nf = new Intl.NumberFormat("pt-PT", { maximumFractionDigits: 1 });
+  const n = (k: PerfMetric) => Number(t[k] ?? 0) || 0;
+  const out: string[] = [];
+  // Tarefa 62: só os atrasos ao trabalho (≥ 5 min); a "entrega atrasada" saiu (os tempos são da organização)
+  if (n("delays") > 0) out.push(`Atrasos ao trabalho ${nf.format(n("delays"))}: entrada no ponto ${LATE_ARRIVAL_FROM_MINUTES} min ou mais depois da hora da escala ou do horário, no máximo 1 por dia. Cada um −5 na avaliação.`);
+  if (n("noGpsDays") > 0) {
+    const noZ = n("noZelloDays"), other = n("noGpsDays") - noZ;
+    const why = [
+      noZ > 0 ? `${nf.format(noZ)} sem Zello ligado à pessoa (nem Zello na ficha, nem PDA lido com o QR nesse dia) — liga-o em Atividade diária → Ao vivo → "Utilizadores Zello ↔ Pessoas"` : null,
+      other > 0 ? `${nf.format(other)} com Zello ou PDA mas sem GPS recolhido (Zello ou localização desligados, sem sinal, ou a recolha ainda não chegou a esse dia)` : null,
+    ].filter(Boolean);
+    out.push(`${nf.format(n("noGpsDays"))} dia(s) de trabalho sem GPS: ${why.join("; ")}.`);
+  }
+  if (n("speedAlerts") > 0) out.push(`Excessos de velocidade ${nf.format(n("speedAlerts"))}: alertas e penalizações de velocidade e 1 por dia com o GPS do Zello acima do limite. Cada um −10 na avaliação.`);
+  return out;
+}
+
+/** "+1", "−20", "+0,5", "0" (o sinal menos tipográfico, vírgula decimal). PURA. */
+export function signedWeight(n: number): string {
+  const abs = String(Math.abs(Math.round(n * 10) / 10)).replace(".", ",");
+  return n > 0 ? `+${abs}` : n < 0 ? `−${abs}` : "0";
 }
 
 /**
@@ -297,9 +554,46 @@ export function rosterGroup(base: PerfGroup | null, roster: { days: number; tlDa
   return base;
 }
 
-/** 42c: "tem km e nenhum movimento" — o Zello/PDA e o agente da Multipark não estão na mesma ficha. PURA. */
-export function kmWithoutMoves(t: Pick<PerfTotals, "km" | "recolhas" | "entregas" | "movements">): boolean {
-  return t.km > 0 && t.recolhas + t.entregas + t.movements === 0;
+/**
+ * 42c: "tem km e nenhum movimento" — o Zello/PDA e o agente da Multipark não
+ * estão na mesma ficha. 14 out 2026: uma mudança de lugar também é mexer em
+ * carros (só não conta como movimento). PURA.
+ */
+export function kmWithoutMoves(t: Pick<PerfTotals, "km" | "recolhas" | "entregas" | "movements"> & Partial<Pick<PerfTotals, "spotChanges">>): boolean {
+  return t.km > 0 && t.recolhas + t.entregas + t.movements + (t.spotChanges ?? 0) === 0;
+}
+
+/**
+ * 14 out 2026: um dia de GPS (uma linha do Zello ou a parte de um PDA) está
+ * acima do limite? A MESMA regra da Avaliação (server/evaluationCore.ts →
+ * gpsDays: velocidade máxima do dia > limite com a tolerância), para os "Dias
+ * acima do limite" baterem com os excessos que descontam −10. Nas linhas
+ * recolhidas com a regra nova (metricsVersion ≥ 5) a máxima já vem sem picos
+ * falsos e, acima do limite, só de um excesso confirmado (pontos seguidos —
+ * shared/speedRules.ts); nas antigas é a máxima bruta (`approx`). Sem limite:
+ * nunca. Tarefa 62: com a "trava da linha GPS" (gpsDayOverThreshold) — o
+ * limite é o MAIOR entre o de hoje e o da recolha da linha (`speedThresholdKmh`;
+ * sem ele, 132). `locked` = acima do limite de hoje mas não do da recolha (não
+ * conta até se re-dividir o dia). PURA.
+ */
+export function gpsDayOverLimit(g: { metricsVersion?: unknown; maxSpeed?: unknown; speedThresholdKmh?: unknown }, threshold: number | null): { over: boolean; approx: boolean; locked: boolean } {
+  const valid = threshold != null && Number.isFinite(threshold);
+  const over = valid && gpsDayOverThreshold(g.maxSpeed, threshold, g.speedThresholdKmh);
+  const locked = valid && !over && (Number(g.maxSpeed) || 0) > (threshold as number);
+  return { over, approx: over && (Number(g.metricsVersion) || 0) < SPEED_EXCESS_METRICS_VERSION, locked };
+}
+
+/** Dias de Lisboa tocados por um check-in de PDA (UTC; sem saída = até agora; no máximo 4). PURA. */
+export function lisbonDaysTouched(start: unknown, end: unknown, nowMs: number = Date.now()): string[] {
+  const ms = (v: unknown) => (v instanceof Date ? v.getTime() : Date.parse(`${String(v ?? "").trim().replace(" ", "T").slice(0, 19)}Z`));
+  const a = ms(start);
+  if (!Number.isFinite(a)) return [];
+  const raw = end == null || end === "" ? nowMs : ms(end);
+  const b = Number.isFinite(raw) && raw > a ? raw : a;
+  const out: string[] = [];
+  const last = lisbonDayOf(b);
+  for (let d = lisbonDayOf(a), i = 0; i < 4 && d <= last; i++, d = addDays(d, 1)) out.push(d);
+  return out;
 }
 
 /** Abaixo disto de horas no período não há "por hora" (dá números absurdos). */
@@ -334,3 +628,98 @@ export function perHourOf(points: number, hours: number): number | null {
 
 /** Hora UTC "YYYY-MM-DD HH:00:00" → instante (ms). PURA. */
 export const utcHourMs = (h: string) => Date.parse(`${String(h).replace(" ", "T").slice(0, 13)}:00:00Z`);
+
+// ─── 49e: telefonemas da central, emails das caixas pessoais, atividade por hora ──
+
+/**
+ * 39g/49e: uma chamada da central (consola Vodafone) é interna quando a
+ * consola a ligou a um colega do RH ("emp-…") ou a uma extensão ("ext-…").
+ * As internas não contam — exceto o supervisor a ligar a um extra (a chamar
+ * o pessoal). O que cada chamada dá no Desempenho de quem a atendeu ou fez
+ * (o SQL de server/peoplePerformance.ts faz o mesmo, agrupado). PURA.
+ *  - recebida e atendida → atendida (+ minutos);
+ *  - recebida e não atendida → perdida;
+ *  - feita → feita (+ minutos); e devolução quando é a 1.ª chamada feita
+ *    para um número/contacto com uma perdida nas 24 h anteriores.
+ */
+export function centralCallMetrics(c: {
+  direction: "in" | "out"; held: boolean; contactRef: string | null; durationS: number | null;
+  callerIsSupervisor?: boolean; otherIsExtra?: boolean; returnsMissed?: boolean;
+}): Partial<Record<PerfMetric, number>> {
+  const ref = String(c.contactRef ?? "");
+  const internal = /^(emp|ext)-/.test(ref);
+  const minutes = Math.max(0, Number(c.durationS ?? 0) || 0) / 60;
+  if (c.direction === "in") {
+    if (internal) return {};
+    return c.held ? { callsAnswered: 1, callMinutes: minutes } : { callsMissed: 1 };
+  }
+  const supToExtra = ref.startsWith("emp-") && !!c.callerIsSupervisor && !!c.otherIsExtra;
+  if (internal && !supToExtra) return {};
+  return { callsMade: 1, callMinutes: minutes, ...(!internal && c.returnsMissed ? { callbacks: 1 } : {}) };
+}
+
+/** Janela da devolução: liga de volta até 24 h depois da perdida. */
+export const CALLBACK_WINDOW_HOURS = 24;
+
+/**
+ * 49e: de quem é um email enviado. Uma linha de mail_messages conta UMA vez:
+ *  - enviado pela dashboard → quem carregou em Enviar (`sentById`);
+ *  - senão, enviado da caixa Gmail PESSOAL ligada (conta "user:N", fora das
+ *    caixas partilhadas) → o dono dessa conta, N;
+ *  - enviado diretamente de uma caixa partilhada (info@, reservas@…) fora da
+ *    dashboard → sem autor (não conta).
+ * Automáticos e recebidos nunca contam. PURA.
+ */
+export function emailAuthorOf(m: { direction: string; automated: number | null; sentById: number | null; accountKey: string | null; mailboxKey: string | null }): number | null {
+  if (m.direction !== "out" || Number(m.automated ?? 0) !== 0) return null;
+  if (m.sentById != null) return Number(m.sentById);
+  const own = /^user:(\d+)$/.exec(String(m.accountKey ?? ""));
+  return own && m.mailboxKey == null ? Number(own[1]) : null;
+}
+
+export const HOURS_OF_DAY = 24;
+export const emptyHours = (): number[] => new Array(HOURS_OF_DAY).fill(0);
+
+/** Hora de RELÓGIO de Lisboa (0–23) de uma hora UTC agrupada no SQL ("YYYY-MM-DD HH"); inválida → null. PURA. */
+export function lisbonHourOfUtcHour(h: string): number | null {
+  const ms = utcHourMs(h);
+  return Number.isFinite(ms) ? lisbonHourOf(ms) : null;
+}
+
+/** Contagens por hora guardadas pela avaliação ("[0,0,…]", 24 números) → lista; outra coisa → null. PURA. */
+export function parseHours(raw: unknown): number[] | null {
+  if (raw == null || raw === "") return null;
+  let v: unknown = raw;
+  if (typeof raw === "string") { try { v = JSON.parse(raw); } catch { return null; } }
+  if (!Array.isArray(v) || v.length !== HOURS_OF_DAY) return null;
+  return v.map((x) => Math.max(0, Number(x) || 0));
+}
+
+/** Soma b em a (24 horas). Muda `a`. */
+export function addHours(a: number[], b: ReadonlyArray<number>): number[] {
+  for (let i = 0; i < HOURS_OF_DAY; i++) a[i] += Number(b[i] ?? 0) || 0;
+  return a;
+}
+
+/**
+ * Nível de cor de uma célula da grelha pessoa × hora: 0 = vazio; 1…levels
+ * proporcional ao máximo (arredondado para cima: qualquer ação já pinta). PURA.
+ */
+export function heatLevel(v: number, max: number, levels = 5): number {
+  if (!(v > 0) || !(max > 0)) return 0;
+  return Math.min(levels, Math.max(1, Math.ceil((v / max) * levels)));
+}
+
+/**
+ * Primeira e última hora com ações e a hora de pico, contadas pela ordem do
+ * dia operacional (03h → 02h): quem faz a noite aparece "15h → 2h", não
+ * "0h → 23h". Sem ações → nulls. PURA.
+ */
+export function hourSpan(hours: ReadonlyArray<number>): { first: number | null; last: number | null; peak: number | null } {
+  const order = Array.from({ length: HOURS_OF_DAY }, (_, i) => (i + OPERATIONAL_DAY_START_HOUR) % HOURS_OF_DAY);
+  const on = order.filter((h) => (hours[h] ?? 0) > 0);
+  if (!on.length) return { first: null, last: null, peak: null };
+  let peak = on[0];
+  for (const h of on) if (hours[h] > hours[peak]) peak = h;
+  return { first: on[0], last: on[on.length - 1], peak };
+}

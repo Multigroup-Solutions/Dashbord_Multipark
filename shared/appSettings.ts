@@ -25,6 +25,26 @@ import { matchKey } from "./textKey";
 import { PRESSURE_SINCE_DEFAULT } from "./extrasPressure";
 import { DEFAULT_TERMINAL_AIRPORTS } from "./pontoTerminal";
 import { DOCS_TEMPLATE_PATTERN } from "./docsRequest";
+import { COMMS_ROUTING_DEFAULTS, commsRoutingSettingsSchema } from "./commsRouting";
+import { MAIL_BACKFILL_DEFAULTS, mailBackfillSettingsSchema } from "./mailTriage";
+import { COMPLAINT_INTAKE_DEFAULTS, complaintIntakeSettingsSchema } from "./complaintIntake";
+import { DEFAULT_SPEED_RULE, SPEED_RULE_SETTING_KEY, speedRuleSchema } from "./speedRules";
+import { PERF_RANK_WEIGHTS_KEY, rankWeightsReadSchema, rankWeightsSchema } from "./peoplePerformance";
+import { DEFAULT_PARK_ZONES, PARK_ZONE_KINDS, PARK_ZONE_RADIUS, p2TerminalConflicts, type ParkZonesMap } from "./serviceGps";
+import type { AirportFence } from "./pontoTerminal";
+import {
+  DEFAULT_GARAGE_ROLES, DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES, GARAGE_ROLES,
+  SERVICE_TIMES_GPS_SINCE_DEFAULT, SERVICE_TIMES_SINCE_DEFAULT,
+} from "./serviceTimes";
+import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, isIsoDay } from "./evaluationClose";
+import { operationalDayOf } from "./lisbonDay";
+
+// ─── Entrar com código (plano 56) ───────────────────────────────────────────
+
+/** Para onde vai o código de entrada: TL/supervisor de serviço (duty) ou o email da pessoa (A2). */
+export const LOGIN_CODE_DELIVERY_MODES = ["duty", "email"] as const;
+export type LoginCodeDeliveryMode = (typeof LOGIN_CODE_DELIVERY_MODES)[number];
+export const LOGIN_CODE_DELIVERY_SETTING_KEY = "login.codeDelivery";
 
 // ─── Taxas com data de efeito (IVA / TSU) ───────────────────────────────────
 
@@ -87,7 +107,7 @@ export const aiFeatureTiersSchema = z.record(
   z.enum(AI_TIERS as unknown as ["lite", "fast", "smart"], { error: "Nível inválido (lite, fast ou smart)." }),
 );
 
-export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos";
+export type SettingGroup = "financeiro" | "sla" | "emails" | "disponibilidade" | "ia" | "extras" | "notificacoes" | "marketing" | "operacao" | "servicos" | "pessoas";
 
 // ─── Zello (GPS) ────────────────────────────────────────────────────────────
 
@@ -191,13 +211,97 @@ export const DEFAULT_CARS_PER_HOUR: CarsPerHourMap = { lisbon: 2, porto: 3, faro
  * por cidade. Entrada/saída do ponto de um extra com GPS dentro do raio do
  * aeroporto da cidade dele = troço de terminal (shared/pontoTerminal.ts).
  */
+const latSchema = z.number({ error: "Indica a latitude (ex.: 38.7742)." }).min(-90, "Latitude entre -90 e 90.").max(90, "Latitude entre -90 e 90.");
+const lngSchema = z.number({ error: "Indica a longitude (ex.: -9.1342)." }).min(-180, "Longitude entre -180 e 180.").max(180, "Longitude entre -180 e 180.");
+/**
+ * Plano 56 (terminal pelo perfil): zonas por terminal (T1/T2…), centro + raio.
+ * Opcional — sem zonas vale o círculo do aeroporto (como até aqui).
+ */
+const terminalZoneSchema = z.object({
+  label: z.string().trim().max(40, "Nome da zona: máximo 40 caracteres.").optional(),
+  lat: latSchema,
+  lng: lngSchema,
+  radiusM: z.number({ error: "Indica o raio da zona em metros." }).int("Raio em metros inteiros.").min(50, "Raio mínimo da zona: 50 m.").max(5000, "Raio máximo da zona: 5 000 m."),
+});
 const airportFenceSchema = z.object({
-  lat: z.number({ error: "Indica a latitude (ex.: 38.7742)." }).min(-90, "Latitude entre -90 e 90.").max(90, "Latitude entre -90 e 90."),
-  lng: z.number({ error: "Indica a longitude (ex.: -9.1342)." }).min(-180, "Longitude entre -180 e 180.").max(180, "Longitude entre -180 e 180."),
+  lat: latSchema,
+  lng: lngSchema,
   radiusM: z.number({ error: "Indica o raio em metros." }).int("Raio em metros inteiros.").min(100, "Raio mínimo: 100 m.").max(10000, "Raio máximo: 10 000 m."),
+  zones: z.array(terminalZoneSchema).max(6, "Máximo 6 zonas por aeroporto.").optional(),
 });
 export const terminalAirportsSchema = z.object({ lisbon: airportFenceSchema, porto: airportFenceSchema, faro: airportFenceSchema }, { error: "Indica os aeroportos de Lisboa, Porto e Faro." });
 export const TERMINAL_AIRPORTS_SETTING_KEY = "ponto.terminalAirports" as const;
+
+// ─── Tempos de entrega e de recolha (plano 62, P5) ──────────────────────────
+
+export const PARK_ZONES_SETTING_KEY = "operations.parkZones" as const;
+export const GARAGE_ROLES_SETTING_KEY = "operations.garageRoles" as const;
+export const SERVICE_TIMES_SETTING_KEYS = [
+  "serviceTimes.targetMinutes", "serviceTimes.pickupT2TargetMinutes", "serviceTimes.since", "serviceTimes.gpsSince",
+  "serviceTimes.useCalls", "serviceTimes.inBriefing", "serviceTimes.gpsGate",
+] as const;
+
+/**
+ * Exceção a uma zona da operação (Q6: as zonas vêm das garagens da
+ * Multipark): `label` = nome da garagem (ou de uma zona nova); centro, raio
+ * (50–1 000 m) e tipo só quando se querem mudar.
+ */
+const parkZoneSchema = z.object({
+  label: z.string({ error: "Indica a garagem (ex.: P2)." }).trim().min(1, "Indica a garagem (ex.: P2).").max(80, "Nome da garagem: máximo 80 caracteres."),
+  kind: z.enum(PARK_ZONE_KINDS as unknown as ["p2", "pd", "central", "coberto", "outra"], { error: "Tipo de zona: P2, PD, central, coberto ou outra." }).optional(),
+  lat: latSchema.optional(),
+  lng: lngSchema.optional(),
+  radiusM: z.number({ error: "Indica o raio da zona em metros." }).int("Raio em metros inteiros.")
+    .min(PARK_ZONE_RADIUS.min, `Raio mínimo da zona: ${PARK_ZONE_RADIUS.min} m.`).max(PARK_ZONE_RADIUS.max, `Raio máximo da zona: ${PARK_ZONE_RADIUS.max} m.`).optional(),
+  garages: z.array(z.string().trim().min(1, "Nome de garagem vazio.").max(80, "Nome de garagem: máximo 80 caracteres.")).max(20, "Máximo 20 garagens por zona.").optional(),
+}).refine((z0) => (z0.lat == null) === (z0.lng == null), { message: "Indica a latitude E a longitude (ou nenhuma, para usar as da Multipark)." });
+const parkZoneListSchema = z.array(parkZoneSchema).max(12, "Máximo 12 zonas por cidade.").superRefine((list, ctx) => {
+  const seen = new Set<string>();
+  for (const z0 of list) {
+    const k = matchKey(z0.label);
+    if (seen.has(k)) ctx.addIssue({ code: "custom", message: `Garagem repetida: ${z0.label}.` });
+    seen.add(k);
+  }
+});
+export const parkZonesSchema = z.object({ lisbon: parkZoneListSchema, porto: parkZoneListSchema, faro: parkZoneListSchema }, { error: "Indica as exceções de Lisboa, Porto e Faro (lista vazia = nenhuma)." });
+
+/** Papel de cada garagem nos tempos das recolhas (provisória / já num parque / parque certo). */
+export const garageRolesSchema = z.array(z.object({
+  garage: z.string({ error: "Nome da garagem em falta." }).trim().min(1, "Nome da garagem em falta.").max(80, "Nome da garagem: máximo 80 caracteres."),
+  role: z.enum(GARAGE_ROLES as unknown as ["provisoria", "parque", "final"], { error: "Papel: provisoria, parque ou final." }),
+})).max(60, "Máximo 60 garagens.").superRefine((list, ctx) => {
+  const seen = new Set<string>();
+  for (const g of list) {
+    const k = matchKey(g.garage);
+    if (seen.has(k)) ctx.addIssue({ code: "custom", message: `Garagem repetida: ${g.garage}.` });
+    seen.add(k);
+  }
+});
+
+/** Portão dos tempos com GPS (§8.1). */
+export const gpsGateSchema = z.object({
+  visible: z.boolean({ error: "visible: true ou false." }),
+  minCoveragePct: z.number({ error: "minCoveragePct: um número (%)." }).min(0, "minCoveragePct: entre 0 e 100.").max(100, "minCoveragePct: entre 0 e 100."),
+  minN: z.number({ error: "minN: um número." }).int("minN: número inteiro.").min(1, "minN: mínimo 1.").max(10000, "minN: máximo 10 000."),
+}).strict();
+
+const PARK_ZONE_CITY_LABEL: Record<string, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
+
+/**
+ * Zonas P2 a tocar numa zona do terminal → texto do erro (recusado ao
+ * gravar, §5.2); null = pode gravar. Recebe as zonas EM VIGOR (garagens da
+ * Multipark + exceções: effectiveParkZones). PURA (o servidor e o editor usam-na).
+ */
+export function parkZonesConflictError(zones: Partial<ParkZonesMap> | null | undefined, airports: Partial<Record<string, AirportFence>> | null | undefined): string | null {
+  const hits = p2TerminalConflicts(zones, airports);
+  if (!hits.length) return null;
+  const list = hits.map((h) => `${h.p2} toca na zona ${h.terminal} do terminal (${PARK_ZONE_CITY_LABEL[h.city] ?? h.city}, centros a ${h.distanceM} m)`).join("; ");
+  return `A zona P2 não pode tocar numa zona do terminal: ${list}. Afasta o centro ou diminui o raio — senão a saída do terminal e a paragem no P2 ficavam iguais.`;
+}
+
+const serviceDaySchema = z.string({ error: "Indica o dia (AAAA-MM-DD)." })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Dia no formato AAAA-MM-DD.")
+  .refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && d >= "2025-01-01", "Dia inválido (a partir de 2025).");
 
 /**
  * Template do WhatsApp do pedido de documentos em falta, por cidade:
@@ -267,6 +371,15 @@ export type AiAssistantLimits = z.infer<typeof aiAssistantLimitsSchema>;
 export const AI_ASSISTANT_DEFAULT_LIMITS = { perMinute: 20, perDay: 200, maxInputChars: 1000 } as const;
 
 
+/** Tarefa 62 (P2d): data AAAA-MM-DD ou nula ("" = nula, para o campo de texto/data). */
+export const closedUntilSchema = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? null : typeof v === "string" ? v.trim() : v),
+  z.string({ error: "Indica a data (AAAA-MM-DD)." }).refine(isIsoDay, "Data inválida (AAAA-MM-DD).").nullable(),
+);
+/** Lista de contas (ids de utilizador), sem repetir. */
+export const userIdListSchema = z.array(z.number({ error: "Escolhe as contas na lista." }).int().positive()).max(50, "No máximo 50 contas.")
+  .transform((ids) => Array.from(new Set(ids)));
+
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
   group: SettingGroup;
@@ -276,6 +389,8 @@ export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   defaultValue: z.input<S>;
   /** Onde o valor é usado; "store" = só guardado/mostrado (ainda não ligado ao código). */
   wiring: "live" | "store";
+  /** Validação mais apertada só ao GRAVAR (a leitura usa `schema`, que pode ser mais tolerante com valores antigos). */
+  writeSchema?: z.ZodTypeAny;
 }
 
 function def<S extends z.ZodTypeAny>(d: SettingDef<S>): SettingDef<S> {
@@ -338,6 +453,16 @@ export const SETTINGS = {
     defaultValue: [],
     wiring: "live",
   }),
+  // Jorge (14 out 2026): "há gente a 141 e 149 km/h, e o limite em Portugal é 120".
+  [SPEED_RULE_SETTING_KEY]: def({
+    key: SPEED_RULE_SETTING_KEY,
+    group: "operacao",
+    label: "Limite de velocidade (GPS do Zello)",
+    description: "Quando é excesso de velocidade no GPS do Zello: o limite em km/h (120 = autoestrada em Portugal; o Zello não diz em que estrada se vai, por isso é um limite único), a tolerância em % (0 por omissão = conta acima de 120 km/h; 10 = 132 km/h) e quantos pontos seguidos acima dele contam um excesso (2 por omissão; um ponto sozinho só conta se a distância percorrida até ao ponto ao lado, a pelo menos 30 s, o confirmar; com o Zello a mandar pontos espaçados, o mesmo troço sem nenhum ponto abaixo do limite pelo meio é um excesso só). Os picos falsos do GPS (acima de 250 km/h ou um salto isolado) nunca contam. Vale para a recolha diária (excessos de cada dia, Atividade diária, Resumo do dia), para a Avaliação (1 excesso de velocidade, −10, por dia acima do limite, sem contar a dobrar com os alertas) e para o Desempenho (dias acima do limite). Os dias já recolhidos ficam como estavam até se voltarem a dividir (Atividade diária → Histórico Diário → Forçar re-divisão): na Avaliação e no Desempenho um dia só conta acima do MAIOR entre o limite de hoje e o limite com que foi recolhido (os dias recolhidos antes de se guardar o limite de cada dia contam a 132), para nunca contar um excesso que a recolha não confirmou. Substitui a tabela antiga speed_limits (sem ecrã).",
+    schema: speedRuleSchema,
+    defaultValue: { ...DEFAULT_SPEED_RULE },
+    wiring: "live",
+  }),
   [EXCLUDED_PARKS_SETTING_KEY]: def({
     key: EXCLUDED_PARKS_SETTING_KEY,
     group: "operacao",
@@ -346,6 +471,88 @@ export const SETTINGS = {
     schema: parkIdListSchema,
     defaultValue: [],
     wiring: "live",
+  }),
+  // Plano 62 (P5): tempos de entrega e de recolha — zonas, garagens e parâmetros.
+  [PARK_ZONES_SETTING_KEY]: def({
+    key: PARK_ZONES_SETTING_KEY,
+    group: "operacao",
+    label: "Zonas da operação (GPS)",
+    description: "As zonas dos parques (P2, PD, central, coberto…) vêm das garagens da Multipark (o centro é o do link do mapa de cada garagem; o raio, o de omissão do tipo: P2 e coberto 150 m, PD e central 200 m). Aqui ficam só as EXCEÇÕES, por cidade: ajustar o raio (50 a 1 000 m), corrigir o centro ou o tipo de uma garagem, ou dar o centro a uma garagem que não tem coordenadas na Multipark (\"Sugerir\" propõe-no: posições da app nos movimentos das últimas 4 semanas, ou o parque). Servem aos tempos das recolhas (a saída do P2 pelo GPS quando a app não tem o início do movimento). Uma zona P2 que toque numa zona do terminal (Aeroportos → zonas) é recusada ao gravar: a saída do terminal e a paragem no P2 ficavam iguais.",
+    schema: parkZonesSchema,
+    defaultValue: DEFAULT_PARK_ZONES,
+    wiring: "live",
+  }),
+  [GARAGE_ROLES_SETTING_KEY]: def({
+    key: GARAGE_ROLES_SETTING_KEY,
+    group: "operacao",
+    label: "Papéis das garagens (tempos das recolhas)",
+    description: "Para onde vai o carro depois do check-in: a garagem PROVISÓRIA (P2 — conta-se o tempo até sair de lá), as que já são UM PARQUE (CENTRAL, CENTRAL COBERTO — o carro já está num dos parques e deixa de se medir) e as do PARQUE CERTO (PD, PD FORA, COBERTO — arrumado se o tipo de lugar bater: descobertos e toldo no PD, interior no coberto). Os nomes são os da app (não contam maiúsculas nem espaços). Uma garagem fora da lista conta como \"parque certo\" e fica marcada como \"garagem sem papel\".",
+    schema: garageRolesSchema,
+    defaultValue: DEFAULT_GARAGE_ROLES.map((g) => ({ ...g })),
+    wiring: "live",
+  }),
+  "serviceTimes.targetMinutes": def({
+    key: "serviceTimes.targetMinutes",
+    group: "operacao",
+    label: "Tempos: meta da entrega (minutos)",
+    description: "O nosso tempo de uma entrega = Fila + Trânsito (da chamada do cliente, ou do pendente, até o condutor chegar ao terminal). Conta para a % na meta. 15 por omissão.",
+    schema: z.number({ error: "Indica um número de minutos." }).int("Número inteiro de minutos.").min(5, "Mínimo 5 minutos.").max(120, "Máximo 120 minutos."),
+    defaultValue: DEFAULT_SERVICE_TARGET_MINUTES,
+    wiring: "live",
+  }),
+  "serviceTimes.pickupT2TargetMinutes": def({
+    key: "serviceTimes.pickupT2TargetMinutes",
+    group: "operacao",
+    label: "Tempos: recolha atrasada no T2 (minutos)",
+    description: "Uma recolha no Terminal 2 fica atrasada quando o condutor chega à zona T2 mais do que isto depois de o cliente ligar (ou do \"em recolha\"). Só no T2 (no T1 há sempre gente de manhã) e só com GPS: sem GPS fica sem medição, nunca \"a tempo\". 15 por omissão (decisão do Jorge).",
+    schema: z.number({ error: "Indica um número de minutos." }).int("Número inteiro de minutos.").min(1, "Mínimo 1 minuto.").max(120, "Máximo 120 minutos."),
+    defaultValue: DEFAULT_PICKUP_T2_TARGET_MINUTES,
+    wiring: "live",
+  }),
+  "serviceTimes.since": def({
+    key: "serviceTimes.since",
+    group: "operacao",
+    label: "Tempos: medir desde",
+    description: "Primeiro dia que o trabalho noturno dos tempos preenche para trás (sem GPS antes do dia do GPS). Mudar esta data não apaga nada.",
+    schema: serviceDaySchema,
+    defaultValue: SERVICE_TIMES_SINCE_DEFAULT,
+    wiring: "live",
+  }),
+  "serviceTimes.gpsSince": def({
+    key: "serviceTimes.gpsSince",
+    group: "operacao",
+    label: "Tempos: GPS desde",
+    description: "A partir deste dia o preenchimento para trás também lê os pontos GPS do Zello guardados (antes não há pontos). Os dias anteriores ficam com os tempos que não dependem do GPS (Fila, Total, Cliente das recolhas, P2, até arrumado).",
+    schema: serviceDaySchema,
+    defaultValue: SERVICE_TIMES_GPS_SINCE_DEFAULT,
+    wiring: "live",
+  }),
+  "serviceTimes.useCalls": def({
+    key: "serviceTimes.useCalls",
+    group: "operacao",
+    label: "Tempos: contar desde a chamada do cliente",
+    description: "Ligado (regra do Jorge): a Fila começa no mais cedo entre a chamada do cliente (central Vodafone ou WhatsApp, pelo telefone da reserva, até 60 min antes do pendente) e o pendente; nas recolhas, o mesmo com o \"em recolha\". Desligado: só o pendente (ou o \"em recolha\"). Só muda contas.",
+    schema: z.boolean({ error: "Ligado ou desligado." }),
+    defaultValue: true,
+    wiring: "live",
+  }),
+  "serviceTimes.inBriefing": def({
+    key: "serviceTimes.inBriefing",
+    group: "operacao",
+    label: "Tempos: linha no briefing por email",
+    description: "Uma linha \"ontem\" com os tempos de entrega e de recolha no briefing diário (vai por email). Desligado por omissão.",
+    schema: z.boolean({ error: "Ligado ou desligado." }),
+    defaultValue: false,
+    wiring: "store",
+  }),
+  "serviceTimes.gpsGate": def({
+    key: "serviceTimes.gpsGate",
+    group: "operacao",
+    label: "Tempos com GPS: portão",
+    description: "Os tempos que dependem do GPS (Trânsito, Cliente das entregas, Nosso, % na meta, No terminal, Até à 1.ª garagem, Atrasadas no T2) só aparecem a quem não é super admin com \"visible\": true e, por cidade e período, com a cobertura ≥ minCoveragePct % e pelo menos minN medições. Fechado (omissão): só o super admin os vê, com \"em calibração\". Abre-se depois da calibração (diagnóstico dos tempos) e do PR dos parâmetros.",
+    schema: gpsGateSchema,
+    defaultValue: { ...DEFAULT_GPS_GATE },
+    wiring: "store",
   }),
   "emails.handoverCc": def({
     key: "emails.handoverCc",
@@ -368,8 +575,8 @@ export const SETTINGS = {
   "rh.suspendAfterDays": def({
     key: "rh.suspendAfterDays",
     group: "operacao",
-    label: "Sugerir suspender ao fim de (dias sem atividade)",
-    description: "Na lista de Utilizadores aparece um aviso com as pessoas de ficha ativa que não trabalham (agente da Multipark, ponto, extras) nem entram na app há mais destes dias, para as suspender (fica sem acesso até alguém desbloquear; não desativa nem solta nada). 0 = não sugerir.",
+    label: "Sugerir pôr inativo ao fim de (dias sem atividade)",
+    description: "Na lista de Utilizadores aparece um aviso com as pessoas de ficha ativa que não trabalham (agente da Multipark, ponto, extras) nem entram na app há mais destes dias, para as pôr INATIVAS (motivo \"Inatividade\"): saem das listas, da escala e dos avisos, mas podem voltar a entrar como utilizador e dizer \"Voltei\". A ficha, a conta e o agente ficam ligados. 0 = não sugerir.",
     schema: z.number({ error: "Indica um número de dias." }).int("Número inteiro de dias.").min(0, "0 desliga.").max(3650, "Máximo 3650 dias."),
     defaultValue: 180,
     wiring: "live",
@@ -390,6 +597,15 @@ export const SETTINGS = {
     description: "Quem recebe o WhatsApp quando um alerta \"a trabalhar sem PDA ou Zello ligado\" fica sem resposta: os administradores de cada cidade e a cópia para todas as cidades. Escolhe as pessoas do RH (o telefone vem da ficha, por isso fica sempre atualizado); para alguém que não está no RH, escreve o número em \"Outros números\".",
     schema: presencePhonesSchema,
     defaultValue: { lisbon: [], porto: [], faro: [], copy: [] },
+    wiring: "live",
+  }),
+  "login.codeDelivery": def({
+    key: "login.codeDelivery",
+    group: "operacao",
+    label: "Código de entrada vai para",
+    description: "Com \"Entrar com email e código\" ligado: duty = o team leader de serviço e os supervisores da cidade da pessoa (sem cidade: RH e admins). email = o email da própria pessoa, enviado pela conta própria acesso@multipark.pt (tem de existir no Google Workspace com delegação; nunca uma caixa da Comunicação — se for, não envia). Se o email não sair, o código vai ao TL e ao supervisor e aparece \"pede o código ao TL\".",
+    schema: z.enum(LOGIN_CODE_DELIVERY_MODES, { error: "Escolhe duty ou email." }),
+    defaultValue: "duty",
     wiring: "live",
   }),
   "ops.presenceEscalateMinutes": def({
@@ -444,6 +660,36 @@ export const SETTINGS = {
     description: "Pedidos por pessoa ao assistente e tamanho máximo da pergunta. JSON: {\"perMinute\": 20, \"perDay\": 200, \"maxInputChars\": 1000}. Acima do limite, a pessoa vê \"Muitos pedidos\" e o tempo de espera.",
     schema: aiAssistantLimitsSchema,
     defaultValue: { ...AI_ASSISTANT_DEFAULT_LIMITS },
+    wiring: "live",
+  }),
+  "ai.commsRouting": def({
+    key: "ai.commsRouting",
+    group: "ia",
+    label: "IA a separar emails e WhatsApp: limiar e teto",
+    description: "minConfidence: abaixo desta certeza (0 a 1) a IA \"não percebeu\" e a conversa vai para o info (no WhatsApp, a Geral). perRun: máximo de emails lidos pela IA em cada sincronização (o resto fica para o varrimento de 15 em 15 min). JSON: {\"minConfidence\": 0.7, \"perRun\": 10}.",
+    schema: commsRoutingSettingsSchema,
+    defaultValue: { ...COMMS_ROUTING_DEFAULTS },
+    wiring: "live",
+  }),
+  // Lote 57 (Jorge, 12 out 2026): a IA vê uma reclamação num email de outra caixa → Reclamações.
+  // 14 out 2026: também os perdidos; a certeza média cria "Por confirmar (IA)" (já não fica só sugerida).
+  "ai.mailComplaints": def({
+    key: "ai.mailComplaints",
+    group: "ia",
+    label: "IA: reclamações e perdidos vistos nas caixas — certezas",
+    description: "Quando a IA vê uma reclamação (ou um objeto perdido) num email de uma caixa partilhada (info@, reservas@…): com certeza ≥ createMinConfidence o caso é criado (ou o email junta-se ao aberto do mesmo cliente); entre suggestMinConfidence e isso é criado na mesma, marcado \"Por confirmar (IA)\" (confirma-se ou arquiva-se — nada se apaga); abaixo, nada. JSON: {\"createMinConfidence\": 0.85, \"suggestMinConfidence\": 0.5}.",
+    schema: complaintIntakeSettingsSchema,
+    defaultValue: { ...COMPLAINT_INTAKE_DEFAULTS },
+    wiring: "live",
+  }),
+  // 14 out 2026 (Jorge: "tudo o que está na caixa de correio e é uma reclamação tem de ir para lá").
+  "ai.mailBackfill": def({
+    key: "ai.mailBackfill",
+    group: "ia",
+    label: "IA: rever os emails que já estão nas caixas — dias e lote",
+    description: "days: quantos dias para trás se revêem os emails das caixas partilhadas ainda sem caso (1 a 90); perRun: emails lidos pela IA em cada corrida de 15 em 15 min (1 a 20). Só com o interruptor «IA: rever os emails que já estão nas caixas» ligado. JSON: {\"days\": 30, \"perRun\": 6}.",
+    schema: mailBackfillSettingsSchema,
+    defaultValue: { ...MAIL_BACKFILL_DEFAULTS },
     wiring: "live",
   }),
   "ai.priceOverridesEur": def({
@@ -549,7 +795,7 @@ export const SETTINGS = {
     key: TERMINAL_AIRPORTS_SETTING_KEY,
     group: "extras",
     label: "Aeroportos (terminal no ponto)",
-    description: "Centro e raio do aeroporto de cada cidade. Com o interruptor \"Terminal no ponto (aeroporto)\" ligado (Definições → Automações), a entrada de um extra com GPS dentro deste raio (aeroporto da cidade dele) abre um troço de terminal, pago à taxa do nível seguinte. A saída fora do raio ou sem GPS deixa o troço \"por confirmar\" até o RH ver.",
+    description: "Centro e raio do aeroporto de cada cidade e, se quiseres, zonas por terminal (T1/T2: centro e raio; com zonas só elas contam). Com o interruptor \"Terminal no ponto (aeroporto)\" ligado (Definições → Automações), o \"Estou no terminal\" só abre com o GPS dentro (distância − imprecisão ≤ raio), no aeroporto de uma cidade onde a pessoa trabalha, e o vigia de 5 em 5 min usa as mesmas zonas para o \"Ainda estás no terminal?\" (fora = distância − imprecisão > raio). Se um parque cair dentro de uma zona, aparece um aviso aqui.",
     schema: terminalAirportsSchema,
     defaultValue: DEFAULT_TERMINAL_AIRPORTS,
     wiring: "live",
@@ -689,6 +935,39 @@ export const SETTINGS = {
     defaultValue: DEFAULT_SERVICE_TASK_RULES,
     wiring: "live",
   }),
+  // Jorge (8 out 2026): "avança com os pesos do ranking" — mudar os pesos sem deploy.
+  [PERF_RANK_WEIGHTS_KEY]: def({
+    key: PERF_RANK_WEIGHTS_KEY,
+    group: "pessoas",
+    label: "Pesos do ranking do Desempenho",
+    description: "Quanto vale cada coisa nos pontos do ranking de Pessoas → Condutores e agentes → Desempenho, por aba (office, supervision, teamleaders, drivers) e os pontos da equipa (team). Só o que muda face às omissões do código (1 ponto ≈ 5 minutos de trabalho). Um peso 0 = não conta; sem a métrica = a omissão. Pesos entre −10 000 e 10 000, com 1 casa decimal no máximo; horas e km nunca dão pontos. JSON: {\"office\": {\"created\": 3}, \"team\": {\"noZelloPerPerson\": -10}}. Mais fácil no próprio Desempenho: \"Como se contam os pontos desta aba\" → Editar pesos. Vazio = omissões do código. Só o super admin muda.",
+    // 14 out 2026: ao ler, um peso proibido gravado antes é ignorado (o resto vale); ao gravar, é recusado
+    schema: rankWeightsReadSchema,
+    writeSchema: rankWeightsSchema,
+    defaultValue: {},
+    wiring: "live",
+  }),
+  // Tarefa 62 (P2d): fecho mensal da Avaliação — fecha-se cada mês antes de pagar os prémios (o 1.º: novembro).
+  [EVALUATION_CLOSED_UNTIL_KEY]: def({
+    key: EVALUATION_CLOSED_UNTIL_KEY,
+    group: "pessoas",
+    label: "Avaliação fechada até (fecho mensal)",
+    description: "Último dia FECHADO da Avaliação (AAAA-MM-DD). Os dias até essa data já não mudam: o recálculo da noite, o Recalcular, os ajustes, a anulação de ajustes, as contestações (criar e aceitar com ajuste) e a re-divisão do GPS dos últimos 31 dias não lhes tocam. Fecha-se cada mês antes de pagar os prémios (o primeiro é novembro, no início de dezembro). Reabrir = mudar a data (fica no histórico). Vazio = nada fechado. Também se fecha em Avaliação → Mês (\"Fecho do mês\"), por quem está na lista \"Avaliação: quem fecha o mês\". Atenção: o fecho congela os números, não as regras — depois do primeiro fecho, uma mudança nos pontos tem de dizer a partir de que dia vale.",
+    schema: closedUntilSchema,
+    // ao gravar (também em Definições): nunca hoje nem o futuro — fechar o dia de hoje congelava o recálculo
+    writeSchema: closedUntilSchema.refine((v) => v == null || v < operationalDayOf(Date.now()), "Só se fecha até ontem (o dia de hoje ainda está a acontecer)."),
+    defaultValue: null,
+    wiring: "live",
+  }),
+  [EVALUATION_CLOSERS_KEY]: def({
+    key: EVALUATION_CLOSERS_KEY,
+    group: "pessoas",
+    label: "Avaliação: quem fecha o mês",
+    description: "Contas que podem fechar e reabrir a Avaliação (Avaliação → Mês → \"Fecho do mês\"), além do super admin. Escolhe as pessoas na lista. Só o super admin muda.",
+    schema: userIdListSchema,
+    defaultValue: [],
+    wiring: "live",
+  }),
   [NOTIFICATION_ROUTING_SETTING_KEY]: def({
     key: NOTIFICATION_ROUTING_SETTING_KEY,
     group: "notificacoes",
@@ -712,6 +991,16 @@ export const SUPER_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   "google.contacts",
   "google.drive",
   "mail.systemSender",
+  // o Desempenho só o super admin o vê (Jorge, 8 out 2026)
+  PERF_RANK_WEIGHTS_KEY,
+  // Plano 62: zonas, garagens e parâmetros dos tempos (quem preenche é o super admin, Q6)
+  PARK_ZONES_SETTING_KEY,
+  GARAGE_ROLES_SETTING_KEY,
+  ...SERVICE_TIMES_SETTING_KEYS,
+  // tarefa 62 (Q10): em Definições, o fecho e a lista de quem fecha só o super admin muda
+  // (quem está na lista fecha em Avaliação → Mês, pelo procedimento próprio)
+  EVALUATION_CLOSED_UNTIL_KEY,
+  EVALUATION_CLOSERS_KEY,
 ]);
 export function settingSuperAdminOnly(key: string): boolean {
   return SUPER_ADMIN_SETTING_KEYS.has(key);
@@ -738,6 +1027,18 @@ export function validateSetting(key: string, value: unknown): ValidationResult<u
   const r = SETTINGS[key].schema.safeParse(value);
   if (r.success) return { ok: true, value: r.data };
   return { ok: false, error: r.error.issues.map((i) => i.message).join(" ") || "Valor inválido." };
+}
+
+/** Validação para GRAVAR: a `writeSchema` (se houver) primeiro, e depois a normal. */
+export function validateSettingForWrite(key: string, value: unknown): ValidationResult<unknown> {
+  if (isSettingKey(key)) {
+    const w = (SETTINGS[key] as SettingDef).writeSchema;
+    if (w) {
+      const r = w.safeParse(value);
+      if (!r.success) return { ok: false, error: r.error.issues.map((i) => i.message).join(" ") || "Valor inválido." };
+    }
+  }
+  return validateSetting(key, value);
 }
 
 // ─── Interruptores das automações ───────────────────────────────────────────
@@ -780,6 +1081,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "MARKETING_WEEKLY", label: "Email semanal de marketing", description: "À segunda a partir das 8h: gasto, reservas e ROAS da semana por marca e cidade, para os endereços em MARKETING_REPORT_EMAILS." },
   // D20 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
   { name: "COMPLAINT_CLIENT_REPLY_NOTIFY", label: "Reclamações: avisar o responsável quando o cliente responde", description: "Quando o cliente volta a escrever (email) numa reclamação, o responsável recebe no sino \"O cliente respondeu à reclamação #X\" — no máximo 1 aviso por reclamação a cada 30 min, só emails do próprio cliente com menos de 48 h. Sem responsável não avisa ninguém (o caso volta na mesma a \"Em análise\"). Desligado por omissão.", defaultEnabled: false },
+  // 49c (Jorge, 8 out 2026): escreve a gente de fora (código por email) → desligado por omissão.
+  { name: "ACCOUNT_LINK_EMAIL_CODE", label: "Liga a tua conta: código por email", description: "Quem entra com uma conta Google sem ficha e escreve o email ou o telefone com que se candidatou (ou trabalhou connosco) recebe um código de 6 algarismos no email que está nessa ficha/candidatura (pela recursos-humanos@; vale 10 minutos, 5 tentativas) e, ao escrevê-lo, a conta liga-se sozinha. Só quando dá UMA pessoa, extra ou condutor, e não desativada; o resto vai para o RH. Desligado: todos os pedidos vão para o RH (Leads de Extras → Candidaturas e ficha → Utilizador e permissões), com aviso no sino. Desligado por omissão.", defaultEnabled: false },
   // 19c: avisa gente → desligado por omissão. Sem ele, os pedidos aparecem na lista do RH e na ficha.
   { name: "RH_BANK_CHANGE_NOTIFY", label: "Aviso dos pedidos de IBAN", description: "Quando alguém pede para mudar o IBAN de uma ficha, avisa no sino o back office e o supervisor da cidade (e os administradores) para aprovar ou recusar. Desligado por omissão: os pedidos aparecem na mesma no RH (topo da lista) e na ficha.", defaultEnabled: false },
   // D45 (Jorge, 3 out 2026): avisa gente → desligado por omissão.
@@ -793,6 +1096,10 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   // 33a (Jorge, 6 out 2026): Google Business pela Windsor — escreve/publica → desligados por omissão.
   { name: "GBP_WINDSOR_SYNC", label: "Críticas: importar do Google Business pela Windsor", description: "Quando a Google não está ligada diretamente, a recolha agendada vai buscar as avaliações dos perfis escolhidos à Windsor (WINDSOR_API_KEY) e põe-nas nas Críticas, como a ligação direta (1–3 estrelas → Reclamações). A 1.ª vez vai até 3 anos para trás; depois os últimos 60 dias. O botão \"Importar pela Windsor\" funciona sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "GBP_WINDSOR_REPLY", label: "Críticas: publicar respostas no Google pela Windsor", description: "Quando a Google não está ligada diretamente, o \"Aprovar e publicar\" das Críticas publica a resposta pela Windsor (ação reply_to_review — tem de estar ativa na equipa da Windsor). A resposta é pública e substitui a anterior. Desligado: publica-se no perfil Google e marca-se \"Já publiquei\". Desligado por omissão.", defaultEnabled: false },
+  // Jorge (14 out 2026): "porque é que os 141 não dão aviso nenhum?" — avisa gente → desligado por omissão.
+  // Tarefa 62 (Q8, Jorge: "não vem: marca-se falta"): as faltas de quem tem horário fixo, como as dos extras.
+  { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar. Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas, dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro) e quem mexeu em carros na Multipark. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  { name: "GPS_SPEED_ALERTS", label: "Avisos de excesso de velocidade (GPS do Zello)", description: "Na recolha do GPS do Zello (a provisória das 23h e a final de D-2), cada excesso de velocidade (Definições → Parâmetros → Limite de velocidade) fica registado e avisa no sino o team leader e o supervisor da cidade da pessoa (\"Excesso de velocidade\"): um aviso por pessoa e recolha, com quantos excessos e a velocidade máxima (a final de D-2 só volta a avisar se trouxer excessos que a provisória não tinha; só para dias dos últimos 3; um dia antigo recolhido à mão não avisa). Também o aviso da verificação manual de velocidade (\"verificar agora\", pela API) só sai com isto ligado. Os pontos da Avaliação (−10 por dia acima do limite) contam sempre, com ou sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "TASKS_AUTOMATION", label: "Automação das tarefas", description: "Checklists do dia e avisos de atraso/conclusão." },
   // 18a (Jorge, 2 out 2026): avisa gente → desligado por omissão, como as outras.
   { name: "TASKS_AUTO_OVERDUE", label: "Avisos de atraso das tarefas automáticas", description: "Checklists, serviços, disponibilidade e fichas sem cidade que passam o prazo: avisa no sino os responsáveis e o supervisor da cidade (um resumo por cidade). Sem email. Só as que passaram o prazo há menos de 48 h (as mais antigas ficam marcadas sem aviso)." },
@@ -801,14 +1108,17 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "HANDOVER_EMAIL", label: "Email da passagem de turno", description: "Envia a passagem de turno por email aos team leaders." },
   { name: "HANDOVER_REMINDERS", label: "Lembretes da passagem de turno", description: "Lembra quem ainda não entregou/confirmou a passagem." },
   { name: "TRAINING_REMINDERS", label: "Lembretes da formação", description: "Avisa quem tem formação por concluir." },
+  // Jorge (14 out 2026): "uma vez por semana vai lá, escolhe duas ou três e põe lá" — escreve sozinho → desligado por omissão.
+  { name: "KB_FAQ_WEEKLY", label: "Formação: FAQs novas da base de conhecimento (semanal)", description: "À segunda a partir das 09:30 (Lisboa) escolhe 2 ou 3 documentos da base de conhecimento (primeiro os atualizados há pouco e os que ainda não deram FAQ; só os que todos podem ver, nunca a ajuda da app) e a IA escreve 2 ou 3 FAQs novas, com resposta curta e a ligação ao documento. Entram logo publicadas em Formação → FAQs, marcadas \"IA\". Nunca repete uma FAQ que já existe, nem as que foram eliminadas (ficam arquivadas e servem de marca). Quem gere a formação pode editar ou eliminar. Precisa de \"IA: FAQs a partir da base de conhecimento\" ligado. Desligado por omissão.", defaultEnabled: false },
   { name: "TRAINING_BLOCKS_ESCALA", label: "Formação bloqueia a escala", description: "Quem tem formação obrigatória em atraso não entra na escala. Desligado por omissão (Jorge, 2 out 2026: para já a formação não bloqueia nada).", defaultEnabled: false },
   { name: "OPS_BRIEFING", label: "Briefing diário por cidade", description: "Às 07:30 (Lisboa): reservas do dia, extras, SLA, pendentes e alertas por email aos team leaders/supervisores da cidade e no Dashboard." },
   { name: "WEEKLY_REPORTS", label: "Relatórios semanais", description: "À segunda de manhã: direção, marketing, operações e RH por email a quem tem acesso nacional ao módulo; resumo semanal da passagem de turno." },
   { name: "WHATSAPP_CALLS", label: "Chamadas de voz do WhatsApp", description: "Toque no dashboard, atender no browser e \"Ligar\" nas conversas. Desligado por omissão: liga só depois de ativar as chamadas no número na Meta (e subscrever o campo `calls` do webhook).", defaultEnabled: false },
   { name: "MAIL_PUSH", label: "Gmail: notificações push (Pub/Sub)", description: "O Gmail avisa a app logo que chega um email (precisa do tópico Pub/Sub configurado: GMAIL_PUSH_TOPIC). Com o push a chegar (últimas 6 h), a sincronização agendada passa de 5 em 5 min a de hora a hora (rede de segurança); sem push volta sozinha aos 5 min. Desligado por omissão.", defaultEnabled: false },
   // Pauta do Rafael (Jorge, 7 out 2026): mexe no dinheiro (ordenado e custos) → desligado por omissão.
-  { name: "PONTO_TERMINAL", label: "Terminal no ponto (aeroporto)", description: "O extra que dá saída + entrada no aeroporto da cidade dele (GPS dentro do raio, Definições → Parâmetros → Extras-dia → \"Aeroportos (terminal no ponto)\") conta esse troço como terminal: paga à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master; o master fica master), no ordenado, no recibo e no custo dos extras. Antes de sair do aeroporto volta a dar saída + entrada e passa a extra normal. Saída fora do aeroporto ou sem GPS deixa o troço \"por confirmar\" (não paga terminal) até o RH o confirmar na ficha → Ponto. Desligado: nada muda no ordenado nem nos ecrãs.", defaultEnabled: false },
-  { name: "ZELLO_PDA_NAMES", label: "Zello: nome de quem tem o PDA no mapa", description: "Quando alguém faz login num PDA (registado pelo QR), o nome da conta Zello desse PDA passa a \"PDA 12 · Rui Santos\"; no logout volta a \"PDA 12\". Assim o mapa do Zello mostra quem está com cada PDA. Escreve no Zello (só o nome). Desligado por omissão até testar com um PDA.", defaultEnabled: false },
+  // Plano 56 (Jorge, 12 out 2026): "terminal pelo perfil + pagamento" (B1 + B2). Mexe no dinheiro → desligado por omissão.
+  { name: "PONTO_TERMINAL", label: "Terminal no ponto (aeroporto)", description: "Terminal pelo perfil + pagamento. Extras, condutores e team leaders carregam na fotografia → \"Estou no terminal\" (ou marcam \"Estou no terminal\" na entrada do ponto). O GPS tem de estar no aeroporto de uma cidade onde a pessoa trabalha (Definições → Parâmetros → Extras-dia → \"Aeroportos (terminal no ponto)\", com zonas por terminal). Só uma pessoa por cidade e cada pessoa só num terminal: ocupado → \"Pedir ao João para passar\" (sino ao João e ao TL de serviço). O TL/supervisor da cidade põe, passa ou fecha em Atividade diária → Ao vivo → Terminal agora (com motivo). A saída do ponto liberta o lugar. De 5 em 5 min vê-se o GPS do Zello do aparelho com a pessoa: fora há mais de 20 min → \"Ainda estás no terminal?\" (barra + push; aviso ao TL); sem resposta em 15 min o lugar fica livre; \"Ainda estou\" reabre sem buraco até 30 min. Horas que contam: saída com GPS no aeroporto → até à saída; senão até ao último GPS no aeroporto ou à última recolha/entrega (só até o GPS o ver sair); sem prova ficam por confirmar e o RH decide na ficha → Ponto. As horas de terminal pagam ao nível seguinte só aos extras (júnior → sénior, sénior → terminal, terminal → master), no ordenado, no recibo e no custo dos extras; condutores e TL ficam no terminal sem mudar o valor. O método antigo (saída + entrada no aeroporto) deixa de contar; os troços antigos ficam como estavam. Meses com o ordenado já fechado não mudam. Desligado: nada aparece, o vigia não corre e nada muda no ordenado.", defaultEnabled: false },
+  { name: "ZELLO_PDA_NAMES", label: "Zello: nome de quem tem o PDA no mapa", description: "Quando alguém faz login num PDA (registado pelo QR), o nome da conta Zello desse PDA passa a \"PDA 12 · Rui Santos\"; no logout volta a \"PDA 12\". Assim o mapa do Zello mostra quem está com cada PDA. Um PDA que passa a telemóvel pessoal (botão \"Pessoal?\") fica com o nome do dono. Escreve no Zello (só o nome). Desligado por omissão até testar com um PDA.", defaultEnabled: false },
   // 20b (Jorge, 2 out 2026): mexe em fichas de clientes sozinho → só o super admin o liga/desliga.
   { name: "CRM_AUTO_MERGE", label: "CRM: juntar sozinho as fichas óbvias", description: "Todas as madrugadas (depois das sugestões das 05:15; se não acabar, continua) o CRM junta sozinho as fichas com o mesmo 1.º e último nome e um dado igual (email, telefone ou matrícula), ou com o mesmo email E telefone mesmo com outro nome. Nunca empresas, clientes Pro, emails genéricos (info@, reservas@…), dados em mais de 2 fichas nem NIF pessoais diferentes. Fica a ficha com mais reservas; cada junção aparece em Rever fichas → Juntas recentemente e pode ser separada. As dúvidas só vão à IA com \"IA: fichas de clientes duvidosas\" ligado.", defaultEnabled: true, superAdminOnly: true },
   // 31b (Jorge, 6 out 2026: "sim" às ligações automáticas pelo mesmo email) → ligado; desliga-se aqui.
@@ -818,6 +1128,10 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "PARTNER_CLOSE_ALERTS", label: "Parceiros: avisar diferenças no fecho do mês", description: "Todas as manhãs (06:40) compara-se o mês corrente e o anterior, parceiro a parceiro, entre a Multipark e a nossa memória do webhook (a comparação corre sempre; isto só liga os avisos). Com isto ligado, quando aparecem diferenças NOVAS chega um aviso (sino e email) a quem vê as Parcerias.", defaultEnabled: false },
   { name: "OPS_PRESENCE_ALERTS", label: "Alertas: a trabalhar sem PDA ou Zello ligado", description: "De 5 em 5 minutos o dashboard vê quem do operacional tem o ponto aberto sem PDA (ou com o Zello desligado) e quem fez movimentos na Multipark sem ponto aberto (ou com o Zello desligado). A lista aparece sempre em Operacional → PDAs; com isto ligado, avisa também no sino o team leader de serviço na cidade e o supervisor. Desligado por omissão até se ver a lista uns dias.", defaultEnabled: false },
   { name: "OPS_PRESENCE_WHATSAPP", label: "Alertas sem PDA/Zello: WhatsApp aos administradores", description: "Se um alerta ficar sem ligação nem \"Visto\" do team leader (10 min por omissão), manda um WhatsApp aos administradores da cidade e à cópia (Definições → Operação). Precisa do modelo aprovado pela Meta e do alerta no sino ligado.", defaultEnabled: false },
+  // Plano 56 (Jorge, 12 out 2026): entrar com email + código + palavra-passe. Avisa gente e mexe na entrada → desligado; só o super admin.
+  { name: "ENTRAR_COM_CODIGO", label: "Entrar com email e código (sem Google)", description: "Na página de entrada aparecem Email + Palavra-passe e \"Pedir código\". O código (6 algarismos, vale 10 minutos, só no aparelho onde foi pedido) vai para o team leader de serviço e os supervisores da cidade da pessoa (sino + aviso no telemóvel; sem cidade, RH e admins), que o dão à pessoa. Depois do código a pessoa pode criar uma palavra-passe. Só para utilizadores, extras e condutores: team leaders e acima continuam a entrar com Google (num PDA registado entram com código, sem palavra-passe). O botão Google continua lá. Google e código caem na mesma conta (mesmo email). Nos PDAs registados a sessão fica presa ao PDA: acaba na saída do ponto, no logout, quando outra pessoa entra no PDA ou ao fim de 16 h; o Chrome não guarda emails nem palavras-passe; o QR do PDA só é lido pelo TL ou acima (e o supervisor é avisado quando um PDA passa para outro aparelho). Desligado: tudo como antes (só Google).", defaultEnabled: false, superAdminOnly: true },
+  // Plano 56 A2 (Jorge, 12 out 2026): "o Google sai dos PDAs". Ligado = como hoje; só desliga com a entrada com código ligada.
+  { name: "GOOGLE_NOS_PDAS", label: "Google nos PDAs", description: "Ligado (como hoje): nos PDAs registados aparece \"Entrar com Google\". Desligado: o botão Google desaparece nos PDAs registados (página de entrada, \"Iniciar sessão\" e registo do PDA) e entra-se com email e código. Só dá para desligar com \"Entrar com email e código\" ligado — sem ele, os PDAs ficavam sem forma de entrar. Telemóveis e PCs ficam sempre com o Google.", defaultEnabled: true, superAdminOnly: true },
   // ── Caixa, fase 4: cruzar com o exterior (desligados até haver chaves e decisão do dono; até lá confirma-se à mão) ──
   { name: "CASH_STRIPE_CHECK", label: "Caixa: cruzar os pagamentos online com a Stripe", description: "Todos os dias (07:00), as saídas de ontem e anteontem pagas online são confirmadas na Stripe (cobrado, valor, reembolsos, disputas). Precisa da chave restrita STRIPE_READ_KEY na Vercel. Desligado: só se confirma na Multipark que o pagamento online existe.", defaultEnabled: false, superAdminOnly: true },
   { name: "CASH_VIVA_CHECK", label: "Caixa: cruzar o multibanco com a Viva Wallet", description: "Todos os dias (07:00), os pagamentos por multibanco de ontem e anteontem são procurados nas transações da Viva Wallet (mesmo dia ou seguinte, mesmo valor). Precisa de VIVA_MERCHANT_ID e VIVA_API_KEY na Vercel. Desligado: confirma-se à mão com a foto do talão.", defaultEnabled: false, superAdminOnly: true },
@@ -825,38 +1139,68 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   { name: "CENTRAL_SUGAR", label: "Central Vodafone: receber as chamadas da consola", description: "A consola One Net Attendant Console regista cada chamada na dashboard, como se fosse um Sugar CRM (Integrações → Central Vodafone: endereço a pôr na consola e um acesso por pessoa). As chamadas contam no Desempenho de quem atendeu ou fez. Desligado: a dashboard responde \"desligada\" à consola e só regista que ela tentou. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   // Lote 45 (Jorge, 7 out 2026: "quando a aplicação toca, dê algum input aqui e também toque aqui").
   { name: "CENTRAL_RING", label: "Central Vodafone: tocar no dashboard", description: "Quando entra uma chamada na consola de uma pessoa, o dashboard dessa pessoa toca e mostra quem é (nome, cliente ou equipa, reservas) com o botão para abrir a ficha. Só para quem tem um acesso da consola (Integrações → Central Vodafone) e precisa do \"receber as chamadas da consola\" ligado. As chamadas que a pessoa faz pelos botões \"Ligar\" da dashboard não tocam. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
+  // Plano 62 (P7): lê a Multipark todas as noites e escreve a tabela service_times → desligado até o Jorge ver
+  // (depois do diagnóstico dos tempos, do PR dos parâmetros e de um dia reprocessado à mão).
+  { name: "SERVICE_TIMES", label: "Tempos de entrega e de recolha (trabalho noturno)", description: "Todas as madrugadas (a partir das 05:30, depois da recolha GPS final) calcula, para cada entrega e recolha que fechou nos últimos 3 dias, a Fila (desde a chamada do cliente ou o pendente), o Trânsito e a espera pelo cliente (pela paragem no terminal no GPS do Zello), e nas recolhas o tempo no terminal, no P2 e até arrumado, com o condutor de cada tempo; guarda tudo na tabela dos tempos e preenche para trás desde abril (blocos de 7 dias, 2 nos dias com GPS, só até às 09h). Uma leitura da BD da Multipark por noite (só leitura, com teto); nada se apaga. Não avisa ninguém nem dá pontos. À mão: /api/cron/service-times?reprocessar=AAAA-MM-DD..AAAA-MM-DD (funciona mesmo desligado). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   { name: "OPS_ANOMALIES", label: "Deteção de anomalias", description: "Todos os dias: reservas por parque/canal, despesas (valores fora do normal e duplicados) e gasto/ROAS do marketing." },
+  // B1 (Jorge, 8 out 2026: "as campanhas dão 0 reservas ligadas"). Só LÊ da Google e escreve
+  // numa tabela nossa de apoio (google_ads_clicks) → ligado por omissão; desliga-se aqui.
+  { name: "GOOGLE_ADS_CLICK_SYNC", label: "Google Ads: ligar reservas à campanha pelo clique (gclid)", description: "De hora a hora lê do Google Ads de que campanha é cada clique (relatório click_view: hoje, ontem e, aos poucos, os dias em falta até 90 dias para trás — a Google não guarda mais) e guarda-o numa tabela de apoio. Assim uma reserva cujo link só traz o gclid (auto-tagging) fica ligada à campanha no Marketing (ROAS por campanha, Ligadas, alertas). O ID da campanha no link continua a ganhar. Só lê do Google Ads; nada é alterado lá. Desligado: deixa de ler cliques novos (as reservas com cliques já lidos continuam ligadas; as outras só pelo ID no link). Estado em Integrações → Google Ads → Recolha." },
   // ── IA (server/_core/ai) — AI_ENABLED desliga tudo de uma vez ──
   { name: "AI_ENABLED", label: "IA (interruptor geral)", description: "Desligado = nenhuma funcionalidade de IA faz pedidos ao fornecedor.", group: "ia" },
   { name: "AI_EXPENSE_OCR", label: "IA: leitura de faturas", description: "Extrai fornecedor, valor, datas e NIF das faturas carregadas nas Despesas.", group: "ia" },
   { name: "AI_REVIEW_DRAFTS", label: "IA: rascunhos de resposta às críticas", description: "Prepara a resposta às críticas Google (nunca publica sozinha).", group: "ia" },
   { name: "AI_RADIO", label: "IA: transcrição e resumo do rádio", description: "Transcreve as mensagens de rádio e resume-as em 1–2 frases.", group: "ia" },
-  { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte.", group: "ia" },
+  { name: "AI_HANDOVER_SUMMARY", label: "IA: resumo da passagem de turno", description: "5 pontos para o team leader do turno seguinte, feitos quando a passagem é entregue (1.ª gravação) e no botão «Resumir agora». Editar a passagem depois não chama a IA.", group: "ia" },
   { name: "AI_WHATSAPP_ASSIST", label: "IA: assistente do WhatsApp", description: "Resumo da conversa e sugestão de resposta (vai para a caixa de texto, nunca é enviada sozinha).", group: "ia" },
   { name: "AI_QUIZ", label: "IA: perguntas da formação", description: "Gera rascunhos de perguntas a partir dos manuais.", group: "ia" },
-  { name: "AI_TRAINING_TUTOR", label: "IA: tutor da formação", description: "Chat nas páginas da Formação: responde só com o conteúdo dos manuais, motiva e explica as respostas erradas do quiz.", group: "ia" },
+  // Jorge (14 out 2026): "a IA devia fazer as perguntas a partir da base de conhecimento, diferentes de cada vez".
+  // Ligado: só corre quando a pessoa carrega em "Jogar" e só grava as perguntas dessa tentativa (para a corrigir).
+  { name: "AI_QUIZ_LIVE", label: "IA: quiz novo em cada jogo", description: "Em cada jogo do Quiz a IA faz 10 perguntas novas (escolha múltipla) a partir da base de conhecimento e dos manuais que a pessoa pode ver, sobre o tema escolhido ou o da formação; evita as que a pessoa já teve. A resposta certa fica só no servidor e a correção é feita lá. As perguntas e as respostas ficam guardadas para a nota e para rever. Se a IA falhar ou estiver desligada, o jogo usa as perguntas fixas (Gerir perguntas). Nada é publicado sozinho.", group: "ia" },
+  // Usado pela FAQ semanal (KB_FAQ_WEEKLY, desligada) e pelo botão "Gerar agora" (uma pessoa carrega).
+  { name: "AI_KB_FAQ", label: "IA: FAQs a partir da base de conhecimento", description: "A IA lê um documento da base de conhecimento (só os que todos podem ver) e escreve FAQs curtas com a ligação ao documento, sem repetir as que já existem nem as eliminadas. Corre no botão \"Gerar agora\" (Formação → FAQs, quem gere a formação) e, com \"Formação: FAQs novas da base de conhecimento (semanal)\" ligado, uma vez por semana.", group: "ia" },
+  { name: "AI_TRAINING_TUTOR", label: "IA: tutor da formação", description: "Chat nas páginas da Formação: responde só com o conteúdo dos manuais, motiva e explica as respostas erradas do quiz. Também ajuda a \"Procurar formação por tema\" (escolhe no catálogo só pelos títulos e resumos; desligado, a pesquisa usa só palavras).", group: "ia" },
   { name: "AI_COMPLAINT_TRIAGE", label: "IA: triagem das reclamações por email", description: "Sugere tipo, prioridade, SLA, reserva e duplicados e prepara um rascunho de resposta (nunca é enviado sozinho). Só aplica sozinha com confiança alta e campo vazio.", group: "ia" },
   { name: "AI_REVIEW_AUTO_DRAFTS", label: "IA: rascunho automático para cada crítica nova", description: "Prepara a resposta às críticas Google novas (fica por aprovar; nunca publica sozinha).", group: "ia" },
   { name: "AI_WHATSAPP_TRIAGE", label: "IA: intenção e urgência no WhatsApp", description: "Etiqueta as conversas (reserva, cancelamento, reclamação…) e marca as urgentes (entram no aviso de SLA). No máximo 1× a cada poucos minutos por conversa; nunca responde sozinha.", group: "ia" },
   { name: "AI_LOST_FOUND_MATCH", label: "IA: correspondências nos Perdidos & Achados", description: "Compara as descrições dos perdidos com os objetos encontrados (depois de um filtro por data, matrícula/reserva e parque). Contactar o cliente é sempre humano.", group: "ia" },
   { name: "AI_CRM_IDENTITY", label: "IA: fichas de clientes duvidosas", description: "Nas sugestões para juntar que as regras não resolvem (nome diferente, nome de uma palavra…), a IA dá o parecer e junta sozinha só com certeza alta (≥ 85 %); o resto fica em Rever fichas com o parecer à vista. Recebe só o primeiro nome e factos (\"telefone igual\", \"NIF diferente\"), nunca emails, telefones ou matrículas. Empresas, clientes Pro e NIF pessoais diferentes nunca vão à IA. Só funciona com a junção automática (CRM_AUTO_MERGE) ligada.", defaultEnabled: false, group: "ia" },
   { name: "AI_ASSISTANT", label: "IA: assistente (chat)", description: "Botão de ajuda em todas as páginas: explica como se usa a app e responde a perguntas sobre os dados que a pessoa já pode ver (só leitura).", group: "ia" },
-  { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. Desligado por omissão até decisão RGPD.", defaultEnabled: false, group: "ia" },
-  { name: "AI_HR_EMAIL_ATTACHMENTS", label: "IA: anexos dos emails do RH (CV)", description: "Lê os anexos (CV, documentos) dos emails de candidatura que chegam ao RH: preenche no candidato só os campos vazios (NIF, n.º do BI/CC, n.º da carta, cidade só quando é certa, outros contactos) e escreve um resumo para quem entrevista. NIF e números dos documentos só o RH vê. Só emails dos últimos 14 dias; cada anexo é lido uma vez.", defaultEnabled: false, group: "ia" },
+  // Multis 2 (Jorge, 8 out 2026: pediu a memória) → ligado por omissão. Não chama a IA:
+  // o "Lembra-te" grava sem IA; as notas só vão no contexto das perguntas ao Multis.
+  { name: "AI_ASSISTANT_MEMORY", label: "IA: memória do Multis", description: "Quem escreve no Multis uma mensagem a começar por \"Lembra-te\" (ou \"Memoriza\", \"Não te esqueças\") fica com essa nota guardada (até 30 por pessoa), e os admins escrevem notas da empresa (até 100) que toda a gente vê. O Multis segue-as em todas as conversas, mas nunca para contornar permissões ou cidades. Tudo à vista no separador Memória do Multis; arquivar não apaga. Desligado: não guarda, não usa as notas e esconde a Memória.", group: "ia" },
+  { name: "AI_HR_AUTOFILL", label: "IA: preenchimento a partir de documentos do RH", description: "Lê CC, título de residência, carta, IBAN e morada para preencher campos vazios da ficha. O documento vai inteiro: só corre com a IA em Vertex AI na UE. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  { name: "AI_HR_EMAIL_ATTACHMENTS", label: "IA: anexos dos emails do RH (CV)", description: "Lê os anexos (CV, documentos) dos emails de candidatura que chegam ao RH: preenche no candidato só os campos vazios (NIF, n.º do BI/CC, n.º da carta, cidade só quando é certa, outros contactos) e escreve um resumo para quem entrevista. NIF e números dos documentos só o RH vê. Só emails dos últimos 14 dias; cada anexo é lido uma vez. O ficheiro vai inteiro: só corre com a IA em Vertex AI na UE.", defaultEnabled: false, group: "ia" },
   { name: "AI_OPS_BRIEFING", label: "IA: texto do briefing diário", description: "Escreve o parágrafo do briefing das 07:30 por cidade (os números vêm sempre do sistema).", group: "ia" },
   { name: "AI_WEEKLY_REPORTS", label: "IA: texto dos relatórios semanais", description: "Narrativa curta dos relatórios de segunda-feira (direção, marketing, operações, RH).", group: "ia" },
-  { name: "AI_ANOMALY_EXPLAIN", label: "IA: explicação das anomalias", description: "Uma linha por anomalia detetada (reservas, despesas, marketing). A deteção é estatística, sem IA.", group: "ia" },
+  { name: "AI_ANOMALY_EXPLAIN", label: "IA: explicação das anomalias", description: "Uma linha por anomalia detetada (reservas, despesas, marketing), uma vez por dia. A deteção é estatística, sem IA. Condutores e extras veem o alerta sem a linha da IA.", group: "ia" },
   { name: "AI_AVAILABILITY_CLASSIFY", label: "IA: respostas de disponibilidade pouco claras", description: "Classifica as respostas que o sistema não percebeu. Confiança alta aplica-se sozinha; o resto vai para revisão humana.", group: "ia" },
-  { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação.", group: "ia" },
+  { name: "AI_LEAD_SCORING", label: "IA: resumo e 1.º contacto das leads", description: "Resumo de uma linha da pontuação (calculada no sistema) e rascunho do 1.º contacto, que precisa de aprovação. Os dois só para quem edita as leads.", group: "ia" },
   { name: "AI_EVALUATION_EXPLAIN", label: "IA: explicação da avaliação", description: "Explica em PT-PT a pontuação a partir das linhas das regras (nunca recalcula).", group: "ia" },
   { name: "AI_HANDOVER_REPEATS", label: "IA: pendentes repetidos da passagem de turno", description: "Redige os pendentes que se repetem entre turnos e o resumo semanal por cidade.", group: "ia" },
-  { name: "AI_MAIL_ROUTING", label: "IA: separar os emails pelas caixas", description: "Os emails novos que chegam a uma caixa geral (info@) vão para a caixa do tema: RH, Reservas, Alterações, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. Só move a conversa (quem vê essa caixa passa a vê-la); nunca responde. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
+  // Jorge (8 out 2026): "a IA… age sozinha… divide logo e põe nas caixas sem ler" → ligado por omissão.
+  // 14 out 2026: lê pelo sentido; a falha não move nada; uma resposta só muda de caixa com um caso.
+  { name: "AI_MAIL_ROUTING", label: "IA: separar emails e WhatsApp pelas caixas", description: "A IA lê cada email recebido nas caixas partilhadas (info@, reservas@, recursos-humanos@…; nunca as pessoais) e as conversas NOVAS do WhatsApp, e decide pelo sentido do que a pessoa escreve (não por palavras soltas). Conversa nova → caixa do tema (RH, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação), por ler; lixo (publicidade, spam, respostas automáticas) fica onde está; o que não percebe vai para o info (no WhatsApp, a Geral). Se a IA falhar nada se mexe: fica por ler e volta a ser lida. Uma resposta numa conversa que já tem caixa só muda de caixa se trouxer uma reclamação ou um perdido. Recrutamento em 1.º contacto cria a lead e a candidatura. As reclamações, os perdidos, as críticas e as ocorrências têm interruptores próprios. Nunca responde a ninguém; mover à mão corrige e a IA não volta a mexer nessa conversa.", group: "ia" },
+  // Lote 57 (Jorge, 12 out 2026: "se a IA vê que é uma reclamação, envia para lá") → ligado por omissão.
+  // 14 out 2026: "tem de ficar automático" — certeza média cria "Por confirmar (IA)"; a conversa vai para as Reclamações.
+  { name: "AI_MAIL_COMPLAINTS", label: "IA: reclamações que chegam a outras caixas vão para as Reclamações", description: "Usa a leitura da IA das caixas (precisa de «IA: separar emails e WhatsApp pelas caixas»; não faz outra chamada à IA). Quando um email de uma caixa partilhada (info@, reservas@, cancelamentos…) é uma reclamação — também numa resposta, num reencaminhamento do backoffice ou escondida noutro pedido: cria a reclamação (origem IA) ou junta o email à aberta da mesma conversa, do mesmo cliente ou da mesma reserva, e a conversa vai para a caixa Reclamações, por ler. Com certeza média a reclamação nasce \"Por confirmar (IA)\": confirma-se ou arquiva-se (nada se apaga). Uma conversa nunca dá duas reclamações. Nunca para emails internos (salvo o reencaminhamento de um cliente), automáticos, envios em massa, parceiros nem avisos de avaliações. NUNCA se responde ao cliente (sem aviso de receção). Na reclamação fica escrito que veio da IA, de que caixa e porquê. Certezas em Definições → Parâmetros → IA (ai.mailComplaints). Desligado: a IA continua a separar pelas caixas, mas não cria reclamações.", group: "ia" },
+  // 14 out 2026 — o mesmo para os perdidos. Cria casos sozinha → desligado por omissão (o Jorge liga depois de ver).
+  { name: "AI_MAIL_LOST_FOUND", label: "IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados", description: "Como as reclamações, para os objetos perdidos (usa a mesma leitura da IA, sem outra chamada): quando um email de uma caixa partilhada diz que alguém deixou, perdeu ou esqueceu um objeto (no carro, no parque, no transfer), cria o caso nos Perdidos e Achados (origem IA) ou junta o email ao caso aberto do mesmo cliente, e a conversa vai para a caixa Perdidos, por ler. Com certeza média o caso nasce \"Por confirmar (IA)\". As respostas do cliente nessa conversa juntam-se ao caso. Uma conversa nunca dá dois casos. Nunca escreve ao cliente. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // Ronda 2 da auditoria (14 out 2026) — parceiros em nome de clientes. Cria casos sozinha → desligado por omissão.
+  { name: "AI_MAIL_PARTNER_CASES", label: "IA: reclamações e perdidos que um parceiro manda em nome de um cliente abrem o caso", description: "Uma agência, um hotel ou um comparador (contacto das Parcerias) que escreve a dizer que um cliente dele se queixa — ou que deixou um objeto — abre a reclamação (ou o perdido) como os outros emails, mas SEMPRE «Por confirmar (IA)»: o email do parceiro nunca fica como o do cliente nem junta casos de clientes diferentes (junta só pela conversa, pela matrícula ou pela reserva). Precisa dos interruptores das reclamações / dos perdidos ligados. Nunca escreve ao parceiro nem ao cliente. Desligado: os emails de parceiros nunca abrem caso (como antes; a conversa vai para a caixa do tema).", defaultEnabled: false, group: "ia" },
+  // 14 out 2026 — críticas e ocorrências por email: caixa própria e lidas. Muda o lido → desligado por omissão.
+  { name: "AI_MAIL_NOTICES", label: "IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas", description: "Avisos de avaliação (Google Business Profile, Trustpilot, Tripadvisor — reconhecidos pelo remetente) e elogios ou opiniões de clientes vão para a caixa Críticas e ficam LIDOS: a crítica entra nas Críticas pela API do Google ou pela criticas@ — daqui não se cria nada. Avisos de ocorrência da app Multipark (o formulário «Tipo de ocorrência / Matrícula») ligam-se à ocorrência da Multipark (só leitura, pela matrícula e pela hora), vão para a caixa Ocorrências e ficam lidos; se a ocorrência não estiver na app, ficam por ler. Relatos de ocorrências escritos por pessoas vão para as Ocorrências por ler. Lido também no Gmail. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // 14 out 2026 — rever o que já está nas caixas (cria casos sozinha) → desligado por omissão.
+  { name: "AI_MAIL_BACKFILL", label: "IA: rever os emails que já estão nas caixas", description: "De 15 em 15 min passa pela mesma triagem os emails recebidos nos últimos dias (30 por omissão; Definições → Parâmetros → IA, ai.mailBackfill) nas caixas partilhadas que ainda não têm caso: as reclamações e os perdidos que lá estejam abrem o caso (com os interruptores deles ligados) e a conversa vai para a caixa do caso; avisos de avaliação e de ocorrência ficam lidos (com o interruptor dos avisos). Não baralha as caixas de tema dos emails antigos. Cada email é lido uma vez; o que já tem caso e o que uma pessoa mexeu (moveu, corrigiu a IA, recusou, resolveu, arquivou) fica como está. Por lotes (6 emails por corrida, por omissão). Nunca escreve ao cliente. Desligado por omissão.", defaultEnabled: false, group: "ia" },
+  // 14 out 2026 — reclamacoes@/perdidos@: só não abre o caso com a certeza da IA de que é lixo → desligado por omissão.
+  { name: "AI_MAIL_ALIAS_FILTER", label: "IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@", description: "Tudo o que chega à reclamacoes@ e à perdidos@ continua a abrir o caso (a reclamação com o aviso de receção, como sempre), salvo se a IA tiver a certeza (90 % ou mais) de que é lixo — publicidade, spam, resposta automática — e não vê reclamação nem perdido. Esse email fica na caixa, por ler, com a linha da IA a dizer porquê. Se a IA falhar ou não houver leitura nesta corrida, o caso abre na mesma. Desligado por omissão.", defaultEnabled: false, group: "ia" },
   { name: "AI_MAIL_DRAFT", label: "IA: rascunho de resposta a emails", description: "Botão \"Rascunho IA\" na Comunicação: prepara uma resposta ao cliente (vai para o editor; nunca é enviada sozinha).", group: "ia" },
   { name: "AI_GBP_POSTS", label: "IA: rascunho de publicações Google Business", description: "Marketing → Web & SEO → Google Business: propõe o texto de uma Novidade/Oferta/Evento a partir do tema indicado (fica no editor; nada é publicado sem confirmação).", group: "ia" },
   { name: "AI_PAGESPEED_EXPLAIN", label: "IA: explicar o que corrigir na PageSpeed", description: "Marketing → Web & SEO → Velocidade: explica em PT-PT as principais oportunidades do Lighthouse (só com os títulos e poupanças; sem dados pessoais).", group: "ia" },
   { name: "AI_WEB_INSIGHT", label: "IA: resumo semanal Web & SEO", description: "Marketing → Web & SEO: um parágrafo por semana sobre o que mudou no tráfego, na pesquisa Google e na velocidade (só a partir dos totais; sem dados pessoais).", group: "ia" },
   { name: "AI_KNOWLEDGE", label: "IA: base de conhecimento", description: "Índice dos manuais (Drive e ficheiros carregados) por embeddings e leitura de PDFs sem Drive. Desligado = a pesquisa usa só palavras-chave (FULLTEXT).", group: "ia" },
-  { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação.", group: "ia" },
+  { name: "AI_TASKS_FROM_TEXT", label: "IA: tarefas a partir de texto", description: "Propõe tarefas a partir de notas coladas; nada é criado sem confirmação. Team leader para cima.", group: "ia" },
 ];
 
 /** Omissão de um interruptor do catálogo (desconhecido → ligado). PURA. */
@@ -917,6 +1261,7 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "mail-sync", label: "Comunicação: sincronização do Gmail", intervalMinutes: 60, workflow: "tick" },
   { name: "multipark-deliveries", label: "Fila do webhook Multipark (repescagem)", intervalMinutes: 60, workflow: "tick" },
   { name: "ai-comms", label: "IA na comunicação com clientes", intervalMinutes: 15, workflow: "tick" },
+  { name: "mail-backfill", label: "Comunicação: casos por criar e emails das caixas revistos pela IA", intervalMinutes: 15, workflow: "tick" },
   // Google por eventos: repetição de hora a hora, rede de segurança de 4 em 4 h, renovação diária dos canais.
   { name: "google-pending", label: "Google: alterações por enviar/receber (repetição)", intervalMinutes: 60, workflow: "tick" },
   { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },
@@ -939,21 +1284,30 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "partner-close", label: "Parceiros: comparar o fecho do mês", intervalMinutes: 1440, workflow: "tick" },
   { name: "cash-sweep", label: "Caixa: varredura do dinheiro (Correção de caixa)", intervalMinutes: 180, workflow: "tick" },
   { name: "ops-presence", label: "Operacional: a trabalhar sem PDA ou Zello ligado", intervalMinutes: 5, workflow: "tick" },
+  { name: "cash-confirm-recheck", label: "Caixa: reler os dias confirmados (reabre se a Multipark mudou)", intervalMinutes: 60, workflow: "tick" },
+  { name: "terminal-watch", label: "Terminal: \"Ainda estás no terminal?\" (GPS de 5 em 5 min)", intervalMinutes: 5, workflow: "tick" },
   { name: "cash-close", label: "Caixa: fecho do dia (saídas de ontem e anteontem)", intervalMinutes: 1440, workflow: "tick" },
   { name: "cash-external", label: "Caixa: confirmar pagamentos (online, Viva, faturas)", intervalMinutes: 1440, workflow: "tick" },
   { name: "daily-ops", label: "Manutenção diária + recolha GPS final (D-2)", intervalMinutes: 1440, workflow: "tick" },
   { name: "zello-sameday", label: "GPS do Zello — recolha provisória do dia (23:15–23:55)", intervalMinutes: 1440, workflow: "tick" },
+  { name: "gps-resplit-backfill", label: "GPS: re-dividir os últimos 31 dias (a pedido do super admin)", intervalMinutes: 5, workflow: "tick" },
   { name: "extras-pressure", label: "Extras-Dia: pressão (acumula desde abril, BD Multipark)", intervalMinutes: 1440, workflow: "tick" },
   { name: "rh-docs-weekly", label: "RH: regra documental dos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "rh-docs-request", label: "RH: pedir documentos em falta aos extras (semanal)", intervalMinutes: 10080, workflow: "tick" },
+  { name: "kb-faq-weekly", label: "Formação: FAQs novas da base de conhecimento (semanal)", intervalMinutes: 10080, workflow: "tick" },
   { name: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", intervalMinutes: 1440, workflow: "tick" },
+  // Plano 62 (P7): interruptor SERVICE_TIMES (desligado por omissão).
+  { name: "service-times", label: "Tempos de entrega e de recolha (BD Multipark, chamadas e GPS)", intervalMinutes: 1440, workflow: "tick" },
   { name: "google-ads", label: "Google Ads", intervalMinutes: 1440, workflow: "tick" },
+  { name: "google-ads-clicks", label: "Google Ads: cliques (gclid → campanha)", intervalMinutes: 60, workflow: "tick" },
   { name: "meta-ads", label: "Meta Ads", intervalMinutes: 1440, workflow: "tick" },
   { name: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", intervalMinutes: 1440, workflow: "tick" },
   { name: "web-analytics", label: "Web & SEO (GA4, Search Console, PageSpeed)", intervalMinutes: 1440, workflow: "tick" },
-  // Fora da agenda (só à mão): base de conhecimento (botão "Sincronizar
-  // agora") e Google Business Profile (em pausa até a Google aprovar a API).
-  { name: "knowledge-sync", label: "Base de conhecimento (pastas do Drive)", intervalMinutes: null, workflow: "manual" },
+  // Fora da agenda do tick: base de conhecimento — sincroniza SOZINHA quando há
+  // alterações nas pastas do Drive (avisos da Google → fila de hora a hora, e a
+  // verificação de 4 em 4 h do google-sync); esta linha regista só o botão
+  // "Sincronizar agora" — e Google Business Profile (em pausa até a Google aprovar a API).
+  { name: "knowledge-sync", label: "Base de conhecimento: «Sincronizar agora» (sozinha quando há alterações nas pastas do Drive)", intervalMinutes: null, workflow: "manual" },
   { name: "google-business", label: "Google Business Profile (críticas, desempenho e pesquisas)", intervalMinutes: null, workflow: "manual (em pausa)" },
 ];
 

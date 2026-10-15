@@ -149,6 +149,15 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "historico_diario", action: "view", roles: ["team_leader", "supervisor"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "ops_presence", group: "operacoes", label: "A trabalhar sem PDA ou Zello", description: "Alguém do operacional com o ponto aberto sem PDA ou com o Zello desligado, ou com movimentos na Multipark sem ponto aberto. Vai ao team leader de serviço na cidade e ao supervisor.",
     module: "pdas", action: "view", roles: [], cityScoped: true, personal: true, channels: IN_APP, dedupeMinutes: 60, mandatoryFlag: CRITICAL_ALERTS_MANDATORY_FLAG }),
+  // Plano 56 (Jorge, 12 out 2026): o código de entrada vai ao TL de serviço e aos supervisores da cidade. Só com ENTRAR_COM_CODIGO.
+  K({ kind: "login_code", group: "operacoes", label: "Códigos de entrada", description: "Alguém da tua cidade pediu para entrar com o email: recebes o código de 6 algarismos para lhe dares (só à própria pessoa). Vai ao team leader de serviço e aos supervisores da cidade (sem cidade: RH e admins). Também aparece em Atividade diária → Ao vivo. Só com \"Entrar com email e código\" ligado.",
+    module: "atividade_diaria", action: "view", roles: [], cityScoped: true, personal: true, mandatory: true, channels: IN_APP, dedupeMinutes: 1 }),
+  // Plano 56 A2 (Jorge, 12 out 2026): aviso ao supervisor quando um PDA passa para outro aparelho (QR lido noutro aparelho). Só com ENTRAR_COM_CODIGO.
+  K({ kind: "pda_device", group: "operacoes", label: "PDA registado noutro aparelho", description: "Alguém leu o QR de um PDA da tua cidade noutro aparelho: esse aparelho passa a ser o PDA e o antigo deixa de o ser. Vai aos supervisores da cidade (não a quem registou). Só com \"Entrar com email e código\" ligado.",
+    module: "pdas", action: "view", roles: ["supervisor"], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 1 }),
+  // Plano 56 B (Jorge, 12 out 2026): terminal pelo perfil — só com o interruptor PONTO_TERMINAL.
+  K({ kind: "terminal", group: "operacoes", label: "Terminal do aeroporto", description: "Alguém pede para ficar com o terminal onde estás (Passar / Ainda estou), a resposta ao teu pedido, ou o TL pôs-te ou tirou-te do terminal. \"Ainda estás no terminal?\" quando o GPS te vê fora há mais de 20 min (também no telemóvel) e o lugar libertado sem resposta. O team leader de serviço na cidade também recebe os pedidos, as perguntas (também no telemóvel) e os lugares libertados.",
+    module: "ficha", action: "view", roles: [], cityScoped: true, personal: true, channels: IN_APP, dedupeMinutes: 10 }),
   K({ kind: "driver_daily_report", group: "operacoes", label: "Relatório diário dos motoristas", description: "Resumo da recolha automática do histórico GPS.",
     module: "historico_diario", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL }),
   K({ kind: "anomaly_bookings", group: "operacoes", label: "Anomalias nas reservas", description: "Quedas/picos fora do normal nas reservas (só críticas).",
@@ -174,6 +183,11 @@ export const NOTIFICATION_KIND_DEFS = [
   K({ kind: "my_doc_rejected", group: "pessoas", label: "Documento recusado", description: "O RH recusou um documento que entregaste (com o motivo) — carrega-o de novo na tua ficha.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "driver_application", group: "pessoas", label: "Candidaturas", description: "Candidaturas novas \"Be a Driver\" da tua cidade.",
+    module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+  // 49c (Jorge, 8 out 2026): quem entra com outra conta Google e diz quem é; quem estava inativo e quer voltar.
+  K({ kind: "account_link_request", group: "pessoas", label: "Pedidos de ligação de conta", description: "Alguém entrou com uma conta Google sem ficha e diz com que email/telefone se candidatou ou trabalhou connosco (ou um candidato com o mesmo telefone/NIF de outra ficha).",
+    module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
+  K({ kind: "employee_comeback", group: "pessoas", label: "Quer voltar", description: "Uma pessoa inativa da tua cidade entrou e carregou em \"Voltei, quero trabalhar\".",
     module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
   K({ kind: "lead_replied", group: "pessoas", label: "Lead respondeu", description: "Leads de extras que responderam por WhatsApp.",
     module: "leads_extras", action: "view", roles: ["team_leader", "supervisor", "backoffice"], cityScoped: true, personal: false, channels: IN_APP }),
@@ -206,6 +220,13 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "parcerias", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "cash_daily_digest", group: "financeiro", label: "Caixa: resumo diário", description: "Casos da Correção de caixa por explicar (por cidade), depois do fecho do dia.",
     module: "caixa", action: "view", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, dedupeMinutes: 12 * 60 }),
+  // Confirmação da caixa (Jorge, 13 out 2026): diferença do dia > 30 € → aviso na app; > 70 € → também email; dia fechado que a Multipark alterou → aviso na app.
+  K({ kind: "cash_confirm_alert", group: "financeiro", label: "Caixa: diferença no dia (> 30 €)", description: "Confirmação da caixa: o João fechou um dia com diferença acima de 30 €, ou um dia já fechado foi reaberto porque a Multipark mudou uma reserva.",
+    module: "caixa", action: "manage", roles: [], cityScoped: true, personal: false, channels: IN_APP, dedupeMinutes: 60 }),
+  K({ kind: "cash_confirm_refused", group: "financeiro", label: "Caixa: justificação recusada", description: "Confirmação da caixa: o Jorge recusou uma justificação de um dia que fechaste — o dia voltou a abrir.",
+    module: "caixa", action: "view", roles: [], cityScoped: false, personal: true, channels: IN_APP }),
+  K({ kind: "cash_confirm_alert_email", group: "financeiro", label: "Caixa: diferença grande no dia (> 70 €)", description: "Confirmação da caixa: dia fechado com diferença acima de 70 € (também por email).",
+    module: "caixa", action: "manage", roles: [], cityScoped: true, personal: false, channels: WITH_EMAIL, emailDefault: true, dedupeMinutes: 60 }),
 
   // ── Marketing ──
   K({ kind: "marketing_alert", group: "marketing", label: "Alertas de marketing", description: "Gasto ou ROAS fora do normal (só críticos).",
@@ -222,6 +243,11 @@ export const NOTIFICATION_KIND_DEFS = [
     module: "definicoes", action: "view", roles: [], cityScoped: false, personal: false, channels: WITH_EMAIL, emailDefault: true }),
   K({ kind: "google_account_reauth", group: "sistema", label: "A tua conta Google", description: "A ligação à tua conta Google (O meu email, Tarefas e Calendário) expirou ou foi revogada e tem de ser religada.",
     module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, channels: WITH_EMAIL, emailDefault: true }),
+  // Plano 56: avisos à própria pessoa sobre a entrada (código usado, palavra-passe bloqueada, acesso reposto).
+  K({ kind: "login_security", group: "sistema", label: "A tua entrada", description: "Entraste com um código (e a quem foi o código), alguém errou a tua palavra-passe 5 vezes no mesmo dia, ou o RH repôs o teu acesso.",
+    module: "ficha", action: "view", roles: [], cityScoped: false, personal: true, mandatory: true, channels: IN_APP, dedupeMinutes: 1 }),
+  K({ kind: "login_conflict", group: "sistema", label: "Entradas recusadas por conta duplicada", description: "Alguém entrou com uma conta Google cujo email já está noutra conta ligada a OUTRA Google, ou com um email de várias contas. Não se junta sozinho: resolve em Utilizadores → Ligações.",
+    module: "utilizadores", action: "view", roles: [], cityScoped: false, personal: false, channels: IN_APP, dedupeMinutes: 1440 }),
   K({ kind: "sync_alert", group: "sistema", label: "Sincronização Multipark", description: "Webhooks parados/retomados e reservas por sincronizar.",
     module: "sincronizacao", action: "view", roles: [], cityScoped: false, personal: false, channels: IN_APP }),
   K({ kind: "ai_budget", group: "sistema", label: "Orçamento da IA", description: "O gasto da IA chegou ao orçamento do mês.",

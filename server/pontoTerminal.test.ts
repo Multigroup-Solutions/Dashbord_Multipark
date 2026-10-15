@@ -217,11 +217,15 @@ describe("custo dos extras (Finanças / Métricas): a mesma regra", () => {
     expect(aggregateExtrasCost(rows, rates, opts()).realByDay.get("2026-10-07")).toBe(expected);
   });
   it("o ordenado e o custo usam a mesma função (shared/pontoTerminal)", () => {
-    expect(src("server/finance/extrasCost.ts")).toContain("payLevelForShift(");
+    // 7 out 2026 ("partial"): troço a troço pela mesma regra das horas
+    expect(src("server/finance/extrasCost.ts")).toContain("terminalSplitOfShift(");
+    expect(src("shared/pontoTerminal.ts")).toMatch(/export function splitTerminalHours[\s\S]*terminalSplitOfShift\(/);
     expect(src("server/payroll/compute.ts")).toContain("splitTerminalHours(");
     expect(src("server/payroll/compute.ts")).toContain("terminalLevelOf(");
     expect(src("server/finance/engine.ts")).toContain("terminal: extrasTerminal");
-    expect(src("server/extrasMetrics.ts")).toContain("terminal: await pontoTerminalEnabled()");
+    // plano 56 B2: o interruptor lê-se uma vez (também carrega as sessões do terminal pelo perfil)
+    expect(src("server/extrasMetrics.ts")).toContain("const terminalOn = await pontoTerminalEnabled();");
+    expect(src("server/extrasMetrics.ts")).toContain("cityOfProject: () => null, terminal: terminalOn");
   });
 });
 
@@ -294,7 +298,12 @@ describe("terminal à mão: quem revê o ponto, com motivo, sem apagar", () => {
     expect(block).toContain("pontoTerminalEnabled()");
   });
   it("saída esquecida (cortada às 12 h) nunca fecha terminal sozinha: fica por confirmar", () => {
-    expect(src("server/rhRouter.ts")).toContain('if (autoNote && terminalOut.terminalStatus === "auto") { terminalOut.terminalStatus = "pending";');
+    // Plano 56 B1: o método antigo saiu do ponto; um troço antigo ainda aberto
+    // fecha sempre "por confirmar" e a sessão do terminal pelo perfil fecha com
+    // `forgotten` (nunca conta pelo GPS de uma saída esquecida).
+    const r = src("server/rhRouter.ts");
+    expect(r).toContain('terminalStatus: legacyTerminal ? "pending" : null,');
+    expect(r).toContain('reason: "checkout", forgotten: !!autoNote');
   });
   it("no aeroporto não se marca \"fora do raio\" (entrada e saída)", () => {
     const r = src("server/rhRouter.ts");

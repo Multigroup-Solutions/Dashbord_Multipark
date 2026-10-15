@@ -9,6 +9,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { IdentityLinksSection } from "@/components/IdentityLinksSection";
 import { EmployeeAccessAvailability } from '@/components/EmployeeAccessAvailability';
 import { NoLinkedRecordNotice } from "@/components/OwnAccessNotice";
+import { ComeBackCard, PersonStateBadge } from "@/components/ComeBackCard";
 import { EmployeeAutoMail } from '@/components/EmployeeAutoMail';
 import { readImageAsJpeg } from "@/components/ProfilePhotoPrompt";
 import { formatIban, ibanError, maskIban, maskNif, sameIban } from "@shared/iban";
@@ -78,11 +79,14 @@ import {
   Download, Wallet, Banknote, ChevronRight, ArrowUpDown, MoreVertical, BarChart3, NotebookPen, Plane
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
-import { TERMINAL_STATUS_LABELS, type TerminalStatus } from "@shared/pontoTerminal";
+import { TERMINAL_STATUS_LABELS, lisbonClock, terminalStatusLabel } from "@shared/pontoTerminal";
+import { TerminalShiftSessions, sessionsInShift, useTerminalRh } from "@/components/terminal/TerminalRhSessions";
 import { ContactActions } from "@/components/ContactActions";
 import { Switch } from "@/components/ui/switch";
 import RhDashboardPage from "./RhDashboardPage";
 import UsersPage from "./UsersPage";
+import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
+import { checkoutSummaryLines } from "@shared/pdaSession";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type Position =
@@ -791,10 +795,10 @@ function DocumentsTab({ employeeId, access, licence, extraName }: { employeeId: 
 // (extraído para componente partilhado — também usado no atalho de ponto do avatar)
 
 // ─── TIME RECORDS TAB ─────────────────────────────────────────────────────────
-/** Etiqueta do terminal (aeroporto) num registo de ponto. */
-function TerminalBadge({ status }: { status: string | null | undefined }) {
+/** Etiqueta do terminal (aeroporto) num registo de ponto ("partial" leva a hora: "Terminal até 14:32 (última recolha/entrega)"). */
+function TerminalBadge({ status, until }: { status: string | null | undefined; until?: string | null }) {
   if (!status || !(status in TERMINAL_STATUS_LABELS)) return null;
-  const label = TERMINAL_STATUS_LABELS[status as TerminalStatus];
+  const label = terminalStatusLabel(status, until);
   const cls = status === "pending"
     ? "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-200"
     : status === "rejected"
@@ -809,9 +813,12 @@ function TerminalBadge({ status }: { status: string | null | undefined }) {
 
 function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { employeeId: number; canManage?: boolean; isExtra?: boolean }) {
   const utils = trpc.useUtils();
-  // Terminal no ponto (aeroporto): só com o interruptor ligado e só nos extras.
+  // Terminal no ponto (aeroporto): só com o interruptor ligado. O método antigo
+  // (histórico, troços nas saídas) só nos extras; o terminal pelo perfil (plano
+  // 56 B2) mostra os troços de cada turno a quem os tiver (extras, condutores, TL).
   const terminalQ = trpc.rh.timeRecords.terminalEnabled.useQuery(undefined, { staleTime: 60_000 });
   const terminalOn = !!terminalQ.data?.enabled && isExtra;
+  const terminalRh = useTerminalRh(employeeId, !!terminalQ.data?.enabled);
   const [terminalEdit, setTerminalEdit] = useState<{ id: number; terminal: boolean } | null>(null);
   const [terminalNote, setTerminalNote] = useState("");
   const setTerminal = trpc.rh.timeRecords.setTerminal.useMutation({
@@ -850,14 +857,14 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
       }
       if (data?.warning) toast.warning(data.warning, { duration: 10000 });
       if (data?.outsideGeofence) toast.warning("Atenção: check-in dado FORA do raio do local de trabalho — ficou marcado.", { duration: 10000 });
-      if (data?.terminal === "start") toast.success("Terminal: entrada no aeroporto. Este troço conta como terminal. Antes de saíres do aeroporto, dá saída + entrada.", { duration: 10000 });
-      if (data?.terminal === "return") toast.info("Saíste do terminal: voltas a contar como extra normal.", { duration: 8000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
   });
   const checkOut = trpc.rh.timeRecords.checkOut.useMutation({
     onSuccess: (data: any) => {
+      // Plano 56 (A2): num PDA a saída acaba a sessão — o resumo fica no ecrã e "A sessão termina em 10 s".
+      if (data?.pdaSessionEnded) { setCameraMode(null); beginPdaSessionEnd(checkoutSummaryLines(data)); return; }
       utils.rh.timeRecords.list.invalidate();
       utils.rh.timeRecords.monthlyHours.invalidate();
       toast.success(`Check-out registado! ${data.hoursWorked}h trabalhadas`);
@@ -869,8 +876,10 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
           { duration: 10000 }
         );
       }
-      if (data?.terminal === "auto") toast.success("Troço de terminal fechado no aeroporto.", { duration: 8000 });
-      if (data?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS). Não paga terminal até o RH confirmar.", { duration: 10000 });
+      // Terminal pelo perfil (plano 56 B1): a saída do ponto liberta o lugar no terminal
+      if (data?.terminalReleased) toast.info(data.terminalReleased.message, { duration: 8000 });
+      if (data?.terminal === "partial") toast.success(`${data.terminalLabel ?? "Terminal até à última recolha/entrega"}. Daí até à saída conta como hora normal.`, { duration: 10000 });
+      if (data?.terminal === "pending") toast.warning("Terminal por confirmar: a saída não foi no aeroporto (ou sem GPS) e ainda não há recolhas/entregas tuas no troço. Não paga terminal até o RH confirmar.", { duration: 10000 });
       setCameraMode(null);
     },
     onError: (e) => toast.error(e.message),
@@ -945,7 +954,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
       {openTerminal && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-950/40 px-3 py-2 text-sm">
           <Badge className="bg-sky-600 hover:bg-sky-600 text-white gap-1"><Plane className="w-3 h-3" />Terminal</Badge>
-          <span>Estás no terminal desde {fmtPTDateTime(openTerminal.recordedAt)}. Antes de saíres do aeroporto, dá saída + entrada para voltares a extra normal.</span>
+          <span>Troço de terminal antigo (saída + entrada no aeroporto) aberto desde {fmtPTDateTime(openTerminal.recordedAt)}. A saída do ponto fecha-o como "por confirmar". Agora o terminal é pela fotografia lá em cima → "Estou no terminal".</span>
         </div>
       )}
 
@@ -982,10 +991,17 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
         </Card>
       )}
 
+      {/* Plano 56 B2: os troços de terminal não carregaram → diz-se (erro ≠ "sem terminal") */}
+      {terminalRh.error && <QueryErrorNote error={terminalRh.error} onRetry={() => terminalRh.refetch()} retrying={terminalRh.fetching} what="os troços de terminal" />}
+
       {/* Records list */}
       <div className="space-y-2">
-        {records.slice(0, 30).map((r) => {
+        {records.slice(0, 30).map((r, idx) => {
           const isExpanded = expandedRecord === r.id;
+          // Plano 56 B2: troços do terminal pelo perfil deste turno — na saída (entrada = a picagem seguinte da lista),
+          // ou na entrada ainda aberta (a última picagem).
+          const shiftIn = r.type === "check_out" ? (records[idx + 1]?.type === "check_in" ? records[idx + 1].recordedAt : null) : idx === 0 ? r.recordedAt : null;
+          const shiftSessions = terminalRh.enabled && shiftIn ? sessionsInShift(terminalRh.sessions, shiftIn, r.type === "check_out" ? r.recordedAt : null) : [];
           const hasCoords = r.latitude && r.longitude;
           // Ponto suspeito (check-out esquecido cortado a 12h) ou fora do raio → VERMELHO
           const reviewStatus = (r as any).reviewStatus as string | undefined;
@@ -1010,8 +1026,9 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                       {reviewStatus === "rejected" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">rejeitado</span>}
                       {reviewStatus === "approved" && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">aprovado</span>}
                       {!reviewStatus && isFlagged && <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">⚠ rever</span>}
-                      {terminalOn && <TerminalBadge status={r.terminalStatus} />}
+                      {terminalOn && <TerminalBadge status={r.terminalStatus} until={r.terminalUntil} />}
                     </p>
+                    {shiftSessions.length > 0 && <TerminalShiftSessions sessions={shiftSessions} canManage={canManage && terminalRh.canManage} />}
                     {terminalOn && canManage && r.type === "check_out" && r.terminalStatus === "pending" && (
                       <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>Confirmar terminal</Button>
@@ -1096,10 +1113,12 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                       Horas trabalhadas: <span className="font-semibold text-foreground">{parseFloat(String(r.hoursWorked)).toFixed(2)}h</span>
                     </div>
                   )}
-                  {terminalOn && r.type === "check_out" && (
+                  {terminalOn && r.type === "check_out" && r.terminalStatus && (
                     <div className="text-xs text-muted-foreground space-y-1" onClick={(e) => e.stopPropagation()}>
                       <p>
-                        Terminal (aeroporto): <span className="font-medium text-foreground">{r.terminalStatus ? TERMINAL_STATUS_LABELS[r.terminalStatus as TerminalStatus] ?? r.terminalStatus : "não (troço normal)"}</span>
+                        Terminal (aeroporto): <span className="font-medium text-foreground">{r.terminalStatus ? terminalStatusLabel(r.terminalStatus, r.terminalUntil) : "não (troço normal)"}</span>
+                        {r.terminalStatus === "partial" && <> · daí até à saída conta como hora normal</>}
+                        {r.terminalUntil && r.terminalStatus !== "partial" && <> · antes: até {lisbonClock(r.terminalUntil)} (última recolha/entrega)</>}
                         {r.terminalNote && <> · motivo: {r.terminalNote}</>}
                         {r.terminalReviewedAt && <> · {fmtPTDateTime(r.terminalReviewedAt)}</>}
                       </p>
@@ -1107,7 +1126,7 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
                         <div className="flex gap-1">
                           {r.terminalStatus !== "auto" && r.terminalStatus !== "confirmed" && (
                             <Button size="sm" variant="outline" className="h-6 text-[11px]" disabled={setTerminal.isPending} onClick={() => { setTerminalNote(""); setTerminalEdit({ id: r.id, terminal: true }); }}>
-                              <Plane className="w-3 h-3 mr-1" />{r.terminalStatus === "pending" ? "Confirmar terminal" : "Marcar como terminal"}
+                              <Plane className="w-3 h-3 mr-1" />{r.terminalStatus === "pending" ? "Confirmar terminal" : r.terminalStatus === "partial" ? "Confirmar o troço todo" : "Marcar como terminal"}
                             </Button>
                           )}
                           {r.terminalStatus && r.terminalStatus !== "rejected" && (
@@ -1149,8 +1168,8 @@ function TimeRecordsTab({ employeeId, canManage = false, isExtra = false }: { em
             </DialogHeader>
             <p className="text-sm text-muted-foreground">
               {terminalEdit.terminal
-                ? "As horas deste troço passam a pagar à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master)."
-                : "As horas deste troço passam a pagar à taxa normal do extra."}
+                ? "As horas deste troço TODO passam a pagar à taxa do nível seguinte (júnior → sénior, sénior → terminal, terminal → master) — mesmo que antes contasse só até à última recolha/entrega."
+                : "As horas deste troço passam todas a pagar à taxa normal do extra (nenhuma de terminal)."}
               {" "}Fica registado quem mudou e porquê.
             </p>
             <div className="space-y-1">
@@ -1490,7 +1509,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
       utils.rh.byId.invalidate({ id: employeeId });
       utils.rh.list.invalidate();
       const scope = r.cascadedUser ? ((r as any).extraAccounts ? ` (colaborador + login + ${(r as any).extraAccounts} conta(s) extra)` : " (colaborador + login)") : "";
-      toast.success(r.reasonLabel ? `Desativado${scope} — ${r.reasonLabel}` : `Estado alterado${scope}`);
+      toast.success(r.reasonLabel ? `Desativado${scope} — ${r.reasonLabel}` : `Estado alterado${scope}${(r as any).promotedRole ? ` · a conta passou a ${(r as any).promotedRole}` : ""}`);
       setShowDeactivate(false);
     },
     onError: (e) => toast.error(e.message),
@@ -1641,12 +1660,16 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
                 setShowDeactivate(true);
                 return;
               }
-              if (!confirm(`Reativar ${emp.fullName}? Volta a ter acesso e a receber emails.`)) return;
+              // 49c: aprovar o candidato não é readmissão; a conta "utilizador" passa ao papel do posto.
+              const isCandidate = emp.deactivationReason === "candidato";
+              if (!confirm(isCandidate
+                ? `Aprovar ${emp.fullName}? A ficha passa a ativa e a conta da pessoa passa ao papel do posto. Não te esqueças da cidade (centro de custos).`
+                : `Reativar ${emp.fullName}? Volta a ter acesso e a receber emails${(emp as any).comebackRequestedAt ? " (pediu para voltar)" : ""}.`)) return;
               setActive.mutate({ id: employeeId, isActive: true });
             }}
           >
             {emp.isActive ? <X className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-            {emp.isActive ? "Desativar" : "Reativar"}
+            {emp.isActive ? "Desativar" : emp.deactivationReason === "candidato" ? "Aprovar candidato" : "Reativar"}
           </Button>
         )}
         {!editing && canSuspend && emp.isActive && !(emp as any).blockedManually && (
@@ -1659,7 +1682,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
           open={showDeactivate}
           subjectName={emp.fullName}
           subjectKind="colaborador"
-          effectNote="O login e as notificações por email ficam imediatamente bloqueados."
+          effectNote="Sai das listas, da escala e dos avisos por email; a conta e as contas extra desativam-se já. O que acontece a seguir depende do motivo:"
           pending={setActive.isPending}
           onOpenChange={setShowDeactivate}
           onConfirm={(values) => setActive.mutate({ id: employeeId, isActive: false, ...values })}
@@ -2609,7 +2632,8 @@ export default function HRPage() {
   // Filtro GLOBAL de cidade/centro (topo da app) aplicado também ao RH
   const globalFilters = useGlobalFilters();
   const { data: employees = [], isLoading } = trpc.rh.list.useQuery({
-    isActive: filterActive === "inactive" ? false : true,
+    // 49c: "Inativos e desativados" e "Candidatos" são as fichas não ativas (separadas abaixo).
+    isActive: filterActive === "inactive" || filterActive === "candidates" ? false : true,
     position: filterPosition !== "all" ? filterPosition : undefined,
     projectId: globalFilters.projectId ?? undefined,
   }, { enabled: !isExtra });
@@ -2630,7 +2654,7 @@ export default function HRPage() {
       );
     }
     if (!myEmployee) return <NoLinkedRecordNotice email={user?.email} />;
-    return <EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => navigate("/perfil")} />;
+    return <><ComeBackCard /><EmployeeDetail employeeId={myEmployee.employee.id} onBack={() => navigate("/perfil")} /></>;
   }
 
   const docSummaryOf = (id: number): DocsSummaryView | undefined => (docStatus as Record<number, DocsSummaryView>)[id];
@@ -2643,6 +2667,9 @@ export default function HRPage() {
       : filterAccount === "with" ? !!e.userId
       : !e.userId;
     const matchesLicence = filterLicence === "all" || (row as any).licence === filterLicence;
+    // 49c: os candidatos (fichas da app, por aprovar) não se misturam com os inativos.
+    const isCandidate = !!(row as any).candidate;
+    if (filterActive === "candidates" ? !isCandidate : filterActive === "inactive" && isCandidate) return false;
     const docs = docSummaryOf(e.id);
     const matchesDocs = filterDocs === "all" ? true
       : filterDocs === "to_validate" ? (docs?.pendingCount ?? 0) > 0
@@ -2685,7 +2712,7 @@ export default function HRPage() {
   const employeesList = filtered.filter(({ employee: e }) => e.position !== "extra");
   const extrasList = filtered.filter(({ employee: e }) => e.position === "extra");
 
-  const renderCard = ({ employee: emp, licence }: { employee: any; licence?: LicenceStatus }) => (
+  const renderCard = ({ employee: emp, licence, candidate }: { employee: any; licence?: LicenceStatus; candidate?: boolean }) => (
     <Card
       key={emp.id}
       className="cursor-pointer hover:shadow-md transition-shadow"
@@ -2710,6 +2737,7 @@ export default function HRPage() {
                 {emp.position === "extra" && emp.extraLevel ? ` N${emp.extraLevel}` : ""}
               </Badge>
               {licenceRelevant(emp.position, licence) && <LicenceBadge status={licence} />}
+              <PersonStateBadge emp={emp} candidate={candidate} />
             </div>
           </div>
         </div>
@@ -2767,7 +2795,7 @@ export default function HRPage() {
   );
 
   /** D46: a mesma ficha em lista (tabela), com a foto. */
-  const renderTable = (list: Array<{ employee: any; licence?: LicenceStatus }>) => (
+  const renderTable = (list: Array<{ employee: any; licence?: LicenceStatus; candidate?: boolean }>) => (
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-sm">
         <thead>
@@ -2783,7 +2811,7 @@ export default function HRPage() {
           </tr>
         </thead>
         <tbody>
-          {list.map(({ employee: emp, licence }) => {
+          {list.map(({ employee: emp, licence, candidate }) => {
             const dir = directoryInfoFor(directory, emp.email);
             const docs = docSummaryOf(emp.id);
             return (
@@ -2798,6 +2826,7 @@ export default function HRPage() {
                 </td>
                 <td className="py-2 px-2 min-w-[10rem]">
                   <button type="button" className="font-medium text-left hover:underline" onClick={(e) => { e.stopPropagation(); setSelectedId(emp.id); }}>{emp.fullName}</button>
+                  <span className="ml-1.5 inline-flex flex-wrap gap-1 align-middle"><PersonStateBadge emp={emp} candidate={candidate} /></span>
                   {dir?.jobTitle && <div className="text-[11px] text-muted-foreground truncate max-w-[16rem]">{dir.jobTitle}</div>}
                 </td>
                 <td className="py-2 px-2 whitespace-nowrap">
@@ -2881,7 +2910,7 @@ export default function HRPage() {
 
       {/* Aviso de dados em falta nos FIXOS (o que trava a folha de ordenados) */}
       {(() => {
-        if (filterActive === "inactive") return null;
+        if (filterActive !== "active") return null;
         const fixosIncompletos = employees
           .filter(({ employee: e }: any) => e.position !== "extra")
           .map(({ employee: e }: any) => {
@@ -2941,7 +2970,8 @@ export default function HRPage() {
           <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="active">Ativos</SelectItem>
-            <SelectItem value="inactive">Desativados</SelectItem>
+            <SelectItem value="inactive">Inativos e desativados</SelectItem>
+            <SelectItem value="candidates">Candidatos (app)</SelectItem>
           </SelectContent>
         </Select>
         {/* Jorge (7 out 2026): carta e documentos por validar */}
@@ -2984,13 +3014,13 @@ export default function HRPage() {
               <TabsTrigger value="ligacoes">Ligações</TabsTrigger>
             )}
           </TabsList>
-          {activeTab === "extras" && canRequestDocs && filterActive !== "inactive" && (
+          {activeTab === "extras" && canRequestDocs && filterActive === "active" && (
             <Button size="sm" variant="outline" className="sm:ml-auto" onClick={() => setShowDocsRequest(true)}>
               <FileText className="w-4 h-4 mr-2" /> Pedir documentos em falta
             </Button>
           )}
           {/* D46: cartões (com foto) ou lista */}
-          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className={activeTab === "extras" && canRequestDocs && filterActive !== "inactive" ? "" : "sm:ml-auto"} />}
+          {(activeTab === "employees" || activeTab === "extras") && <ViewToggle value={hrView} onChange={setHrView} className={activeTab === "extras" && canRequestDocs && filterActive === "active" ? "" : "sm:ml-auto"} />}
           </div>
           <TabsContent value="employees" className="mt-4">
             {employeesList.length === 0 ? (

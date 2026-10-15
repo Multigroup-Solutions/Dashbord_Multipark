@@ -107,7 +107,7 @@ function SettingsCard({ config, onSaved }: { config: KnowledgeConfig; onSaved: (
           <CardContent className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm">
-                <span><b>Sincronizar pastas do Drive</b><br /><span className="text-xs text-muted-foreground">Com o botão «Sincronizar agora» (sem agenda automática).</span></span>
+                <span><b>Sincronizar pastas do Drive</b><br /><span className="text-xs text-muted-foreground">Sincroniza sozinha quando há alterações nas pastas do Drive (e confere de 4 em 4 h). «Sincronizar agora» lê já.</span></span>
                 <Switch checked={draft.driveEnabled} onCheckedChange={(v) => setDraft({ ...draft, driveEnabled: v })} />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm">

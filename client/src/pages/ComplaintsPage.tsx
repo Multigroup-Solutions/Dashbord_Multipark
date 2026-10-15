@@ -3,7 +3,7 @@ import { CommunicationsTimeline } from "@/components/mail/CommunicationsTimeline
 import { CreateMeetingButton } from "@/components/google/CreateMeetingButton";
 import { DriveFilesPanel } from "@/components/google/DriveFilesPanel";
 import { SaveToDriveButton } from "@/components/google/DriveActions";
-import { can, roleRank, seesBeyondOwn } from "@shared/access";
+import { can, roleRank, scopeFor, seesBeyondOwn } from "@shared/access";
 import { openInMultipark } from "@/lib/multiparkLinks";
 import { formatBookingHistoryDetails } from "@/lib/bookingHistoryFormat";
 import { fileHref } from "@/lib/fileHref";
@@ -12,6 +12,12 @@ import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import { toCsv } from "@shared/csv";
 import { COMPLAINT_LIST_DEFAULT_DAYS, complaintOverdue } from "@shared/caseRules";
+import {
+  COMPLAINT_AI_UNCONFIRMED_FILTER, COMPLAINT_AI_UNCONFIRMED_LABEL,
+  COMPLAINT_ORIGINS, COMPLAINT_ORIGIN_LABELS, COMPLAINT_STATUS_FILTERS, COMPLAINT_STATUS_FILTER_LABELS, activeComplaintFilterCount,
+  complaintAssigneeOptions, complaintDateRangeInvalid, complaintFiltersNeedAllTime, complaintOriginLabel, filterComplaintRows,
+  type ComplaintListFilters, type ComplaintStatusFilter,
+} from "@shared/complaintFilters";
 import { compressImage } from "@/lib/compressImage";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useConfirm } from "./training/shared";
@@ -19,6 +25,7 @@ import { filterBookingHistory } from "@/lib/bookingHistory";
 import { REPLY_TEMPLATES } from "@/lib/replyTemplates";
 import { retryTransient } from "@/lib/queryRetry";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +43,9 @@ import ClientHistoryCard from "@/components/ClientHistoryCard";
 import CaseAssignmentCard from "@/components/CaseAssignmentCard";
 import LinkInboundEmailButton from "@/components/LinkInboundEmailButton";
 import ComplaintAiPanel from "@/components/ComplaintAiPanel";
+import ComplaintClientMail from "@/components/ComplaintClientMail";
+import ComplaintMailSuggestions from "@/components/ComplaintMailSuggestions";
+import { AiUnconfirmedBadge, AiUnconfirmedBanner } from "@/components/AiUnconfirmedBanner";
 import { useState, useMemo, useEffect } from "react";
 import { useSearch } from "wouter";
 import {
@@ -43,17 +53,17 @@ import {
   ChevronRight, ChevronLeft, Send, Eye, Trash2, Upload, Shield,
   BarChart3, AlertCircle, CheckCircle2, Hourglass, XCircle, Pencil,
   Mail, UserPlus, LinkIcon, X as XIcon, Download, RefreshCw, GripVertical, Package,
-  ExternalLink, Paperclip, FileSearch, Archive, ArchiveRestore,
+  ExternalLink, Paperclip, FileSearch, Archive, ArchiveRestore, SlidersHorizontal,
 } from "lucide-react";
 import { Link } from "wouter";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-  new: { label: "Novo", color: "bg-blue-100 text-blue-800 border-blue-200", icon: AlertCircle },
-  analyzing: { label: "Em Análise", color: "bg-yellow-100 text-yellow-800 border-yellow-200", icon: Hourglass },
-  waiting_client: { label: "Aguarda Cliente", color: "bg-purple-100 text-purple-800 border-purple-200", icon: Clock },
-  resolved: { label: "Resolvido", color: "bg-green-100 text-green-800 border-green-200", icon: CheckCircle2 },
-  closed: { label: "Fechado", color: "bg-gray-100 text-gray-800 border-gray-200", icon: XCircle },
-  converted: { label: "Convertida", color: "bg-violet-100 text-violet-800 border-violet-200", icon: XCircle },
+  new: { label: "Novo", color: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/60 dark:text-blue-200 dark:border-blue-900", icon: AlertCircle },
+  analyzing: { label: "Em Análise", color: "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-950/60 dark:text-yellow-200 dark:border-yellow-900", icon: Hourglass },
+  waiting_client: { label: "Aguarda Cliente", color: "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-950/60 dark:text-purple-200 dark:border-purple-900", icon: Clock },
+  resolved: { label: "Resolvido", color: "bg-green-100 text-green-800 border-green-200 dark:bg-green-950/60 dark:text-green-200 dark:border-green-900", icon: CheckCircle2 },
+  closed: { label: "Fechado", color: "bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-800/60 dark:text-gray-200 dark:border-gray-700", icon: XCircle },
+  converted: { label: "Convertida", color: "bg-violet-100 text-violet-800 border-violet-200 dark:bg-violet-950/60 dark:text-violet-200 dark:border-violet-900", icon: XCircle },
 };
 
 const TYPE_CONFIG: Record<string, { label: string; emoji: string }> = {
@@ -66,10 +76,10 @@ const TYPE_CONFIG: Record<string, { label: string; emoji: string }> = {
 };
 
 const PRIORITY_CONFIG: Record<string, { label: string; color: string }> = {
-  low: { label: "Baixa", color: "bg-slate-100 text-slate-700" },
-  medium: { label: "Média", color: "bg-blue-100 text-blue-700" },
-  high: { label: "Alta", color: "bg-orange-100 text-orange-700" },
-  urgent: { label: "Urgente", color: "bg-red-100 text-red-700" },
+  low: { label: "Baixa", color: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
+  medium: { label: "Média", color: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-200" },
+  high: { label: "Alta", color: "bg-orange-100 text-orange-700 dark:bg-orange-950/60 dark:text-orange-200" },
+  urgent: { label: "Urgente", color: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-200" },
 };
 
 const KANBAN_COLUMNS = ["new", "analyzing", "waiting_client", "resolved", "closed"] as const;
@@ -98,23 +108,31 @@ export default function ComplaintsPage() {
     const id = Number(new URLSearchParams(search).get("id")) || null;
     if (id) { setSelectedId(id); setView("detail"); }
   }, [search]);
-  const [, setFilterProject] = useState<string>("all");
   // ?new=1 (atalho "Nova reclamação" da pesquisa global) abre logo o formulário.
   const [showCreate, setShowCreate] = useState(() => new URLSearchParams(window.location.search).get("new") === "1");
-  const [filterType, setFilterType] = useState<string>("all");
+  // Lote 57: os filtros ficam aqui (voltar da ficha não os perde). ?q= vem da pesquisa global.
+  // Auditoria: como nas outras páginas (usePersistedState), os filtros mantêm-se também ao mudar de página e voltar.
+  const [filters, setFilters] = usePersistedState<ComplaintListFilters>("complaints.filters", EMPTY_FILTERS);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (q != null) setFilters((f) => ({ ...f, q: q.slice(0, 120) }));
+  }, [setFilters]);
 
   return (
     <>
       {view === "kanban" ? (
         <KanbanView
           user={user}
-          filterType={filterType}
-          setFilterType={setFilterType}
+          filters={filters}
+          setFilters={setFilters}
           onSelect={(id: number) => { setSelectedId(id); setView("detail"); }}
           onNew={() => setShowCreate(true)}
         />
       ) : selectedId ? (
         <DetailView
+          // Auditoria lote 57: outra reclamação (link do sino/pesquisa com a ficha aberta) = ficha nova —
+          // nada do caso anterior (emails do cliente, rascunho da mensagem, edição) passa para este.
+          key={selectedId}
           id={selectedId}
           user={user}
           onBack={() => { setView("kanban"); setSelectedId(null); }}
@@ -125,38 +143,68 @@ export default function ComplaintsPage() {
   );
 }
 
+const EMPTY_FILTERS: ComplaintListFilters = { q: "", status: "all", type: "all", assignee: "all", origin: "all", noCity: false, from: "", to: "" };
+
+/** Um campo do painel de filtros (etiqueta + controlo), sempre a toda a largura da célula. */
+function FilterField({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`min-w-0 space-y-1 ${className}`}>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
 // ─── KANBAN VIEW ──────────────────────────────────────────────────────────────
 
-function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
+function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
+  user: any;
+  filters: ComplaintListFilters;
+  setFilters: React.Dispatch<React.SetStateAction<ComplaintListFilters>>;
+  onSelect: (id: number) => void;
+  onNew: () => void;
+}) {
   const globalFilters = useGlobalFilters();
   const canEdit = can(user, "reclamacoes", "edit");
   const canManage = can(user, "reclamacoes", "manage");
+  // Só quem vê todas as cidades vê as reclamações sem cidade (e pode filtrá-las).
+  const seesAllCities = scopeFor(user, "reclamacoes") === "national";
   const [showArchived, setShowArchived] = useState(false);
-  // ?q= (pesquisa global → "ver todos"): filtro local por título, cliente, reserva, matrícula ou nº.
-  const [q, setQ] = useState(() => (new URLSearchParams(window.location.search).get("q") ?? "").slice(0, 120));
-  // D21: abre nos últimos 90 dias (+ as abertas). Pesquisar ou "Ver todas" tira o limite; as arquivadas vêm todas.
-  const [allTime, setAllTime] = useState(false);
+  const setF = (patch: Partial<ComplaintListFilters>) => setFilters((f) => ({ ...f, ...patch }));
+  const q = String(filters.q ?? "");
+  // D21: abre nos últimos 90 dias (+ as abertas). Pesquisar, "Ver todas" ou escolher datas tira o limite; as arquivadas vêm todas.
+  const [allTimeChosen, setAllTime] = useState(false);
+  const allTime = allTimeChosen || complaintFiltersNeedAllTime(filters);
   const searching = q.trim().length > 0;
   const windowed = !showArchived && !allTime && !searching;
+  const [showFilters, setShowFilters] = useState(false);
   const complaintsQueryInput = useMemo(() => {
     const input: any = {};
-    if (filterType !== "all") input.type = filterType;
     if (globalFilters.projectId !== undefined) input.projectId = globalFilters.projectId;
     if (showArchived) input.archived = true;
     if (windowed) input.sinceDays = COMPLAINT_LIST_DEFAULT_DAYS;
     return input;
-  }, [filterType, globalFilters.projectId, showArchived, windowed]);
+  }, [globalFilters.projectId, showArchived, windowed]);
   const listQ = trpc.complaints.list.useQuery(complaintsQueryInput);
   const { data: allComplaints = [], isLoading } = listQ;
-  const complaints = useMemo(() => {
-    const needle = q.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    if (!needle) return allComplaints;
-    const norm = (v: unknown) => String(v ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    return (allComplaints as any[]).filter((c: any) => [c.id, c.title, c.clientName, c.clientEmail, c.reservationRef, c.vehiclePlate]
-      .some((v) => norm(v).includes(needle) || norm(v).replace(/-/g, "").includes(needle.replace(/-/g, ""))));
-  }, [allComplaints, q]);
-  // Contadores contados da MESMA lista do quadro (tipo, pesquisa e cidade
-  // incluídos) — antes vinham de outra consulta que ignorava os filtros (16b).
+  // Lote 57: UMA regra para todos os filtros (shared/complaintFilters.ts) — o
+  // quadro, a lista, o CSV e os contadores usam esta mesma lista.
+  const complaints = useMemo(
+    () => filterComplaintRows(allComplaints as any[], filters, Date.now()),
+    [allComplaints, filters],
+  );
+  const activeCount = activeComplaintFilterCount(filters);
+  // Ronda 2: quantas "Por confirmar (IA)" há na lista (sem os filtros) — atalho para as ver.
+  const unconfirmedCount = useMemo(() => (allComplaints as any[]).filter((c) => Number(c.aiUnconfirmed ?? 0) === 1 && !c.archivedAt).length, [allComplaints]);
+  const dateInvalid = complaintDateRangeInvalid(filters);
+  const assigneeOptions = useMemo(() => {
+    const opts = complaintAssigneeOptions(allComplaints as any[]);
+    const a = filters.assignee;
+    if (typeof a === "number" && !opts.some((o) => o.id === a)) opts.push({ id: a, name: `Ficha #${a} (sem reclamações nesta lista)` });
+    return opts;
+  }, [allComplaints, filters.assignee]);
+  // Contadores contados da MESMA lista do quadro (todos os filtros incluídos) —
+  // antes vinham de outra consulta que ignorava os filtros (16b).
   const stats = useMemo(() => {
     const list = complaints as any[];
     const n = (st: string) => list.filter((c) => c.complaintStatus === st).length;
@@ -180,6 +228,11 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
     });
     return map;
   }, [complaints]);
+
+  // Telemóvel: uma coluna de cada vez (escolhida nos botões com as contagens).
+  const [mobileCol, setMobileCol] = useState<string | null>(null);
+  const statusCol = (KANBAN_COLUMNS as readonly string[]).includes(String(filters.status)) ? String(filters.status) : null;
+  const activeCol = mobileCol ?? statusCol ?? (KANBAN_COLUMNS.find((s) => (grouped[s]?.length ?? 0) > 0) ?? "new");
 
   // Optimistic: o cartão muda de coluna imediatamente; rollback se o servidor
   // recusar (mesmo padrão do kanban das Tarefas).
@@ -205,34 +258,41 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
   // cartões ficam como alternativa para touch, onde o drag nativo não existe).
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
+  // Escolher uma cidade no filtro global (cabeçalho) tira o "Sem cidade" — senão o quadro ficava vazio sem razão à vista.
+  useEffect(() => {
+    if (globalFilters.cityId != null) setFilters((f) => (f.noCity ? { ...f, noCity: false } : f));
+  }, [globalFilters.cityId, setFilters]);
+  const cityValue = filters.noCity ? "none" : globalFilters.cityId != null ? String(globalFilters.cityId) : "all";
+  const onCity = (v: string) => {
+    if (v === "none") { globalFilters.setCityId(null); setF({ noCity: true }); return; }
+    setF({ noCity: false });
+    globalFilters.setCityId(v === "all" ? null : Number(v));
+  };
+  const clearFilters = () => {
+    setFilters({ ...EMPTY_FILTERS });
+    setMobileCol(null);
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6 min-w-0">
       {/* Header */}
       <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div>
-          <p className="text-muted-foreground">Gestão de tickets e reclamações de clientes</p>
-        </div>
+        <p className="text-muted-foreground text-sm sm:text-base min-w-0">Gestão de tickets e reclamações de clientes</p>
         <div className="flex flex-wrap gap-2">
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Filtrar (nome, reserva, matrícula, nº)…"
-            className="h-9 w-full sm:w-64"
-            aria-label="Filtrar reclamações"
-          />
           {/* CSV leva contactos do cliente: só quem pode exportar (matriz) — 16b. */}
           {can(user, "reclamacoes", "export") && (
             <Button
               variant="outline"
               disabled={complaints.length === 0}
               onClick={() => {
-                const headers = ["ID","Título","Tipo","Estado","Prioridade","Cliente","Email","Telefone","Matrícula","Ref.Reserva","Criado","Resolvido","SLA","Atribuída a"];
+                const headers = ["ID","Título","Tipo","Estado","Prioridade","Origem","Cliente","Email","Telefone","Matrícula","Ref.Reserva","Criado","Resolvido","SLA","Atribuída a"];
                 const day = (v: string | null | undefined) => (v ? lisbonDayOf(String(v)) : "");
                 const rows = (complaints as any[]).map(c => [
                   c.id, c.title ?? "",
                   TYPE_CONFIG[c.complaintType]?.label ?? c.complaintType,
                   STATUS_CONFIG[c.complaintStatus]?.label ?? c.complaintStatus,
                   PRIORITY_CONFIG[c.complaintPriority]?.label ?? c.complaintPriority,
+                  complaintOriginLabel(c.origin),
                   c.clientName ?? "", c.clientEmail ?? "", c.clientPhone ?? "", c.vehiclePlate ?? "", c.reservationRef ?? "",
                   day(c.createdAt), day(c.resolvedAt), day(c.slaDeadline),
                   c.assignedToName ?? "",
@@ -256,6 +316,91 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
         </div>
       </div>
 
+      {/* Filtros (lote 57): todos filtram a mesma lista que o quadro e os contadores mostram. */}
+      <div className="space-y-2" data-testid="complaints-filters">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={q}
+            onChange={(e) => setF({ q: e.target.value })}
+            placeholder="Pesquisar (nome, reserva, nº…)"
+            title="Procura no nº, título, nome, email, telefone, reserva, matrícula e responsável"
+            className="h-9 min-w-0 flex-1 basis-full sm:basis-72"
+            aria-label="Pesquisar reclamações"
+          />
+          <Button
+            variant={showFilters ? "selected" : "outline"} size="sm" className="h-9 sm:hidden"
+            onClick={() => setShowFilters((v) => !v)} aria-expanded={showFilters} aria-controls="complaints-filter-panel"
+          >
+            <SlidersHorizontal className="w-4 h-4 mr-1" /> Filtros{activeCount ? ` (${activeCount})` : ""}
+          </Button>
+          {activeCount > 0 && (
+            <Button variant="ghost" size="sm" className="h-9" onClick={clearFilters}>
+              <XIcon className="w-4 h-4 mr-1" /> Limpar filtros
+            </Button>
+          )}
+        </div>
+        <div id="complaints-filter-panel" className={`${showFilters ? "grid" : "hidden"} sm:grid grid-cols-1 min-[480px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2`}>
+          <FilterField label="Estado">
+            <Select value={String(filters.status ?? "all")} onValueChange={(v) => { setF({ status: v as ComplaintStatusFilter }); setMobileCol(null); }}>
+              <SelectTrigger className="h-9 w-full" aria-label="Estado"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {COMPLAINT_STATUS_FILTERS.map((k) => <SelectItem key={k} value={k}>{COMPLAINT_STATUS_FILTER_LABELS[k]}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FilterField>
+          <FilterField label="Tipo" className="sm:hidden">
+            <Select value={String(filters.type ?? "all")} onValueChange={(v) => setF({ type: v })}>
+              <SelectTrigger className="h-9 w-full" aria-label="Tipo"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                {Object.entries(TYPE_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.emoji} {v.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FilterField>
+          <FilterField label="Cidade">
+            <Select value={cityValue} onValueChange={onCity}>
+              <SelectTrigger className="h-9 w-full" aria-label="Cidade"><SelectValue placeholder="Cidade" /></SelectTrigger>
+              <SelectContent>
+                {(seesAllCities || globalFilters.cityId == null) && <SelectItem value="all">{seesAllCities ? "Todas" : "As tuas cidades"}</SelectItem>}
+                {globalFilters.cities.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+                {seesAllCities && <SelectItem value="none">Sem cidade</SelectItem>}
+              </SelectContent>
+            </Select>
+          </FilterField>
+          <FilterField label="Responsável">
+            <Select
+              value={filters.assignee == null ? "all" : String(filters.assignee)}
+              onValueChange={(v) => setF({ assignee: v === "all" || v === "none" ? v : Number(v) })}
+            >
+              <SelectTrigger className="h-9 w-full" aria-label="Responsável"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="none">Sem responsável</SelectItem>
+                {assigneeOptions.map((a) => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FilterField>
+          <FilterField label="Origem">
+            <Select value={String(filters.origin ?? "all")} onValueChange={(v) => setF({ origin: v as any })}>
+              <SelectTrigger className="h-9 w-full" aria-label="Origem"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas</SelectItem>
+                {COMPLAINT_ORIGINS.map((o) => <SelectItem key={o} value={o}>{COMPLAINT_ORIGIN_LABELS[o]}</SelectItem>)}
+                <SelectItem value={COMPLAINT_AI_UNCONFIRMED_FILTER}>{COMPLAINT_AI_UNCONFIRMED_LABEL}</SelectItem>
+                <SelectItem value="unknown">Sem origem registada</SelectItem>
+              </SelectContent>
+            </Select>
+          </FilterField>
+          <FilterField label="Criada de">
+            <Input type="date" className="h-9 w-full min-w-0" value={filters.from ?? ""} max={filters.to || undefined} onChange={(e) => setF({ from: e.target.value })} aria-label="Criada a partir de" />
+          </FilterField>
+          <FilterField label="Criada até">
+            <Input type="date" className="h-9 w-full min-w-0" value={filters.to ?? ""} min={filters.from || undefined} onChange={(e) => setF({ to: e.target.value })} aria-label="Criada até" />
+          </FilterField>
+        </div>
+        {dateInvalid && <p role="alert" className="text-xs text-red-700 dark:text-red-300">A data "Criada de" é depois de "até" — nenhuma reclamação cabe nesse intervalo.</p>}
+      </div>
+
       {listQ.isError && (
         <QueryErrorNote error={listQ.error} what="as reclamações" onRetry={() => listQ.refetch()} retrying={listQ.isFetching} />
       )}
@@ -268,50 +413,70 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
             <>A mostrar as dos últimos {COMPLAINT_LIST_DEFAULT_DAYS} dias e todas as que ainda estão abertas. <button type="button" className="underline text-primary" onClick={() => setAllTime(true)}>Ver todas</button></>
           ) : searching ? (
             <>A pesquisar em todas as reclamações (sem o limite de {COMPLAINT_LIST_DEFAULT_DAYS} dias).</>
+          ) : complaintFiltersNeedAllTime(filters) ? (
+            <>Com datas escolhidas procura-se em todas as reclamações (sem o limite de {COMPLAINT_LIST_DEFAULT_DAYS} dias).</>
           ) : (
             <>A mostrar todas as reclamações. <button type="button" className="underline text-primary" onClick={() => setAllTime(false)}>Só os últimos {COMPLAINT_LIST_DEFAULT_DAYS} dias</button></>
           )}
         </p>
       )}
 
-      {/* Stats */}
-      {!listQ.isError && !isLoading && !showArchived && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
-          {[
-            { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
-            { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600" },
-            { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-700" },
-            { label: "Aguarda Cliente", value: stats.waitingClient, icon: Clock, color: "text-purple-600" },
-            { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-700" },
-            { label: "Fechados", value: stats.closed, icon: XCircle, color: "text-gray-600" },
-            { label: "Em Atraso", value: stats.overdue, icon: AlertTriangle, color: "text-red-600" },
-          ].map(s => (
-            <Card key={s.label} className="p-3 gap-1 min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <s.icon className={`w-4 h-4 shrink-0 ${s.color}`} />
-                <span className="text-xs text-muted-foreground truncate">{s.label}</span>
-              </div>
-              <p className={`text-xl font-bold tabular-nums truncate ${s.color}`}>{s.value}</p>
-            </Card>
-          ))}
+      {/* Lote 57: emails de outras caixas que a IA achou que podem ser reclamações. */}
+      {!showArchived && unconfirmedCount > 0 && filters.origin !== COMPLAINT_AI_UNCONFIRMED_FILTER && (
+        <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-900 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-100">
+          <span className="min-w-0 flex-1 basis-56">
+            <strong>{unconfirmedCount}</strong> {unconfirmedCount === 1 ? "reclamação criada pela IA está" : "reclamações criadas pela IA estão"} <strong>{COMPLAINT_AI_UNCONFIRMED_LABEL}</strong>.
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setF({ origin: COMPLAINT_AI_UNCONFIRMED_FILTER })}>Ver só essas</Button>
         </div>
       )}
+      {!showArchived && <ComplaintMailSuggestions canEdit={canEdit} onOpenComplaint={onSelect} />}
 
-      {/* Type Tabs */}
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* Stats */}
+      {!listQ.isError && !isLoading && !showArchived && (
+        <>
+          <p className="sm:hidden text-sm" data-testid="complaints-mobile-total">
+            <span className="font-semibold tabular-nums">{stats.total}</span> reclamaç{stats.total === 1 ? "ão" : "ões"}
+            {activeCount > 0 ? " com estes filtros" : ""}
+            {stats.overdue > 0 && <> · <span className="font-semibold text-red-600 dark:text-red-400 tabular-nums">{stats.overdue} em atraso</span></>}
+          </p>
+          <div className="hidden sm:grid grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3">
+            {[
+              { label: "Total", value: stats.total, icon: BarChart3, color: "text-foreground" },
+              { label: "Novos", value: stats.new, icon: AlertCircle, color: "text-blue-600 dark:text-blue-400" },
+              { label: "Em Análise", value: stats.analyzing, icon: Hourglass, color: "text-yellow-700 dark:text-yellow-300" },
+              { label: "Aguarda Cliente", value: stats.waitingClient, icon: Clock, color: "text-purple-600 dark:text-purple-400" },
+              { label: "Resolvidos", value: stats.resolved, icon: CheckCircle2, color: "text-green-700 dark:text-green-400" },
+              { label: "Fechados", value: stats.closed, icon: XCircle, color: "text-gray-600 dark:text-gray-300" },
+              { label: "Em Atraso", value: stats.overdue, icon: AlertTriangle, color: "text-red-600 dark:text-red-400" },
+            ].map(s => (
+              <Card key={s.label} className="p-3 gap-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <s.icon className={`w-4 h-4 shrink-0 ${s.color}`} />
+                  <span className="text-xs text-muted-foreground truncate">{s.label}</span>
+                </div>
+                <p className={`text-xl font-bold tabular-nums truncate ${s.color}`}>{s.value}</p>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Tipo (no PC; no telemóvel está nos filtros) */}
+      <div className="hidden sm:flex items-center gap-2 flex-wrap">
         <Button
-          variant={filterType === "all" ? "selected" : "outline"}
+          variant={!filters.type || filters.type === "all" ? "selected" : "outline"}
           size="sm"
-          onClick={() => setFilterType("all")}
+          onClick={() => setF({ type: "all" })}
         >
           Todos
         </Button>
         {Object.entries(TYPE_CONFIG).map(([k, v]) => (
           <Button
             key={k}
-            variant={filterType === k ? "selected" : "outline"}
+            variant={filters.type === k ? "selected" : "outline"}
             size="sm"
-            onClick={() => setFilterType(k)}
+            onClick={() => setF({ type: k })}
           >
             {v.emoji} {v.label}
           </Button>
@@ -323,66 +488,120 @@ function KanbanView({ user, filterType, setFilterType, onSelect, onNew }: any) {
         <div className="flex justify-center py-20"><div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full" /></div>
       ) : listQ.isError ? null : showArchived ? (
         <div className="space-y-2">
-          {(complaints as any[]).length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Sem reclamações arquivadas.</p>}
+          {(complaints as any[]).length === 0 && <p className="text-sm text-muted-foreground text-center py-8">{activeCount ? "Nenhuma arquivada com estes filtros." : "Sem reclamações arquivadas."}</p>}
           {(complaints as any[]).map((c: any) => (
             <Card key={c.id} className="cursor-pointer hover:shadow-md" onClick={() => onSelect(c.id)}>
-              <CardContent className="p-3 flex flex-wrap items-center gap-2 text-sm">
+              <CardContent className="p-3 flex flex-wrap items-center gap-2 text-sm min-w-0">
                 <span className="text-xs text-muted-foreground tabular-nums">#{c.id}</span>
-                <span className="font-medium min-w-0 break-words">{c.title}</span>
+                <span className="font-medium min-w-0 break-words [overflow-wrap:anywhere]">{c.title}</span>
                 <Badge variant="secondary">Arquivada</Badge>
-                {c.archiveReason && <span className="text-xs text-muted-foreground break-words">— {c.archiveReason}</span>}
+                {c.archiveReason && <span className="text-xs text-muted-foreground break-words min-w-0">— {c.archiveReason}</span>}
                 {c.archivedAt && <span className="text-xs text-muted-foreground ml-auto">{fmtPTDate(c.archivedAt)}</span>}
               </CardContent>
             </Card>
           ))}
         </div>
+      ) : complaints.length === 0 ? (
+        // Auditoria lote 57: lista vazia = UM aviso claro com a saída (e não cinco colunas "Sem tickets").
+        <div className="rounded-lg border border-dashed px-4 py-10 text-center space-y-3" data-testid="complaints-empty">
+          <p className="text-sm font-medium">
+            {activeCount > 0
+              ? "Nenhuma reclamação com estes filtros."
+              : windowed
+                ? `Sem reclamações nos últimos ${COMPLAINT_LIST_DEFAULT_DAYS} dias e nenhuma aberta.`
+                : "Ainda não há reclamações."}
+          </p>
+          {activeCount > 0 ? (
+            <Button variant="outline" size="sm" className="h-9" onClick={clearFilters}><XIcon className="w-4 h-4 mr-1" /> Limpar filtros</Button>
+          ) : windowed ? (
+            <Button variant="outline" size="sm" className="h-9" onClick={() => setAllTime(true)}>Ver todas (sem o limite de {COMPLAINT_LIST_DEFAULT_DAYS} dias)</Button>
+          ) : null}
+        </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
-          {KANBAN_COLUMNS.map(status => {
-            const cfg = STATUS_CONFIG[status];
-            const items = grouped[status] || [];
-            return (
-              <div
-                key={status}
-                className={`space-y-3 rounded-lg transition-colors ${dragOverCol === status ? "ring-2 ring-primary/60 bg-primary/5" : ""}`}
-                onDragOver={(e) => { if (!canEdit) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
-                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null); }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOverCol(null);
-                  const id = Number(e.dataTransfer.getData("text/plain"));
-                  const card = (complaints as any[]).find((x) => x.id === id);
-                  if (id && canEdit && card?.complaintStatus !== "converted") moveCard(id, status);
-                }}
-              >
-                <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
-                  <cfg.icon className="w-4 h-4 shrink-0" />
-                  <span className="font-medium text-sm truncate">{cfg.label}</span>
-                  <Badge variant="secondary" className="ml-auto text-xs shrink-0 tabular-nums">{items.length}</Badge>
-                </div>
-                {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
-                <div className="max-h-[60vh] overflow-y-auto">
-                  <div className="space-y-2 pr-2">
-                    {items.map((c: any) => (
-                      <ComplaintCard
-                        key={c.id}
-                        complaint={c}
-                        onSelect={() => onSelect(c.id)}
-                        onMove={moveCard}
-                        currentStatus={status}
-                        // Convertidas não se movem (o servidor recusa); sem edição, só se vê.
-                        canMove={canEdit && c.complaintStatus !== "converted"}
-                      />
-                    ))}
-                    {items.length === 0 && (
-                      <p className="text-xs text-muted-foreground text-center py-8">Sem tickets</p>
-                    )}
+        <>
+          {/* Telemóvel: uma coluna de cada vez, com as contagens nos botões. */}
+          <div className="sm:hidden space-y-3" data-testid="complaints-mobile-board">
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Estado a mostrar">
+              {KANBAN_COLUMNS.map((st) => {
+                const cfg = STATUS_CONFIG[st];
+                const on = activeCol === st;
+                return (
+                  <button
+                    key={st} type="button" aria-pressed={on}
+                    onClick={() => setMobileCol(st)}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium min-h-9 ${on ? "bg-primary text-primary-foreground border-primary" : `${cfg.color}`}`}
+                  >
+                    <cfg.icon className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                    {cfg.label}
+                    <span className="tabular-nums font-semibold">{grouped[st]?.length ?? 0}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="space-y-2">
+              {(grouped[activeCol] ?? []).map((c: any) => (
+                <ComplaintCard
+                  key={c.id}
+                  complaint={c}
+                  onSelect={() => onSelect(c.id)}
+                  onMove={moveCard}
+                  currentStatus={activeCol}
+                  canMove={canEdit && c.complaintStatus !== "converted"}
+                />
+              ))}
+              {(grouped[activeCol]?.length ?? 0) === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-8">Sem reclamações em «{STATUS_CONFIG[activeCol]?.label}»{activeCount ? " com estes filtros" : ""}.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="hidden sm:grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+            {KANBAN_COLUMNS.map(status => {
+              const cfg = STATUS_CONFIG[status];
+              const items = grouped[status] || [];
+              return (
+                <div
+                  key={status}
+                  className={`space-y-3 rounded-lg transition-colors min-w-0 ${dragOverCol === status ? "ring-2 ring-primary/60 bg-primary/5" : ""}`}
+                  onDragOver={(e) => { if (!canEdit) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (dragOverCol !== status) setDragOverCol(status); }}
+                  onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverCol(null);
+                    const id = Number(e.dataTransfer.getData("text/plain"));
+                    const card = (complaints as any[]).find((x) => x.id === id);
+                    if (id && canEdit && card?.complaintStatus !== "converted") moveCard(id, status);
+                  }}
+                >
+                  <div className={`flex items-center gap-2 p-2 rounded-lg ${cfg.color} border`}>
+                    <cfg.icon className="w-4 h-4 shrink-0" />
+                    <span className="font-medium text-sm truncate">{cfg.label}</span>
+                    <Badge variant="secondary" className="ml-auto text-xs shrink-0 tabular-nums">{items.length}</Badge>
+                  </div>
+                  {/* div nativo: o ScrollArea (Radix) com max-h corta em vez de scrollar */}
+                  <div className="max-h-[60vh] overflow-y-auto">
+                    <div className="space-y-2 pr-2">
+                      {items.map((c: any) => (
+                        <ComplaintCard
+                          key={c.id}
+                          complaint={c}
+                          onSelect={() => onSelect(c.id)}
+                          onMove={moveCard}
+                          currentStatus={status}
+                          // Convertidas não se movem (o servidor recusa); sem edição, só se vê.
+                          canMove={canEdit && c.complaintStatus !== "converted"}
+                        />
+                      ))}
+                      {items.length === 0 && (
+                        <p className="text-xs text-muted-foreground text-center py-8">Sem tickets</p>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );
@@ -406,14 +625,14 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus, canMove 
         if (e.currentTarget instanceof HTMLElement) e.currentTarget.style.opacity = "1";
       }}
       onClick={onSelect}
-      className={`${canMove ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} hover:shadow-md transition-shadow ${isOverdue ? "border-red-400 border-2" : ""}`}
+      className={`${canMove ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} hover:shadow-md transition-shadow min-w-0 ${isOverdue ? "border-red-400 border-2" : ""}`}
     >
       <CardContent className="p-3 space-y-2">
-        <div className="flex items-start gap-2">
+        <div className="flex items-start gap-2 min-w-0">
           <div className="flex items-start gap-1.5 min-w-0">
-            <GripVertical className="h-3.5 w-3.5 mt-0.5 text-muted-foreground/40 shrink-0" />
+            <GripVertical className="h-3.5 w-3.5 mt-0.5 text-muted-foreground/40 shrink-0 hidden sm:block" />
             <span className="text-sm shrink-0">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
-            <span className="font-medium text-sm leading-snug line-clamp-2 break-words" title={c.title} onClick={onSelect}>{c.title}</span>
+            <span className="font-medium text-sm leading-snug line-clamp-2 break-words [overflow-wrap:anywhere]" title={c.title} onClick={onSelect}>{c.title}</span>
           </div>
         </div>
 
@@ -447,25 +666,27 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus, canMove 
           </div>
         )}
 
-        <div className="flex items-center justify-between pt-1">
-          <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
             <span className="text-[11px] text-muted-foreground tabular-nums">#{c.id}</span>
             <Badge className={`text-[11px] ${PRIORITY_CONFIG[c.complaintPriority]?.color}`}>
               {PRIORITY_CONFIG[c.complaintPriority]?.label}
             </Badge>
+            {c.origin === "ia" && <Badge variant="outline" className="text-[11px] border-violet-300 text-violet-800 dark:text-violet-200" title="Criada a partir de um email de outra caixa que a IA viu como reclamação">IA</Badge>}
+            {Number((c as any).aiUnconfirmed ?? 0) === 1 && <AiUnconfirmedBadge />}
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1 shrink-0">
             {canMoveLeft && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna anterior" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx - 1]); }}>
-                <ChevronLeft className="w-3 h-3" />
+              <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-6 sm:w-6" aria-label="Mover para a coluna anterior" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx - 1]); }}>
+                <ChevronLeft className="w-4 h-4 sm:w-3 sm:h-3" />
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Ver detalhe" onClick={onSelect}>
-              <Eye className="w-3 h-3" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-6 sm:w-6" aria-label="Ver detalhe" onClick={(e) => { e.stopPropagation(); onSelect(); }}>
+              <Eye className="w-4 h-4 sm:w-3 sm:h-3" />
             </Button>
             {canMoveRight && (
-              <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Mover para a coluna seguinte" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx + 1]); }}>
-                <ChevronRight className="w-3 h-3" />
+              <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-6 sm:w-6" aria-label="Mover para a coluna seguinte" onClick={(e) => { e.stopPropagation(); onMove(c.id, KANBAN_COLUMNS[colIdx + 1]); }}>
+                <ChevronRight className="w-4 h-4 sm:w-3 sm:h-3" />
               </Button>
             )}
           </div>
@@ -479,11 +700,12 @@ function ComplaintCard({ complaint: c, onSelect, onMove, currentStatus, canMove 
 
 const CHANGE_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
   CREATED: { label: "Criada", color: "bg-blue-100 text-blue-800" },
-  CHECKING_IN: { label: "A fazer check-in", color: "bg-cyan-100 text-cyan-800" },
+  CHECKING_IN: { label: "Em recolha", color: "bg-cyan-100 text-cyan-800" },
   CHECK_IN: { label: "Check-in", color: "bg-green-100 text-green-800" },
   MOVEMENT: { label: "Movimento", color: "bg-amber-100 text-amber-800" },
   PENDING_CHECKOUT: { label: "Pend. Check-out", color: "bg-purple-100 text-purple-800" },
-  CHECKING_OUT: { label: "A fazer check-out", color: "bg-indigo-100 text-indigo-800" },
+  // tarefa 62 (fluxo A): o condutor pegou no carro e leva-o ao terminal
+  CHECKING_OUT: { label: "Em entrega", color: "bg-indigo-100 text-indigo-800" },
   CHECK_OUT: { label: "Check-out", color: "bg-violet-100 text-violet-800" },
   ocorrencia: { label: "Ocorrência", color: "bg-red-100 text-red-800" },
 };
@@ -567,6 +789,11 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   const unarchiveMut = trpc.complaints.unarchive.useMutation({
     onSuccess: () => { toast.success("Reclamação tirada do arquivo"); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); },
     onError: (e) => toast.error(e.message || "Erro ao tirar do arquivo"),
+  });
+  // 14 out 2026: "Por confirmar (IA)" — uma pessoa confirma (ou arquiva).
+  const confirmAiMut = trpc.complaints.confirmAi.useMutation({
+    onSuccess: () => { toast.success("Confirmada como reclamação"); utils.complaints.list.invalidate(); utils.complaints.getById.invalidate({ id }); },
+    onError: (e) => toast.error(e.message || "Erro ao confirmar"),
   });
   const convertMut = trpc.complaints.convertToLostFound.useMutation({
     onSuccess: (r) => { toast.success(`Convertida no Perdido #${r.newId} (a reclamação fica fechada e ligada)`); utils.complaints.list.invalidate(); utils.lostFound.list.invalidate(); onBack(); },
@@ -677,24 +904,25 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
         <Button variant="outline" onClick={onBack}><ChevronLeft className="w-4 h-4 mr-1" /> Voltar</Button>
         <div className="w-full sm:w-auto sm:flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
             <span className="text-lg shrink-0">{TYPE_CONFIG[c.complaintType]?.emoji}</span>
-            <h1 className="text-xl font-bold break-words min-w-0">{c.title}</h1>
+            <h1 className="text-lg sm:text-xl font-bold break-words [overflow-wrap:anywhere] min-w-0">{c.title}</h1>
             <Badge className={STATUS_CONFIG[c.complaintStatus]?.color}>{STATUS_CONFIG[c.complaintStatus]?.label}</Badge>
             <Badge className={PRIORITY_CONFIG[c.complaintPriority]?.color}>{PRIORITY_CONFIG[c.complaintPriority]?.label}</Badge>
-            {isOverdue && <Badge className="bg-red-100 text-red-800">SLA Ultrapassado</Badge>}
+            {isOverdue && <Badge className="bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-200">SLA Ultrapassado</Badge>}
             {(() => {
               // Nº de contactos do cliente = mensagens vindas de email (📧).
               const n = data.messages.filter((m: any) => typeof m.message === "string" && m.message.startsWith("📧")).length;
-              return n > 1 ? <Badge className="bg-amber-100 text-amber-800">Cliente já contactou {n}×</Badge> : null;
+              return n > 1 ? <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">Cliente já contactou {n}×</Badge> : null;
             })()}
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground break-words">
             Ticket #{c.id} — Criado em {fmtPTDate(c.createdAt)}
             {c.assignedToName ? ` — Atribuída a: ${c.assignedToName}` : " — Por atribuir"}
+            {" — Origem: "}{complaintOriginLabel((c as any).origin)}
           </p>
         </div>
         {canEdit && !archived && <Button variant="outline" size="sm" onClick={startEditing}><Pencil className="w-4 h-4 mr-1" /> Editar</Button>}
@@ -712,7 +940,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
           </a>
         )}
         <Select value={c.complaintStatus} onValueChange={handleStatusChange} disabled={!canEdit || archived || c.complaintStatus === "converted"}>
-          <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-48" aria-label="Estado da reclamação"><SelectValue /></SelectTrigger>
           <SelectContent>
             {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "converted" || c.complaintStatus === "converted").map(([k, v]) => (
               <SelectItem key={k} value={k} disabled={k === "converted"}>{v.label}</SelectItem>
@@ -745,6 +973,13 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
         )}
       </div>
 
+      {!archived && Number((c as any).aiUnconfirmed ?? 0) === 1 && (
+        <AiUnconfirmedBanner
+          kind="complaint" canConfirm={canEdit} canArchive={canManage} confirming={confirmAiMut.isPending}
+          onConfirm={() => confirmAiMut.mutate({ id })}
+          onReject={() => { setArchiveReason("Não é reclamação (a IA criou-a por confirmar)"); setArchiveOpen(true); }}
+        />
+      )}
       {archived && (
         <div role="status" className="rounded-md border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800 dark:bg-slate-900/40 dark:text-slate-200">
           <Archive className="w-4 h-4 inline mr-1" /> Arquivada{(c as any).archivedAt ? ` em ${fmtPTDateTime((c as any).archivedAt)}` : ""}{(c as any).archiveReason ? ` — ${(c as any).archiveReason}` : ""}.
@@ -770,9 +1005,9 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
       </Dialog>
       {confirmUi}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 min-w-0">
         {/* Left: Details */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="lg:col-span-2 space-y-4 min-w-0">
           <Tabs defaultValue="details">
             <TabsList className="flex-wrap">
               <TabsTrigger value="details">Detalhes</TabsTrigger>
@@ -781,7 +1016,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               {seesMore && (c.vehiclePlate || c.vehicleId) && <TabsTrigger value="vehicle">Viatura</TabsTrigger>}
               {seesMore && <TabsTrigger value="duty">Em serviço</TabsTrigger>}
               {seesMore && <TabsTrigger value="booking-history">Histórico{timelineQ.isError || apiTimeline?.error ? "" : ` (${timelineHist.length})`}</TabsTrigger>}
-              {seesMore && <TabsTrigger value="comms">Comunicações</TabsTrigger>}
+              {seesMore && <TabsTrigger value="comms">Emails do cliente</TabsTrigger>}
             </TabsList>
 
             <TabsContent value="details" className="space-y-4 mt-4">
@@ -793,7 +1028,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               {c.description && (
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Descrição</CardTitle></CardHeader>
-                  <CardContent><p className="text-sm whitespace-pre-wrap">{c.description}</p></CardContent>
+                  <CardContent><p className="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{c.description}</p></CardContent>
                 </Card>
               )}
               <Card>
@@ -827,7 +1062,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     const b: any = dossier.booking;
                     const eur = (v: any) => v != null ? Number(v).toLocaleString("pt-PT", { style: "currency", currency: b.currency || "EUR" }) : "—";
                     return (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t pt-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t pt-3 [overflow-wrap:anywhere]">
                         {b.externalId && (
                           <div className="sm:col-span-2">
                             <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => openInMultipark(b.externalId)}>
@@ -858,7 +1093,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                           <div className="sm:col-span-2 text-red-600"><span>Cancelada em {fmtPTDateTime(b.cancelledAt)}</span>{b.cancelReason ? ` — ${b.cancelReason}` : ""}</div>
                         )}
                         {b.remarks && (
-                          <div className="sm:col-span-2 text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap"><span className="text-muted-foreground">Observações: </span>{b.remarks}</div>
+                          <div className="sm:col-span-2 text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap [overflow-wrap:anywhere]"><span className="text-muted-foreground">Observações: </span>{b.remarks}</div>
                         )}
                         {dossier.extras.length > 0 && (
                           <div className="sm:col-span-2">
@@ -889,9 +1124,9 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                   <CardContent>
                     <div className="space-y-2">
                       {drivers.map((d: any, i: number) => (
-                        <div key={i} className="flex items-center gap-2 text-sm p-2 bg-muted rounded">
-                          <User className="w-4 h-4" />
-                          <span className="font-medium">{d.name}</span>
+                        <div key={i} className="flex flex-wrap items-center gap-2 text-sm p-2 bg-muted rounded min-w-0">
+                          <User className="w-4 h-4 shrink-0" />
+                          <span className="font-medium break-words min-w-0">{d.name}</span>
                           {d.date && <span className="text-muted-foreground">— {d.date}</span>}
                         </div>
                       ))}
@@ -913,7 +1148,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                   {canEdit && !archived && <><Separator />
                   <div className="space-y-2">
                     <Textarea placeholder="Escrever mensagem..." value={newMsg} onChange={e => setNewMsg(e.target.value)} rows={3} />
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input type="checkbox" checked={isInternal} onChange={e => setIsInternal(e.target.checked)} className="rounded" />
                         <Shield className="w-4 h-4 text-amber-600" /> Nota interna
@@ -1037,9 +1272,9 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     ) : vehicleHistory && vehicleHistory.length > 0 ? (
                       <div className="space-y-2">
                         {vehicleHistory.map((h: any, i: number) => (
-                          <div key={i} className="flex items-center gap-3 text-sm p-2 bg-muted rounded">
-                            <Car className="w-4 h-4 text-muted-foreground" />
-                            <span className="font-medium">{h.driverName || "Desconhecido"}</span>
+                          <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm p-2 bg-muted rounded min-w-0">
+                            <Car className="w-4 h-4 text-muted-foreground shrink-0" />
+                            <span className="font-medium break-words min-w-0">{h.driverName || "Desconhecido"}</span>
                             <span className="text-muted-foreground">
                               {fmtPTDateTime(h.startTime)}
                               {h.endTime && ` → ${fmtPTDateTime(h.endTime)}`}
@@ -1064,9 +1299,20 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               }} />
             </TabsContent>}
 
-            {seesMore && <TabsContent value="comms" className="mt-4 space-y-3">
-              <div className="flex justify-end"><CreateMeetingButton entityType="complaint" entityId={id} defaultTitle={`Reunião — reclamação #${id}${c.clientName ? ` (${c.clientName})` : ""}`} /></div>
-              <CommunicationsTimeline type="complaint" id={id} compact />
+            {seesMore && <TabsContent value="comms" className="mt-4 space-y-3 min-w-0">
+              {/* Lote 57: o histórico de emails do CLIENTE (todas as caixas que a pessoa vê), não só os desta reclamação. */}
+              <Card>
+                <CardContent className="p-3 sm:p-4">
+                  <ComplaintClientMail complaintId={id} />
+                </CardContent>
+              </Card>
+              <details className="rounded-lg border bg-card px-3 py-2 sm:px-4 group">
+                <summary className="cursor-pointer text-sm font-medium select-none min-h-9 py-2 -my-2 flex items-center">Só desta reclamação: emails ligados e reuniões</summary>
+                <div className="mt-3 space-y-3">
+                  <div className="flex justify-end"><CreateMeetingButton entityType="complaint" entityId={id} defaultTitle={`Reunião — reclamação #${id}${c.clientName ? ` (${c.clientName})` : ""}`} /></div>
+                  <CommunicationsTimeline type="complaint" id={id} compact />
+                </div>
+              </details>
               <DriveFilesPanel entityType="complaint" entityId={id} />
             </TabsContent>}
             {seesMore && <TabsContent value="booking-history" className="mt-4">
@@ -1100,24 +1346,24 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                                 <div className="absolute left-[-16px] top-3 bottom-0 w-px bg-border" />
                               )}
                               <div className="absolute left-[-20px] top-1.5 w-2 h-2 rounded-full bg-primary ring-2 ring-background" />
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="flex items-center gap-2 flex-wrap">
+                              <div className="flex flex-col-reverse gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3 min-w-0">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap min-w-0">
                                     <Badge className={cfg.color}>{cfg.label}</Badge>
-                                    <span className="font-medium text-sm">{h.userName ? `${h.userName} ${h.userLastName || ""}`.trim() : "Sistema"}</span>
+                                    <span className="font-medium text-sm break-words min-w-0">{h.userName ? `${h.userName} ${h.userLastName || ""}`.trim() : "Sistema"}</span>
                                   </div>
-                                  {h.parkName && <p className="text-xs text-muted-foreground mt-1">Parque: {h.parkName}</p>}
+                                  {h.parkName && <p className="text-xs text-muted-foreground mt-1 break-words">Parque: {h.parkName}</p>}
                                   {(() => {
                                     const lines = formatBookingHistoryDetails(h.remarks);
                                     if (!lines.length) return null;
                                     return (
-                                      <ul className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
+                                      <ul className="text-xs text-muted-foreground mt-0.5 space-y-0.5 [overflow-wrap:anywhere]">
                                         {lines.map((l: string, li: number) => <li key={li}>{l}</li>)}
                                       </ul>
                                     );
                                   })()}
                                 </div>
-                                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
                                   {h.actionDate ? fmtPTDateTime(h.actionDate) : "—"}
                                 </span>
                               </div>
@@ -1133,7 +1379,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
         </div>
 
         {/* Right: Client + SLA info */}
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           <Card>
             <CardHeader><CardTitle className="text-sm">Cliente</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
@@ -1141,7 +1387,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
               <div className="break-all"><span className="text-muted-foreground">Email:</span> <span className="font-medium">{c.clientEmail || "—"}</span></div>
               <div className="break-words"><span className="text-muted-foreground">Telefone:</span> <span className="font-medium">{c.clientPhone || "—"}</span></div>
               {c.clientNotes && (
-                <div className="text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap"><span className="text-muted-foreground">Notas: </span>{c.clientNotes}</div>
+                <div className="text-xs bg-muted/50 rounded p-2 whitespace-pre-wrap [overflow-wrap:anywhere]"><span className="text-muted-foreground">Notas: </span>{c.clientNotes}</div>
               )}
               {canEdit && !archived && <><SendClientEmailButton
                 complaintId={id}
@@ -1196,7 +1442,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     <div>
                       <Label>Tipo</Label>
                       <Select value={editForm.type} onValueChange={v => setEditForm((f: any) => ({ ...f, type: v }))}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {Object.entries(TYPE_CONFIG).map(([k, v]) => (
                             <SelectItem key={k} value={k}>{v.emoji} {v.label}</SelectItem>
@@ -1207,7 +1453,7 @@ function DetailView({ id, user, onBack }: { id: number; user: any; onBack: () =>
                     <div>
                       <Label>Prioridade</Label>
                       <Select value={editForm.priority} onValueChange={v => setEditForm((f: any) => ({ ...f, priority: v }))}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (
                             <SelectItem key={k} value={k}>{v.label}</SelectItem>
@@ -1314,8 +1560,8 @@ function ReservationPreview({ bookingId }: { bookingId: string }) {
       {history.slice(0, 10).map((h: any) => {
         const cfg = CHANGE_TYPE_CONFIG[h.changeType] || { label: h.changeType, color: "bg-gray-100 text-gray-800" };
         return (
-          <div key={h.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted">
-            <div className="flex items-center gap-1.5">
+          <div key={h.id} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs p-1.5 rounded bg-muted min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
               <Badge className={`${cfg.color} text-[11px] px-1`}>{cfg.label}</Badge>
               <span>{h.user?.firstName || h.agentName || "Sistema"} {h.user?.lastName || ""}</span>
             </div>
@@ -1468,8 +1714,8 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* Email import */}
           <div className="sm:col-span-2 p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 flex-1 basis-52">
                 <Label className="text-amber-700 dark:text-amber-300 font-medium">Importar email do cliente</Label>
                 <p className="text-xs text-muted-foreground">Carrega o ficheiro .eml ou .txt — preenche automaticamente nome, email, assunto, matrícula e nº reserva</p>
               </div>
@@ -1496,10 +1742,10 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
                 {foundBookings.map((b: any) => (
                   <div
                     key={b.id}
-                    className="flex items-center justify-between p-2 bg-white dark:bg-gray-900 rounded border cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                    className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 p-2 bg-white dark:bg-gray-900 rounded border cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/30 min-w-0"
                     onClick={() => fillFromBooking(b)}
                   >
-                    <div className="text-sm">
+                    <div className="text-sm min-w-0 break-words">
                       <span className="font-mono font-medium">#{b.bookingNumber}</span>
                       {b.licensePlate && <span className="font-mono ml-2">{b.licensePlate}</span>}
                       {(b.clientFirstName || b.clientLastName) && <span className="text-muted-foreground ml-2">{b.clientFirstName} {b.clientLastName}</span>}
@@ -1525,7 +1771,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
           <div>
             <Label>Tipo</Label>
             <Select value={form.type} onValueChange={v => setForm(f => ({ ...f, type: v }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {Object.entries(TYPE_CONFIG).map(([k, v]) => (
                   <SelectItem key={k} value={k}>{v.emoji} {v.label}</SelectItem>
@@ -1536,7 +1782,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
           <div>
             <Label>Prioridade</Label>
             <Select value={form.priority} onValueChange={v => setForm(f => ({ ...f, priority: v }))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (
                   <SelectItem key={k} value={k}>{v.label}</SelectItem>
@@ -1571,7 +1817,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
           <div>
             <Label>Viatura (interna)</Label>
             <Select value={form.vehicleId} onValueChange={handleVehicleChange}>
-              <SelectTrigger><SelectValue placeholder="Opcional" /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Opcional" /></SelectTrigger>
               <SelectContent>
                 {vehicles.map((v: any) => (
                   <SelectItem key={v.id} value={String(v.id)}>{v.plate} — {v.brand} {v.model}</SelectItem>
@@ -1582,7 +1828,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
           <div>
             <Label>Projeto</Label>
             <Select value={form.projectId} onValueChange={v => setForm(f => ({ ...f, projectId: v }))}>
-              <SelectTrigger><SelectValue placeholder="Selecionar projeto" /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Selecionar projeto" /></SelectTrigger>
               <SelectContent>
                 {projs.map((p: any) => (
                   <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
@@ -1593,7 +1839,7 @@ function CreateDialog({ user, onClose }: { user: any; onClose: () => void }) {
           <div>
             <Label>Atribuir a</Label>
             <Select value={form.assignedToId} onValueChange={v => setForm(f => ({ ...f, assignedToId: v }))}>
-              <SelectTrigger><SelectValue placeholder="Selecionar responsável" /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Selecionar responsável" /></SelectTrigger>
               <SelectContent>
                 {assigneeOptions.map((e) => (
                   <SelectItem key={e.id} value={String(e.id)}>{e.fullName} · {e.roleLabel}</SelectItem>
@@ -1732,17 +1978,19 @@ function DutyDriversPanel({
           ) : (
             <div className="space-y-2">
               {attachedQ.data!.map((d: any) => (
-                <div key={d.id} className="flex items-center gap-2 text-sm p-2 bg-muted rounded min-w-0">
-                  <User className="w-4 h-4 shrink-0" />
-                  <span className="font-medium truncate min-w-0">{d.employeeName}</span>
-                  {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
-                  <Badge variant="outline" className="text-[11px]">{d.source}</Badge>
-                  {d.notes && <span className="text-xs text-muted-foreground min-w-0 truncate">— {d.notes}</span>}
+                <div key={d.id} className="flex items-start gap-2 text-sm p-2 bg-muted rounded min-w-0">
+                  <User className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-medium break-words min-w-0">{d.employeeName}</span>
+                    {d.roleAtTime && <Badge variant="outline" className="text-[11px]">{d.roleAtTime}</Badge>}
+                    <Badge variant="outline" className="text-[11px]">{d.source}</Badge>
+                    {d.notes && <span className="text-xs text-muted-foreground min-w-0 break-words">— {d.notes}</span>}
+                  </div>
                   {canEdit && <Button
                     variant="ghost"
                     size="icon"
                     aria-label={`Tirar ${d.employeeName} da reclamação`}
-                    className="ml-auto h-6 w-6 shrink-0"
+                    className="h-8 w-8 sm:h-6 sm:w-6 shrink-0"
                     disabled={detachMut.isPending}
                     onClick={async () => {
                       if (!(await confirm({ title: `Tirar ${d.employeeName} da reclamação?`, description: "Deixa de contar na avaliação desta pessoa. A associação fica registada (nada é apagado).", confirmLabel: "Tirar", destructive: true }))) return;
@@ -1782,11 +2030,11 @@ function DutyDriversPanel({
           ) : (
             <div className="space-y-2">
               {candidates.map((d: any, i: number) => (
-                <div key={i} className="flex items-center gap-2 text-sm p-2 border rounded">
-                  <User className="w-4 h-4" />
+                <div key={i} className="flex flex-wrap items-center gap-2 text-sm p-2 border rounded min-w-0">
+                  <User className="w-4 h-4 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium">{d.employeeName}</span>
+                      <span className="font-medium break-words min-w-0">{d.employeeName}</span>
                       <Badge variant="outline" className="text-[11px]">
                         {d.source === "history" ? "mexeu na reserva" : "escalado"}
                       </Badge>

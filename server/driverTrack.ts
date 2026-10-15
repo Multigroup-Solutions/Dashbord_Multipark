@@ -4,7 +4,8 @@
  * lê o GeoJSON do Zello guardado na recolha (no servidor: o ficheiro é
  * privado) e devolve os pontos do dia, já poucos para o mapa. Só leitura.
  */
-import { gpsPointsFromGeoJson, MAX_PLAUSIBLE_KMH, type GpsPoint } from "./zelloGps";
+import { gpsPointsFromGeoJson, type GpsPoint } from "./zelloGps";
+import { speedSpikes } from "../shared/speedRules";
 
 export interface TrackPoint { lat: number; lng: number; speed: number; ts: number }
 export interface DriverTrack {
@@ -25,12 +26,15 @@ export const TRACK_MAX_POINTS = 2500;
 /**
  * Pontos com posição e precisão aceitável → no máximo `max`, por igual ao
  * longo do dia, guardando SEMPRE o primeiro, o último e os que passaram o
- * limite de velocidade (os excessos não desaparecem por reduzir). Velocidades
- * acima do plausível (erro do GPS) contam como 0. PURA.
+ * limite de velocidade (os excessos não desaparecem por reduzir). 14 out 2026:
+ * os picos falsos do GPS (acima de 250 km/h ou um salto isolado —
+ * shared/speedRules.ts) contam como 0; antes era tudo acima de 150. PURA.
  */
 export function downsampleTrack(points: readonly GpsPoint[], max: number, threshold: number | null): TrackPoint[] {
-  const ok = points.filter((p) => p.accurate && p.lat != null && p.lon != null)
-    .map((p) => ({ lat: p.lat!, lng: p.lon!, speed: p.speed > MAX_PLAUSIBLE_KMH ? 0 : Math.round(p.speed), ts: p.ts }));
+  const spikes = speedSpikes(points);
+  const ok = points.map((p, i) => ({ p, spike: spikes.has(i) }))
+    .filter(({ p }) => p.accurate && p.lat != null && p.lon != null)
+    .map(({ p, spike }) => ({ lat: p.lat!, lng: p.lon!, speed: spike ? 0 : Math.round(p.speed), ts: p.ts }));
   if (ok.length <= max) return ok;
   const keep = new Set<number>([0, ok.length - 1]);
   if (threshold != null) ok.forEach((p, i) => { if (p.speed > threshold) keep.add(i); });

@@ -168,6 +168,19 @@ export async function quizQuestionsByIds(ids: number[]) {
   return d.select().from(quizQuestions).where(inArray(quizQuestions.id, ids));
 }
 
+/** Perguntas feitas pela IA para UMA tentativa (0660), no formato das da lista fixa. */
+export async function aiQuizQuestionsOfSession(sessionId: number, ids: number[]) {
+  if (!ids.length) return [];
+  const d = await db();
+  const { trainingQuizAiQuestions } = await import("../drizzle/schema");
+  const rows = await d.select().from(trainingQuizAiQuestions)
+    .where(and(eq(trainingQuizAiQuestions.sessionId, sessionId), inArray(trainingQuizAiQuestions.id, ids)));
+  return rows.map((q) => ({
+    id: q.id, question: q.question, optionA: q.optionA, optionB: q.optionB, optionC: q.optionC, optionD: q.optionD,
+    correctOption: q.correctOption, explanation: q.explanation, sourceManualId: q.sourceManualId, categoryId: null as number | null,
+  }));
+}
+
 // ─── Histórico ─────────────────────────────────────────────────────────────
 
 export interface StoredTurn { role: "user" | "assistant"; content: string; outOfContent: boolean; createdAt: string }

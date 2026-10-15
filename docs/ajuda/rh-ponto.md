@@ -2,7 +2,7 @@
 modulo: rh
 titulo: RH e ponto
 rotas: /rh, /rh/dashboard, /perfil
-palavras: pedir documentos, pedir documentos em falta, documentos em falta, pedido de documentos, último pedido, template documentos, enviar documentos em falta, lembrar documentos, terminal, horas terminal, terminal no ponto, aeroporto, ponto no aeroporto, terminal por confirmar, confirmar terminal, desmarcar terminal, nível seguinte, conta não ligada, entra com a google como, sem conta ligada, email da ficha, contas sem ficha, entraram sem ficha, conta como utilizador, a minha ficha, carta validada, carta pendente de validação, carta < 3 anos, carta com menos de 3 anos, sem carta, validar carta, data de emissão da carta, anos de carta, validar documentos, recusar documento, documento recusado, pendente de validação, documentos por validar, substituir documento, documento validado, notas internas, nota interna, trabalhou mal, back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar
+palavras: falta horário fixo, feriados, falta num feriado, faltas de funcionários, limpeza dos pdas, conta google do pda, oferecer para guardar, início de sessão automático, gestor de palavras-passe, pda mudou de aparelho, registar pda, qr do pda, só o tl regista, a sessão termina em 10 s, estou no terminal, sair do terminal, terminal ocupado, pedir para passar, passar o terminal, ainda estou, terminal pelo perfil, candidatos, candidato, aprovar candidato, quer voltar, inativo pode voltar, inativos e desativados, pedido de ligação, possível duplicado, pedir documentos, pedir documentos em falta, documentos em falta, pedido de documentos, último pedido, template documentos, enviar documentos em falta, lembrar documentos, terminal, horas terminal, terminal no ponto, terminal até, última recolha, última entrega, terminal parcial, aeroporto, ponto no aeroporto, terminal por confirmar, confirmar terminal, desmarcar terminal, nível seguinte, conta não ligada, entra com a google como, sem conta ligada, email da ficha, contas sem ficha, entraram sem ficha, conta como utilizador, a minha ficha, carta validada, carta pendente de validação, carta < 3 anos, carta com menos de 3 anos, sem carta, validar carta, data de emissão da carta, anos de carta, validar documentos, recusar documento, documento recusado, pendente de validação, documentos por validar, substituir documento, documento validado, notas internas, nota interna, trabalhou mal, back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar, entra como, entrar com código, ainda estás no terminal, sim estou, já saí, lugar libertado, reabrir o terminal, sem resposta, gps do zello, horas que contam, último gps, troços de terminal, corrigir terminal, sobreposição, mês fechado
 ---
 # RH e ponto
 
@@ -14,19 +14,50 @@ palavras: pedir documentos, pedir documentos em falta, documentos em falta, pedi
 3. Se deres entrada fora do raio do local de trabalho, fica registado com um aviso.
 4. As tuas horas do mês aparecem na tua ficha (separador **Ponto**).
 
-**Terminal no aeroporto (extras)** — só com o interruptor **"Terminal no ponto (aeroporto)"** ligado (Definições → Automações; desligado por omissão)
-1. Já tens o ponto aberto. Ao **chegar ao aeroporto**, dá **saída + entrada**. Se a entrada for no aeroporto da tua cidade (GPS dentro do raio), aparece o selo **Terminal**: a partir daí contas horas de terminal.
-2. **Antes de saíres do aeroporto**, dá outra vez **saída + entrada**. A saída fecha o troço de terminal e a entrada logo a seguir (até 30 min depois) é o regresso: voltas a extra normal.
-3. As horas de terminal pagam à taxa do **nível seguinte** ao teu: júnior → sénior, sénior → terminal, terminal → master. O master fica master.
-4. Se a saída do troço de terminal **não for no aeroporto** (ou sem GPS), o troço fica **Terminal por confirmar**: paga como hora normal até o RH confirmar.
-5. Só contam os extras e o aeroporto da **cidade da ficha** (Lisboa, Porto ou Faro). No aeroporto não aparece o aviso "fora do raio".
+**Estou no terminal** (extras, condutores e team leaders) — só com o interruptor **"Terminal no ponto (aeroporto)"** ligado (Definições → Automações; desligado por omissão)
+1. Carrega na tua **fotografia** lá em cima → **Estou no terminal**. Se ainda não deste entrada, abre a entrada do ponto (foto + GPS) com **Estou no terminal** já marcado.
+2. O GPS tem de estar no **aeroporto** de uma cidade onde trabalhas (a da tua ficha ou uma cidade que te deram). Conta a imprecisão do GPS. Fora do aeroporto aparece, por exemplo, **"Não estás no aeroporto de Lisboa (a 3,2 km)"**.
+3. Ficas com a barra **"Terminal Lisboa · desde 14:05 · Sair"** por baixo do topo. **Sair** pede confirmação e diz **"Saíste do terminal às 17:20 (3 h 15)"**. O ponto continua aberto.
+4. **Só uma pessoa por cidade** e cada pessoa só num terminal. Se estiver ocupado aparece **"O terminal de Lisboa está com João Silva desde 14:05"** e o botão **Pedir a João para passar**. O João e o TL de serviço recebem o aviso no sino.
+5. O João vê o pedido na barra: **Passar** (ficas tu no terminal, na hora) ou **Ainda estou** (ele fica e tu recebes o aviso). O pedido vale 30 minutos.
+6. Se o João já não tiver o ponto aberto, entras logo e fica registado.
+7. Se deres entrada no ponto com **Estou no terminal** e o terminal estiver ocupado, a **entrada fica feita** na mesma e aparece o **Pedir a João para passar**.
+8. A **saída do ponto** liberta o lugar no terminal. O fecho automático do ponto esquecido também.
+9. O **nível seguinte** no pagamento (júnior → sénior, sénior → terminal, terminal → master) é **só para extras**. Condutores e TL podem estar no terminal, mas o valor não muda.
+10. **Horas que contam** (nunca se paga sem prova, não se corta a quem tem prova):
+    - sais com o GPS no aeroporto → contam até à saída;
+    - senão → até ao **último GPS no aeroporto** (o Zello do aparelho contigo) ou à tua **última recolha ou entrega** na Multipark, a mais tarde das duas. A recolha/entrega só conta até à hora a que o GPS te viu sair;
+    - sem nenhuma prova → ficam **por confirmar** (o RH decide).
+11. O TL de serviço também te pode **pôr**, **passar** ou **tirar** do terminal (Atividade diária → Ao Vivo → **Terminal agora**). Recebes o aviso no sino.
+- O método antigo (dar saída + entrada no aeroporto) deixou de contar. Os troços antigos ficam como estavam (histórico). Um troço antigo ainda aberto fecha na saída do ponto como **Terminal por confirmar**.
 
-**Terminal: confirmar ou desmarcar** (quem revê o ponto da ficha: supervisor da cidade, back office, administrador)
-- Na ficha → **Ponto**, cada troço mostra **Terminal**, **Terminal (confirmado)**, **Terminal por confirmar** ou **Terminal desmarcado**.
-- Num troço **por confirmar** carrega em **Confirmar terminal** ou **Desmarcar**. Noutra saída, abre o registo e usa **Marcar como terminal** ou **Desmarcar terminal** (ex.: o GPS falhou à entrada).
-- Escreve sempre o **motivo**. Fica registado quem mudou, quando e porquê (também nos Logs). Nada se apaga.
-- Na **folha de ordenados**, a coluna Extra mostra "incl. X h terminal" e as horas por confirmar. No **recibo** aparece a linha **Horas terminal**. O custo dos extras (Faturação e Métricas dos extras) usa a mesma regra.
-- Os aeroportos (centro e raio, 1500 m por omissão) mudam-se em **Definições → Parâmetros → Extras-dia → "Aeroportos (terminal no ponto)"**.
+**"Ainda estás no terminal?"** (só com o mesmo interruptor ligado)
+1. De 5 em 5 minutos a app vê o GPS do **Zello do aparelho que está contigo** (o PDA onde fizeste check-in; senão o teu Zello).
+2. GPS velho (mais de 10 min), pouco preciso ou sem Zello = **sem GPS**: nunca conta como "fora". Com o **Zello em baixo** a app não pergunta nem liberta o lugar: espera pela leitura seguinte.
+3. **Fora** = o GPS fora da zona do aeroporto, descontada a imprecisão, em **2 leituras seguidas**.
+4. Fora há mais de **20 min** → aparece na barra (e no telemóvel) **"Ainda estás no terminal?"** com **Sim, estou** e **Já saí**. O TL de serviço recebe o aviso no sino e no telemóvel.
+5. **Sim, estou** → não voltamos a perguntar durante **60 min**. Se o GPS do telemóvel te puser no aeroporto, também conta como prova.
+6. **Já saí** → sais do terminal à hora a que o GPS te viu sair.
+7. Sem resposta em **15 min** → o lugar fica livre. Fica escrito **"saiu do aeroporto às 16:40 (GPS)"** e o TL é avisado.
+8. A barra mostra então **"Saíste do terminal de Lisboa às 16:40 (GPS)"** com **Ainda estou**:
+    - até **30 min** depois, voltas ao terminal (o lugar fica teu sem buraco na linha do tempo), se estiver livre. **Conta a partir de agora**; o tempo em que o GPS te viu fora fica para o RH decidir;
+    - se já estiver com outra pessoa, o pedido vai ao TL de serviço;
+    - mais tarde, carrega outra vez em **Estou no terminal** (com GPS).
+9. Depois de um **Ainda estou** sem prova, as horas desse bocado ficam **por confirmar** até haver GPS no aeroporto (ou o RH decidir).
+- Não há fecho às 03:00. Fica sempre escrito como fechou, até que hora contou e porquê.
+
+**Terminal: confirmar, corrigir ou desmarcar** (quem revê o ponto da ficha: supervisor da cidade, back office, administrador)
+- Na ficha → **Ponto**, cada turno mostra os **troços de terminal**: "Terminal Lisboa 14:05–17:20 · contou até 16:40 (último GPS no aeroporto)". Também aparece como abriu, como fechou e o motivo.
+- Os **por confirmar** aparecem a amarelo: sem prova, ou um "Ainda estou" sem prova no fim.
+- **Confirmar**: conta o troço todo (do início ao fecho).
+- **Corrigir horas**: escreve **Das** e **Às** (hora de Lisboa); conta só esse bocado.
+- **Desmarcar**: nenhuma hora desse troço paga terminal.
+- Escreve sempre o **motivo**. Fica registado quem mudou, quando e porquê (também nos Logs). O que a app tinha calculado fica guardado ("antes: até 16:40"). Nada se apaga.
+- **Não deixa sobrepor** dois troços na mesma cidade (duas pessoas no terminal ao mesmo tempo), nem dois da mesma pessoa.
+- **Mês fechado** (fecho do ordenado aprovado ou pago): o terminal desse mês já não muda. Os números ficam como estavam no fecho.
+- Os botões antigos **Confirmar terminal** / **Desmarcar** numa saída do ponto atuam nos troços desse turno. Num troço do método antigo continuam a funcionar como antes.
+- Na **folha de ordenados**, a coluna Extra mostra "incl. X h terminal" e as horas **por confirmar** (pagas como normais até decidires). No **recibo** aparece a linha **Horas terminal**. Conta só a parte do troço dentro do turno do ponto. O custo dos extras (Faturação e Métricas dos extras) usa a mesma regra.
+- Os aeroportos e as **zonas por terminal** (T1/T2) mudam-se em **Definições → Parâmetros → Extras-dia → "Aeroportos (terminal no ponto)"**.
 
 **A tua ficha**
 - Em **Perfil → A minha ficha** (ou **Pessoas → Recursos Humanos**) abres a tua ficha: dados, **Documentos**, **Ponto** e **Horário**. O Perfil em si tem os atalhos, a foto, as notificações e as contas Google (ver a ajuda "Perfil").
@@ -35,19 +66,27 @@ palavras: pedir documentos, pedir documentos em falta, documentos em falta, pedi
 - Carrega documentos (CC, carta de condução, comprovativo de morada, NIB…) no separador **Documentos**. Documentos em falta podem bloquear o acesso.
 - **Os teus dados**: em **Editar os meus dados** mudas o nome, os telefones, o NIF, a morada, a data de nascimento, a nacionalidade, o **n.º do documento de identificação** e o **n.º da carta de condução**. O IBAN fica como pedido (ver abaixo).
 - **Os teus documentos**: carregas o CC/BI, o título de residência, a carta, o comprovativo do IBAN, o de morada, a fotografia e "Outro". O contrato, os anexos, o termo de responsabilidade e o seguro são carregados pelo RH. Até 10 ficheiros de 10 MB de cada vez.
+- **A IA a ler os documentos** (interruptor "IA: preenchimento a partir de documentos do RH", desligado por omissão): ao carregar o CC, o título de residência, a carta, o comprovativo do IBAN ou o de morada, preenche só os campos **vazios** da ficha. O IBAN lido fica como pedido ao RH, exceto para quem o pode mudar na hora. Como o documento vai inteiro, **só corre com a IA em Vertex AI na UE**: sem isso não corre, mesmo ligado.
   - O que entregas fica **"Pendente de validação"** até o RH ver. Enquanto está pendente (ou se o RH o **recusar**, com o motivo) podes voltar a entregar ou retirar.
   - Depois de **validado** já não o substituis nem retiras: se mudou (ex.: renovaste o CC), pede ao RH. "Outro" não fica trancado.
   - Um documento pendente já conta como entregue para o aviso de documentos em falta; um recusado volta a faltar.
 - **Acesso bloqueado** (ex.: documentos em falta): no ecrã de bloqueio aparece **Carregar os teus documentos**, com o que falta, o que já enviaste (**Enviado — pendente de validação**) e o que foi recusado (com o motivo). Carregas daí sem precisares de entrar no resto da app; depois o RH revê e liberta o acesso.
 - Quem não vê a lista do RH (extra, condutor, utilizador…) tem no menu **A minha ficha** (em vez de "Recursos Humanos") e abre logo a sua ficha. Enquanto carrega diz "A carregar a tua ficha…"; se a leitura falhar aparece o erro com **Tentar de novo**.
-- **"A tua conta não está ligada a nenhuma ficha"**: entraste com a Google com um email que não está em nenhuma ficha. A mensagem diz qual é a conta. Sai e entra com o email que deste ao RH (o login é só com a Google e tem de ser sempre o mesmo email), ou pede ao RH para pôr esse email na tua ficha.
+- **"A tua conta não está ligada a nenhuma ficha"**: entraste com a Google com um email que não está em nenhuma ficha. A mensagem diz qual é a conta. Sai e entra com o email que deste ao RH, ou pede ao RH para pôr esse email na tua ficha. Com o interruptor **Entrar com email e código** desligado (é o que vem) o login é só com a Google e tem de ser sempre o mesmo email; ligado, também entras com esse email e um código (pedido ao TL/supervisor de serviço) e depois a palavra-passe — ver a ajuda "Entrada".
 - **Sem cidade (centro de custos)** na ficha: abres na mesma a tua ficha (todos os cartões: conta, ponto, horas, documentos, disponibilidade) e marcas a disponibilidade. O resto pede a cidade: o aviso diz para pedires ao RH a tua cidade.
 - **Readmissão**: se a tua conta ficou na ficha antiga (inativa) e na nova, conta a ficha **ativa** (a cidade vem dela).
 
-**Com que conta Google a pessoa entra** (ficha → cartão **Utilizador e permissões**)
-- **Entra com a Google como**: as contas ligadas à ficha (principal e extra) com o último login. "Ainda não entrou" = a conta existe mas a pessoa nunca entrou com ela.
+**Com que conta a pessoa entra** (ficha → cartão **Utilizador e permissões**)
+- **Entra como**: as contas ligadas à ficha (principal e extra) com o último login e como entrou (Google, código ou palavra-passe). "Ainda não entrou" = a conta existe mas a pessoa nunca entrou com ela.
 - **Sem conta ligada**: diz com que email(s) da ficha a pessoa tem de entrar — a conta liga-se sozinha no primeiro login com esse email. Se entrou com outro email, põe esse email na ficha ou liga a conta em **Ligações (unir / separar)**.
-- **Entraram sem ficha e parecem ser esta pessoa** (só para quem gere o RH de todas as cidades): contas que entraram com a Google, sem ficha, com o mesmo email ou dois nomes em comum. É só uma sugestão: ligar é sempre à mão, em Ligações.
+- **Entraram sem ficha e parecem ser esta pessoa** (só para quem gere o RH de todas as cidades): contas que entraram (com a Google, um código ou a palavra-passe), sem ficha, com o mesmo email ou dois nomes em comum. É só uma sugestão: ligar é sempre à mão, em Ligações.
+- **Pedidos de ligação** desta ficha (49c): "Pedido de ligação: *email Google* diz ser *email/telefone*", com **Ligar a esta ficha** e **Recusar**; e os **possíveis duplicados** (o candidato gravou um telefone/NIF igual ao desta ficha), com **Já tratei** / **Não é a mesma pessoa**.
+- Ficha não ativa (inativa ou candidato): a pessoa entra como **Utilizador** de propósito; ao reativar ou aprovar, a conta passa sozinha ao papel do posto.
+
+**Candidatos, inativos e desativados** (lista do RH, filtro de estado — 49c)
+- **Ativos**, **Inativos e desativados** e **Candidatos (app)**. Os candidatos são as fichas criadas na app ("Sou novo"): extras inativos com o selo **Candidato**, fora das listas, da escala e dos avisos, mas a pessoa vê e preenche a ficha e carrega os documentos. **Aprovar candidato** (na ficha) ou aprovar a candidatura põe a ficha ativa sem perguntar readmissão e a conta de utilizador passa ao papel do posto.
+- Nos não ativos aparecem **Quer voltar** (carregou em "Voltei, quero trabalhar"), **Inativo — pode voltar** ou **Desativado** (estes dois só para quem vê o motivo). **Reativar** limpa o "Quer voltar" e repõe o papel do posto.
+- Quem está inativo ou é candidato **não pica o ponto** até ser reativado/aprovado.
 - Aviso **A conta está como "Utilizador"** numa ficha de extra: abre a ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Muda o papel para Extra em Utilizadores.
 
 **Documentos: validar ou recusar** (o RH da ficha: supervisor da cidade, front office, back office, administrador)
@@ -106,6 +145,16 @@ palavras: pedir documentos, pedir documentos em falta, documentos em falta, pedi
 - O separador **Agentes** ("Agentes por ligar") lê os agentes **ao vivo** da BD da Multipark: os ativos e os que tiveram ações nos últimos 180 dias e ainda não estão ligados a uma ficha, a um parceiro nem marcados como "não é funcionário". A ligação automática de hora a hora (por email e por nome) usa a mesma leitura. Se a BD da Multipark não responder, aparece um aviso e a lista vem da cópia antiga (sem os agentes novos).
 - Num **PDA registado**, ao entrar na app o aparelho fica ligado a ti (e ao Zello do PDA) até saíres ou outra pessoa entrar. Se essa ligação falhar, aparece um aviso — fala com a chefia.
 - **PDAs só pelo QR**: cada PDA regista-se uma vez lendo, no próprio aparelho, o QR colado nele (Operacional → PDAs → botão QR). Já não há check-in manual nem registo pela lista. A seguir ao registo aparece **Instalar a app neste PDA**: o dashboard fica instalado e abre sempre direto, no mesmo browser.
+- **O teu telemóvel não é um PDA.** Os PDAs são os aparelhos partilhados (extras e condutores). O telemóvel de um team leader, de um supervisor ou de qualquer pessoa regista-se no **Perfil → Este telemóvel → Registar este telemóvel como meu**: aparece com o teu nome em Operacional → PDAs → Telemóveis pessoais e usa o teu Zello (o da ficha). A sessão nele não acaba na saída do ponto e não tira o PDA nem o Zello a ninguém. Num telemóvel pessoal o QR de um PDA não regista (diz para carregares primeiro em "Deixar de ser pessoal"). Se o teu telemóvel já foi registado como PDA, uma chefia carrega em **Pessoal?** nesse PDA (ver a ajuda "Actividade Diária" → PDAs).
+- Com **Entrar com email e código** ligado (Definições → Automações):
+  - **Só o team leader (ou acima) regista um PDA pelo QR** — um extra ou condutor que lê o QR noutro aparelho vê "Só o team leader (ou acima) regista um PDA pelo QR". Se ler o QR no PDA onde já está (o aparelho já é esse PDA), vê **"Este PDA já está registado — estás no PDA 12"**: está tudo certo, não precisa de fazer nada.
+  - Sem sessão, o QR abre a **página de entrada nova** (email e código); depois do registo, a sessão de quem registou fica presa a esse PDA.
+  - Ler o QR noutro aparelho passa o PDA para esse aparelho (o antigo deixa de ser o PDA) e os **supervisores da cidade** recebem no sino **"O PDA 12 mudou de aparelho"** (não quem registou). Ler outra vez no mesmo aparelho não muda nada nem avisa.
+  - A **saída do ponto** num PDA mostra o resumo e **"A sessão termina em 10 s"**; a sessão também acaba quando outra pessoa entra, no Sair, quando o ponto esquecido fecha sozinho (que também solta o PDA) e ao fim de 16 h.
+- **Limpeza única de cada PDA** (antes de ligar "Entrar com email e código"):
+  1. No Android (Definições → Contas) fica **uma só conta Google, da empresa**, por PDA (para a Play Store e o Zello). Sai qualquer conta pessoal.
+  2. No Chrome do PDA: **⋮ → Definições → Gestor de palavras-passe → Definições** → desliga **Oferecer para guardar palavras-passe** e **Início de sessão automático**. Se houver palavras-passe guardadas, apaga-as aí.
+  3. Abre a app do PDA e confirma que aparece a página de entrada (sem email nem palavra-passe sugeridos).
 - Cada PDA tem uma **etiqueta** (nome ou número) e uma **cidade** fixa (Operacional → PDAs → editar).
 - Com o interruptor **"Zello: nome de quem tem o PDA no mapa"** ligado (Definições → Automações), o nome da conta Zello do PDA passa a "PDA 12 · Rui Santos" quando alguém entra, e volta a "PDA 12" quando sai.
 - **A trabalhar sem PDA ou Zello ligado** (Operacional → PDAs, em cima): de 5 em 5 minutos aparecem aqui as pessoas do operacional com o ponto aberto sem PDA (passados 10 min), com o Zello do PDA desligado, ou com movimentos na Multipark sem ponto aberto ou com o Zello desligado. O back office e o front office ficam de fora. Cada alerta fecha sozinho quando o problema desaparece.
@@ -129,6 +178,7 @@ Em **RH → Dashboard** (super admin).
 **Possíveis faltas por validar** (no fim da página, fechado; abre-se ao carregar)
 - Todas as noites (e no botão **Processar faltas (ontem)**) cada extra escalado sem ponto no turno fica como **possível falta**, que não conta pontos enquanto não for confirmada.
 - **Não** fica como possível falta: o turno só **proposto** (escala automática por confirmar), quem foi **mandado para casa** e quem **mexeu em carros na Multipark** nesse dia (trabalhou sem picar o ponto). Se a Multipark não responder, a nota diz "movimentos da Multipark não lidos".
+- **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **"RH: possíveis faltas de quem tem horário fixo"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Fora: quem estava na escala do Extras-Dia nesse dia, férias e baixas, dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro) e quem mexeu em carros na Multipark. Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).
 - O número entre parênteses é o **total real** das tuas cidades; a lista mostra as 200 mais recentes.
 - **Falta** / **Libertar** em cada linha, ou em massa: **Marcar falta a todas** / **Libertar todas** (as da lista), ou escolhe algumas e os botões passam a "as N escolhidas". Cada falta confirmada vale 1 ponto e com 3 pontos o acesso fica bloqueado. As que não der para rever (ex.: foste tu a propor) ficam e vêm contadas.
 
@@ -182,6 +232,12 @@ A regra é que **cada agente é um utilizador e cada utilizador tem um agente**.
 - Na ficha, escolhe a **conta perdida (sem ficha)** e carrega em **Juntar**, ou numa conta extra carrega em **Ficar só com esta**.
 - Fica a conta que entra na app. Tudo o que era da pessoa passa para ela: a ficha, as permissões e cidades extra, as notificações, o Google, o email, o WhatsApp e os casos atribuídos. O papel fica o mais alto dos dois.
 - A outra conta fica **desativada** ("conta duplicada"), nunca apagada, e o email dela passa para a ficha como email pessoal. O registo de quem fez o quê fica como estava.
+
+**Passar a conta Google** (só administradores) — quando a Google Workspace renomeia a conta de quem saiu para uma pessoa nova (ex.: carlosjesus@multipark.pt passou a thiagocamargo@multipark.pt)
+- Para a Google é a mesma conta, por isso o dashboard continuava a reconhecê-la como a conta antiga (desativada) e a pessoa nova não entrava.
+- Na ficha de quem saiu, na conta **desativada**, carrega em **Passar a conta Google**, procura a conta da pessoa nova e confirma.
+- A conta antiga larga a Google e volta ao nome e email da ficha dela, desativada — **o histórico (ponto, tarefas, registos) fica todo com ela**. A conta nova passa a entrar com essa Google e, se deixares a caixa marcada, fica com esse email como principal. A Google que a pessoa nova já usava continua a entrar.
+- Fica no registo de atividade das duas contas.
 
 **Juntar fichas da mesma pessoa** (só administradores)
 - Caso típico: a ficha do RH e outra criada sozinha a partir de um login ou de um agente (ex.: "ribeirohelio662", "Agent DRIVER").

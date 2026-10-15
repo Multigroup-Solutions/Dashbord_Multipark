@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronLeft, ChevronRight, Loader2, Plus, Search, UsersRound } from "lucide-react";
 import { ALERTS, SEARCH_FIELDS, SEGMENTS, SORTS, type CrmGroups, type CrmSort, type SearchField } from "@shared/crmFilters";
-import { FilterGroup, RulesEditor, SavedFiltersMenu, SelButton, ruleText, type Opt, type RulesState } from "@/components/crm/CrmFilters";
+import { FacetRow, FilterChips, FilterGroup, RulesEditor, SavedFiltersMenu, SelButton, ruleText, type Opt, type RulesState } from "@/components/crm/CrmFilters";
 import { ALERT_CLASS, ClientAvatar, ColorSwatch, Pill, SegmentPill, eur, mainSegment, num, shortDate } from "@/components/crm/crmUi";
 import type { CrmListRow } from "@/components/crm/crmTypes";
 import { ProAccountsPanel } from "@/components/crm/ProAccountsPanel";
@@ -252,18 +252,7 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
           )}
         </div>
 
-        {chips.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-bold text-muted-foreground">Filtro:</span>
-            {chips.map((c) => (
-              <span key={c.key} className="inline-flex h-7 items-center gap-1.5 rounded-full bg-secondary pl-2.5 pr-1.5 text-xs font-semibold text-secondary-foreground">
-                {c.label}
-                <button type="button" aria-label="Tirar filtro" onClick={c.remove} className="h-5 w-5 rounded-full text-sm leading-none hover:bg-black/5">×</button>
-              </span>
-            ))}
-            <button type="button" onClick={clearAll} className="text-xs font-semibold text-primary">Limpar tudo</button>
-          </div>
-        )}
+        <FilterChips chips={chips} onClear={clearAll} />
 
         <div className="flex flex-wrap items-center gap-2">
           {GROUP_ORDER.map((g) => (
@@ -348,15 +337,6 @@ function CrmList({ initialSearch }: { initialSearch?: ViewState["search"] }) {
 
       <NewClientDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(id) => navigate(`/clientes/${id}`)} />
     </div>
-  );
-}
-
-function FacetRow({ label, hint, on, dim, onPick }: { label: string; hint: string; on: boolean; dim?: boolean; onPick: () => void }) {
-  return (
-    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onPick}
-      className={cn("flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-[13px] font-medium", on ? "bg-secondary" : "hover:bg-muted", dim && "opacity-50")}>
-      <span>{label}</span><span className="text-xs text-muted-foreground">{hint}</span>
-    </button>
   );
 }
 

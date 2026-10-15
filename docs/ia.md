@@ -26,6 +26,13 @@ Toda a IA da aplicação passa por um único módulo, `server/_core/ai/` (ver o
      da UE que tenha os modelos.
    - `GOOGLE_SERVICE_ACCOUNT_JSON=<o JSON, em texto ou base64>`
 3. O Vertex ganha à `GEMINI_API_KEY`. Quando tudo funcionar, podes apagar a chave.
+   - **Ficheiros pessoais inteiros** (documentos e CV do RH: `AI_HR_AUTOFILL` e
+     `AI_HR_EMAIL_ATTACHMENTS`) **só correm em Vertex AI numa região da UE**
+     (`europe-*`, menos `europe-west2` Londres e `europe-west6` Zurique; ou `eu`).
+     Com o Google AI Studio (ou o fornecedor antigo) não correm, mesmo com o
+     interruptor ligado. Regra em `shared/aiLimits.ts`, aplicada no `runAi` e
+     no `aiFeatureAvailable`; as Definições → Automações dizem ao lado do
+     interruptor onde está a IA hoje.
 4. Confirma que os modelos escolhidos existem na região escolhida. Se não
    existirem, muda os `AI_MODEL_*`.
 
@@ -90,35 +97,44 @@ faz sozinha): [`docs/ia-inventario.md`](ia-inventario.md).
 | Interruptor | Funcionalidade (`feature`) | Nível |
 |---|---|---|
 | `AI_ENABLED` | todas (interruptor geral) | — |
-| `AI_EXPENSE_OCR` | `expense_ocr`: leitura de faturas nas Despesas | lite (imagem) / fast (PDF) |
+| `AI_EXPENSE_OCR` | `expense_ocr`: leitura de faturas nas Despesas e dos talões nas Despesas do turno (Passagem de turno → `shiftHandover.readReceipt`, mesmo `extractInvoice`) | lite (imagem) / fast (PDF) |
 | `AI_REVIEW_DRAFTS` | `review_reply`: rascunho de resposta às críticas Google (4 pontos de entrada) | lite |
 | `AI_RADIO` | `radio_transcription` + `radio_summary` | lite |
-| `AI_HANDOVER_SUMMARY` | `handover_summary`: 5 pontos da passagem de turno | lite |
+| `AI_HANDOVER_SUMMARY` | `handover_summary`: 5 pontos da passagem de turno, **só ao entregar** (1.ª gravação) e no botão "Resumir agora"; as edições não chamam a IA (o resumo fica "desatualizado", `aiSummaryVersion` < `version`, migração 0600) | lite |
 | `AI_WHATSAPP_ASSIST` | `whatsapp_summary` + `whatsapp_reply` | lite |
 | `AI_QUIZ` | `quiz_generation`: perguntas a partir dos manuais e da base de conhecimento (texto com `redactPii`; o PDF anexo vai inteiro) | fast (manual) / lite (base) |
-| `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH (só campos vazios; o IBAN só entra na hora para quem o pode mudar na hora — os outros ficam com pedido ao RH, D49) | lite. **Desligado por omissão** até decisão sobre o RGPD. |
-| `AI_HR_EMAIL_ATTACHMENTS` | `hr_email_attachments`: anexos dos emails do RH (CV, documentos) → candidato (só campos vazios) + resumo para quem entrevista | lite. **Desligado por omissão**. Corre no varrimento de 15 em 15 min (2 anexos por vez), só emails dos últimos 14 dias, cada anexo uma vez (`rh_attachment_reads`). NIF/BI-CC/carta só o RH vê. |
-| `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz) | lite |
+| `AI_HR_AUTOFILL` | `hr_autofill`: documentos do RH (só campos vazios; o IBAN só entra na hora para quem o pode mudar na hora — os outros ficam com pedido ao RH, D49) | lite. **Desligado por omissão.** **Só corre com Vertex AI na UE.** |
+| `AI_HR_EMAIL_ATTACHMENTS` | `hr_email_attachments`: anexos dos emails do RH (CV, documentos) → candidato (só campos vazios) + resumo para quem entrevista | lite. **Desligado por omissão**. **Só corre com Vertex AI na UE.** Corre no varrimento de 15 em 15 min (2 anexos por vez), só emails dos últimos 14 dias, cada anexo uma vez (`rh_attachment_reads`). NIF/BI-CC/carta só o RH vê. |
+| `AI_QUIZ_LIVE` | `quiz_live`: em cada jogo do Quiz, 10 perguntas novas a partir dos trechos da base de conhecimento (visibilidade de quem joga) e dos manuais publicados, com `redactPii`; evita as que a pessoa já teve. A resposta certa fica em `training_quiz_ai_questions` (0660) e a correção é no servidor. Falha/desligada → perguntas fixas | fast. **Ligado por omissão** (Jorge, 14 out 2026: só corre quando a pessoa carrega em **Jogar** e só grava as perguntas dessa tentativa). Limite: 5 jogos por pessoa por dia (a tentativa é reservada antes do pedido: cliques repetidos não passam o limite); 30 s, sem nova tentativa. Quem gere só vê as perguntas de documentos que pode ver |
+| `AI_KB_FAQ` | `kb_faq`: FAQs a partir da base de conhecimento (só documentos visíveis para todos, nunca a ajuda da app), 1 pedido por documento com `redactPii`; até 3 FAQs publicadas e marcadas "IA" (`faqs.source`, `sourceKbDocId`, `aiKey`, 0660), sem repetir as que existem nem as arquivadas | lite. Corre em **Gerar agora** (Formação → FAQs, quem gere) e no trabalho semanal `kb-faq-weekly` (segunda a partir das 09:30), que tem o seu interruptor `KB_FAQ_WEEKLY` — **desligado por omissão** (escreve sozinho). "Gerar agora": 3/hora e 8/dia; uma corrida de cada vez |
+| `AI_TRAINING_TUTOR` | `training_tutor`: tutor da Formação (chat nos manuais, vídeos, percursos e quiz). Também `training_search`: "Procurar formação" escolhe no catálogo (só títulos e resumos, `redactPii`; 6/min e 60/dia por pessoa); falha ou desligado → pesquisa por palavras | lite |
 | `AI_COMPLAINT_TRIAGE` | `complaint_triage`: triagem das reclamações por email | lite |
 | `AI_REVIEW_AUTO_DRAFTS` | `review_auto_draft`: rascunho automático para cada crítica nova | lite |
 | `AI_WHATSAPP_TRIAGE` | `whatsapp_triage`: intenção e urgência das conversas | lite |
 | `AI_LOST_FOUND_MATCH` | `lost_found_match`: correspondências perdido ↔ achado | lite |
 | `AI_CRM_IDENTITY` | `crm_identity`: "é a mesma pessoa?" nas sugestões duvidosas de Rever fichas (só o 1.º nome e factos; junta sozinha só com ≥ 85 %) | lite. **Desligado por omissão.** |
 | `AI_ASSISTANT` | `assistant`: assistente (chat) em todas as páginas | lite |
+| `AI_ASSISTANT_MEMORY` | Memória do Multis (não chama a IA): "Lembra-te…" grava a nota da pessoa sem IA (até 30, 300 car.); notas da empresa só admin/super_admin (até 100); as ativas vão no contexto do turno (`<memoria>`, fora da cache). `assistant_memories` (0605); arquivar não apaga | — (sem IA). **Ligado por omissão** (Jorge, 8 out 2026). Desligado: não grava, não usa as notas e esconde a Memória. |
 | `AI_OPS_BRIEFING` | `ops_briefing`: parágrafo do briefing diário por cidade | lite |
 | `AI_WEEKLY_REPORTS` | `weekly_report`: texto dos relatórios de segunda (direção, marketing, operações, RH) | lite |
-| `AI_ANOMALY_EXPLAIN` | `anomaly_explain`: uma linha por anomalia (1 chamada por corrida) | lite |
+| `AI_ANOMALY_EXPLAIN` | `anomaly_explain`: uma linha por anomalia (1 chamada por corrida); condutores e extras veem o alerta sem a linha da IA | lite |
 | `AI_AVAILABILITY_CLASSIFY` | `availability_classify`: respostas de disponibilidade pouco claras | lite |
-| `AI_LEAD_SCORING` | `lead_summary` + `lead_first_contact`: resumo da pontuação e rascunho do 1.º contacto (a aprovar) | lite |
+| `AI_LEAD_SCORING` | `lead_summary` + `lead_first_contact`: resumo da pontuação e rascunho do 1.º contacto (a aprovar); os dois só para quem edita as Leads | lite |
 | `AI_EVALUATION_EXPLAIN` | `evaluation_explain`: explicação da avaliação | lite |
 | `AI_HANDOVER_REPEATS` | `handover_repeats`: pendentes repetidos e resumo semanal da passagem | lite |
-| `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar) | lite |
-| `AI_MAIL_ROUTING` | `mail_routing`: separar os emails novos das caixas gerais pelas caixas do tema (só move; nunca responde) | lite. **Desligado por omissão.** |
+| `AI_TASKS_FROM_TEXT` | `tasks_from_text`: tarefas a partir de texto (confirmadas antes de criar); team leader para cima | lite |
+| `AI_MAIL_ROUTING` | `mail_routing`: a triagem dos emails (14 out 2026, `shared/mailTriage.ts`): UMA leitura por email recebido nas caixas partilhadas (nunca as pessoais; também as respostas) dá a categoria (`box`), o sim/não de haver uma queixa / um objeto em qualquer parte do email (`complaintMentioned`, `lostItemMentioned`) e as certezas de reclamação (`complaint`) e de objeto perdido (`lostItem`), pelo sentido — o pedido descreve cada categoria por uma frase, sem listas de palavras (teste). Conversa nova → caixa do tema; não percebeu (abaixo de `ai.commsRouting.minConfidence`, 0,7) → info; lixo fica. **Falhou → nada se mexe** e volta a ser lida (até 3×). Antes da IA, só regras óbvias: enviados/sistema/notificações de reserva, o que uma pessoa mexeu, reclamacoes@/perdidos@, envios em massa pelos cabeçalhos, avisos de avaliação pelo remetente, aviso de ocorrência da app pelo formulário, Livro de Reclamações pelo remetente. WhatsApp: as conversas NOVAS pela intenção da triagem (sem 2.ª chamada). Recrutamento em 1.º contacto → lead + candidatura. Uma linha por mensagem em `comms_ai_routing` (0595, 0655) | lite. **Ligado por omissão** (Jorge, 8 out 2026). Teto `ai.commsRouting.perRun` (10) por sincronização; o resto no `ai-comms`. Mensagem nova até 2500 car. + o citado/reencaminhado até 1200 como contexto, com `redactPii`; só o 1.º nome. O sim/não e as certezas de caso vêm primeiro e são obrigatórias no esquema (o modelo não os pode omitir); "mencionou" vale pelo menos "Por confirmar" (`caseScoresOf`) — um modelo pequeno vê a queixa de passagem mas dá-lhe pouca certeza. Um email só em HTML lê-se pelo HTML (não só o resumo do Gmail). Avaliação: Definições → Comunicação → "Testar a triagem" / `scripts/eval-mail-triage.ts` (três corpora: `server/fixtures/mailTriageCorpus.ts`, o de controlo `server/fixtures/mailTriageHoldout.ts` e o cego da auditoria `server/fixtures/mailTriageBlind.ts`; `--dump`/`--answers` para a avaliação sem chave). |
+| `AI_MAIL_COMPLAINTS` | Lote 57 / 14 out 2026: sem funcionalidade própria — usa a leitura do `mail_routing`. Certeza de reclamação ≥ `ai.mailComplaints.createMinConfidence` (0,85) → a reclamação nasce pelo pipeline das reclamações (`server/complaintMailIntake.ts`, sem aviso de receção ao cliente) ou o email junta-se à aberta do mesmo cliente/conversa/reserva; ≥ `suggestMinConfidence` (0,5) → nasce **"Por confirmar (IA)"** (`complaints.aiUnconfirmed`). A conversa vai para a caixa Reclamações, por ler. Uma linha por conversa em `complaint_mail_intake` (0630, 0655) | **Ligado por omissão** (pedido do Jorge, 12 e 14 out 2026). Precisa de `AI_MAIL_ROUTING`. Nunca responde ao cliente. |
+| `AI_MAIL_LOST_FOUND` | O mesmo para os perdidos (certeza `lostItem`; `lost_found_items.origin = 'ia'`, `aiUnconfirmed`) e a caixa Perdidos | **Desligado por omissão.** |
+| `AI_MAIL_NOTICES` | Avisos de avaliação e elogios → caixa Críticas, lidos (nada no módulo); aviso de ocorrência da app → liga à ocorrência da Multipark (só leitura, `server/mailNotices.ts`), caixa Ocorrências, lido | **Desligado por omissão.** Sem IA nos avisos (regra). |
+| `AI_MAIL_BACKFILL` | Varrimento dos emails dos últimos `ai.mailBackfill.days` (30) nas caixas partilhadas ainda sem caso, `perRun` (6) por corrida no trabalho `mail-backfill` | **Desligado por omissão.** Idempotente (`comms_ai_routing.sweptAt`/`category`); não baralha caixas de tema. |
+| `AI_MAIL_PARTNER_CASES` | Ronda 2 (14 out 2026): uma reclamação ou um perdido que um parceiro (contacto das Parcerias: agência, hotel, comparador) manda em nome de um cliente abre o caso — sempre "Por confirmar (IA)"; o email do parceiro nunca fica como o do cliente nem junta casos (só pela conversa, matrícula ou reserva) | **Desligado por omissão** (antes: parceiros nunca abriam caso). |
+| `AI_MAIL_ALIAS_FILTER` | reclamacoes@/perdidos@: só não abre o caso quando a IA diz lixo com ≥ 90 % e sem sinal de caso | **Desligado por omissão.** IA falhou → abre na mesma. |
 | `AI_MAIL_DRAFT` | `mail_reply`: "Rascunho IA" na Comunicação (fica no editor) | lite |
 | `AI_WEB_INSIGHT` | `web_insight`: resumo semanal do Web & SEO | lite |
 | `AI_PAGESPEED_EXPLAIN` | `pagespeed_explain`: o que corrigir primeiro na PageSpeed | lite |
 | `AI_GBP_POSTS` | `gbp_post_draft`: rascunho de publicações do Google Business | lite |
-| `AI_KNOWLEDGE` | `knowledge_extract` + `knowledge_embed`: índice da base de conhecimento (PDFs sem Drive, embeddings) | lite / embed |
+| `AI_KNOWLEDGE` | `knowledge_extract` + `knowledge_embed`: índice da base de conhecimento (PDFs sem Drive, embeddings); sincroniza sozinha quando há alterações nas pastas do Drive | lite / embed |
 
 Quando uma funcionalidade está desligada, a UI mostra a mensagem "Esta
 funcionalidade de IA está desligada." e não se faz nenhum pedido. Os botões
@@ -203,6 +219,8 @@ tabelas na migração 0125.
   últimas 8 semanas (reservas por parque e por canal, gasto e ROAS do
   marketing) e, nas despesas, valores fora do normal (mediana/MAD) e possíveis
   duplicados. Aparecem como "Alertas" em Operações, Despesas e Marketing.
+  A linha da IA (`AI_ANOMALY_EXPLAIN`) faz-se uma vez por dia nesta corrida;
+  condutores e extras veem o alerta, mas o servidor não lhes manda a linha da IA.
 - **Relatórios semanais** (`WEEKLY_REPORTS`, segunda de manhã): direção,
   marketing, operações e RH, a quem tem o módulo com alcance nacional; resumo
   semanal da passagem de turno por cidade.
@@ -214,7 +232,10 @@ tabelas na migração 0125.
   `seja_motorista` continua como antes).
 - **Avaliação**: explicação a partir das linhas das regras (nunca recalcula);
   o team leader pode escondê-la.
-- **Tarefas a partir de texto**: a IA propõe, a pessoa confirma.
+- **Tarefas a partir de texto**: a IA propõe, a pessoa confirma. Só team
+  leader para cima (o servidor recusa a extras e condutores).
+- **Passagem de turno**: o resumo da IA faz-se ao entregar a passagem e no
+  botão "Resumir agora"; editar depois não chama a IA.
 
 Custos: pedidos curtos, dados pessoais tapados (`redactPii`), teto de 12
 chamadas por corrida do cron e cache por hash (leads, avaliação).
@@ -255,7 +276,9 @@ chamadas por corrida do cron e cache por hash (leads, avaliação).
   chegar. Nas respostas públicas (críticas), os marcadores são retirados.
 - Dos nomes, só se envia o primeiro.
 - As imagens e PDFs (faturas, documentos do RH) vão tal como estão. Por isso o
-  `AI_HR_AUTOFILL` está desligado por omissão.
+  `AI_HR_AUTOFILL` e o `AI_HR_EMAIL_ATTACHMENTS` estão desligados por omissão
+  e **só correm com Vertex AI numa região da UE** (ver secção 1): fora disso
+  não correm, mesmo ligados. O rádio, as faturas e o resto não dependem disto.
 - Os logs do servidor só têm metadados: funcionalidade, código de erro e modelo.
 
 ## 6. Erros
@@ -280,7 +303,34 @@ fecha ao mudar de página e volta à mesma conversa (estado em `localStorage`:
 - **"Como se usa"**: a ajuda está em `docs/ajuda/*.md`, um ficheiro curto por
   módulo. Depois de mudar um ficheiro, corre `pnpm tsx scripts/gen-ajuda.ts`
   (um teste avisa se te esqueceres). A escolha do ficheiro é feita por
-  palavras-chave, sem IA. Só os 1–2 ficheiros relevantes vão no pedido.
+  palavras-chave (sem IA) e, com a base de conhecimento ligada ao assistente
+  (`useInAssistant`), também **pelo significado**: a MESMA consulta à base
+  (um só vetor da pergunta, `helpTopK`) traz os trechos da ajuda (fonte
+  "help"), que se juntam aos das palavras-chave — no máximo **3 páginas**, sem
+  repetir (`combineHelpDocs`). Base desligada ou em baixo → só palavras-chave
+  (1–2 páginas, como antes). De uma página longa vai a parte que interessa à
+  pergunta (`excerptHelp`), não só o início; o bloco `<ajuda>` tem até 6000
+  caracteres repartidos pelas páginas.
+- **Memória** (Multis 2, interruptor `AI_ASSISTANT_MEMORY`): uma mensagem a
+  começar por "Lembra-te" / "Memoriza" / "Não te esqueças" grava a nota da
+  pessoa **sem chamar a IA** (`shared/assistantMemory.ts` →
+  `parseRememberCommand`; uma pergunta, a acabar em "?", não conta). Até 30
+  notas por pessoa e 100 da empresa (só admin/super_admin; ficam em
+  `activity_logs`). As ativas vão no contexto do turno num bloco `<memoria>`
+  (nunca no prompt estável, para não partir a cache); acima de ~3000
+  caracteres as da empresa escolhem-se pelas palavras da pergunta. O prompt
+  diz para as seguir como preferências, nunca para contornar permissões ou
+  cidades. Arquivar marca `archivedAt` (nada se apaga).
+- **👍/👎 e "Perguntas que falharam"** (`assistant_feedback`, 0605): cada
+  pessoa avalia as respostas das suas conversas (mudar de ideias atualiza a
+  mesma linha); depois de cada resposta o servidor marca sozinho (auto = 1)
+  as que dizem que não sabe / não tem acesso / não encontrou nos manuais e as
+  em que uma ferramenta devolveu erro (`detectUnanswered`). Guarda cópia da
+  pergunta, da resposta (até 4000 car.), da página, das ferramentas e da
+  ajuda usada (`ai_chat_messages.helpFiles`/`path`), porque as conversas se
+  apagam aos 30 dias; esta tabela não tem purga. Lista em `/multis/falhas`
+  (só admin/super_admin): período 7/30/90 dias, motivo, por tratar/tratadas,
+  "Marcar como tratada" com nota e Desfazer.
 - **Perguntas aos dados**, só de leitura, através de ferramentas: reservas
   (contagens por dia/cidade/parque), Extras-Dia (escalados e horas em falta),
   casos em aberto (reclamações, ocorrências, perdidos), WhatsApp por

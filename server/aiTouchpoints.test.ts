@@ -45,7 +45,9 @@ import { generateAiSummary } from "./shiftHandoverAutomation";
 import { generateQuizDrafts } from "./trainingAttempts";
 import { aiAssist } from "./whatsappInboxOps";
 
-const KEYS = ["GEMINI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY", "AI_HR_AUTOFILL", "AI_ENABLED", "AI_MONTHLY_BUDGET_EUR"];
+const KEYS = ["GEMINI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY", "AI_HR_AUTOFILL", "AI_ENABLED", "AI_MONTHLY_BUDGET_EUR", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"];
+/** 49g (Jorge, 8 out 2026): os documentos do RH só correm com a IA em Vertex AI na UE. */
+const vertexEu = () => { process.env.GOOGLE_GENAI_USE_VERTEXAI = "true"; process.env.GOOGLE_CLOUD_PROJECT = "multipark"; process.env.GOOGLE_CLOUD_LOCATION = "europe-west1"; };
 let saved: Record<string, string | undefined> = {};
 
 function sdk(text: string) {
@@ -191,8 +193,16 @@ describe("documentos do RH", () => {
     expect(h.gen).not.toHaveBeenCalled();
   });
 
+  it("ligado mas com o Google AI Studio: não corre (só Vertex AI na UE)", async () => {
+    process.env.AI_HR_AUTOFILL = "on";
+    const r = await autofillFromDocument({ employeeId: 1, docType: "id_card", mimeType: "image/png", base64: "eA==", userId: 1 });
+    expect(r.skipped).toMatch(/desligada ou não configurada/);
+    expect(h.gen).not.toHaveBeenCalled();
+  });
+
   it("ligado: saída estruturada e preenche só campos vazios", async () => {
     process.env.AI_HR_AUTOFILL = "on";
+    vertexEu();
     h.gen.mockResolvedValueOnce(sdk(JSON.stringify(doc)));
     h.db = createFakeDb((q) => (q.sql.includes("FROM employees") ? [[{ nif: null, birthDate: null, nationality: "Brasileira", address: null, nib: null }]] : [[]]));
     const r = await autofillFromDocument({ employeeId: 4, docType: "id_card", mimeType: "image/png", base64: "eA==", userId: 1 });
@@ -203,6 +213,7 @@ describe("documentos do RH", () => {
 
   it("26b (D49): IBAN lido → pedido ao RH para quem não o muda na hora (nunca grava direto)", async () => {
     process.env.AI_HR_AUTOFILL = "on";
+    vertexEu();
     h.bankReq.mockClear();
     h.gen.mockResolvedValueOnce(sdk(JSON.stringify({ ...doc, iban: "PT50 0002 0123 1234 5678 9015 4" })));
     h.db = createFakeDb((q) => (q.sql.includes("FROM employees") ? [[{ nif: null, birthDate: null, nationality: null, address: null, nib: null }]] : [[]]));
@@ -214,6 +225,7 @@ describe("documentos do RH", () => {
 
   it("26b (D49): quem muda o IBAN na hora (back office, supervisor, admin) grava direto, sem pedido", async () => {
     process.env.AI_HR_AUTOFILL = "on";
+    vertexEu();
     h.bankReq.mockClear();
     h.gen.mockResolvedValueOnce(sdk(JSON.stringify({ ...doc, iban: "PT50000201231234567890154" })));
     h.db = createFakeDb((q) => (q.sql.includes("FROM employees") ? [[{ nif: null, birthDate: null, nationality: null, address: null, nib: null }]] : [[]]));
@@ -226,6 +238,7 @@ describe("documentos do RH", () => {
 
   it("extractDocument devolve null (sem lançar) se a resposta for inválida", async () => {
     process.env.AI_HR_AUTOFILL = "on";
+    vertexEu();
     h.gen.mockResolvedValue(sdk("isto não é JSON"));
     expect(await extractDocument("image/png", "eA==")).toBeNull();
   });

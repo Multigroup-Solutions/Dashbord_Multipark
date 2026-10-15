@@ -1,6 +1,6 @@
 /**
  * Comunicação — corrida da sincronização (agendador /api/cron/tick: de 5 em
- * 5 min, ou de hora a hora como rede de segurança quando o push do Gmail está
+ * 5 min, ou 1×/dia como rede de segurança quando o push do Gmail está
  * saudável; prazo por corrida, resumível) e o que acontece a cada email
  * guardado (TODO o email entra pela API do Gmail — não há IMAP):
  *
@@ -19,8 +19,10 @@
  * própria pessoa).
  */
 import { sql } from "drizzle-orm";
-import { aliasPipeline, canSeeMailbox, configuredPipelines, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
+import { aliasPipeline, canSeeMailbox, isAutomatedSender, isCompanyAddress, parseMailOwner, type MailboxAddress, type MailboxConfig, type MailPipeline } from "../../shared/mail";
+import { DIRECT_CASE_PIPELINES, bulkListMail, forwardedExternalSender, preTriageMail, senderKindOf } from "../../shared/mailTriage";
 import type { InboundAlias } from "../emailParse";
+import { readableMailText } from "../complaintEmail";
 import { gmailThreadIdToImap } from "./parse";
 import { syncAccount, type AccountSyncResult, type StoredEvent } from "./sync";
 import {
@@ -44,6 +46,8 @@ export interface MailSyncReport {
   errors: string[];
   aiTriaged?: number;
   watchRenewed?: number;
+  /** Emails novos que a IA leu para separar pelas caixas nesta corrida (teto em "ai.commsRouting"). */
+  aiRouted?: number;
 }
 
 /** Só emails recebidos nestes últimos dias criam registos (a importação inicial de 90 d não ressuscita casos antigos). */
@@ -99,7 +103,12 @@ export const dbAutoLinkDeps: AutoLinkDeps = {
 
 // ─── Pós-processamento de cada email guardado ───────────────────────────────
 
-async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<GmailApi, "getAttachment">, pipeline: MailPipeline): Promise<{ targetModule: string; targetId?: number; existing?: true } | null> {
+async function runPipeline(
+  e: Pick<StoredEvent, "parsed" | "result">,
+  api: Pick<GmailApi, "getAttachment">,
+  pipeline: MailPipeline,
+  aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null,
+): Promise<{ targetModule: string; targetId?: number; existing?: true } | null> {
   const p = e.parsed;
   if (!p.rfcMessageId) return null;
   const { processInboundEmail } = await import("../jobs/emailInboundSync");
@@ -123,6 +132,7 @@ async function runPipeline(e: Pick<StoredEvent, "parsed" | "result">, api: Pick<
       }
       return list;
     },
+    aiIntake,
   });
   if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, out.status).catch(() => {});
   if (out.status === "processed") return out.routed;
@@ -190,21 +200,63 @@ async function notifyAliasOwner(e: StoredEvent, mailbox: MailboxConfig, alias: M
   return true;
 }
 
-export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains: Record<string, string[]>) {
+export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains: Record<string, string[]>, opts: { deadlineAt?: number } = {}) {
   const windowMs = MAIL_PIPELINE_WINDOW_DAYS * 86_400_000;
+  // Teto de emails lidos pela IA nesta corrida (o resto fica para o varrimento ai-comms).
+  const routingRun: { left: number; deadlineAt?: number; loaded?: boolean } = { left: 0, deadlineAt: opts.deadlineAt };
+  const loadBudget = async () => {
+    if (routingRun.loaded) return;
+    routingRun.loaded = true;
+    try {
+      const { getSetting } = await import("../appSettings");
+      const { commsRoutingSettings } = await import("../../shared/commsRouting");
+      routingRun.left = commsRoutingSettings(await getSetting("ai.commsRouting")).perRun;
+    } catch { routingRun.left = 10; }
+  };
+  const company = (a: string) => isCompanyAddress(a, brandDomains);
   return async (e: StoredEvent) => {
     const p = e.parsed;
     const mailbox = e.classification.mailboxKey ? e.account.mailboxes.find((m) => m.key === e.classification.mailboxKey) ?? null : null;
     const alias = e.classification.alias ?? null;
     let routed: { targetModule: string; targetId?: number; existing?: true } | null = null;
+    let pipelineUsed: string | null = null;
+    const external = !!p.fromEmail && !isCompanyAddress(p.fromEmail, brandDomains)
+      && !isAutomatedSender(p.fromEmail, { autoSubmitted: p.autoSubmitted, precedence: p.precedence, listUnsubscribe: p.listUnsubscribe, listId: p.listId }, { ownListDomains: Object.values(brandDomains).flat() });
     // 1) Pipeline temático — só emails RECEBIDOS (de pessoas), recentes, de caixas partilhadas.
     if (!p.outbound && !e.classification.personal && !p.systemMail) {
-      const accountPipelines = [...configuredPipelines(e.account.mailboxes).keys()];
-      const pipeline = aliasPipeline(mailbox, alias, p.subject, accountPipelines);
+      let pipeline = aliasPipeline(mailbox, alias, p.subject);
       const recent = p.sentAt ? Date.now() - Date.parse(p.sentAt.replace(" ", "T") + "Z") <= windowMs : false;
-      if (pipeline && recent) {
+      // Lote 57: o cliente responde numa conversa de outra caixa que a IA ligou
+      // a uma reclamação → a resposta vai para ESSA reclamação (volta a "Em
+      // Análise"), como se tivesse vindo pela reclamacoes@. Nunca cria outra
+      // nem escreve ao cliente. Só respostas de pessoas de fora da empresa.
+      // 14 out 2026: o mesmo para um perdido que a IA ligou à conversa.
+      let aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null;
+      if (!pipeline && recent && !e.result.newThread && e.result.messageId && external) {
+        const { intakeComplaintOfThread, intakeLostFoundOfThread } = await import("../complaintMailIntake");
+        const complaintId = await intakeComplaintOfThread(e.result.threadId);
+        if (complaintId) { pipeline = "reclamacoes"; aiIntake = { forceComplaintId: complaintId, replyOnly: true }; }
+        else {
+          const lostFoundId = await intakeLostFoundOfThread(e.result.threadId);
+          if (lostFoundId) { pipeline = "perdidos"; aiIntake = { forceLostFoundId: lostFoundId, replyOnly: true }; }
+        }
+      }
+      pipelineUsed = pipeline;
+      // 14 out 2026: reclamacoes@ / perdidos@ — tudo o que lá chega é caso,
+      // salvo se a IA tiver a CERTEZA de que é lixo (interruptor próprio,
+      // desligado por omissão). A IA falhou ou sem leitura nesta corrida → caso.
+      let noiseByAi = false;
+      if (pipeline && recent && !aiIntake && DIRECT_CASE_PIPELINES.has(pipeline) && e.result.messageId && mailbox) {
+        await loadBudget();
+        noiseByAi = await aliasNoiseByAi(e, mailbox, routingRun, company).catch(() => false);
+        if (noiseByAi) {
+          await setMessagePipeline(e.result.messageId, pipeline, "ai_noise").catch(() => {});
+          report.aiRouted = (report.aiRouted ?? 0) + 1;
+        }
+      }
+      if (pipeline && recent && !noiseByAi) {
         try {
-          routed = await runPipeline(e, api, pipeline);
+          routed = await runPipeline(e, api, pipeline, aiIntake);
           if (routed && !routed.existing && ["complaint", "lostfound", "review", "incident"].includes(routed.targetModule)) report.pipelineCreated++;
         } catch (err: any) {
           // O caso NÃO foi criado: fica marcado para nova tentativa e o cron
@@ -241,65 +293,191 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     }
     // 3) Avisos (conversa nova ou reaberta, recebida, não automática).
     const createdCase = !!routed && ["complaint", "lostfound", "review", "incident", "incident_dup"].includes(routed.targetModule);
-    const automated = !!(await (await db()).execute(sql`SELECT automated FROM mail_messages WHERE id = ${e.result.messageId ?? 0}`).then((r) => Number(rowsOf(r)[0]?.automated ?? 0)));
+    const automatedValue = Number(rowsOf(await (await db()).execute(sql`SELECT automated FROM mail_messages WHERE id = ${e.result.messageId ?? 0}`))[0]?.automated ?? 0);
+    const automated = automatedValue !== 0;
     const fresh = !p.outbound && !automated && (e.result.newThread || e.result.reopened);
-    // 2b) Caixa geral (info@): a IA separa a conversa NOVA pela caixa do tema
-    // (17f, interruptor AI_MAIL_ROUTING). O aviso vai a quem vê a caixa nova.
+    // 2b) Triagem (Jorge, 8 e 14 out 2026 — shared/mailTriage.ts): a IA lê cada
+    // email recebido das caixas PARTILHADAS e decide pelo sentido: reclamação /
+    // perdido → o caso + a caixa do caso, por ler; crítica → Críticas, lida;
+    // ocorrência → Ocorrências; o resto → a caixa do tema (só conversas novas).
+    // Avisos de formato conhecido (avaliação publicada, ocorrência da app,
+    // Livro de Reclamações) e envios em massa vão por regra, sem IA. O aviso
+    // de email novo vai a quem vê a caixa nova.
     let noticeBox: MailboxConfig | null = mailbox;
-    if (fresh && e.result.newThread && mailbox?.aiRoute && !createdCase && !e.classification.personal) {
-      const target = await routeNewThreadByAi(e.result.threadId, mailbox, { subject: p.subject, text: p.text || p.snippet || "" }).catch(() => null);
+    // A IA criou/juntou o caso (o aviso "Nova reclamação" já foi) — sem 2.º aviso de email novo.
+    let aiComplaint = false;
+    let aiLostFound = false;
+    if (mailbox && e.result.messageId) {
+      const target = await triageNewMessage(e, mailbox, {
+        automated: automatedValue, pipeline: pipelineUsed, createdCase, routingRun, loadBudget, api, company,
+        onCase: (r) => {
+          // Só a RECLAMAÇÃO tem o seu aviso ("Nova reclamação" / "por confirmar (IA)"). Ronda 2: um perdido
+          // aberto pela IA não avisa ninguém por si — o aviso de email novo vai a quem vê a caixa Perdidos.
+          if ((r.status === "created" || r.status === "linked") && "complaintId" in r) aiComplaint = true;
+          if ((r.status === "created" || r.status === "linked") && "lostFoundId" in r) aiLostFound = true;
+          if (r.status === "created" && "complaintId" in r) report.pipelineCreated++; // a triagem das reclamações novas corre no fim
+        },
+        onAi: () => { report.aiRouted = (report.aiRouted ?? 0) + 1; },
+      }).catch((err: any) => {
+        console.warn("[mail] triagem falhou:", e.result.threadId, String(err?.message ?? err).slice(0, 160));
+        return null;
+      });
       if (target) noticeBox = target;
+    }
+    // Ronda 3: o perdido que a IA abriu deu a cidade à conversa (pela reserva) — o aviso vai a quem
+    // vê a caixa Perdidos NESSA cidade (antes da triagem a conversa ainda não tinha cidade).
+    if (aiLostFound && projectId == null) {
+      try {
+        const pr = rowsOf(await (await db()).execute(sql`SELECT projectId FROM mail_threads WHERE id = ${e.result.threadId} LIMIT 1`))[0];
+        if (pr?.projectId != null) projectId = Number(pr.projectId);
+      } catch { /* sem cidade: o aviso segue como antes */ }
     }
     let ownerNotified = false;
     if (fresh && mailbox && alias?.owner && e.result.newThread && noticeBox === mailbox) {
       ownerNotified = await notifyAliasOwner(e, mailbox, alias, projectId).catch(() => false);
     }
-    if (fresh && noticeBox?.notify && !createdCase && !ownerNotified) {
+    if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified) {
       await notifyNewMail(e, noticeBox, projectId).catch(() => {});
     }
   };
 }
 
+/** O que a triagem precisa de saber de um email acabado de guardar (BD só nas respostas). */
+async function threadTriageState(threadId: number, newThread: boolean): Promise<{ humanTouched: boolean; threadHasCase: boolean }> {
+  if (newThread) return { humanTouched: false, threadHasCase: false };
+  const d = await db();
+  // Auditoria: uma conversa que uma PESSOA ligou à mão a uma reclamação/perdido é dela — a IA não abre
+  // outro caso numa resposta. (As ligações automáticas não contam: a junção da IA ao caso da mesma
+  // conversa — fio do email, [REC-n] — continua a pôr a resposta no caso certo.)
+  const r = rowsOf(await d.execute(sql`SELECT t.routedBy,
+      EXISTS (SELECT 1 FROM comms_ai_routing c WHERE c.threadId = t.id AND c.correctedBoxKey IS NOT NULL) AS corrected,
+      (SELECT i.status FROM complaint_mail_intake i WHERE i.threadId = t.id LIMIT 1) AS intakeStatus,
+      EXISTS (SELECT 1 FROM mail_links l WHERE l.threadId = t.id AND l.entityType IN ('complaint', 'lost_found')
+        AND l.removedAt IS NULL AND l.source = 'manual') AS hasCase
+    FROM mail_threads t WHERE t.id = ${threadId} LIMIT 1`))[0] ?? {};
+  const intake = r.intakeStatus != null ? String(r.intakeStatus) : null;
+  return {
+    humanTouched: r.routedBy === "manual" || Number(r.corrected ?? 0) === 1 || intake === "dismissed",
+    threadHasCase: Number(r.hasCase ?? 0) === 1 || intake === "created" || intake === "linked" || intake === "creating" || intake === "suggested",
+  };
+}
+
 /**
- * IA (lite): para que caixa do tema vai esta conversa nova de uma caixa geral?
- * Move-a (mailboxKey + routedFromKey/routedBy) e devolve a caixa nova; null =
- * fica (IA desligada, sem resposta clara, erro). Nunca responde ao cliente.
+ * Triagem de UM email acabado de guardar numa caixa partilhada: pré-triagem
+ * (regras), depois a IA (até ao teto da corrida; o resto fica "pending").
+ * Devolve a caixa nova quando a conversa mudou de caixa (null = ficou). Nunca
+ * responde ao cliente.
  */
-export async function routeNewThreadByAi(threadId: number, from: MailboxConfig, mail: { subject: string; text: string }): Promise<MailboxRow | null> {
-  const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
-  if (!(await aiFeatureAvailableFresh("mail_routing"))) return null;
+async function triageNewMessage(
+  e: StoredEvent,
+  from: MailboxConfig,
+  ctx: {
+    automated: number; pipeline: string | null; createdCase: boolean;
+    routingRun: { left: number; deadlineAt?: number }; loadBudget: () => Promise<void>;
+    api: Pick<GmailApi, "getAttachment" | "getMessage"> | null; company: (a: string) => boolean;
+    onCase?: (r: import("../complaintMailIntake").IntakeResult) => void; onAi?: () => void;
+  },
+): Promise<MailboxRow | null> {
+  const p = e.parsed;
+  // O que nunca é lido (enviado, pessoal, sistema, notificação de reserva) sai já, sem ir à BD.
+  if (p.outbound || e.classification.personal || p.systemMail || ctx.automated >= 2) return null;
+  const text = readableMailText({ text: p.text, html: p.html, snippet: p.snippet });
+  const senderKind = senderKindOf({ fromEmail: p.fromEmail, automated: ctx.automated }, ctx.company);
+  const state = await threadTriageState(e.result.threadId, e.result.newThread);
+  const pre = preTriageMail({
+    outbound: p.outbound, personal: e.classification.personal, systemMail: !!p.systemMail, automated: ctx.automated,
+    mailboxKey: from.key, pipeline: ctx.pipeline ?? from.pipeline ?? null, fromEmail: p.fromEmail, text,
+    senderIsCompany: senderKind === "company", createdCase: ctx.createdCase, threadHasCase: state.threadHasCase, humanTouched: state.humanTouched,
+  });
+  if (pre.action === "skip") return null;
+  const d = await db();
+  const t = rowsOf(await d.execute(sql`SELECT projectId FROM mail_threads WHERE id = ${e.result.threadId} LIMIT 1`))[0];
+  const { dbEmailRoutingDeps, routeEmailMessage, applyRuleTriage } = await import("../commsRouting");
+  // O caso que a IA vir aqui nasce com o email já lido (anexos incluídos) — sem voltar ao Gmail.
+  const deps = {
+    ...dbEmailRoutingDeps,
+    async caseIntake(msg: Parameters<NonNullable<typeof dbEmailRoutingDeps.caseIntake>>[0], verdict: Parameters<NonNullable<typeof dbEmailRoutingDeps.caseIntake>>[1]) {
+      const { intakeFromRouting, dbIntakeDeps } = await import("../complaintMailIntake");
+      const r = await intakeFromRouting(msg, verdict, dbIntakeDeps({ parsed: p, api: ctx.api }));
+      ctx.onCase?.(r);
+      return r;
+    },
+  };
+  const msg = {
+    threadId: e.result.threadId, messageId: e.result.messageId!, fromBoxKey: from.key, subject: p.subject ?? "", text,
+    fromName: p.fromName ?? null, fromEmail: p.fromEmail ?? null,
+    attachmentNames: (p.attachments ?? []).filter((a) => !a.inline).map((a) => a.filename).filter(Boolean),
+    projectId: t?.projectId != null ? Number(t.projectId) : null,
+    newThread: e.result.newThread, senderKind, mode: "sync" as const, sentAt: p.sentAt ?? null,
+    forwardedExternal: senderKind === "company" && !!forwardedExternalSender(text, ctx.company),
+    // Só o que a sincronização deu como envio em massa (uma lista NOSSA — Grupo Google que distribui a caixa — é o cliente).
+    listMail: bulkListMail({ automated: ctx.automated, listUnsubscribe: p.listUnsubscribe, listId: p.listId }),
+  };
+  let res: Awaited<ReturnType<typeof routeEmailMessage>>;
+  if (pre.action === "rule") res = await applyRuleTriage(msg, pre, deps);
+  else {
+    await ctx.loadBudget();
+    const before = ctx.routingRun.left;
+    res = await routeEmailMessage(msg, deps, ctx.routingRun);
+    if (ctx.routingRun.left < before) ctx.onAi?.();
+  }
+  if (res.status !== "moved") return null;
   const { listMailboxes } = await import("./store");
-  const all = await listMailboxes();
-  const { availableTargets, parseRoutingAnswer } = await import("../../shared/commsBoxes");
-  const targets = availableTargets(all).filter((t) => t.key !== from.key);
-  if (!targets.length) return null;
-  const { runAi } = await import("../_core/ai/run");
-  const { redactPii } = await import("../_core/ai/pii");
-  const { MAIL_ROUTING_SYSTEM, mailRoutingInput, mailRoutingSchema } = await import("../_core/ai/prompts/comms");
-  const red = redactPii(`${mail.subject}\n${mail.text}`.slice(0, 3000));
+  return (await listMailboxes()).find((b) => b.key === res.boxKey) ?? null;
+}
+
+/**
+ * reclamacoes@ / perdidos@ com o interruptor AI_MAIL_ALIAS_FILTER: a IA tem
+ * a CERTEZA de que é lixo (publicidade, spam, resposta automática)? Só então o
+ * caso não nasce (o email fica na caixa, por ler, com a linha da IA). Sem
+ * leitura nesta corrida, IA desligada ou falhada → false (o caso nasce).
+ */
+async function aliasNoiseByAi(
+  e: StoredEvent, from: MailboxConfig, run: { left: number; deadlineAt?: number }, company: (a: string) => boolean,
+): Promise<boolean> {
+  const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("../_core/featureFlags");
+  const { automationFlagDefault } = await import("../../shared/appSettings");
+  await ensureFeatureFlagOverrides().catch(() => {});
+  if (!isFeatureEnabled("AI_MAIL_ALIAS_FILTER", { defaultEnabled: automationFlagDefault("AI_MAIL_ALIAS_FILTER") })) return false;
+  if (run.left <= 0 || (run.deadlineAt != null && Date.now() + 16_000 > run.deadlineAt)) return false;
+  const { dbEmailRoutingDeps, classifyEmailWithAi } = await import("../commsRouting");
+  if (!(await dbEmailRoutingDeps.enabled())) return false;
+  const p = e.parsed;
+  const text = readableMailText({ text: p.text, html: p.html, snippet: p.snippet });
+  const msg = {
+    threadId: e.result.threadId, messageId: e.result.messageId!, fromBoxKey: from.key, subject: p.subject ?? "", text,
+    fromName: p.fromName ?? null, fromEmail: p.fromEmail ?? null, attachmentNames: [], projectId: null,
+    senderKind: senderKindOf({ fromEmail: p.fromEmail, automated: 0 }, company),
+  };
+  if (!(await dbEmailRoutingDeps.claim(msg))) return false;
+  run.left--;
+  const { aliasGateIsNoise } = await import("../../shared/mailTriage");
+  const { complaintIntakeSettings } = await import("../../shared/complaintIntake");
+  const { getSetting } = await import("../appSettings");
   try {
-    const r = await runAi({
-      feature: "mail_routing", system: MAIL_ROUTING_SYSTEM, schema: mailRoutingSchema,
-      input: mailRoutingInput({ targets, subject: "", body: red.text }),
-      maxTokens: 400, timeoutMs: 15_000, retries: 1, entity: "mail_thread", entityId: threadId,
+    const c = await classifyEmailWithAi(msg, from.label);
+    const noise = aliasGateIsNoise(c.output, complaintIntakeSettings(await getSetting("ai.mailComplaints").catch(() => null)));
+    await dbEmailRoutingDeps.record(msg.messageId, {
+      status: "kept", via: "ai", boxKey: from.key, aiBoxKey: String(c.output.box ?? "").slice(0, 40) || null, confidence: Number(c.output.confidence) || null,
+      category: noise ? "ruido" : from.pipeline === "perdidos" ? "perdidos" : "reclamacoes",
+      reason: noise ? `A IA tem a certeza de que não é ${from.pipeline === "perdidos" ? "um perdido" : "uma reclamação"} (${String(c.output.reason ?? "").slice(0, 120)}) — o caso não foi criado` : String(c.output.reason ?? "").slice(0, 300) || null,
     });
-    const key = parseRoutingAnswer((r.output as any)?.box, targets);
-    if (!key) return null;
-    const moved = await moveThreadToBox(threadId, key, "ai");
-    return moved ? all.find((b) => b.key === key) ?? null : null;
+    return noise;
   } catch (err: any) {
-    console.warn("[mail] separar pela IA falhou:", threadId, String(err?.message ?? err).slice(0, 160));
-    return null;
+    await dbEmailRoutingDeps.record(msg.messageId, { status: "kept", via: "fallback", boxKey: from.key, error: String(err?.code ?? "erro").slice(0, 60), reason: "a IA não leu — o caso foi criado na mesma" }).catch(() => {});
+    return false;
   }
 }
 
 /**
  * Move uma conversa de email para outra caixa (IA ou à mão). Guarda de onde
- * veio (a 1.ª caixa) e quem moveu; a IA nunca muda uma conversa já movida.
+ * veio (a 1.ª caixa) e quem moveu; a IA nunca muda uma conversa movida à
+ * mão. `reroute` (só a IA, quando abriu um caso): pode mudar uma conversa que
+ * ela própria já tinha separado.
  */
-export async function moveThreadToBox(threadId: number, boxKey: string, by: "ai" | "manual"): Promise<boolean> {
+export async function moveThreadToBox(threadId: number, boxKey: string, by: "ai" | "manual", opts: { reroute?: boolean } = {}): Promise<boolean> {
   const d = await db();
-  const guard = by === "ai" ? sql`AND routedBy IS NULL` : sql``;
+  const guard = by === "ai" ? (opts.reroute ? sql`AND (routedBy IS NULL OR routedBy = 'ai')` : sql`AND routedBy IS NULL`) : sql``;
   const res = await d.execute(sql`UPDATE mail_threads SET routedFromKey = COALESCE(routedFromKey, mailboxKey), mailboxKey = ${boxKey}, routedBy = ${by}
     WHERE id = ${threadId} AND mailboxKey IS NOT NULL AND mailboxKey <> ${boxKey} AND needsTriage = 0 ${guard}`);
   const head = Array.isArray(res) ? res[0] : res;
@@ -360,7 +538,16 @@ export async function retryPipelineMessage(messageId: number, opts: { manual?: b
     if (!raw) throw new Error("O email já não está no Gmail.");
     const parsed = parseGmailMessage(raw);
     const threadId = Number(m.threadId);
-    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline);
+    // Lote 57: resposta numa conversa que a IA ligou a uma reclamação → só junta a ESSA (nunca o pipeline normal,
+    // que podia abrir outra reclamação e mandar o aviso de receção).
+    // Auditoria: o mesmo para um perdido que a IA ligou (senão o pipeline normal dos perdidos podia abrir outro caso).
+    let aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null;
+    if (pipeline === "reclamacoes" || pipeline === "perdidos") {
+      const { intakeOfThread } = await import("../complaintMailIntake");
+      const seen = await intakeOfThread(threadId);
+      if (seen) aiIntake = pipeline === "perdidos" ? { forceLostFoundId: seen.lostFoundId, replyOnly: true } : { forceComplaintId: seen.complaintId, replyOnly: true };
+    }
+    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline, aiIntake);
     if (routed?.targetId) {
       const links = await proposeLinks({ contactEmail: null, subject: "", bodyText: "", gmThreadId: null, refs: [], sentAt: null, pipeline: routed }, dbAutoLinkDeps);
       for (const l of links) await addAutoLink({ threadId, messageId, entityType: l.entityType, entityId: l.entityId, confidence: l.confidence, reason: l.reason });
@@ -375,12 +562,12 @@ export async function retryPipelineMessage(messageId: number, opts: { manual?: b
 }
 
 /** Nova tentativa dos casos que falharam (recentes, com tentativas por gastar). */
-export async function retryFailedPipelines(report: MailSyncReport, deadlineAt: number): Promise<void> {
+export async function retryFailedPipelines(report: MailSyncReport, deadlineAt: number, opts: { limit?: number } = {}): Promise<void> {
   const d = await db();
   const since = new Date(Date.now() - MAIL_PIPELINE_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
   const rows = rowsOf(await d.execute(sql`SELECT id FROM mail_messages
     WHERE pipelineStatus = 'error' AND pipelineAttempts < ${MAIL_PIPELINE_MAX_ATTEMPTS} AND direction = 'in' AND sentAt >= ${since}
-    ORDER BY sentAt LIMIT 5`));
+    ORDER BY sentAt LIMIT ${Math.max(1, Math.min(5, opts.limit ?? 5))}`));
   for (const r of rows) {
     if (Date.now() > deadlineAt) break;
     const out = await retryPipelineMessage(Number(r.id));
@@ -443,7 +630,7 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
     try {
       const api = await gmailApiForAccount(acc.key);
       const r = await syncAccount(api, dbSyncStore, acc, {
-        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, workspaceDomains, autoSenders, onStored: makeOnStored(api, report, brandDomains),
+        deadlineAt: opts.deadlineAt - 2_000, backfillDays, brandDomains, workspaceDomains, autoSenders, onStored: makeOnStored(api, report, brandDomains, { deadlineAt: opts.deadlineAt }),
       });
       report.stored += r.stored;
       if (r.partial) report.done = false;
@@ -482,6 +669,10 @@ export async function runMailSync(opts: { deadlineAt: number; onlyAccountKey?: s
   // Push: 2.ª tentativa no fim, para as contas que não couberam no início.
   if (Date.now() + 8_000 < opts.deadlineAt) {
     try { report.watchRenewed = (report.watchRenewed ?? 0) + await renewWatches(accounts.map((a) => a.key), opts.deadlineAt); } catch { /* opcional */ }
+  }
+  // 14 out 2026: uma linha nos logs quando entrou email (só números): diz se está a ler, a separar e a criar casos.
+  if (report.stored > 0 || report.pipelineFailed) {
+    console.log(`[triagem-email] sincronização${opts.onlyAccountKey ? " (push)" : ""}: ${report.stored} email(s) guardado(s), ${report.aiRouted ?? 0} lido(s) pela IA, ${report.pipelineCreated} caso(s) criado(s)${report.pipelineFailed ? `, ${report.pipelineFailed} caso(s) por criar` : ""}${report.done ? "" : " (ficou a meio)"}`);
   }
   return report;
 }

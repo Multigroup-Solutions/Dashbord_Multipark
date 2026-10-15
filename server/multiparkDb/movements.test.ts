@@ -25,13 +25,15 @@ import {
   mapAgentMovementRow,
   mapEngineActionCountRow,
   mergeAgentAggregates,
+  movementKindSql,
+  scheduledCheckOutTextSql,
   movementWindow,
   opDaySql,
   opShiftSql,
   sumAgentSummaries,
   type AggregateFilters,
 } from "./movements";
-import { MOVEMENT_CHANGE_TYPES, movementLabel, movementPhase } from "../../shared/multiparkMovements";
+import { MOVEMENT_CHANGE_TYPES, MOVEMENT_GARAGE_KEYS, MOVEMENT_PATTERNS, MOVEMENT_SPOT_KEYS, classifyMovement, movementLabel, movementPhase, placeValue, posixToJs, scheduledCheckOutMs, type MovementKind } from "../../shared/multiparkMovements";
 
 const ENV = "DATABASE_URL_MULTIPARK";
 let savedEnv: string | undefined;
@@ -62,18 +64,32 @@ describe("motor — contagens agregadas", () => {
     expect(() => assertReadOnlySql(sql)).not.toThrow();
     expect(sql).toContain(`h."actionTime" >= $1::timestamp AND h."actionTime" < $2::timestamp`);
     expect(sql).toContain(`WHERE x.at >= $3::timestamp`);
-    // levar ao parque: movimento logo a seguir a uma recolha, na mesma reserva
-    expect(sql).toContain(`x.ct = 'MOVEMENT' AND x.prev_cat = 'CHECK_IN'`);
-    expect(sql).toContain(`PARTITION BY h.booking_id, (h.ct IN ('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL'))`);
-    // entrega atrasada: desde o 1.º pedido de entrega depois da entrega anterior
-    expect(sql).toContain(`min(s.at) FILTER (WHERE s.ct = 'PENDING_CHECKOUT') OVER (PARTITION BY s.booking_id, s.deliveries_before)`);
+    // 14 out 2026: cada MOVEMENT pelo modifiedFields; levar ao parque = fim sem garagem de origem, ou (formato antigo) o 1.º depois de uma recolha sem contar os inícios
+    expect(sql).toContain(`CASE WHEN h.ct = 'MOVEMENT' THEN ${movementKindSql("h.mf")} END AS mk`);
+    expect(sql).toContain(`x.ct = 'MOVEMENT' AND (x.mk = 'arrumar' OR (x.mk = 'antigo' AND x.prev_cat = 'CHECK_IN'))) AS parking_moves`);
+    expect(sql).toContain(`x.ct = 'MOVEMENT' AND x.mk IN ('arrumar', 'parques', 'antigo')) AS moves`);
+    expect(sql).toContain(`x.ct = 'MOVEMENT' AND x.mk = 'lugar') AS spot_changes`);
+    expect(sql).toContain(`PARTITION BY k.booking_id, (k.ct IN ('CHECK_IN', 'CHECK_OUT', 'MOVEMENT', 'CANCEL') AND k.mk IS DISTINCT FROM 'inicio')`);
+    // tarefa 62: a entrega atrasada saiu — nem hora marcada, nem pedido, nem late_deliveries (mais simples e barato)
+    expect(sql).not.toMatch(/late_deliveries|deliveries_without_schedule|sched_|pending_at|deliveries_before|PENDING_CHECKOUT/);
+    // os inícios de movimento não são ações
+    expect(sql).toContain(`WHERE x.at >= $3::timestamp AND x.mk IS DISTINCT FROM 'inicio'`);
+    expect(sql).toContain(`  FROM seq x`);
+    expect(sql).not.toContain("\\"); // a guarda recusa barras invertidas
     expect(sql).toMatch(/GROUP BY x\.user_id, 3, 4, x\.ct/);
-    expect(params.slice(0, 5)).toEqual(["2026-08-29 02:00:00", w.to, w.from, 15, 600]);
+    expect(params.slice(0, 3)).toEqual(["2026-08-29 02:00:00", w.to, w.from]);
+  });
+
+  it("linha → contagem (com movimentos e mudanças de lugar; tarefa 62: as entregas atrasadas já não vêm)", () => {
+    const r = mapEngineActionCountRow({ user_id: "u1", day: "2026-09-02", shift: "night", change_type: "MOVEMENT", n: 5, parking_moves: 1, late_deliveries: 3, moves: "2", spot_changes: "1", deliveries_without_schedule: 4 });
+    expect(r).toMatchObject({ n: 5, parkingMoves: 1, moves: 2, spotChanges: 1 });
+    expect(r).not.toHaveProperty("lateDeliveries");
+    expect(r).not.toHaveProperty("deliveriesWithoutSchedule");
   });
 
   it("linha → contagem", () => {
     expect(mapEngineActionCountRow({ user_id: "u1", agent_name: " Ana ", day: "2026-09-02", shift: "morning", change_type: "movement", n: "4", parking_moves: "1", late_deliveries: null }))
-      .toEqual({ agentUserId: "u1", agentName: "Ana", day: "2026-09-02", shift: "morning", changeType: "MOVEMENT", n: 4, parkingMoves: 1, lateDeliveries: 0 });
+      .toEqual({ agentUserId: "u1", agentName: "Ana", day: "2026-09-02", shift: "morning", changeType: "MOVEMENT", n: 4, parkingMoves: 1 });
     expect(mapEngineActionCountRow({ user_id: null, day: "2026-09-02", shift: "x", change_type: null, n: 1 }).shift).toBe("night");
   });
 
@@ -244,5 +260,110 @@ describe("vocabulário", () => {
     expect(movementPhase("PENDING_CHECKOUT")).toBe("checkout");
     expect(movementPhase("MOVEMENT")).toBe("move");
     expect(movementPhase(null)).toBe("other");
+  });
+});
+
+// ─── 14 out 2026: o tipo de cada MOVEMENT — JS e SQL com OS MESMOS padrões ─
+describe("14 out 2026 — que movimento foi (início · levar ao parque · mudança de lugar · entre parques)", () => {
+  const samples: Array<[string, MovementKind]> = [
+    ['{"_version":2,"status":{"from":"CHECKED_IN","to":"MOVING"}}', "inicio"],
+    ['{"_version":2,"garageName":{"from":null,"to":"PD"},"spot":{"from":null,"to":"26 / 4"}}', "arrumar"],
+    ['{"_version":2,"garageName":{"from":"PD","to":"PD"},"spot":{"from":"26 / 3","to":"70 / 1"}}', "lugar"],
+    ['{"_version":2,"garageName":{"from":"PD FORA","to":"PD"},"spot":{"from":"4 / 1","to":"75 / 1"}}', "parques"],
+    ['{"_version":2,"garageName":{"from":"PD","to":"COBERTO"},"spot":{"from":"72 / 2","to":"7 / 3"}}', "parques"],
+    ['{"_version":2,"garageName":{"from":"PD","to":"PD FORA"}}', "parques"], // sem lugar (a atribuição falhou)
+    ['{"_version":2,"garageName":{"from":" pd ","to":"PD"},"spot":{"from":"1","to":"2"}}', "lugar"],
+    ['{"spot":{"from":"10","to":"11"}}', "lugar"],
+    ['{"spot":{"from":10,"to":11}}', "lugar"], // números sem aspas
+    ['{"spot":{"from":null,"to":12}}', "arrumar"],
+    ['{"garageName":{"from":3,"to":4}}', "parques"],
+    ['{"garageName":{"from":"","to":"PD"}}', "arrumar"], // vazio = sem origem
+    ['{"garageName": { "to" : "PD" , "from" : "PD" } }', "lugar"], // espaços e ordem trocada
+    ['{"garagem":"G2","lugar":"114","km":"45210"}', "antigo"], // cópia local: só o destino
+    ['{"_version":2,"status":{"from":"MOVING","to":"CHECKED_IN"}}', "antigo"],
+    ['{"garageName":{"from":"PD","to":"PD FO', "parques"], // JSON cortado: decide pelo que se lê, igual no SQL
+    ["isto não é JSON", "antigo"],
+    ["", "antigo"],
+  ];
+  it.each(samples)("%s → %s", (mf, kind) => {
+    expect(classifyMovement(mf)).toBe(kind);
+  });
+
+  it("o SQL usa exatamente os mesmos padrões e a mesma normalização do JS (placeValue)", () => {
+    const k = movementKindSql("mf");
+    for (const pat of [MOVEMENT_PATTERNS.hasKey(MOVEMENT_GARAGE_KEYS), MOVEMENT_PATTERNS.hasKey(MOVEMENT_SPOT_KEYS), MOVEMENT_PATTERNS.plainKey(MOVEMENT_GARAGE_KEYS), MOVEMENT_PATTERNS.moving]) {
+      expect(k).toContain(`'${pat}'`);
+    }
+    for (const key of [...MOVEMENT_GARAGE_KEYS, ...MOVEMENT_SPOT_KEYS]) {
+      expect(k).toContain(`NULLIF(NULLIF(lower(trim(btrim(substring(mf from '${MOVEMENT_PATTERNS.side(key, "from")}'), '"'))), ''), 'null')`);
+    }
+    expect(k).toContain(`mf ~* '${MOVEMENT_PATTERNS.moving}'`); // sem distinguir maiúsculas, como o "i" do JS
+    expect(placeValue('" PD "')).toBe("pd");
+    expect(placeValue("null")).toBeNull();
+    expect(placeValue('""')).toBeNull();
+    expect(placeValue("12")).toBe("12");
+    expect(MOVEMENT_GARAGE_KEYS).toEqual(["garageName", "garagem"]); // sem chaves especulativas (garage, spotId)
+    expect(MOVEMENT_SPOT_KEYS).toEqual(["spot", "lugar"]);
+  });
+
+  it("o SQL do tipo passa a guarda (sem barras invertidas) e lê o texto COMPLETO (não o cortado)", () => {
+    const k = movementKindSql(`COALESCE(h."modifiedFields", '')`);
+    expect(k).not.toContain("\\");
+    expect(() => assertReadOnlySql(`SELECT ${k} AS mk FROM "History" h`)).not.toThrow();
+    // o detalhe (corta a 300) calcula o tipo sobre o texto inteiro
+    const d = buildAgentMovementDetailSql({ window: w, userIds: ["u1"] }).sql;
+    expect(d).toContain(`THEN ${movementKindSql(`COALESCE(h."modifiedFields", '')`)} END AS move_kind`);
+    expect(() => assertReadOnlySql(d)).not.toThrow();
+    // com um texto longo, o tipo depende do texto completo: uma garagem depois dos 1000 caracteres conta
+    const long = `{"_version":2,"notes":"${"x".repeat(1200)}","garageName":{"from":"PD","to":"COBERTO"}}`;
+    expect(classifyMovement(long)).toBe("parques");
+    expect(classifyMovement(long.slice(0, 1000))).toBe("antigo"); // por isso o tipo NUNCA se tira do texto cortado
+  });
+
+  it("hora marcada da entrega: checkOut.from (não o checkOutDate)", () => {
+    const mf = '{"_version":2,"status":{"from":"CHECKING_OUT","to":"CHECKED_OUT"},"checkOut":{"from":"2026-10-10T18:45:00.000Z","to":"2026-10-10T18:47:00.000Z"},"checkOutDate":{"from":"2026-10-09T00:00:00.000Z","to":"2026-10-10"}}';
+    expect(posixToJs(MOVEMENT_PATTERNS.checkOutFrom).exec(mf)?.[1]).toBe("2026-10-10T18:45:00.000Z");
+    expect(posixToJs(MOVEMENT_PATTERNS.checkOutFrom).exec('{"checkOutDate":{"from":"2026-10-09T00:00:00.000Z"}}')).toBeNull();
+    // sem fuso = sem hora marcada (o JS e o SQL usam o mesmo padrão)
+    expect(posixToJs(MOVEMENT_PATTERNS.checkOutFrom).exec('{"checkOut":{"from":"2026-10-10T18:45:00","to":"x"}}')).toBeNull();
+    expect(posixToJs(MOVEMENT_PATTERNS.checkOutFrom).exec('{"checkOut":{"from":"2026-10-10T19:45:00+01:00","to":"x"}}')?.[1]).toBe("2026-10-10T19:45:00+01:00");
+    expect(scheduledCheckOutMs('{"checkOut":{"from":"2026-10-10T18:45:00"}}')).toBeNull();
+    expect(scheduledCheckOutMs('{"checkOut":{"from":"2026-10-10T19:45:00+01:00"}}')).toBe(Date.parse("2026-10-10T18:45:00Z"));
+    expect(scheduledCheckOutTextSql("mf")).toBe(`substring(mf from '${MOVEMENT_PATTERNS.checkOutFrom}')`);
+  });
+
+  it("Condutores e agentes: movimentos e mudanças de lugar pelo tipo; os inícios ficam fora de tudo", () => {
+    const { sql } = buildAgentHistoryAggSql(f());
+    expect(() => assertReadOnlySql(sql)).not.toThrow();
+    expect(sql).toContain(`count(*) FILTER (WHERE h.mk IN ('arrumar', 'parques', 'antigo')) AS moves`);
+    expect(sql).toContain(`count(*) FILTER (WHERE h.mk = 'lugar') AS spot_changes`);
+    expect(sql).toContain(`WHERE h.mk IS DISTINCT FROM 'inicio'`);
+    // o tipo calcula-se UMA vez por linha (numa subconsulta), não uma vez por coluna
+    expect(sql.split(movementKindSql(`COALESCE(h."modifiedFields", '')`)).length - 1).toBe(1);
+    expect(sql).not.toContain(`'UPDATE' AND (h."modifiedFields" ILIKE`);
+    const [r] = mergeAgentAggregates({ history: [{ user_id: "u1", total: 10, t_movement: 6, moves: 3, spot_changes: 1 }], phases: [], occurrences: [], reviews: [] });
+    expect(r).toMatchObject({ movements: 3, spotChanges: 1, byType: { MOVEMENT: 6 } });
+  });
+
+  it("detalhe da Avaliação do dia: o início e a mudança de lugar com o seu nome (o resto como estava)", () => {
+    const base = { id: "h", action_time: "2026-10-03 02:26:24", user_id: "u1" };
+    expect(mapAgentMovementRow({ ...base, change_type: "MOVEMENT", move_kind: "inicio" })).toMatchObject({ changeType: "MOVEMENT_START", moveKind: "inicio" });
+    expect(mapAgentMovementRow({ ...base, change_type: "MOVEMENT", move_kind: "lugar" })).toMatchObject({ changeType: "SPOT_CHANGE" });
+    expect(mapAgentMovementRow({ ...base, change_type: "MOVEMENT", move_kind: "parques" })).toMatchObject({ changeType: "MOVEMENT" });
+    expect(mapAgentMovementRow({ ...base, change_type: "check_out", move_kind: null })).toMatchObject({ changeType: "CHECK_OUT", moveKind: null });
+    expect(movementLabel("MOVEMENT_START")).toBe("Início de movimento (não conta)");
+    expect(movementLabel("SPOT_CHANGE")).toBe("Mudança de lugar");
+    expect(movementPhase("SPOT_CHANGE")).toBe("move");
+  });
+
+  it("getAgentDayMovements (o agentHistorySummary): lê o tipo e devolve os rótulos", async () => {
+    process.env[ENV] = "postgres://ro@db/mp";
+    queryMock.mockResolvedValueOnce([
+      { id: "1", action_time: "2026-10-03 02:26:24", change_type: "MOVEMENT", user_id: "u1", move_kind: "inicio" },
+      { id: "2", action_time: "2026-10-03 02:40:40", change_type: "MOVEMENT", user_id: "u1", move_kind: "arrumar" },
+      { id: "3", action_time: "2026-10-03 13:32:13", change_type: "MOVEMENT", user_id: "u1", move_kind: "lugar" },
+    ]);
+    const r = await getAgentDayMovements({ day: "2026-10-03", userIds: ["u1"] });
+    expect(r.available && r.data.rows.map((x) => x.changeType)).toEqual(["MOVEMENT_START", "MOVEMENT", "SPOT_CHANGE"]);
   });
 });

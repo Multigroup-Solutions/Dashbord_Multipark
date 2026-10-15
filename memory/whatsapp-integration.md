@@ -51,6 +51,45 @@ Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashb
 
 ## Changelog
 
+### 2026-10-09 — Inbox: filtro de CIDADE da pessoa (Lisboa / Porto / Faro / Sem cidade)
+**Type**: feature (SEM migração, NÃO commitado, sobre `main` @ `c4e93d2c`)
+**Scope**: `shared/whatsappInboxView.ts` (`INBOX_CITY_FILTERS`, `InboxCityFilter`, `INBOX_CITY_SCAN_LIMIT`=5000,
+`conversationCityKey`, `matchesCityFilter`, `city` em `InboxListFilters` + contado em `activeInboxFilterCount`),
+`server/whatsappInbox.ts` (`cityKey` em `ConversationRow`, `leadProjectIdSql`, `classifyConversationCities`,
+`pickCityConversationIds` PURA, `listConversations({ city })`), `server/employeeCity.ts` (`loadProjectIndex` exportada;
+`resolveEmployeeCities(people, preloadedIndex?)`), `server/routers.ts` (`whatsapp.conversations.list` +`cityKey`),
+`client/src/components/whatsapp/InboxListHeader.tsx` (select "Cidade" ao lado da "Caixa"), `WhatsAppInboxPage.tsx`;
+testes +3 describes em `whatsappInboxView.test.ts`, +1 em `whatsappInbox.test.ts`.
+**What**:
+- **Regra ÚNICA da cidade da pessoa** (`conversationCityKey`): ficha (`employeeCity`: projeto → candidatura → morada) →
+  lead MAIS RECENTE com o número (centro de custos; o mesmo lead de `conversationDriverCity`) → `bookingProjectId`
+  (reserva pelo telefone, só números soltos) → `null` = "Sem cidade". Nunca se adivinha. "Porto" mostra SÓ Porto
+  (nem Lisboa, nem Faro, nem sem cidade).
+- **No servidor, ANTES do LIMIT 300** (mesma razão da pesquisa 17a): com filtro, varre as 5000 mais recentes (colunas
+  leves), classifica em JS (a morada é texto → não cabe em SQL) e devolve as 300 mais recentes da cidade via
+  `id IN (…)`. Sem filtro, só classifica as 300 da lista (`cityKey` em todas as linhas). Projects lidos 1× por pedido.
+- Input chama-se **`cityKey`, NÃO `city`**: `city` faria o middleware (`hasForeignCityFilter`/`selectedCityAccess`)
+  estreitar o âmbito, o que deixa à vista conversas SEM cidade e não conhece "none". O filtro NÃO é permissão — o
+  `visibilitySql` continua a aplicar-se sempre.
+- UI: select com só as cidades que a pessoa vê (`useGlobalFilters().cities` → `matchCityKey`) + "Sem cidade";
+  realce verde quando ativo; conta no "Limpar filtros". **NÃO segue o seletor global de cidade** (para quem só tem
+  uma cidade vem sempre preenchido → esconderia as conversas sem cidade). Filtro local `matchesCityFilter` também
+  corre (cobre a lista placeholder enquanto a nova carrega); estado vazio "Sem conversas de Porto." / "A carregar…"
+  com `isPlaceholderData`.
+**Verificado na BD real (Railway `shinkansen`, 2026-10-09, só contagens)**: sem filtro as 300 mais recentes =
+239 Lisboa / 24 Porto / 3 Faro / 34 sem cidade; com filtro Porto = **40** (16 estavam fora das 300 → prova do
+pré-LIMIT), Faro 5, Lisboa 300, sem cidade 71 (só 2 com ficha); **0 linhas com cidade errada** em todos os filtros.
+⚠️ `listConversations` faz o auto-preenchimento de resumos (`fillMissingPreviews`) — a verificação equivaleu a abrir o inbox.
+**Gates**: tsc EXIT 0 (precisou `NODE_OPTIONS=--max-old-space-size=8192` e `pnpm install` — `@googlemaps/js-api-loader`
+faltava no node_modules), suite 5370 passam / 0 falhas, `vite build` OK. NÃO testado num browser real.
+**Debt / follow-ups**:
+- `employeeCity.ts` ainda usa `matchCityKey` (só nomes de cidade) para candidatura e morada; `shared/city.ts` já tem
+  `cityKeyFromText`/`cityKeyFromAddress` (Maia/Gaia → Porto, Albufeira → Faro). Trocar melhora "Sem cidade" mas muda
+  também o filtro dos extras e a cidade dos TEMPLATES → decisão do Jorge, não feito.
+- Sem contagens por cidade no select (as da lista seriam só das 300 carregadas — enganavam).
+- A cidade não aparece na linha da conversa (só serve o filtro); candidata a etiqueta se for útil.
+- `assignedCityKey` (atribuição a um grupo de cidade) NÃO entra na regra: é quem trata, não de onde a pessoa é.
+
 ### 2026-10-07 — Templates POR CIDADE (Lisboa / Porto / Faro) + turno_confirmado + "Preciso de alterar"
 **Type**: feature (**migração 0550**, branch `claude/whatsapp-templates-cidade` a partir do main)
 **Scope**: `shared/driverTemplates.ts` (NOVO, registo = fonte única), `shared/whatsappTemplate.ts` (catálogo por `message`,

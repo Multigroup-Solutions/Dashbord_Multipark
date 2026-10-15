@@ -2,11 +2,22 @@
 modulo: disponibilidade
 titulo: Disponibilidade
 rotas: /disponibilidade
-palavras: a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade
+palavras: quadrados de estado, sem resposta, indisponíveis, filtros ligados, disponível em, sem mensagem nas últimas 24h, selecionados, filtrados, para quem vai, enviar email, enviar whatsapp, testar primeiro, dias livres habituais, dias habituais, habitual, esboço da escala, terças à tarde, fins de semana, dias úteis, todos os dias, tenho livre, costumo estar livre, a minha disponibilidade, conta não ligada, conta google sem ficha, não consigo pôr a disponibilidade, extras dia sem acesso, outro email, custo pago, custo previsto, ponto em falta, menos 98, candidatura primeiro turno, cobertura 7 dias, parados 90 dias, faltas por extra, responderam, pesquisar, pesquisa por nome, só extras, ordem da lista, cidade escolhida, disponibilidade, disponível, marcar disponibilidade, semana, manhã, noite, horas, métricas dos extras, pedido de disponibilidade, segunda-feira, link do email, histórico da disponibilidade, voltei, quero trabalhar, bem-vindo de volta, inativo, liga a tua conta
 ---
 # Disponibilidade
 
 Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para escalar no Extras-Dia.
+
+**Os teus dias livres habituais** (extras, candidatos e quem volta)
+Um esboço da tua escala: não são datas, são os dias e as alturas em que **costumas** estar livre (ex.: "terças à tarde, quartas de manhã e todos os fins de semana").
+1. Abre **A minha disponibilidade**. O cartão **Os meus dias livres habituais** está no topo.
+2. Toca nas casas da grelha: um dia (Seg a Dom) × **Manhã** (até às 12h), **Tarde** (12h–19h) ou **Noite** (depois das 19h). Tocar outra vez desmarca.
+3. Atalhos: **Fins de semana**, **Dias úteis** e **Todos os dias** marcam esses dias o dia todo e **somam** ao que já tens (tocar outra vez desfaz). **Limpar** tira tudo.
+4. Se quiseres, escreve uma nota curta (ex.: "não posso em agosto").
+5. Carrega em **Guardar dias habituais**. Por baixo da grelha aparece o resumo (ex.: "Ter tarde · Qua manhã · Sáb e Dom todo o dia") e quando foi atualizado.
+- Funciona mesmo com a ficha **inativa** (candidatos e quem volta) e sem cidade na ficha.
+- É só uma **ajuda para a gestão**: não marca a disponibilidade de nenhuma semana nem te põe em nenhuma escala. A disponibilidade de cada semana continua a marcar-se por baixo, como sempre.
+- Fica registado quem mudou e o que estava antes.
 
 **Marcar a tua disponibilidade** (extras)
 1. Menu **Operações → A minha disponibilidade** (ou **Perfil → A minha disponibilidade**, ou o link que recebes por WhatsApp/email). A disponibilidade **não** se marca no Extras Dia: essa página é a escala da gestão; se a abrires, aparece "Sem acesso" com o botão **Abrir a minha disponibilidade**.
@@ -19,22 +30,32 @@ Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para 
 - Cada vez que guardas, a semana é substituída de uma vez (nunca fica a meio).
 - Fica registado quem mudou e o que estava antes.
 - Funciona mesmo que a tua ficha ainda não tenha centro de custos: aparece um aviso a dizer para pedires ao RH a tua cidade, mas a disponibilidade grava-se na mesma.
-- **"A tua conta Google … não está ligada a nenhuma ficha"**: entraste com um email que não está na tua ficha. O login é só com a Google e tem de ser **sempre com o mesmo email**. Sai e entra com o email que deste ao RH, ou pede ao RH para pôr na ficha o email que aparece na mensagem. Depois sai e volta a entrar.
+- **"Liga a tua conta"**: entraste com um email que não está em nenhuma ficha. Escolhe **Sou novo — quero candidatar-me** ou **Já me candidatei / já trabalhei convosco com outro email** (escreves o email ou o telefone que usaste). Também podes sair e entrar com o email que deste ao RH.
+- **Bem-vindo de volta** (ficha inativa): marca os teus dias livres e carrega em **Voltei, quero trabalhar** — o RH vê "Quer voltar" e reativa-te. Até lá não entras na escala.
 - Na tua ficha (RH), no cartão **Disponibilidade**, o botão **Marcar a minha disponibilidade** abre esta página na semana que estás a ver.
+- Na ficha (RH), o cartão **Disponibilidade** mostra também os **dias livres habituais** (resumo, nota e quando foram atualizados). A própria pessoa e quem gere a disponibilidade dos extras (team leader e supervisor na sua cidade, front office, back office, administradores) carregam em **Mudar** / **Indicar** para os alterar; quem só vê a ficha não mexe.
 - Se a leitura falhar, aparece **"Não foi possível carregar…"** com **Tentar de novo**.
 
 **Gestão** (backoffice e acima)
 - A mesma página mostra a matriz das disponibilidades **só dos extras** (função "extra"), por cidade. Os funcionários não aparecem aqui.
-- Com uma **cidade escolhida em cima** (o botão do pino), só aparece essa cidade. Com "todas", escolhes nos botões Lisboa / Porto / Faro / Sem cidade.
-- A lista vem por esta ordem: **disponíveis primeiro**, depois **sem resposta**, depois **indisponíveis** (e por nome), com uma linha a separar cada estado. Carregar no título de uma coluna reordena.
-- **Pesquisar**: escreve parte do nome (ou do número). Quem **começa** pelo que escreveste vem primeiro ("ana" → Ana Sousa antes de Mariana Costa).
+- O ecrã tem quatro blocos, de cima para baixo:
+  1. **A semana** (setas ◀ ▶ ou **Próxima semana**) e quatro quadrados: **Todos**, **Disponíveis**, **Indisponíveis** e **Sem resposta**, cada um com o número. Carregar num quadrado mostra só esse estado; carregar outra vez volta a **Todos**. Por baixo, **Disponíveis por dia**: quantos podem de manhã (☀) e à noite (☾) em cada dia.
+  2. **A barra de filtros**: a pesquisa, a cidade e o botão **Filtros**. Em **Filtros** estão o **Disponível em** (um dia e/ou das X às Y) e o **Sem mensagem nas últimas 24h**; o número no botão diz quantos estão ligados. Os filtros ligados aparecem logo por baixo, em etiquetas com **×** para os tirar, e **Limpar filtros** tira tudo.
+  3. **A barra de envio**: diz sempre **Para:** quem vai — os **selecionados** ou, sem ninguém marcado, os **filtrados** — (sem filtro nenhum diz **todos os N extras**), quantos têm número válido e a divisão por estado (ex.: "40 disponíveis · 237 sem resposta"), avisando quando vai gente que **não está à vista** (secções fechadas ou ainda por mostrar). Com o estado em **Todos**, ninguém selecionado e o envio a ir a toda a gente ou a **mais de um estado**, os botões ficam desligados: escolhe primeiro um quadrado (ex.: Sem resposta) ou seleciona pessoas; para mandar assim mesmo, carrega no link (ex.: **Enviar a todos os 320 extras…** ou **Enviar aos 12 extras filtrados (2 estados)…**) e o diálogo pede esse mesmo botão antes de enviar. Os botões **Email** e **WhatsApp** abrem o diálogo do envio, que repete tudo isto. Mudar de semana limpa a seleção.
+  4. **A grelha**, uma caixa por cidade (com quantos disponíveis, sem resposta e indisponíveis). Dentro de cada cidade, **Disponíveis** está aberta; **Sem resposta** e **Indisponíveis** ficam fechadas com o número à vista — carrega no título para abrir. Se escolheres um estado nos quadrados, abre esse.
+- **Cidade**: com uma cidade escolhida em cima (o botão do pino), só aparece essa e não se muda aqui. Com "todas" (e no telemóvel), escolhes no seletor da barra: Lisboa / Porto / Faro / **Sem cidade**.
+- A lista vem por esta ordem: **disponíveis**, **sem resposta**, **indisponíveis** (e por nome). Carregar no título de uma coluna reordena dentro de cada secção.
+- **Pesquisar**: escreve parte do nome (ou do número). Quem **começa** pelo que escreveste vem primeiro ("ana" → Ana Sousa antes de Mariana Costa); a pesquisar, cada cidade mostra uma lista só, com o estado em cada pessoa.
+- **Selecionar**: a caixa ao lado de cada pessoa, de cada secção (ex.: todos os **Sem resposta** de Lisboa, para lembrar só esses), de cada cidade, ou **Selecionar os N** na barra de envio. Mudar um filtro (menos a pesquisa) limpa a seleção; quem ficou marcado fora da pesquisa continua no envio e a barra diz quantos.
+- **Enviar**: o diálogo do **Email** e o do **WhatsApp** dizem em cima a quem vai. No email escolhes o tipo de pedido (semana, dia + turno, que horas, das X às Y), uma nota e vês a pré-visualização; **Usar este texto no WhatsApp** passa-o para o diálogo do WhatsApp. Os dois têm **Testar primeiro** e, a mais de uma pessoa, pedem **Confirmar**. O pedido **nunca vai para funcionários** (nem o pedido, nem os avisos de escala).
+- Sem permissão para editar a disponibilidade dos extras, os botões de envio ficam desligados e a grelha é só de leitura (sem lápis); sem permissão de WhatsApp, o botão do WhatsApp fica desligado.
 - Daqui envias o pedido de disponibilidade por email/WhatsApp e vês as **Métricas dos extras**. As **Candidaturas do site** e o **Recrutamento** estão nos **Leads de Extras**.
-- O pedido vai para os extras escolhidos na tabela; sem escolha, para todos os extras ativos. **Nunca vai para funcionários** (nem o pedido, nem os avisos de escala).
 - O **pedido automático** (quinta) e o **lembrete** (sábado, só a quem não respondeu) vão só aos extras **com cidade**. Quem está em "Sem cidade" não recebe: primeiro o RH define a cidade na ficha (há uma tarefa para isso). Enviar à mão, escolhendo na tabela, continua possível.
 - Quem tem **"Não enviar WhatsApp"** ou **"Não enviar email"** na ficha aparece com a etiqueta **sem WA** / **sem email** / **nada** e não recebe o pedido nesse canal (o resultado do envio conta-os à parte).
 - O link do email é sempre o endereço da app.
 - A semana começa sempre à segunda-feira.
 - Marcar a disponibilidade por alguém também fica registado, com o que estava antes.
+- **Habitual**: na matriz, quem ainda **não respondeu** à semana mostra por baixo do nome os dias livres habituais (ex.: "Habitual: Ter tarde · Fins de semana"; passa o rato para ver a nota). É só uma dica para saberes a quem pedir: não conta como resposta, não entra nos filtros nem nos totais e não muda nenhuma escala.
 - No Extras-Dia, "Preencher com disponíveis" usa estas marcações.
 - Na matriz, um dia com horas mostra as **horas reais** (ex.: "18h–01h" de um slot do site) em vez do sol/lua. O filtro "disponível das X às Y", a proposta automática e o Extras-Dia leem as marcações da mesma forma (pelo calendário): quem marcou a madrugada de terça conta para a noite de segunda.
 

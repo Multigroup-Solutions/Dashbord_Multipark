@@ -2,7 +2,7 @@
 modulo: integracoes
 titulo: Integrações → Google Ads e Meta Ads
 rotas: /integracoes/google-ads
-palavras: google ads, meta ads, facebook ads, ligar google ads, desligar google ads, religar, reautorização, revogar, contas publicitárias, selecionar contas, recolha, recolha inicial, 37 meses, últimos 35 dias, conversões atrasadas, chave de cifra, INTEGRATIONS_ENCRYPTION_KEY, invalid_client, invalid_grant, recolha parcial, recolha saltada
+palavras: google ads, meta ads, facebook ads, ligar google ads, desligar google ads, religar, reautorização, revogar, contas publicitárias, selecionar contas, recolha, recolha inicial, 37 meses, últimos 35 dias, conversões atrasadas, chave de cifra, INTEGRATIONS_ENCRYPTION_KEY, invalid_client, invalid_grant, recolha parcial, recolha saltada, cliques, gclid, click_view, ler cliques agora, dias em falta, último dia lido, 0 reservas ligadas, campanhas sem reservas ligadas
 ---
 # Integrações → Google Ads e Meta Ads
 
@@ -25,6 +25,14 @@ Aqui liga-se o Google Ads, escolhem-se as contas a recolher e vê-se o históric
 - Se outra recolha ainda estiver a correr, esta fica **para a próxima volta** — já não conta como feita.
 
 **Recolha inicial (37 meses)**: pede de novo todo o histórico e substitui o que está guardado. Pede confirmação e só quem gere as Integrações a vê.
+
+**Cliques (gclid → campanha)** (no cartão **Recolha**; Jorge, 8 out 2026 — as campanhas davam 0 reservas ligadas):
+- Com o auto-tagging, o link da reserva só traz o **gclid**. O Google Ads sabe de que campanha é cada clique (relatório *click_view*); a app lê-o **de hora a hora** e guarda-o numa tabela de apoio, para ligar essas reservas à campanha no Marketing.
+- Em cada volta: **hoje e ontem** de todas as contas recolhidas e, aos poucos, os **dias em falta** (até 10 por conta e por volta, do mais recente para trás). A Google só guarda **90 dias** de cliques — mais para trás não há.
+- O cartão mostra o **último dia lido**, os **dias em falta** (dos últimos 89 até ontem, com o mais antigo), quantos cliques estão guardados e a última leitura. A primeira vez faltam todos; ficam em dia ao fim de umas horas.
+- **Ler cliques agora**: faz já uma volta (quem pode editar as Integrações). Só lê do Google Ads; nada é alterado lá.
+- Interruptor em **Definições → Automações → "Google Ads: ligar reservas à campanha pelo clique (gclid)"** — **ligado** por omissão. Desligado: deixa de ler cliques novos — as reservas com cliques já lidos continuam ligadas; as outras só pelo ID da campanha no link.
+- Uma conta sem acesso aos cliques (erro 403) é saltada nessa volta e aparece o aviso; as outras seguem.
 
 **Desligar**: revoga a autorização na Google e pára as recolhas; os dados já recolhidos ficam. Se a Google não responder, desliga na mesma e avisa para tirares o acesso em myaccount.google.com → Segurança.
 

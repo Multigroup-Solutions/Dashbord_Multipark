@@ -5,8 +5,10 @@
  * SÓ os campos que ainda estão vazios — nunca substitui o que já lá está.
  *
  * Usa a IA da app (server/_core/ai — runAi, saída estruturada validada por
- * zod). Interruptor AI_HR_AUTOFILL, DESLIGADO por omissão até decisão RGPD:
- * desligado ou sem IA, não faz nada. Best-effort: nunca parte o upload.
+ * zod). Interruptor AI_HR_AUTOFILL, DESLIGADO por omissão; o documento vai
+ * inteiro, por isso só corre com a IA em Vertex AI na UE (Jorge, 8 out 2026 —
+ * shared/aiLimits.ts): desligado, sem IA ou fora da UE, não faz nada.
+ * Best-effort: nunca parte o upload.
  */
 import { aiFeatureAvailableFresh } from "./_core/ai/status";
 import { sql } from "drizzle-orm";
@@ -106,7 +108,7 @@ export function planAutofill(
 
 // ─── I/O ────────────────────────────────────────────────────────────────────
 
-/** IA do RH disponível? (configurada + AI_ENABLED + AI_HR_AUTOFILL). */
+/** IA do RH disponível? (configurada + AI_ENABLED + AI_HR_AUTOFILL + Vertex AI na UE). */
 export async function llmConfigured(): Promise<boolean> {
   return aiFeatureAvailableFresh("hr_autofill");
 }

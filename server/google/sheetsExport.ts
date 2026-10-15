@@ -15,7 +15,7 @@ import { can } from "../../shared/access";
 import {
   GOOGLE_MIME, SHEET_EXPORT_GATES, chunkSheetWrites, sanitizeSheetTitle, type SheetExportInput, type SheetExportReport, type SheetTab, type SheetCell, type LiveReportKey,
 } from "../../shared/drive";
-import { METRIC_KEYS, METRIC_LABELS } from "../../shared/evaluationRules";
+import { METRIC_KEYS, METRIC_LABELS, lateArrivalsOf } from "../../shared/evaluationRules";
 import type { DriveApiLike, DriveFileMeta, SheetsApiLike } from "./driveApi";
 
 export type ProcedureCall = (path: string, input?: unknown) => Promise<any>;
@@ -117,13 +117,27 @@ export const SHEET_REPORTS: Record<SheetExportReport, ReportDef> = {
     },
   },
   avaliacoes: {
+    // 14 out 2026: a folha leva o que se vê no ecrã — a cidade/marca do topo
+    // (projectId) e o filtro (pesquisas, grupos, regras), aplicado AQUI com as
+    // mesmas funções do ecrã (shared/evaluationFilters.ts); filtrada, di-lo no
+    // nome do separador e num separador "Filtro" (não é "incompleta": é o pedido).
     async load(call, input) {
-      const list = await call("evaluation.ranking", { from: input.from, to: input.to });
+      const all: any[] = (await call("evaluation.ranking", { from: input.from, to: input.to, ...(input.projectId != null ? { projectId: input.projectId } : {}) })) ?? [];
+      const { filterRanking, isFilterActive, filterParts } = await import("../../shared/evaluationFilters");
+      const active = isFilterActive(input.filter);
+      const list = active ? filterRanking(all, input.filter) : all;
       const header: SheetCell[] = ["Colaborador", "Função", "Dias", "Pontos", "Positivos", "Negativos", "Contestações abertas", ...METRIC_KEYS.map((k) => METRIC_LABELS[k])];
-      return [tabOf("Ranking", header, (list ?? []).map((x: any) => [
+      const ranking = tabOf(active ? "Ranking (filtrado)" : "Ranking", header, list.map((x: any) => [
         x.employeeName, x.position, x.days, r2(x.score?.totalPoints), r2(x.score?.positivePoints), r2(x.score?.negativePoints), x.openDisputes,
-        ...METRIC_KEYS.map((k) => (x.metrics?.[k] == null ? null : r2(x.metrics[k]))),
-      ]))];
+        // tarefa 62: "Atrasos ao trabalho" = lateArrivalsOf (nas linhas antigas o delays incluía as entregas atrasadas)
+        ...METRIC_KEYS.map((k) => (x.metrics?.[k] == null ? null : k === "delays" ? r2(lateArrivalsOf({ delays: Number(x.metrics.delays) || 0, lateServices: Number(x.metrics.lateServices) || 0 })) : r2(x.metrics[k]))),
+      ]));
+      if (!active) return [ranking];
+      return [ranking, tabOf("Filtro", ["Filtro aplicado", "Valor"], [
+        ["Período", `${input.from} a ${input.to}`],
+        ["Colaboradores", `${list.length} de ${all.length}`],
+        ...filterParts(input.filter, all).map((p): SheetCell[] => ["Filtro", p]),
+      ])];
     },
   },
 };

@@ -23,6 +23,8 @@ export interface KbHit {
   href: string | null;
   source: KbSource;
   score: number;
+  /** Chave do documento (kb_documents.driveFileId; na ajuda, "help:<ficheiro>.md"). */
+  ref?: string | null;
 }
 
 export interface KbRetrieval {
@@ -31,6 +33,8 @@ export interface KbRetrieval {
   mode: "embeddings" | "fulltext" | "keywords" | "none";
   /** A consulta falhou (BD/IA) — não é o mesmo que "os manuais não falam disso" (18d). */
   failed?: boolean;
+  /** Com `helpTopK`: os trechos da AJUDA da app (fonte "help"), ordenados à parte. */
+  helpHits?: KbHit[];
 }
 
 export type QueryEmbedFn = (question: string) => Promise<number[] | null>;
@@ -59,6 +63,7 @@ export function keywordScore(question: string, text: string): number {
 interface CandidateRow {
   id: number; docId: number; section: string | null; text: string; embedding: string | null;
   title: string; webViewLink: string | null; source: KbSource; visibilityRoles: unknown; visibilityCities: unknown; ft: number;
+  ref?: string | null;
 }
 
 function toRow(r: any): CandidateRow {
@@ -66,15 +71,17 @@ function toRow(r: any): CandidateRow {
     id: Number(r.id), docId: Number(r.docId), section: r.section != null ? String(r.section) : null, text: String(r.text ?? ""),
     embedding: r.embedding != null ? String(r.embedding) : null, title: String(r.title ?? ""), webViewLink: r.webViewLink != null ? String(r.webViewLink) : null,
     source: String(r.source) as KbSource, visibilityRoles: r.visibilityRoles, visibilityCities: r.visibilityCities, ft: Number(r.ft ?? 0) || 0,
+    ref: r.driveFileId != null ? String(r.driveFileId) : null,
   };
 }
 
 /** Candidatos visíveis (FULLTEXT → LIKE). */
-export async function candidateChunks(d: Db, question: string, viewer: KbViewer, opts: { excludeSources?: KbSource[]; docIds?: number[] } = {}): Promise<{ rows: CandidateRow[]; mode: "fulltext" | "keywords" }> {
+export async function candidateChunks(d: Db, question: string, viewer: KbViewer, opts: { excludeSources?: KbSource[]; onlySources?: KbSource[]; docIds?: number[] } = {}): Promise<{ rows: CandidateRow[]; mode: "fulltext" | "keywords" }> {
   const base: SQL[] = [sql`d.deletedAt IS NULL`, sql`d.status = 'synced'`, kbVisibilitySql(viewer)];
   if (opts.excludeSources?.length) base.push(sql`d.source NOT IN (${sql.join(opts.excludeSources.map((x) => sql`${x}`), sql`, `)})`);
+  if (opts.onlySources?.length) base.push(sql`d.source IN (${sql.join(opts.onlySources.map((x) => sql`${x}`), sql`, `)})`);
   if (opts.docIds?.length) base.push(sql`d.id IN (${sql.join(opts.docIds.map((x) => sql`${x}`), sql`, `)})`);
-  const cols = sql`c.id, c.docId, c.section, c.text, c.embedding, d.title, d.webViewLink, d.source, d.visibilityRoles, d.visibilityCities`;
+  const cols = sql`c.id, c.docId, c.section, c.text, c.embedding, d.title, d.webViewLink, d.source, d.visibilityRoles, d.visibilityCities, d.driveFileId`;
   const ftq = fulltextQuery(question);
   if (ftq) {
     try {
@@ -124,7 +131,7 @@ export async function rankCandidates(question: string, rows: CandidateRow[], que
     const n = perDoc.get(x.r.docId) ?? 0;
     if (n >= 2) continue; // no máximo 2 trechos do mesmo documento
     perDoc.set(x.r.docId, n + 1);
-    hits.push({ chunkId: x.r.id, docId: x.r.docId, title: x.r.title, section: x.r.section, text: x.r.text, href: x.r.webViewLink, source: x.r.source, score: Math.round(x.score * 1000) / 1000 });
+    hits.push({ chunkId: x.r.id, docId: x.r.docId, title: x.r.title, section: x.r.section, text: x.r.text, href: x.r.webViewLink, source: x.r.source, score: Math.round(x.score * 1000) / 1000, ref: x.r.ref ?? null });
   }
   return { hits, usedEmbeddings };
 }
@@ -155,6 +162,10 @@ async function defaultQueryEmbed(question: string): Promise<number[] | null> {
 /**
  * Trechos da base de conhecimento que `viewer` pode ver, para `question`.
  * Nunca lança (sem BD/erro → sem trechos).
+ *
+ * `helpTopK` (Multis 2): na MESMA consulta, também os trechos da ajuda da app
+ * (fonte "help"), ordenados à parte em `helpHits` — o vetor da pergunta é
+ * calculado UMA vez para os dois (sem chamada extra de embeddings).
  */
 export async function retrieveKnowledge(input: {
   question: string;
@@ -162,6 +173,8 @@ export async function retrieveKnowledge(input: {
   topK?: number;
   excludeSources?: KbSource[];
   docIds?: number[];
+  /** Quantos trechos da ajuda ("help") devolver à parte em `helpHits` (0/omisso = nenhum). */
+  helpTopK?: number;
   d?: Db;
   /** null = sem embeddings; omisso = decide pela configuração. */
   embedQuery?: QueryEmbedFn | null;
@@ -179,19 +192,33 @@ export async function retrieveKnowledge(input: {
     }
     const { rows, mode } = await candidateChunks(d, question, input.viewer, { excludeSources: input.excludeSources, docIds: input.docIds });
     // Segunda barreira: a mesma regra em código (nunca um trecho restrito num prompt).
-    const visible = rows.filter((r) => canSeeKbDoc(parseVisibility(r.visibilityRoles, r.visibilityCities), input.viewer));
-    if (!visible.length) return { ...empty, mode };
+    const canSee = (r: CandidateRow) => canSeeKbDoc(parseVisibility(r.visibilityRoles, r.visibilityCities), input.viewer);
+    const visible = rows.filter(canSee);
+    const helpTopK = Math.max(0, Math.min(8, Math.floor(input.helpTopK ?? 0)));
+    let helpRows: CandidateRow[] = [];
+    if (helpTopK > 0) {
+      // A ajuda falhar não estraga os manuais (fica só com as palavras-chave).
+      try { helpRows = (await candidateChunks(d, question, input.viewer, { onlySources: ["help"] })).rows.filter(canSee); } catch { helpRows = []; }
+    }
+    if (!visible.length && !helpRows.length) return { ...empty, mode, ...(helpTopK > 0 ? { helpHits: [] } : {}) };
+    const withVectors = [...visible, ...helpRows].some((r) => r.embedding);
     let embedQuery = input.embedQuery;
     if (embedQuery === undefined) {
       const { embeddingsWanted, loadKnowledgeConfig } = await import("./sync");
-      embedQuery = visible.some((r) => r.embedding) && (await embeddingsWanted(await loadKnowledgeConfig())) ? defaultQueryEmbed : null;
+      embedQuery = withVectors && (await embeddingsWanted(await loadKnowledgeConfig())) ? defaultQueryEmbed : null;
     }
     let qv: number[] | null = null;
-    if (embedQuery && visible.some((r) => r.embedding)) {
+    if (embedQuery && withVectors) {
       try { qv = await embedQuery(question); } catch { qv = null; }
     }
-    const { hits, usedEmbeddings } = await rankCandidates(question, visible, qv, Math.max(1, Math.min(8, input.topK ?? 4)));
-    return { hits, citations: citationsFor(hits), mode: usedEmbeddings ? "embeddings" : mode };
+    const main = visible.length ? await rankCandidates(question, visible, qv, Math.max(1, Math.min(8, input.topK ?? 4))) : { hits: [] as KbHit[], usedEmbeddings: false };
+    const help = helpRows.length ? await rankCandidates(question, helpRows, qv, helpTopK) : { hits: [] as KbHit[], usedEmbeddings: false };
+    return {
+      hits: main.hits,
+      citations: citationsFor(main.hits),
+      mode: main.usedEmbeddings || help.usedEmbeddings ? "embeddings" : mode,
+      ...(helpTopK > 0 ? { helpHits: help.hits } : {}),
+    };
   } catch (err) {
     console.warn("[knowledge] recuperação falhou:", String((err as any)?.code ?? (err as any)?.name ?? "erro"));
     return { ...empty, failed: true };

@@ -89,7 +89,8 @@ describe("42a: filtros de cidade e marca", () => {
     expect(r).toContain("teams: protectedProcedure.input(filteredRangeSchema)");
     const e = read("server/evaluationEngine.ts");
     expect(e).toContain("OR (${employeeDayMetrics.city} IS NULL AND ${employeeScope(employeeDayMetrics.employeeId)})");
-    const c = read("client/src/pages/AvaliacaoPage.tsx");
+    // 12 out 2026: o "Mês" é um componente próprio (também na Atividade diária).
+    const c = read("client/src/pages/AvaliacaoPage.tsx") + read("client/src/components/evaluation/MonthEvaluationTab.tsx");
     expect(c).toContain("trpc.evaluation.ranking.useQuery({ from, to, projectId })");
     expect(c).toContain("trpc.evaluation.liveMovements.useQuery({ from, to, projectId }");
     expect(c).toContain("trpc.evaluation.teams.useQuery({ from, to, projectId }");
@@ -98,7 +99,7 @@ describe("42a: filtros de cidade e marca", () => {
 
 describe("42a: Mês em vez de 4 semanas", () => {
   it("separador Mês, o mês atual por omissão, ?tab=semanas ainda funciona; o cron cobre o mês", () => {
-    const c = read("client/src/pages/AvaliacaoPage.tsx");
+    const c = read("client/src/pages/AvaliacaoPage.tsx") + read("client/src/components/evaluation/MonthEvaluationTab.tsx");
     expect(c).toContain('<TabsTrigger value="mes">Mês</TabsTrigger>');
     expect(c).toContain('askedRaw === "semanas" ? "mes" : askedRaw');
     expect(c).toContain("useState(thisMonth)");

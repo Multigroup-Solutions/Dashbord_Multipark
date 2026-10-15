@@ -3,6 +3,7 @@ import { geminiConfig, selectProvider } from "./client";
 import { aiFeatureEnabledFresh, isAiFeatureEnabled, type AiFeature } from "./features";
 import { geminiModelFor, sttModelFor, type Env } from "./models";
 import { runAi } from "./run";
+import { euVertexOk, requiresEuVertex, type AiWhere } from "../../../shared/aiLimits";
 
 export interface AiStatus {
   provider: "gemini" | "legacy" | null;
@@ -27,8 +28,25 @@ export function aiStatus(env: Env = process.env): AiStatus {
   return { provider, mode: cfg.mode, models, warnings };
 }
 
-/** Funcionalidade utilizável agora? (configurada + interruptores ligados). */
+/** Onde corre a IA (de uma funcionalidade, se indicada): fornecedor, modo e região. PURA (só env). */
+export function aiWhere(env: Env = process.env, feature?: string): AiWhere {
+  const provider = selectProvider(env, feature);
+  if (provider !== "gemini") return { provider, mode: provider === "legacy" ? "legacy" : null, location: null };
+  const cfg = geminiConfig(env)!;
+  return { provider, mode: cfg.mode, location: cfg.mode === "vertex" ? cfg.location : null };
+}
+
+/**
+ * Jorge (8 out 2026): os documentos e CV do RH vão INTEIROS para a IA — só
+ * correm com o Gemini em Vertex AI na UE. Nas outras funcionalidades: true. PURA.
+ */
+export function aiFeatureRegionOk(feature: AiFeature, env: Env = process.env): boolean {
+  return !requiresEuVertex(feature) || euVertexOk(aiWhere(env, feature));
+}
+
+/** Funcionalidade utilizável agora? (configurada + interruptores ligados + Vertex na UE quando é preciso). */
 export function aiFeatureAvailable(feature: AiFeature, env: Env = process.env): boolean {
+  if (!aiFeatureRegionOk(feature, env)) return false;
   if (feature === "radio_transcription") {
     if (!(selectProvider(env, feature) === "gemini" || String(env.OPENAI_API_KEY ?? "").trim())) return false;
   } else if (!selectProvider(env, feature)) return false;

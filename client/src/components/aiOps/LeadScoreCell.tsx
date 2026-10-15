@@ -58,9 +58,10 @@ export default function LeadScoreCell({ leadId, row, canEdit }: { leadId: number
           ))}
         </ul>
         <p className="text-[11px] text-muted-foreground">Só critérios explícitos; nunca idade, género, nacionalidade ou outros dados sensíveis.</p>
+        {/* "Resumo IA" tem custo: só quem edita as leads o pede (Jorge, 8 out 2026). */}
         {row.summary ? (
           <p className="text-sm bg-muted/40 rounded p-2">{row.summary}</p>
-        ) : (
+        ) : canEdit && (
           <Button size="sm" variant="outline" className="h-8" disabled={summarize.isPending} onClick={() => summarize.mutate({ leadIds: [leadId] })}>
             {summarize.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1" />}Resumo IA
           </Button>

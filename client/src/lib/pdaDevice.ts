@@ -3,6 +3,8 @@
  * o aparelho é registado (QR ou escolha na aba PDAs). Tudo em try/catch: em
  * modo privado o storage pode falhar e a app tem de continuar a funcionar.
  */
+import { PERSONAL_TOKEN_KEY } from "@shared/personalDevice";
+
 export const PDA_TOKEN_KEY = "mp.pda.deviceToken";
 const CLAIM_KEY = "mp.pda.claimedFor";
 const PENDING_QR_KEY = "mp.pda.pendingQr";
@@ -32,4 +34,34 @@ export function setPendingQr(search: string | null): void {
 }
 export function getPendingQr(): string | null {
   try { return localStorage.getItem(PENDING_QR_KEY); } catch { return null; }
+}
+
+// ─── Telemóvel pessoal (não é um PDA partilhado; shared/personalDevice.ts) ───
+// Outra chave e outra tabela: os fluxos do PDA (ligar no login, sessão de PDA,
+// ponto→PDA, Google a pedir a conta) nunca veem este token.
+/** Avisa os cartões "Este telemóvel" quando o registo deste aparelho muda. */
+export const DEVICE_CHANGED_EVENT = "mp:device-changed";
+const changed = () => { try { window.dispatchEvent(new Event(DEVICE_CHANGED_EVENT)); } catch { /* sem window */ } };
+
+export function getPersonalToken(): string | null {
+  try { return localStorage.getItem(PERSONAL_TOKEN_KEY); } catch { return null; }
+}
+export function setPersonalToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(PERSONAL_TOKEN_KEY, token);
+    else localStorage.removeItem(PERSONAL_TOKEN_KEY);
+  } catch { /* sem storage */ }
+  changed();
+}
+/**
+ * Um PDA convertido em telemóvel pessoal (por uma chefia): o token passa da
+ * chave do PDA para a do telemóvel pessoal — o aparelho deixa de ser PDA aqui.
+ */
+export function movePdaTokenToPersonal(token: string): void {
+  try {
+    localStorage.setItem(PERSONAL_TOKEN_KEY, token);
+    if (localStorage.getItem(PDA_TOKEN_KEY) === token) localStorage.removeItem(PDA_TOKEN_KEY);
+  } catch { /* sem storage */ }
+  markClaimed(null);
+  changed();
 }

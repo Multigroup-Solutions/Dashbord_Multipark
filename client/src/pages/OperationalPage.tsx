@@ -17,7 +17,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useTableSort, Th } from "@/components/SortableTable";
 import { ZelloLiveTab } from "@/components/ZelloLiveTab";
+import { LoginCodesCard } from "@/components/login/LoginCodesCard";
+import { TerminalLiveCard } from "@/components/terminal/TerminalLiveCard";
 import { OpsPresencePanel } from "@/components/OpsPresencePanel";
+import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
+import { ResplitBackfillCard } from "@/components/ResplitBackfillCard";
+import { usePersonalMigration } from "@/components/PersonalDeviceBinder";
+import { DEVICE_CHANGED_EVENT, getPersonalToken } from "@/lib/pdaDevice";
+import { PERSONAL_DEVICE_HELP } from "@shared/personalDevice";
 import RadioPage from "@/pages/RadioPage";
 import { UniDateNav } from "@/components/DateRangeNav";
 import { usePersistedState } from "@/hooks/usePersistedState";
@@ -28,12 +35,16 @@ import { PDA_ZELLO_LABELS } from "@shared/pdaZelloMatch";
 import { SpeedTrackMap } from "@/components/maps/SpeedTrackMap";
 import {
   Plus, Trash2, Eye, Gauge, ArrowUpDown, Satellite, Users, Settings,
-  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio,
+  History, Smartphone, Camera, LogOut, CalendarDays, Route, QrCode, Activity, RefreshCw, Radio, BarChart3, CalendarRange, Trophy, UserRound,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { can, seesBeyondOwn, type ModuleId } from "@shared/access";
+import { ROLE_RANK, can, seesBeyondOwn, type ModuleId } from "@shared/access";
+// 12 out 2026 (Jorge): Resumo do dia (veio da Passagem de turno), Semana e Avaliação do mês.
+import DaySummaryTab, { DepartedComplaintsCard } from "@/components/shiftDay/DaySummaryTab";
+import WeekActivityTab from "@/components/operacoes/WeekActivityTab";
+import MonthEvaluationTab from "@/components/evaluation/MonthEvaluationTab";
 import { OPERATIONAL_TABS as TABS, operationalAccess, type OperationalTab as TabKey } from "@shared/operationalTabs";
 import { retryTransient } from "@/lib/queryRetry";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
@@ -74,21 +85,30 @@ export default function OperationalPage() {
     return <Card className="p-8 text-center text-sm text-muted-foreground">A tua conta não tem acesso à Actividade Diária.</Card>;
   }
   const has = (t: TabKey) => allowed.includes(t);
+  // Avaliação do mês: "Recalcular" e ajustes como no separador "Mês" da Avaliação.
+  const evalSupervisor = !!user && can(user as any, "avaliacao", "edit");
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-muted-foreground">Quem fez o quê, km e velocidades, os PDAs e o rádio.</p>
+        <p className="text-muted-foreground">Quem fez o quê, o resumo do dia, a semana por hora, km e velocidades, os PDAs e o rádio.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto">
           {has("dia") && <TabsTrigger value="dia"><Activity className="w-4 h-4 mr-1" />Atividade do Dia</TabsTrigger>}
+          {has("resumo") && <TabsTrigger value="resumo"><BarChart3 className="w-4 h-4 mr-1" />Resumo do dia</TabsTrigger>}
+          {has("semana") && <TabsTrigger value="semana"><CalendarRange className="w-4 h-4 mr-1" />Semana</TabsTrigger>}
+          {has("mes") && <TabsTrigger value="mes"><Trophy className="w-4 h-4 mr-1" />Avaliação do mês</TabsTrigger>}
           {has("live") && <TabsTrigger value="live"><Satellite className="w-4 h-4 mr-1" />Ao Vivo</TabsTrigger>}
           {has("history") && <TabsTrigger value="history"><Gauge className="w-4 h-4 mr-1" />Histórico Diário</TabsTrigger>}
           {has("pdas") && <TabsTrigger value="pdas"><Smartphone className="w-4 h-4 mr-1" />PDAs</TabsTrigger>}
           {has("radio") && <TabsTrigger value="radio"><Radio className="w-4 h-4 mr-1" />Rádio</TabsTrigger>}
         </TabsList>
         {has("dia") && <TabsContent value="dia"><DayActivityTab onOpenSpeedHistory={has("history") ? openSpeedHistory : undefined} /></TabsContent>}
-        {has("live") && <TabsContent value="live">{tab === "live" && <ZelloLiveTab />}</TabsContent>}
+        {has("resumo") && <TabsContent value="resumo">{tab === "resumo" && <DaySummaryTab />}</TabsContent>}
+        {has("semana") && <TabsContent value="semana">{tab === "semana" && <WeekActivityTab />}</TabsContent>}
+        {has("mes") && <TabsContent value="mes" className="mt-4">{tab === "mes" && <MonthEvaluationTab isSupervisor={evalSupervisor} />}</TabsContent>}
+        {/* Plano 56: terminal (PONTO_TERMINAL) e códigos de entrada pedidos ao TL/supervisor (ENTRAR_COM_CODIGO); só com os interruptores ligados. */}
+        {has("live") && <TabsContent value="live">{tab === "live" && <><TerminalLiveCard /><LoginCodesCard /><ZelloLiveTab /></>}</TabsContent>}
         {has("history") && <TabsContent value="history">{tab === "history" && <DriverHistoryTab speedTarget={speedTarget} onSpeedTarget={setSpeedTarget} />}</TabsContent>}
         {has("pdas") && <TabsContent value="pdas">{tab === "pdas" && <PdasTab />}</TabsContent>}
         {has("radio") && <TabsContent value="radio">{tab === "radio" && <RadioPage />}</TabsContent>}
@@ -140,6 +160,11 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
   );
   const { data, isLoading } = activityQ;
   const totals = data?.totals;
+  // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM nestes dias (à parte: não atrasa a atividade).
+  const departedQ = trpc.multipark.departedComplaints.useQuery(
+    { startDate, endDate, projectId },
+    { enabled: !!startDate && !tooLong, refetchOnWindowFocus: false, retry: retryTransient, staleTime: 2 * 60_000 },
+  );
   const allPeople = (data?.people ?? []) as any[];
   // 43a: escolher a pessoa (o nome abre a ficha; o resto da linha, o dia dela)
   const [who, setWho] = usePersistedState<string>("operacional.dia.who", "");
@@ -200,7 +225,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
         <div className="grid grid-cols-2 md:grid-cols-4 2xl:grid-cols-8 gap-3">
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold tabular-nums truncate text-emerald-700">{totals.checkins}</p></Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold tabular-nums truncate text-blue-700">{totals.checkouts}</p></Card>
-          <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Movimentações</p><p className="text-xl font-bold tabular-nums truncate">{totals.movements}</p></Card>
+          <Card className="p-3 gap-0.5 min-w-0" title="Levar ao parque e entre garagens. O início de cada deslocação não conta; as mudanças de lugar (mesma garagem) contam nas ações, não aqui."><p className="text-xs text-muted-foreground">Movimentações</p><p className="text-xl font-bold tabular-nums truncate">{totals.movements}</p></Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Cancelamentos</p><p className="text-xl font-bold tabular-nums truncate text-red-700">{totals.cancels}</p></Card>
           <Card className="p-3 gap-0.5 min-w-0">
             <p className="text-xs text-muted-foreground">No horário / fora</p>
@@ -209,6 +234,10 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
           </Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Km GPS</p><p className="text-xl font-bold tabular-nums truncate text-purple-700">{Number(totals.totalKm).toLocaleString("pt-PT", { maximumFractionDigits: 1 })} km</p><p className="text-[11px] text-muted-foreground">{totals.violations} excessos</p></Card>
           <Card className="p-3 gap-0.5 min-w-0"><p className="text-xs text-muted-foreground">Pessoas ativas</p><p className="text-xl font-bold tabular-nums truncate">{totals.activePeople}</p></Card>
+          <DepartedComplaintsCard
+            loading={departedQ.isLoading}
+            value={departedQ.data ?? (departedQ.error ? { available: false, reason: departedQ.error.message } : undefined)}
+          />
           {canSeeCost && totals.totalCost != null && (
             <Card className="p-3 gap-0.5 min-w-0">
               <p className="text-xs text-muted-foreground">Custo extras</p>
@@ -368,7 +397,7 @@ function DayActivityTab({ onOpenSpeedHistory }: { onOpenSpeedHistory?: (t: Speed
 
 const CHANGE_LABEL: Record<string, string> = {
   CHECK_IN: "Recolha", CHECKIN: "Recolha", CHECK_OUT: "Entrega", CHECKOUT: "Entrega",
-  MOVEMENT: "Movimento", CANCELLED: "Cancelamento", CANCELLATION: "Cancelamento", CREATED: "Criada", UPDATE: "Alteração",
+  MOVEMENT: "Movimento", SPOT_CHANGE: "Mudança de lugar", CANCELLED: "Cancelamento", CANCELLATION: "Cancelamento", CREATED: "Criada", UPDATE: "Alteração",
 };
 
 // Gaveta com o dia de UMA pessoa: ações, GPS (trajeto), PDAs e ponto.
@@ -549,7 +578,7 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
               {running === "collect" ? "A recolher…" : "Recolher Dados"}
             </Button>
             <Button variant="outline" onClick={() => run("resplit")} disabled={!!running}
-              title="Volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa depois de corrigir um check-in de PDA; não volta ao Zello nem muda as velocidades.">
+              title="Volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa depois de corrigir um check-in de PDA; não volta ao Zello nem muda os km, mas refaz a velocidade máxima e os excessos com o limite em vigor (sem avisar ninguém).">
               <RefreshCw className="w-4 h-4 mr-1" />{running === "resplit" ? "A dividir…" : "Forçar re-divisão"}
             </Button>
           </>
@@ -599,6 +628,9 @@ function DriverHistoryTab({ speedTarget, onSpeedTarget }: { speedTarget: SpeedTa
         <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Bat. Média</p><p className="text-xl font-bold tabular-nums truncate">{st(stats?.avgBattery, (n) => `${n}%`)}</p></CardContent></Card>
         <Card className="py-0 gap-0 min-w-0"><CardContent className="p-3"><p className="text-xs text-muted-foreground">Excessos{threshold ? ` (> ${Math.round(threshold)} km/h)` : ""}</p><p className="text-xl font-bold tabular-nums truncate text-amber-600">{st(stats?.totalViolations, String)}</p></CardContent></Card>
       </div>
+
+      {/* tarefa 62 (P1b): re-dividir uma vez os últimos 31 dias com o limite de hoje (só o super admin vê) */}
+      <ResplitBackfillCard />
 
       <SpeedHistoryCard target={speedTarget} onTarget={onSpeedTarget} people={peopleData} threshold={threshold} />
 
@@ -864,10 +896,27 @@ function SpeedHistoryCard({ target, onTarget, people, threshold, own }: {
 // troca sozinha quando entra outro). Pedido do Jorge 2026-08-06.
 function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister: boolean }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("mp.pda.deviceToken"));
-  const { data: deviceInfo, isLoading } = trpc.operational.pdas.deviceInfo.useQuery(
-    { token: token ?? "" },
-    { enabled: !!token }
-  );
+  // Telemóvel pessoal (não é PDA): o cartão mostra-o em vez do "lê o QR".
+  const [personal, setPersonal] = useState<string | null>(() => getPersonalToken());
+  useEffect(() => {
+    const on = () => { setToken(localStorage.getItem("mp.pda.deviceToken")); setPersonal(getPersonalToken()); };
+    window.addEventListener(DEVICE_CHANGED_EVENT, on);
+    return () => window.removeEventListener(DEVICE_CHANGED_EVENT, on);
+  }, []);
+  // Plano 56 (A2): mutação (o token vai no corpo do pedido, nunca no endereço — senão ficava nos registos).
+  const info = trpc.operational.pdas.deviceInfo.useMutation();
+  // O PDA deixou de reconhecer este token: pode ter sido convertido em telemóvel pessoal por uma chefia
+  // (o token muda de chave e os avisos passam a ser da pessoa, como no PersonalDeviceBinder).
+  const migrate = usePersonalMigration();
+  const personalSeen = trpc.operational.personalDevices.seen.useMutation({
+    onSuccess: (r, vars) => { if (r.kind === "pessoal" && r.migrated && vars.pdaToken) migrate(vars.pdaToken, r.device?.title); },
+  });
+  useEffect(() => {
+    if (token) info.mutate({ token }, { onSuccess: (d) => { if (!d) personalSeen.mutate({ pdaToken: token }); } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+  const deviceInfo = token ? info.data : undefined;
+  const isLoading = !!token && (info.isIdle || info.isPending || personalSeen.isPending);
 
   return (
     <Card className={token && deviceInfo ? "border-green-300" : "border-dashed"}>
@@ -894,16 +943,20 @@ function ThisDeviceCard({ pdaList, canRegister }: { pdaList: any[]; canRegister:
             <Button size="sm" variant="outline" onClick={() => { localStorage.removeItem("mp.pda.deviceToken"); setToken(null); }}>Limpar</Button>
           </div>
         ) : (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Smartphone className="w-5 h-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm font-medium">Registar um PDA: lê o QR colado no aparelho</p>
-                <p className="text-xs text-muted-foreground">
-                  Uma chefia lê o QR (botão <QrCode className="inline w-3 h-3" /> em cada PDA) <b>no próprio aparelho</b>, uma vez. Depois, quem entrar nele fica com o PDA/Zello.
-                </p>
+          <div className="space-y-3">
+            {!personal && (
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">Registar um PDA: lê o QR colado no aparelho</p>
+                  <p className="text-xs text-muted-foreground">
+                    Uma chefia lê o QR (botão <QrCode className="inline w-3 h-3" /> em cada PDA) <b>no próprio aparelho</b>, uma vez. Depois, quem entrar nele fica com o PDA/Zello.
+                    O <b>teu telemóvel</b> não é um PDA: regista-o como teu aqui em baixo (ou no Perfil).
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
+            <PersonalDeviceCard className="shadow-none" />
           </div>
         )}
       </CardContent>
@@ -915,11 +968,18 @@ function PdasTab() {
   // As mesmas permissões do servidor: criar/editar/QR = editar PDAs; eliminar = gerir.
   const canManage = useCan("pdas", "edit");
   const canDelete = useCan("pdas", "manage");
+  // "Pessoal?" (PDA → telemóvel pessoal): quem edita PDAs, do team leader para cima (como o servidor).
+  const { user: me } = useAuth();
+  const canConvert = canManage && (ROLE_RANK[(me as any)?.role as keyof typeof ROLE_RANK] ?? 0) >= ROLE_RANK.team_leader;
   const [showCreate, setShowCreate] = useState(false);
   const [editPda, setEditPda] = useState<any | null>(null);
   const [viewPda, setViewPda] = useState<number | null>(null);
   const [qrPda, setQrPda] = useState<{ id: number; name: string } | null>(null);
+  const [convertPda, setConvertPda] = useState<{ id: number; name: string; holderId: number | null } | null>(null);
   const utils = trpc.useUtils();
+  // Telemóveis pessoais (não são PDAs partilhados): à parte, com o nome de quem lá está.
+  const personalQ = trpc.operational.personalDevices.list.useQuery(undefined, { retry: retryTransient });
+  const convertedPdaIds = useMemo(() => new Set(personalQ.data?.convertedPdaIds ?? []), [personalQ.data]);
 
   const pdasQ = trpc.operational.pdas.list.useQuery(undefined, { retry: retryTransient });
   const { data: pdaList, isLoading } = pdasQ;
@@ -937,6 +997,7 @@ function PdasTab() {
   // 43b: o Zello de cada PDA bate certo com o Zello? (e corrigir com um clique)
   const zelloCheckQ = trpc.operational.pdas.zelloCheck.useQuery(undefined, { retry: false, staleTime: 5 * 60_000 });
   const zelloCheckBy = useMemo(() => new Map(((zelloCheckQ.data?.available ? zelloCheckQ.data.checks : []) ?? []).map((c) => [c.pdaId, c])), [zelloCheckQ.data]);
+  const personalZelloBy = useMemo(() => new Map(((zelloCheckQ.data?.available ? zelloCheckQ.data.personal : []) ?? []).map((c) => [c.deviceId, c])), [zelloCheckQ.data]);
   const fixZelloMut = trpc.operational.pdas.update.useMutation({
     onSuccess: () => { utils.operational.pdas.list.invalidate(); utils.operational.pdas.zelloCheck.invalidate(); toast.success("Zello do PDA corrigido."); },
     onError: (e) => toast.error(e.message),
@@ -1026,6 +1087,9 @@ function PdasTab() {
                       {PDA_STATUS_LABELS[pda.status]}
                     </span>
                   </div>
+                  {convertedPdaIds.has(pda.id) && (
+                    <p className="text-xs text-muted-foreground">Passou a telemóvel pessoal (ver em baixo). O histórico de quem o teve fica.</p>
+                  )}
 
                   <div className="text-sm space-y-1 text-muted-foreground">
                     {(() => {
@@ -1077,6 +1141,12 @@ function PdasTab() {
                         <QrCode className="w-3 h-3" />
                       </Button>
                     )}
+                    {canConvert && pda.registered && !convertedPdaIds.has(pda.id) && (
+                      <Button size="sm" variant="outline" title="É um telemóvel pessoal (de uma pessoa, não um PDA partilhado)" aria-label={`O ${pda.name} é um telemóvel pessoal`}
+                        onClick={() => setConvertPda({ id: pda.id, name: pda.name, holderId: checkin?.employeeId ?? null })}>
+                        <UserRound className="w-3 h-3 mr-1" />Pessoal?
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" title="Histórico de quem o teve" aria-label={`Histórico do ${pda.name}`} onClick={() => setViewPda(pda.id)}>
                       <Eye className="w-3 h-3" />
                     </Button>
@@ -1095,13 +1165,141 @@ function PdasTab() {
         </div>
       )}
 
+      <PersonalDevicesSection q={personalQ} zelloBy={personalZelloBy} canManage={canManage} />
+
       {/* Dialogs */}
+      {convertPda && <ConvertPdaDialog pda={convertPda} onClose={() => setConvertPda(null)} />}
       {showCreate && <CreatePdaDialog onClose={() => setShowCreate(false)} />}
       {editPda && <EditPdaDialog pda={editPda} onClose={() => setEditPda(null)} />}
       {viewPda !== null && <PdaHistoryDialog pdaId={viewPda} pdaName={pdaList?.find((p: any) => p.id === viewPda)?.name ?? null} onClose={() => setViewPda(null)} />}
       {qrPda && <PdaQrDialog pda={qrPda} onClose={() => setQrPda(null)} />}
     </div>
     </div>
+  );
+}
+
+// Telemóveis pessoais (shared/personalDevice.ts): o telemóvel de UMA pessoa
+// (TL, supervisor…), registado por ela no próprio aparelho. Aparece com o nome
+// de quem tem sessão nele agora e o Zello da ficha do dono. Não é um PDA.
+function PersonalDevicesSection({ q, zelloBy, canManage }: {
+  q: { data?: { devices: any[] } | undefined; isLoading: boolean; error: any; isFetching: boolean; refetch: () => unknown };
+  zelloBy: Map<number, { status: string; problem: boolean; detail: string }>;
+  canManage: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const unregister = trpc.operational.personalDevices.unregister.useMutation({
+    onSuccess: () => { utils.operational.personalDevices.list.invalidate(); toast.info("Deixou de ser telemóvel pessoal (fica no histórico)."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const devices = q.data?.devices ?? [];
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2"><UserRound className="w-4 h-4" />Telemóveis pessoais{q.data ? ` (${devices.length})` : ""}</CardTitle>
+        <p className="text-xs text-muted-foreground">{PERSONAL_DEVICE_HELP} Cada pessoa regista o seu no <b>Perfil → Este telemóvel</b>.</p>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading ? (
+          <p className="text-sm text-muted-foreground">A carregar…</p>
+        ) : q.error && !q.data ? (
+          <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="os telemóveis pessoais" />
+        ) : devices.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Ainda não há telemóveis pessoais registados.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {devices.map((d: any) => {
+              const zc = zelloBy.get(d.id);
+              return (
+                <div key={d.id} className="rounded-lg border p-3 space-y-1 text-sm min-w-0">
+                  <p className="font-semibold truncate" title={d.title}>{d.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {d.currentName
+                      ? <>Agora com <span className="font-medium text-foreground">{d.currentName}</span>{d.currentSince ? ` desde ${fmtPTDateTime(d.currentSince)}` : ""}</>
+                      : <>Ninguém com sessão{d.lastName ? ` · último: ${d.lastName}${d.lastSeenAt ? ` (${fmtPTDateTime(d.lastSeenAt)})` : ""}` : ""}</>}
+                  </p>
+                  {d.ownerName && d.ownerName !== d.currentName && <p className="text-xs text-muted-foreground">Dono: {d.ownerName}</p>}
+                  <p className={`text-xs ${zc?.problem ? "rounded border border-amber-300 bg-amber-50 p-1 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200" : "text-muted-foreground"}`}>
+                    Zello: <span className="font-medium">{d.zelloUsername || "—"}</span>{d.zelloOf ? ` (da ficha de ${d.zelloOf})` : ""}
+                    {zc && zc.status !== "ok" && <span className="block">{zc.detail}</span>}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">{d.label ?? ""}{d.convertedFromPdaId ? " · era um PDA" : ""}</p>
+                  {canManage && (
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={unregister.isPending}
+                      onClick={() => { if (confirm(`${d.title} deixa de ser telemóvel pessoal? Fica no histórico; a pessoa pode voltar a registá-lo.`)) unregister.mutate({ id: d.id }); }}>
+                      Deixar de ser pessoal
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// "É um telemóvel pessoal": um PDA que afinal é o telemóvel de alguém (o do
+// Jorge, da Márcia, do Marco…) passa a telemóvel pessoal dessa pessoa. O PDA
+// fica Inativo (o histórico fica); o telemóvel passa sozinho na próxima entrada.
+function ConvertPdaDialog({ pda, onClose }: { pda: { id: number; name: string; holderId: number | null }; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const histQ = trpc.operational.pdas.checkins.byPda.useQuery({ pdaId: pda.id, limit: PDA_HISTORY_LIMIT }, { retry: retryTransient });
+  // Quem já o teve (o dono costuma ser quem mais o usou): o atual primeiro.
+  const people = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const c of (histQ.data as any[]) ?? []) if (c.employeeId && c.employeeName && !seen.has(Number(c.employeeId))) seen.set(Number(c.employeeId), String(c.employeeName));
+    return [...seen].map(([id, name]) => ({ value: String(id), label: name }));
+  }, [histQ.data]);
+  // Por omissão quem o tem agora (senão quem mais recentemente o teve); "none" = ninguém, escolhido de propósito.
+  const [picked, setPicked] = useState<string | null>(pda.holderId ? String(pda.holderId) : null);
+  const owner = picked ?? people[0]?.value ?? "none";
+  const convert = trpc.operational.personalDevices.convertFromPda.useMutation({
+    onSuccess: (r) => {
+      utils.operational.pdas.list.invalidate();
+      utils.operational.pdas.checkins.active.invalidate();
+      utils.operational.personalDevices.list.invalidate();
+      utils.operational.pdas.zelloCheck.invalidate();
+      toast.success(`O ${r.pdaName} passou a ${r.device?.title ?? "telemóvel pessoal"}.${r.zelloAdopted ? ` O Zello ${r.zelloAdopted} passou para a ficha.` : ""}`, { duration: 10000 });
+      if (r.zelloLeft) {
+        toast.warning(`O Zello ${r.zelloLeft} do PDA não passou para a ficha (a ficha já tem outro, ou outra ficha tem este). Confirma na ficha qual é o Zello deste telemóvel.`, { duration: 15000 });
+      }
+      onClose();
+    },
+    onError: (e) => toast.error(e.message, { duration: 10000 }),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>O {pda.name} é um telemóvel pessoal?</DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            Para o telemóvel de uma pessoa (TL, supervisor…) registado por engano como PDA. Passa a <b>telemóvel pessoal</b>:
+            deixa de ser PDA partilhado (fica <b>Inativo</b>, com o histórico), a sessão de PDA que lá estiver termina e a pessoa entra outra vez.
+            A partir daí a sessão não acaba na saída do ponto e o telemóvel não tira o Zello a ninguém.
+          </p>
+          <div>
+            <Label>De quem é o telemóvel?</Label>
+            {histQ.isLoading ? <p className="text-xs text-muted-foreground">A carregar quem o teve…</p> : (
+              <Select value={owner} onValueChange={setPicked}>
+                <SelectTrigger><SelectValue placeholder="Escolher a pessoa" /></SelectTrigger>
+                <SelectContent>
+                  {people.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+                  <SelectItem value="none">Ninguém por agora (fica de quem o registar no Perfil)</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">Aparece com o nome de quem estiver ligado nele; o Zello é o da ficha do dono.</p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button disabled={convert.isPending || histQ.isLoading} onClick={() => convert.mutate({ pdaId: pda.id, employeeId: owner !== "none" ? Number(owner) : null })}>
+            {convert.isPending ? "A converter…" : "Passar a telemóvel pessoal"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

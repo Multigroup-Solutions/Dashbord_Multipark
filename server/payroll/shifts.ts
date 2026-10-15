@@ -19,6 +19,8 @@ export interface TimeRecordLike {
   reviewStatus?: "ok" | "suspicious" | "approved" | "rejected" | null;
   /** 0555 — terminal (aeroporto): na saída é o estado do troço (shared/pontoTerminal.ts) */
   terminalStatus?: string | null;
+  /** 0575 — "partial": o terminal conta até aqui (UTC); o resto é hora normal */
+  terminalUntil?: string | null;
 }
 
 export type ShiftStatus = "ok" | "open" | "suspicious" | "approved" | "rejected";
@@ -37,6 +39,8 @@ export interface Shift {
   notes: string | null;
   /** estado de terminal do troço (o da SAÍDA); null = normal ou aberto */
   terminalStatus?: string | null;
+  /** "partial": até quando conta o terminal (UTC, o da SAÍDA) */
+  terminalUntil?: string | null;
 }
 
 const NIGHT_START = 22, NIGHT_END = 7;
@@ -57,6 +61,25 @@ export function lisbonParts(d: Date): { day: string; hour: number; weekend: bool
 export function parseDbDate(s: string): Date {
   // a BD guarda "YYYY-MM-DD HH:MM:SS" em UTC
   return new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
+}
+
+/** Turno máx. 12 h: entrada aberta há mais de 16 h = check-out esquecido. */
+export const CHECKOUT_FORGOTTEN_AFTER_H = 16;
+export const CHECKOUT_FORGOTTEN_CAP_H = 12;
+
+/**
+ * Horas da saída do ponto a partir da entrada como está na BD (texto UTC).
+ * Nunca `new Date("YYYY-MM-DD HH:MM:SS")`: isso lê a hora local do servidor
+ * (em Lisboa, no verão, dava +1 h a cada turno).
+ * Esquecida (>16 h) → corta às 12 h, sem extraordinárias.
+ */
+export function checkoutHours(checkInAt: string, nowMs: number): { inAt: Date; outAt: Date; hoursWorked: string; forgotten: boolean } {
+  const inAt = parseDbDate(checkInAt);
+  const diff = (nowMs - inAt.getTime()) / 3600000;
+  if (diff > CHECKOUT_FORGOTTEN_AFTER_H) {
+    return { inAt, outAt: new Date(inAt.getTime() + CHECKOUT_FORGOTTEN_CAP_H * 3600000), hoursWorked: CHECKOUT_FORGOTTEN_CAP_H.toFixed(2), forgotten: true };
+  }
+  return { inAt, outAt: new Date(nowMs), hoursWorked: diff.toFixed(2), forgotten: false };
 }
 
 /**
@@ -128,6 +151,7 @@ export function pairShifts(records: TimeRecordLike[]): { shifts: Shift[]; orphan
       status: statusOf(open, r), day, split: { normal: sp.normal, night: sp.night, weekend: sp.weekend }, daysTouched: sp.days,
       notes: [open.notes, r.notes].filter(Boolean).join(" · ") || null,
       terminalStatus: r.terminalStatus ?? null,
+      terminalUntil: r.terminalUntil ?? null,
     });
     open = null;
   }

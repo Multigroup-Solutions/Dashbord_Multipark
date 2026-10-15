@@ -7,17 +7,25 @@
  *   +5   pelo 1.º movimento depois de uma recolha (levar o carro ao parque) —
  *        SUBSTITUI os +2 desse movimento, não soma
  *   −10  por cada excesso de velocidade
- *   −5   por cada atraso
+ *   −5   por cada atraso ao trabalho: entrada no ponto 5 min ou mais depois
+ *        da hora da escala ou do horário fixo do RH (máx. 1 por dia — Jorge,
+ *        14 out 2026; ≥ 5 min e para todos os que têm horário desde a tarefa 62)
+ *   +1   por cada mudança de lugar (mesma garagem; não é movimento — 14 out 2026)
  *   −20  por cada reclamação confirmada
  *   −6000 por cada acidente (D15, Jorge 3 out: era −600) — ocorrência da app
  *        Multipark que um team leader (ou acima) confirmou como acidente e
  *        disse quem conduzia (server/evaluationAccidents.ts). Só a partir de
  *        ACCIDENTS_FROM_DAY: os acidentes antigos não contam (Jorge, 3 out)
+ * A "entrega atrasada" (−5) saiu na tarefa 62 (D5): os tempos das entregas e
+ * das recolhas são da organização, não de cada pessoa.
  * Os totais podem ser negativos. A normalização por hora é uma vista
  * secundária (não entra na pontuação).
  *
  * Mudar um número aqui muda as duas páginas e o recálculo diário (os dias
  * guardados atualizam-se no recálculo seguinte — o cron refaz o último mês).
+ * ATENÇÃO (fecho mensal, shared/evaluationClose.ts): a pontuação calcula-se ao
+ * ler, por isso, depois do 1.º mês fechado, uma mudança aqui tem de dizer a
+ * partir de que dia vale (como o withAccidentCutoff) — senão muda meses pagos.
  *
  * Tudo PURO (sem BD): usado no servidor (motor + routers) e no cliente
  * (legenda, rótulos, detalhe). Testado em server/evaluationRules.test.ts.
@@ -26,15 +34,20 @@
 // ─── Pontos (configuráveis) ──────────────────────────────────────────────────
 
 export const EVALUATION_POINTS = {
-  /** Movimento entre parques (changeType MOVEMENT). */
+  /** Movimento entre parques (MOVEMENT com garagem de origem ≠ destino — shared/multiparkMovements.ts). */
   movement: 2,
+  /** Mudança de lugar: MOVEMENT na mesma garagem (Jorge, 14 out 2026: "só conta como mudança de lugar"). */
+  spotChange: 1,
   /** Recolha (CHECK_IN) ou entrega (CHECK_OUT). */
   pickupOrDelivery: 3,
   /** 1.º movimento depois de uma recolha, na mesma reserva (substitui `movement`). */
   firstMoveAfterPickup: 5,
   /** Excesso de velocidade (speed_alerts do colaborador + penalização RH "velocidade" confirmada). */
   speeding: -10,
-  /** Atraso: entrada no ponto depois da hora da escala OU entrega atrasada (serviço). */
+  /**
+   * Atraso ao trabalho: entrada no ponto LATE_ARRIVAL_FROM_MINUTES ou mais depois da hora da
+   * escala (Extras-Dia) ou do horário fixo (RH) — no máximo MAX_LATE_ARRIVALS_PER_DAY por dia.
+   */
   delay: -5,
   /** Reclamação confirmada (com pontos aplicados) em que o colaborador foi associado. */
   confirmedComplaint: -20,
@@ -54,18 +67,33 @@ export function withAccidentCutoff<M extends { accidents: number }>(day: string,
   return day < ACCIDENTS_FROM_DAY && m.accidents !== 0 ? { ...m, accidents: 0 } : m;
 }
 
-/** Minutos de tolerância antes de uma entrada contar como atraso (0 = qualquer minuto). */
-export const DELAY_TOLERANCE_MINUTES = 0;
+/**
+ * Atraso ao trabalho (tarefa 62, D4): conta a partir de 5 minutos INTEIROS
+ * depois da hora da escala — floor((entrada − hora) / 60 s) ≥ 5: 03:04:59
+ * numa escala das 03:00 não é atraso; 03:05:00 já é (−5); 03:10 também.
+ * Substitui a antiga tolerância de 0 min.
+ */
+export const LATE_ARRIVAL_FROM_MINUTES = 5;
+
+/** Atrasos ao trabalho que contam por pessoa e dia operacional (Jorge, 14 out 2026: "no máximo 1 por dia"). */
+export const MAX_LATE_ARRIVALS_PER_DAY = 1;
 
 /**
- * Serviço atrasado: entrega (CHECK_OUT) feita mais de X minutos depois de o
- * cliente a pedir (PENDING_CHECKOUT), na mesma reserva — a mesma medida do
- * resumo do supervisor ("> 15 min"). Acima de LATE_SERVICE_MAX_MINUTES não é
- * o mesmo pedido (dados incoerentes) e não conta. As recolhas não contam: o
- * atraso aí é quase sempre do voo/cliente, não do condutor.
+ * Versão das regras com que um dia foi calculado (employee_day_metrics.rulesVersion, 0670).
+ * 1 = antes de 14 out 2026 (inícios de movimento contados, entregas pelo pedido + 15 min, atrasos à entrada sem limite por dia);
+ * 2 = regras de 14 out 2026;
+ * 3 = tarefa 62: atraso ao trabalho só a partir de 5 min e sem a "entrega atrasada".
+ * Dias com versão menor mostram o aviso "calculados com as regras antigas — Recalcular".
  */
-export const LATE_SERVICE_MINUTES = 15;
-export const LATE_SERVICE_MAX_MINUTES = 600;
+export const EVALUATION_RULES_VERSION = 3;
+
+/**
+ * Métricas de regras retiradas (tarefa 62): as colunas ficam (nunca se apagam
+ * dados), a 0 nos dias novos; já não se ajustam nem se contestam e os ajustes
+ * antigos ficam guardados, sem efeito na pontuação.
+ */
+export const RETIRED_METRICS: readonly MetricKey[] = ["lateServices", "deliveriesWithoutSchedule"];
+export const isRetiredMetric = (k: string | null | undefined): boolean => !!k && (RETIRED_METRICS as readonly string[]).includes(k);
 
 /** Tipos de ocorrência (incidents.incidentType) que contam como acidente/dano/risco. */
 export const DAMAGE_INCIDENT_TYPES: readonly string[] = ["dano"];
@@ -118,15 +146,24 @@ export interface DayMetrics {
   movements: number;
   /** Movimentos que foram o 1.º depois de uma recolha (levar ao parque). */
   parkingMoves: number;
+  /** Mudanças de lugar (MOVEMENT na mesma garagem) — NÃO entram em `movements`. */
+  spotChanges: number;
   cancels: number;
   otherActions: number;
   /** Pontos das ações (movimentos + recolhas/entregas + levar ao parque). */
   weightedActions: number;
   speedingEvents: number;
-  /** Atrasos que pontuam: entradas tardias no ponto + serviços atrasados. */
+  /**
+   * Atrasos. Desde a tarefa 62 só os atrasos ao trabalho (entrada no ponto
+   * ≥ 5 min depois da hora da escala, máx. 1 por dia). Nos dias antigos ainda
+   * incluem as entregas atrasadas: os atrasos ao trabalho são SEMPRE
+   * `lateArrivalsOf` (delays − lateServices) — nunca mostrar o `delays` em bruto.
+   */
   delays: number;
-  /** Parte dos `delays` que são serviços (entregas) atrasados. */
+  /** Regra retirada (tarefa 62): parte dos `delays` que eram entregas atrasadas (só nos dias antigos; 0 nos novos). */
   lateServices: number;
+  /** Regra retirada (tarefa 62): entregas sem hora marcada legível (só nos dias antigos; 0 nos novos). */
+  deliveriesWithoutSchedule: number;
   complaints: number;
   accidents: number;
   /** Informativo (não pontua): ocorrências reportadas pelo colaborador. */
@@ -143,8 +180,8 @@ export type MetricKey = keyof DayMetrics;
 
 export const METRIC_KEYS: MetricKey[] = [
   "hoursWorked", "suspiciousHours", "scheduledHours", "pontoEvents", "cost",
-  "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves", "cancels", "otherActions",
-  "weightedActions", "speedingEvents", "delays", "lateServices", "complaints", "accidents",
+  "actions", "actionsMorning", "actionsNight", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges", "cancels", "otherActions",
+  "weightedActions", "speedingEvents", "delays", "lateServices", "deliveriesWithoutSchedule", "complaints", "accidents",
   "incidentsReported", "incidentsAgainst", "penaltyPoints", "bonusPoints",
 ];
 
@@ -160,17 +197,19 @@ export const METRIC_LABELS: Record<MetricKey, string> = {
   actionsNight: "Ações noite (15h–03h)",
   recolhas: "Recolhas",
   entregas: "Entregas",
-  movements: "Movimentos",
+  movements: "Movimentos (levar ao parque + entre parques)",
   parkingMoves: "Levar ao parque (1.º movimento após recolha)",
+  spotChanges: "Mudanças de lugar (mesma garagem)",
   cancels: "Cancelamentos",
   otherActions: "Outras ações",
   weightedActions: "Pontos das ações",
   speedingEvents: "Excessos de velocidade",
-  delays: "Atrasos (ponto + serviço)",
-  lateServices: "Entregas atrasadas (> 15 min)",
+  delays: "Atrasos ao trabalho",
+  lateServices: "Entregas atrasadas (regra antiga)",
+  deliveriesWithoutSchedule: "Entregas sem hora marcada (regra antiga)",
   complaints: "Reclamações confirmadas",
   accidents: "Acidentes / danos",
-  incidentsReported: "Ocorrências reportadas",
+  incidentsReported: "Ocorrências que registou",
   incidentsAgainst: "Ocorrências atribuídas",
   penaltyPoints: "Pontos de penalização (RH)",
   bonusPoints: "Pontos (ajuste direto)",
@@ -178,7 +217,7 @@ export const METRIC_LABELS: Record<MetricKey, string> = {
 
 /** Métricas que um gestor pode ajustar à mão (as derivadas recalculam-se). */
 export const ADJUSTABLE_METRICS: MetricKey[] = [
-  "bonusPoints", "recolhas", "entregas", "movements", "parkingMoves",
+  "bonusPoints", "recolhas", "entregas", "movements", "parkingMoves", "spotChanges",
   "speedingEvents", "delays", "complaints", "accidents", "hoursWorked",
 ];
 
@@ -194,7 +233,7 @@ export function round2(n: number): number {
 
 // ─── Pontuação ───────────────────────────────────────────────────────────────
 
-export type RuleKey = "movement" | "pickupOrDelivery" | "firstMoveAfterPickup" | "speeding" | "delay" | "confirmedComplaint" | "accidentOrDamage" | "manual";
+export type RuleKey = "movement" | "spotChange" | "pickupOrDelivery" | "firstMoveAfterPickup" | "speeding" | "delay" | "confirmedComplaint" | "accidentOrDamage" | "manual";
 
 export interface RuleLine {
   key: RuleKey;
@@ -208,19 +247,29 @@ export interface RuleLine {
 /** Regras, pela ordem da legenda. `count` lê as métricas do dia (ou da soma). */
 export const EVALUATION_RULES: Array<{ key: Exclude<RuleKey, "manual">; label: string; count: (m: DayMetrics) => number }> = [
   { key: "movement", label: "Movimento entre parques", count: (m) => Math.max(0, m.movements - m.parkingMoves) },
+  { key: "spotChange", label: "Mudança de lugar (mesma garagem)", count: (m) => m.spotChanges ?? 0 },
   { key: "pickupOrDelivery", label: "Recolha ou entrega", count: (m) => m.recolhas + m.entregas },
   { key: "firstMoveAfterPickup", label: "1.º movimento após recolha (levar ao parque)", count: (m) => m.parkingMoves },
   { key: "speeding", label: "Excesso de velocidade", count: (m) => m.speedingEvents },
-  { key: "delay", label: "Atraso", count: (m) => m.delays },
+  { key: "delay", label: "Atraso ao trabalho (≥ 5 min)", count: (m) => lateArrivalsOf(m) },
   { key: "confirmedComplaint", label: "Reclamação confirmada", count: (m) => m.complaints },
   { key: "accidentOrDamage", label: "Acidente ou dano/risco", count: (m) => m.accidents },
 ];
 
+/**
+ * Atrasos ao trabalho de um dia (ou soma): todos os atrasos menos as entregas
+ * atrasadas (que só existem nos dias antigos). É o número a mostrar em todo o
+ * lado (ecrã, CSV, Sheets, assistente, Desempenho). PURA.
+ */
+export function lateArrivalsOf(m: Pick<DayMetrics, "delays" | "lateServices">): number {
+  return Math.max(0, round2(m.delays - m.lateServices));
+}
+
 /** Pontos das ações (a "ação ponderada" do operacional). */
-export function actionPoints(m: Pick<DayMetrics, "movements" | "parkingMoves" | "recolhas" | "entregas">): number {
+export function actionPoints(m: Pick<DayMetrics, "movements" | "parkingMoves" | "recolhas" | "entregas"> & { spotChanges?: number }): number {
   const p = EVALUATION_POINTS;
   const plainMoves = Math.max(0, m.movements - m.parkingMoves);
-  return round2(plainMoves * p.movement + m.parkingMoves * p.firstMoveAfterPickup + (m.recolhas + m.entregas) * p.pickupOrDelivery);
+  return round2(plainMoves * p.movement + (m.spotChanges ?? 0) * p.spotChange + m.parkingMoves * p.firstMoveAfterPickup + (m.recolhas + m.entregas) * p.pickupOrDelivery);
 }
 
 export interface Score {
@@ -299,9 +348,14 @@ export function applyAdjustments(base: DayMetrics, adjustments: AdjustmentLike[]
     if (!METRIC_KEYS.includes(key)) continue;
     const delta = Number(a.delta);
     if (!Number.isFinite(delta) || delta === 0) continue;
-    out[key] = round2(out[key] + delta);
-    if (ACTION_PARTS.includes(key)) out.actions = round2(out.actions + delta);
-    if (ACTION_PARTS.includes(key) || key === "parkingMoves") touchedActions = true;
+    // as entregas atrasadas fazem parte do total dos atrasos: o ajuste nunca passa abaixo de 0 entregas,
+    // para não apagar atrasos à entrada (delays − lateServices fica igual). Tarefa 62: a regra saiu e
+    // `lateServices` já não se ajusta; este ramo só trata os ajustes antigos (sem efeito na pontuação).
+    const d = key === "lateServices" ? Math.max(delta, -out.lateServices) : delta;
+    out[key] = round2(out[key] + d);
+    if (ACTION_PARTS.includes(key)) out.actions = round2(out.actions + d);
+    if (key === "lateServices") out.delays = round2(out.delays + d);
+    if (ACTION_PARTS.includes(key) || key === "parkingMoves" || key === "spotChanges") touchedActions = true;
   }
   for (const k of NON_NEGATIVE) if (out[k] < 0) out[k] = 0;
   if (out.parkingMoves > out.movements) out.parkingMoves = out.movements;

@@ -2,7 +2,7 @@ import { projectScope, bookingHistoryScope, employeeScope, userScope, partnerSco
 import { TRPCError } from '@trpc/server';
 import { buildHandoverCurrent, buildHandoverInsert, buildHandoverList, buildHandoverUpdate, handoverBoundValues, type HandoverInput, type HandoverKey } from './shiftHandoverSql';
 import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HANDOVER_EXISTS_MESSAGE, operationalDayWindowUtc } from '../shared/shiftHandover';
-import { mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, stampOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
+import { handoverAiSummaryStale, mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, stampOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { normalizeEmail } from "../shared/email";
@@ -73,9 +73,7 @@ import {
   InsertInviteToken,
   payslipHistory,
   InsertPayslipHistory,
-  speedLimits,
   speedViolations,
-  InsertSpeedLimit,
   InsertSpeedViolation,
   dailyDriverHistory,
   InsertDailyDriverHistory,
@@ -94,6 +92,7 @@ import type { LostFoundItem, LostFoundPhoto, LostFoundMessage } from "../drizzle
 import { ENV } from "./_core/env";
 import { expenseStatsWindows, lisbonToday } from "../shared/expensePeriods";
 import { lisbonDayRangeUtc } from "../shared/lisbonDay";
+import { DELIVERY_LATE_MIN, DELIVERY_VERY_LATE_MIN, PICKUP_LATE_MIN, dayTimings, teamLines, type ActorRef } from "../shared/shiftDayReview";
 import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
@@ -369,6 +368,7 @@ export async function seedDefaultCategories() {
       const found = await db.select().from(expenseCategories).where(eq(expenseCategories.name, cat.name)).limit(1);
       if (found.length === 0) await db.insert(expenseCategories).values(cat);
     }
+    // Acentos certos + "Sinistros" nas categorias que já existem: migração 0675 (uma vez).
     return;
   }
 
@@ -382,6 +382,7 @@ export async function seedDefaultCategories() {
     { name: "Transportes", department: "Operacional", color: "#14b8a6" },
     { name: "Tecnologia", department: "IT", color: "#0ea5e9" },
     { name: "Seguros", department: "Financeiro", color: "#f97316" },
+    { name: "Sinistros", department: "Operacional", color: "#b91c1c" },
     { name: "Rendas", department: "Financeiro", color: "#e11d48" },
     { name: "Água", department: "Instalações", color: "#06b6d4" },
     { name: "Eletricidade", department: "Instalações", color: "#eab308" },
@@ -1308,7 +1309,7 @@ export async function monthWorkMetrics(employeeIds: number[], year: number, mont
   const from = `${year}-${mm}-01`, to = `${year}-${mm}-31`;
   const ids = sql.join(Array.from(new Set(employeeIds)).map((i) => sql`${i}`), sql`, `);
   const [rows] = await db.execute(sql`SELECT employeeId,
-      SUM(actions) AS actions, SUM(recolhas) AS recolhas, SUM(entregas) AS entregas, SUM(movements + parkingMoves) AS movements,
+      SUM(actions) AS actions, SUM(recolhas) AS recolhas, SUM(entregas) AS entregas, SUM(movements) AS movements,
       SUM(CASE WHEN actions > 0 THEN 1 ELSE 0 END) AS daysWithActions,
       SUM(hoursWorked) AS hoursPonto, SUM(CASE WHEN hoursWorked > 0 THEN 0 ELSE scheduledHours END) AS hoursEscala
     FROM employee_day_metrics WHERE day >= ${from} AND day <= ${to} AND employeeId IN (${ids}) GROUP BY employeeId`) as any;
@@ -2130,7 +2131,8 @@ export async function revokeApiKey(id: number, byUserId: number, reason: string)
 
 export async function getComplaints(filters?: { status?: string; type?: string; vehicleId?: number; assignedToId?: number; projectId?: number; archived?: boolean; sinceDays?: number }) {
   const db = await getDb();
-  if (!db) return [];
+  // Lote 57: BD em baixo = erro (a página diz "Não foi possível carregar"), nunca "Sem tickets".
+  if (!db) throw new Error("Base de dados indisponível.");
   const conditions: any[] = await projectFilterConds(complaints.projectId, filters?.projectId);
   // Arquivadas (16b) só quando pedidas; nunca misturadas com as outras.
   conditions.push(filters?.archived ? sql`${complaints.archivedAt} IS NOT NULL` : sql`${complaints.archivedAt} IS NULL`);
@@ -2371,7 +2373,7 @@ export async function getTrainingVideos(categoryId?: number) {
   return db.select().from(trainingVideos).where(and(...conditions)).orderBy(trainingVideos.sortOrder);
 }
 
-export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number; careerLevel?: string }) {
+export async function createTrainingVideo(data: { categoryId: number; title: string; description?: string; videoUrl: string; thumbnailUrl?: string; durationMinutes?: number; sortOrder?: number; createdBy?: number; careerLevel?: string; area?: string | null; subarea?: string | null }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingVideos).values(data).$returningId();
@@ -2395,14 +2397,14 @@ export async function getTrainingManuals(categoryId?: number, type?: string, inc
   return db.select().from(trainingManuals).where(and(...conditions)).orderBy(desc(trainingManuals.createdAt));
 }
 
-export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure" | "link"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string; careerLevel?: string }) {
+export async function createTrainingManual(data: { categoryId?: number; title: string; content: string; type?: "manual" | "update" | "news" | "procedure" | "link"; createdBy?: number; fileUrl?: string; fileKey?: string; fileName?: string; fileMimeType?: string; careerLevel?: string; area?: string | null; subarea?: string | null }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [result] = await db.insert(trainingManuals).values(data).$returningId();
   return result;
 }
 
-export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure" | "link"; published?: boolean; fileUrl?: string | null; fileKey?: string | null; fileName?: string | null; fileMimeType?: string | null; careerLevel?: string | null; categoryId?: number | null }) {
+export async function updateTrainingManual(id: number, data: { title?: string; content?: string; type?: "manual" | "update" | "news" | "procedure" | "link"; published?: boolean; fileUrl?: string | null; fileKey?: string | null; fileName?: string | null; fileMimeType?: string | null; careerLevel?: string | null; categoryId?: number | null; area?: string | null; subarea?: string | null }) {
   const db = await getDb();
   if (!db) return;
   const { published, ...rest } = data;
@@ -3978,7 +3980,7 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
   if (!db) return { closed: 0 };
   // Último registo de cada colaborador; se for check_in com >16h, fecha.
   const [rows] = await db.execute(sql`
-    SELECT t.id, t.employeeId, t.recordedAt
+    SELECT t.id, t.employeeId, t.recordedAt, t.terminalStatus
     FROM time_records t
     JOIN (
       SELECT employeeId, MAX(recordedAt) AS lastAt
@@ -3986,17 +3988,53 @@ export async function autoCloseStaleCheckIns(): Promise<{ closed: number }> {
     ) last ON last.employeeId = t.employeeId AND last.lastAt = t.recordedAt
     WHERE t.type = 'check_in' AND t.recordedAt < DATE_SUB(NOW(), INTERVAL 16 HOUR)
   `) as any;
+  // Terminal no ponto (interruptor PONTO_TERMINAL): a entrada aberta era de
+  // terminal → a saída esquecida fica "por confirmar" (o trabalho diário tenta
+  // logo a seguir "até à última recolha/entrega"; senão decide o RH).
+  let terminalOn: boolean | null = null;
+  let terminalDeps: import("./terminalSessions").TerminalDeps | null = null;
+  // Plano 56 (A2, só com ENTRAR_COM_CODIGO): o ponto esquecido fechado sozinho
+  // também solta o PDA (pda_checkins) e acaba a sessão de PDA da pessoa.
+  let pdaOn: boolean | null = null;
   let closed = 0;
   for (const r of rows as any[]) {
     const outAt = new Date(new Date(r.recordedAt).getTime() + 12 * 3600000);
+    let terminalStatus: "pending" | null = null;
+    if (r.terminalStatus === "start") {
+      if (terminalOn === null) terminalOn = await (await import("./pontoTerminal")).pontoTerminalEnabled();
+      if (terminalOn) terminalStatus = "pending";
+    }
     await db.insert(timeRecords).values({
       employeeId: Number(r.employeeId),
       type: "check_out",
       recordedAt: outAt.toISOString().slice(0, 19).replace("T", " "),
       hoursWorked: "12.00",
       notes: "[SUSPEITO] check-out automático — entrada aberta há mais de 16h, cortado a 12h",
+      ...(terminalStatus ? { terminalStatus } : {}),
     } as any);
     closed++;
+    // Terminal pelo perfil (plano 56 B1): o ponto esquecido fechado sozinho
+    // também liberta o lugar no terminal (endReason "stale_checkout"; as horas
+    // ficam "por confirmar"). Nunca parte o fecho do ponto.
+    try {
+      const ts = await import("./terminalSessions");
+      terminalDeps ??= await ts.realTerminalDeps();
+      await ts.releaseOnCheckout(terminalDeps, { employeeId: Number(r.employeeId), actorUserId: null, endedAtMs: outAt.getTime(), fix: null, reason: "stale_checkout" });
+    } catch (err) {
+      console.warn("[terminal] lugar não libertado no fecho automático do ponto:", String((err as any)?.message ?? err).slice(0, 160));
+    }
+    try {
+      const ps = await import("./pdaSession");
+      // As sessões de PDA só existem com o interruptor; acabar as que houver nunca faz mal.
+      await ps.endPdaSessionsOfEmployee(Number(r.employeeId), "stale_checkout");
+      pdaOn ??= await ps.pdaSessionsEnabled();
+      if (pdaOn && (await closePdaCheckinsForEmployee(Number(r.employeeId), outAt))) {
+        const { syncPdaZelloNamesForEmployee } = await import("./pdaZelloName");
+        void syncPdaZelloNamesForEmployee(Number(r.employeeId));
+      }
+    } catch (err) {
+      console.warn("[pda] PDA não soltado no fecho automático do ponto:", String((err as any)?.message ?? err).slice(0, 160));
+    }
   }
   return { closed };
 }
@@ -4065,6 +4103,8 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
     materialExceptions: parseMaterialExceptions(r.materialExceptions),
     // A fotografia do resumo automático (JSON grande) não vai na lista.
     hasAutoSummary: !!autoSummary,
+    // 0600: resumo IA feito para uma versão anterior (editada depois de entregue).
+    aiSummaryStale: handoverAiSummaryStale(r),
   }));
 }
 
@@ -4072,43 +4112,24 @@ export async function listShiftHandovers(opts: { from?: string; to?: string; cit
  * Tempos do painel do supervisor a partir do histórico (ao vivo):
  *  - pendente→entrega: 1.º PENDING_CHECKOUT no dia → 1.º CHECK_OUT (até 10 h depois);
  *  - atraso na recolha: 1.º CHECK_IN no dia vs entrada PREVISTA da reserva (±10 h).
- * Instantes UTC "YYYY-MM-DD HH:MM:SS". PURA.
+ * Instantes UTC "YYYY-MM-DD HH:MM:SS". PURA. As regras vivem em
+ * shared/shiftDayReview.ts (`dayTimings`, com a reserva e quem fez cada uma).
  */
 export function supervisorTimings(
   rows: Array<{ bookingExternalId: string; changeType: string | null; actionTime: string | null; agentName: string | null; checkIn: string | null }>,
   w: { start: string; end: string; checkoutEnd: string },
 ): { deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }>; pickupDelays: number[] } {
-  const ms = (t: string) => Date.parse(`${t.replace(" ", "T")}Z`);
-  const pend = new Map<string, string>(), out = new Map<string, { t: string; agent: string | null }>(), cin = new Map<string, { t: string; planned: string | null }>();
-  for (const r of rows) {
-    const t = r.actionTime; const b = r.bookingExternalId;
-    if (!t || !b) continue;
-    const ct = (r.changeType ?? "").toUpperCase();
-    if (ct === "PENDING_CHECKOUT" && t >= w.start && t < w.end) { if (!pend.has(b) || t < pend.get(b)!) pend.set(b, t); }
-    else if (ct === "CHECK_OUT" && t >= w.start && t < w.checkoutEnd) {
-      const e = out.get(b);
-      if (!e || t < e.t) out.set(b, { t, agent: r.agentName ?? e?.agent ?? null });
-    } else if (ct === "CHECK_IN" && t >= w.start && t < w.end) { if (!cin.has(b) || t < cin.get(b)!.t) cin.set(b, { t, planned: r.checkIn }); }
-  }
-  const deliveryTimes: Array<{ booking: string; mins: number; agent: string | null }> = [];
-  for (const [b, t1] of pend) {
-    const o = out.get(b);
-    if (!o || o.t < t1) continue;
-    const mins = Math.floor((ms(o.t) - ms(t1)) / 60_000);
-    if (mins < 600) deliveryTimes.push({ booking: b, mins, agent: o.agent });
-  }
-  const pickupDelays: number[] = [];
-  for (const { t, planned } of cin.values()) {
-    if (!planned) continue;
-    const mins = Math.trunc((ms(t) - ms(planned)) / 60_000);
-    if (Number.isFinite(mins) && Math.abs(mins) < 600) pickupDelays.push(mins);
-  }
-  return { deliveryTimes, pickupDelays };
+  const t = dayTimings(rows, w);
+  return {
+    deliveryTimes: t.deliveries.map((d) => ({ booking: d.booking, mins: d.mins, agent: d.agent })),
+    pickupDelays: t.pickups.filter((p) => p.delayMins != null).map((p) => p.delayMins!),
+  };
 }
 
 /** Resumo do dia do supervisor: condutores por turno, carros
  *  recolhidos/entregues, TEMPOS pendente→entrega e atraso na recolha
- *  (previsto vs real), e reclamações do dia.
+ *  (previsto vs real), reclamações do dia e, por chefe de turno, o que a
+ *  equipa dele fez a tempo e atrasado (12 out 2026).
  *  O "dia" é o dia OPERACIONAL de Lisboa: 03:00 → 03:00 do dia seguinte
  *  (manhã + noite inteira), convertido para UTC (as colunas são UTC). Tudo
  *  dentro das cidades do utilizador (ou da cidade pedida). */
@@ -4125,16 +4146,29 @@ export async function getSupervisorDayDashboard(date: string) {
   const { scopedCityNamesLive } = await import("./cityScope");
   const HIST_LIMIT = 5000;
   const hist = await readLiveHistory({ changeTypes: ["PENDING_CHECKOUT", "CHECK_OUT", "CHECK_IN"], from: start, to: checkoutEnd, cities: scopedCityNamesLive(), limit: HIST_LIMIT, order: "asc" });
-  const { deliveryTimes, pickupDelays } = supervisorTimings(hist, { start, end, checkoutEnd });
-  deliveryTimes.sort((a, b) => b.mins - a.mins);
+  const timings = dayTimings(hist, { start, end, checkoutEnd });
+  const deliveryTimes = [...timings.deliveries].sort((a, b) => b.mins - a.mins);
+  const pickupDelays = timings.pickups.filter((p) => p.delayMins != null).map((p) => p.delayMins!);
   const dAvg = deliveryTimes.length ? Math.round(deliveryTimes.reduce((s, r) => s + r.mins, 0) / deliveryTimes.length) : 0;
 
-  const late = pickupDelays.filter((m) => m > 15).length;
+  const late = pickupDelays.filter((m) => m > PICKUP_LATE_MIN).length;
   const pAvg = pickupDelays.length ? Math.round(pickupDelays.reduce((s, m) => s + m, 0) / pickupDelays.length) : 0;
 
   // Reclamações criadas no mesmo dia operacional
   const [[compl]] = await db.execute(sql`SELECT COUNT(*) n FROM complaints
     WHERE createdAt >= ${start} AND createdAt < ${end} AND ${projectScope(sql`complaints.projectId`)}`) as any;
+  // 12 out 2026 (Jorge): reclamações dos carros que SAÍRAM neste dia (entrega feita
+  // no dia operacional), seja qual for o dia em que chegaram — com o histórico já lido.
+  let complaintsDeparted: { available: true; complaints: number; bookings: number; truncated: boolean } | { available: false; reason: string };
+  try {
+    const { departedFromHistory, departedRefs } = await import("../shared/departedComplaints");
+    const { countComplaintsForRefs } = await import("./departedComplaints");
+    const left = departedFromHistory(hist, start, end);
+    complaintsDeparted = { available: true, complaints: await countComplaintsForRefs(departedRefs(left)), bookings: left.length, truncated: hist.length >= HIST_LIMIT };
+  } catch (err: any) {
+    console.warn("[resumo-dia] reclamações dos carros que saíram:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+    complaintsDeparted = { available: false, reason: "Não foi possível contar as reclamações dos carros que saíram." };
+  }
 
   // Condutores por turno (escala extras-dia do dia + ações)
   const dayActivity = await getDayActivity(date);
@@ -4145,22 +4179,46 @@ export async function getSupervisorDayDashboard(date: string) {
     employeeId: extrasDiaAssignments.employeeId,
     startHour: extrasDiaAssignments.startHour,
     endHour: extrasDiaAssignments.endHour,
+    sentHomeHour: extrasDiaAssignments.sentHomeHour,
     isTeamLeader: extrasDiaAssignments.isTeamLeader,
   }).from(extrasDiaAssignments).where(and(eq(extrasDiaAssignments.assignmentDate, date), cityNameScope(extrasDiaAssignments.city)));
+
+  // Equipas por chefe de turno (regra 42c): quem fez cada entrega/recolha → a
+  // ficha (a MESMA identidade da Atividade do Dia) → o turno dela na escala.
+  const { loadIdentityResolver } = await import("./dayActivity");
+  const { resolve } = await loadIdentityResolver();
+  const actor = (userId: string | null, name: string | null): ActorRef => {
+    const who = resolve(userId, name);
+    if (who.kind === "ignorado") return { employeeId: null, name: null };
+    return { employeeId: who.employeeId, name: who.kind === "colaborador" ? who.name : name };
+  };
+  const teams = teamLines(date, assignments.map((a) => ({ ...a, shift: a.shift as "morning" | "night" })), {
+    deliveries: [
+      ...timings.deliveries.map((d) => ({ actor: actor(d.agentUserId, d.agent), at: d.deliveredAt, mins: d.mins })),
+      ...timings.unmeasured.map((d) => ({ actor: actor(d.agentUserId, d.agent), at: d.at, mins: null })),
+    ],
+    pickups: timings.pickups.map((p) => ({ actor: actor(p.agentUserId, p.agent), at: p.at, delayMins: p.delayMins })),
+  });
 
   return {
     date,
     window: { start, end },
     totals: dayActivity.totals,
     people: dayActivity.people,
+    gpsMissingDays: dayActivity.gpsMissingDays,
     shifts: assignments,
+    teams,
     delivery: {
       count: deliveryTimes.length,
       avgMins: dAvg,
       maxMins: deliveryTimes[0]?.mins ?? 0,
-      over15: deliveryTimes.filter((r) => r.mins > 15).length,
-      over30: deliveryTimes.filter((r) => r.mins > 30).length,
-      worst: deliveryTimes.slice(0, 8),
+      over15: deliveryTimes.filter((r) => r.mins > DELIVERY_LATE_MIN).length,
+      over30: deliveryTimes.filter((r) => r.mins > DELIVERY_VERY_LATE_MIN).length,
+      // Cada uma abre o "o que se passava nesse horário" (shiftHandover.deliveryContext).
+      worst: deliveryTimes.slice(0, 8).map((d) => ({
+        booking: d.booking, mins: d.mins, agent: d.agent, pendingAt: d.pendingAt, deliveredAt: d.deliveredAt,
+        bookingCode: d.bookingCode, plate: d.plate, parkName: d.parkName, city: d.city,
+      })),
     },
     pickup: {
       count: pickupDelays.length,
@@ -4168,6 +4226,7 @@ export async function getSupervisorDayDashboard(date: string) {
       over15: late,
     },
     complaintsToday: Number((compl as any)?.n ?? 0),
+    complaintsDeparted,
     // Movimentos cortados no limite: os tempos são de uma parte do dia (o ecrã avisa).
     timingsTruncated: hist.length >= HIST_LIMIT,
   };
@@ -4986,37 +5045,8 @@ export async function getProjectHierarchyManagers(projectId: number) {
 
 // ─── SPEED LIMITS & VIOLATIONS ──────────────────────────────────────────────
 
-export async function getSpeedLimits() {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(speedLimits).where(eq(speedLimits.isActive, 1));
-}
-
-export async function getDefaultSpeedLimit() {
-  const db = await getDb();
-  if (!db) return null;
-  const rows = await db.select().from(speedLimits).where(eq(speedLimits.isDefault, 1)).limit(1);
-  return rows[0] || null;
-}
-
-export async function createSpeedLimit(data: InsertSpeedLimit) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  const [result] = await db.insert(speedLimits).values(data);
-  return result.insertId;
-}
-
-export async function updateSpeedLimit(id: number, data: Partial<InsertSpeedLimit>) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.update(speedLimits).set({ ...data, updatedAt: toMysqlDateTime(new Date()) }).where(eq(speedLimits.id, id));
-}
-
-export async function deleteSpeedLimit(id: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.delete(speedLimits).where(eq(speedLimits.id, id));
-}
+// O limite de velocidade está em Definições → Parâmetros (gps.speedRule — server/speedRule.ts). A tabela
+// antiga speed_limits fica na BD (sem se apagar), mas já não é lida nem escrita (ronda 2, 14 out 2026).
 
 export async function recordSpeedViolation(data: InsertSpeedViolation) {
   const db = await getDb();
@@ -6022,6 +6052,8 @@ export async function getAgentHistoryFromDb(opts: {
   userIds?: readonly string[];
 }): Promise<{
   total: number;
+  /** 14 out 2026: inícios de movimento lidos e deixados de fora da lista e do total */
+  movementStarts?: number;
   truncated?: boolean;
   period: { startDate: string; endDate: string };
   agentName: string;
@@ -6067,13 +6099,20 @@ export async function getAgentHistoryFromDb(opts: {
   });
   const rows = live.map((r) => ({
     id: r.historyId, changeType: r.changeType, actionTime: r.actionTime, remarks: r.remarks, agentName: r.agentName,
-    agentUserId: r.agentUserId, modifiedFields: r.modifiedFields, platform: r.platform, bookingExternalId: r.bookingExternalId,
+    agentUserId: r.agentUserId, modifiedFields: r.modifiedFields, moveKind: r.moveKind, platform: r.platform, bookingExternalId: r.bookingExternalId,
     bookingStatus: r.bookingStatus, bookingCheckIn: r.checkIn, bookingCheckOut: r.checkOut, bookingParkName: r.parkName, bookingLicensePlate: r.licensePlate,
   }));
 
+  // Jorge, 14 out 2026: o início de um movimento e a mudança de lugar (mesma garagem) não são movimentos —
+  // no detalhe (Condutores e agentes) aparecem com o seu nome, e "Movimentos" mostra só os que contam.
+  // O tipo vem do SQL (texto completo); sem ele (leituras antigas), do texto que veio (pode vir cortado).
+  const { classifyMovement, displayChangeType, MOVEMENT_KIND_CHANGE_TYPES } = await import("../shared/multiparkMovements");
+  const MOVEMENT_START_TYPE = MOVEMENT_KIND_CHANGE_TYPES.inicio;
+  const moveType = (ct: string | null, mf: string | null, kind: string | null | undefined): string =>
+    String(ct ?? "").toUpperCase() !== "MOVEMENT" ? (ct ?? "") : displayChangeType(ct, kind ?? classifyMovement(mf));
   const history = rows.map((r) => ({
     id: r.id,
-    changeType: r.changeType ?? "",
+    changeType: moveType(r.changeType, r.modifiedFields, r.moveKind),
     actionTime: r.actionTime ?? "",
     remarks: r.remarks ?? undefined,
     agentName: r.agentName ?? "",
@@ -6093,14 +6132,18 @@ export async function getAgentHistoryFromDb(opts: {
   }));
 
   const first = rows[0];
+  // 14 out 2026: o início de um movimento não é uma ação — fica fora da lista e do total (contado à parte)
+  const actions = history.filter((h) => h.changeType !== MOVEMENT_START_TYPE);
   return {
-    total: history.length,
+    total: actions.length,
+    /** inícios de movimento lidos e deixados de fora (não contam) */
+    movementStarts: history.length - actions.length,
     // Leitura limitada a AGENT_HISTORY_LIMIT ações: no limite, o total é "pelo menos".
     truncated: history.length >= AGENT_HISTORY_LIMIT,
     period: { startDate: opts.startDate, endDate: opts.endDate },
     agentName: first?.agentName ?? opts.agentName ?? "",
     agentUserId: first?.agentUserId ?? ids[0] ?? "",
-    history,
+    history: actions,
   };
 }
 
@@ -6364,6 +6407,27 @@ export async function findComplaintByClientSignals(
       notInArray(complaints.complaintStatus, ["resolved", "closed", "converted"]),
       or(gte(complaints.updatedAt, since), gte(complaints.createdAt, since)),
       or(...conds),
+    ))
+    .orderBy(desc(complaints.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Lote 57: reclamação ainda aberta (Novo, Em Análise, Aguarda Cliente) da
+ * MESMA reserva (ref da Multipark ou nº), não arquivada — para o email que a
+ * IA viu como reclamação se juntar a ela em vez de abrir outra.
+ */
+export async function findOpenComplaintByBookingRef(ref?: string | null) {
+  const r = String(ref ?? "").trim().replace(/^#+/, "");
+  if (r.length < 3) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(complaints)
+    .where(and(
+      eq(complaints.reservationRef, r),
+      inArray(complaints.complaintStatus, ["new", "analyzing", "waiting_client"]),
+      sql`${complaints.archivedAt} IS NULL`,
     ))
     .orderBy(desc(complaints.createdAt))
     .limit(1);

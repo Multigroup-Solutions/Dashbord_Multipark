@@ -14,9 +14,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertTriangle, Flame, Gauge, Timer, TrafficCone } from "lucide-react";
+import { cellStyle, rampLegend } from "@/components/heatRamp";
 import {
-  CREW_MEASURE_MIN_SAMPLES, MIN_SAMPLE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, isRushHour, loadComparison, pressureSummary,
-  slotCycleAt, slotLoadPerDay, tightReason, tightThresholds, type CrewMeasureBand, type CyclePercentile, type PressureCrewRow,
+  CREW_MEASURE_MIN_SAMPLES, MIN_SAMPLE, WEEKDAY_SHORT, cycleAt, describeLoadEffect, extraCityGroupKey, hasCycleSplit, isRushHour, loadComparison, pressureSummary,
+  slotCycleOf, slotLoadPerDay, tightReason, tightThresholds, type CrewMeasureBand, type CycleKind, type CyclePercentile, type PressureCrewRow,
   type PressureLoadRow, type PressureSlot,
 } from "@shared/extrasPressure";
 
@@ -28,33 +29,40 @@ const fmt0 = (n: number | null | undefined) => (n == null ? "—" : String(Math.
 const ddmm = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : "—");
 const ddmmyyyy = (d: string | null) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : "—");
 
-/**
- * 44a: rampa ordinal de um só tom (validada: clara → escura). Quatro degraus
- * em vez de transparência contínua — os números estão escritos na célula.
- */
-const RAMP = ["#86b6ef", "#5598e7", "#256abf", "#104281"] as const;
-const rampIndex = (v: number, max: number) => Math.min(RAMP.length - 1, Math.floor((v / max) * RAMP.length - 1e-9));
-function cellStyle(v: number | null, max: number): React.CSSProperties {
-  if (v == null || v <= 0 || max <= 0) return {};
-  const i = rampIndex(v, max);
-  return { backgroundColor: RAMP[i], color: i >= 2 ? "#ffffff" : "#0f172a" };
-}
+// 44a: rampa ordinal de um só tom (validada: clara → escura) — partilhada com a Semana da Atividade diária.
 
 /** 44a: as métricas, com nome claro e o que querem dizer. */
 const METRICS: Array<{ key: Metric; label: string; short: string; city?: boolean }> = [
   { key: "load", label: "Carros por hora", short: "chegadas + saídas feitas" },
-  { key: "delivery", label: "Tempo de entrega", short: "do pedido ao carro entregue" },
+  { key: "delivery", label: "Tempo de entrega", short: "do pedido à assinatura" },
   { key: "cycle", label: "Tempo por carro", short: "de cada condutor", city: true },
-  { key: "drive", label: "Na estrada", short: "do início da entrega a entregue", city: true },
+  { key: "drive", label: "Na estrada", short: "de pegar no carro à assinatura", city: true },
   { key: "crew", label: "Pessoas a trabalhar", short: "média, com o TL", city: true },
 ];
 
 const METRIC_HELP: Record<Metric, string> = {
   load: "Quantos carros se tratam nessa hora, em média por dia (chegadas + saídas concluídas). Mais escuro = mais carros.",
-  delivery: "Minutos desde o cliente pedir o carro até o ter na mão. Mostra-se o p75: em 3 de cada 4 entregas demorou isto ou menos. Mais escuro = entregas mais lentas.",
+  delivery: "Minutos desde o cliente pedir o carro (pendente) até assinar a entrega: junta a fila, o caminho até ao terminal e a espera pelo cliente. Mostra-se o p75: em 3 de cada 4 entregas demorou isto ou menos. Mais escuro = entregas mais lentas.",
   cycle: "Minutos entre o início de um serviço e o início do seguinte do mesmo condutor (inclui voltar, trânsito e esperas). Mostra-se o p{p}: em {p} % das vezes foi isto ou menos. Mais escuro = cada carro come mais tempo.",
-  drive: "Minutos desde que o condutor arranca com a entrega até entregar. Mostra-se o p75: em 3 de cada 4 entregas foi isto ou menos. Mais escuro = mais tempo na estrada.",
+  drive: "Minutos desde que o condutor pega no carro (em entrega) até o cliente assinar: junta o caminho até ao terminal e a espera pelo cliente lá. Mostra-se o p75: em 3 de cada 4 entregas foi isto ou menos. Mais escuro = mais tempo na estrada.",
   crew: "Pessoas diferentes a fazer serviços nessa hora, sempre a contar o team leader (média por dia). Mais escuro = mais gente.",
+};
+
+/**
+ * 12 out 2026 (Jorge: "um quadro igual para as recolhas"): o tempo por carro
+ * mede-se por serviço — começado com o início de uma entrega ou de uma
+ * recolha. O quadro mostra as entregas, as recolhas, ou as duas juntas (o que
+ * a escala usa). Mesmas regras, mesma legenda.
+ */
+const CYCLE_KINDS: Array<{ key: CycleKind; label: string }> = [
+  { key: "out", label: "Entregas" },
+  { key: "in", label: "Recolhas" },
+  { key: "all", label: "Juntas" },
+];
+const CYCLE_HELP: Record<CycleKind, string> = {
+  out: "Entregas: minutos entre o início de uma entrega e o início do serviço seguinte do mesmo condutor (inclui voltar, trânsito e esperas; uma recolha feita pelo caminho, até 30 min depois de entregar, fica dentro desta entrega). Mostra-se o p{p}: em {p} % das vezes foi isto ou menos. Mais escuro = cada carro come mais tempo.",
+  in: "Recolhas: minutos entre o início de uma recolha e o início do serviço seguinte do mesmo condutor (inclui levar o carro ao parque, voltar e esperas). Mostra-se o p{p}: em {p} % das vezes foi isto ou menos. Mais escuro = cada carro come mais tempo.",
+  all: METRIC_HELP.cycle + " Aqui entram as entregas e as recolhas juntas (é o que a escala usa).",
 };
 
 const WEEKDAY_PLURAL_PT: Record<number, string> = { 1: "segundas", 2: "terças", 3: "quartas", 4: "quintas", 5: "sextas", 6: "sábados", 7: "domingos" };
@@ -94,11 +102,18 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
   const crewRows = useMemo(() => (q.data?.crew ?? []).filter((c) => c.group === group) as PressureCrewRow[], [q.data, group]);
   const metricShown: Metric = !cityInfo && (metric === "cycle" || metric === "drive" || metric === "crew") ? "load" : metric;
   const stale = q.data?.stale?.[group];
+  // 12 out 2026: entregas / recolhas / juntas. Até o trabalho noturno reler os dias, só "Juntas".
+  const split = useMemo(() => hasCycleSplit(slots), [slots]);
+  const [cycleKindPicked, setCycleKind] = useState<CycleKind | null>(null);
+  const cycleKind: CycleKind = !split ? "all" : cycleKindPicked ?? "out";
 
   const value = (s: PressureSlot | undefined): number | null => {
     if (!s) return null;
     if (metricShown === "load") return slotLoadPerDay(s);
-    if (metricShown === "cycle") return (s.cycleN ?? 0) >= MIN_SAMPLE ? slotCycleAt(s, pct) : null;
+    if (metricShown === "cycle") {
+      const c = slotCycleOf(s, cycleKind, pct);
+      return c.n >= MIN_SAMPLE ? c.value : null;
+    }
     if (metricShown === "drive") return (s.driveN ?? 0) >= MIN_SAMPLE ? s.driveP75 ?? null : null;
     if (metricShown === "crew") return s.crewAvg ?? null;
     return s.deliveryN >= MIN_SAMPLE ? s.deliveryP75 : null;
@@ -119,7 +134,9 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
       `Em simultâneo: média ${fmt1(s.concurrencyAvg)}, máx. ${fmt0(s.concurrencyMax)}`,
       `Entrega (n=${s.deliveryN}): mediana ${fmt0(s.deliveryP50)} · p75 ${fmt0(s.deliveryP75)} · p90 ${fmt0(s.deliveryP90)} min`,
       `Recolha (n=${s.pickupN}): mediana ${fmt0(s.pickupP50)} · p75 ${fmt0(s.pickupP75)} min`,
-      cityInfo && (s.cycleN ?? 0) > 0 ? `Por carro, por condutor (n=${s.cycleN}): mediana ${fmt0(s.cycleP50)} · p${pct} ${fmt0(slotCycleAt(s, pct))} min` : "",
+      cityInfo && (s.cycleN ?? 0) > 0 ? `Por carro, por condutor (n=${s.cycleN}): mediana ${fmt0(s.cycleP50)} · p${pct} ${fmt0(slotCycleOf(s, "all", pct).value)} min` : "",
+      cityInfo && (s.cycleOutN ?? 0) > 0 ? `  · entregas (n=${s.cycleOutN}): mediana ${fmt0(s.cycleOutP50)} · p${pct} ${fmt0(slotCycleOf(s, "out", pct).value)} min` : "",
+      cityInfo && (s.cycleInN ?? 0) > 0 ? `  · recolhas (n=${s.cycleInN}): mediana ${fmt0(s.cycleInP50)} · p${pct} ${fmt0(slotCycleOf(s, "in", pct).value)} min` : "",
       cityInfo && (s.driveN ?? 0) > 0 ? `Na estrada (n=${s.driveN}): mediana ${fmt0(s.driveP50)} · p75 ${fmt0(s.driveP75)} min` : "",
       cityInfo && (s.toParkN ?? 0) > 0 ? `Recolhido → no parque (n=${s.toParkN}): mediana ${fmt0(s.toParkP50)} · p75 ${fmt0(s.toParkP75)} min` : "",
       cityInfo && s.crewAvg != null ? `Pessoas a trabalhar (média): ${fmt1(s.crewAvg)}` : "",
@@ -148,9 +165,7 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
     );
   }
 
-  const legend = max > 0
-    ? RAMP.map((c, i) => ({ c, from: (max * i) / RAMP.length, to: (max * (i + 1)) / RAMP.length }))
-    : [];
+  const legend = rampLegend(max);
 
   return (
     <div className="space-y-4">
@@ -207,9 +222,27 @@ export function PressureTab({ city, targetDate, canEdit }: { city: "lisbon" | "p
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
-            <Gauge className="h-4 w-4" />{METRICS.find((m) => m.key === metricShown)?.label} — dia da semana × hora{where ? ` — ${where}` : ""}
+            <Gauge className="h-4 w-4" />{METRICS.find((m) => m.key === metricShown)?.label}{metricShown === "cycle" ? ` — ${CYCLE_KINDS.find((k) => k.key === cycleKind)?.label.toLowerCase()}` : ""} — dia da semana × hora{where ? ` — ${where}` : ""}
           </CardTitle>
-          <p className="text-sm text-muted-foreground">{METRIC_HELP[metricShown].replaceAll("{p}", String(pct))}</p>
+          {metricShown === "cycle" && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-md border p-0.5" role="radiogroup" aria-label="Que serviços">
+                {CYCLE_KINDS.map((k) => {
+                  const off = !split && k.key !== "all";
+                  return (
+                    <button key={k.key} type="button" role="radio" aria-checked={cycleKind === k.key} disabled={off}
+                      title={off ? "Ainda a calcular: o trabalho noturno está a reler os dias desde abril com as entregas e as recolhas separadas." : undefined}
+                      onClick={() => { setCycleKind(k.key); setCellKey(null); }}
+                      className={`h-8 rounded px-3 text-sm ${cycleKind === k.key ? "bg-blue-600 text-white" : "hover:bg-muted/60"} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                      {k.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {!split && <span className="text-xs text-muted-foreground">Entregas e recolhas em separado: a calcular (o trabalho da noite relê os dias desde abril).</span>}
+            </div>
+          )}
+          <p className="text-sm text-muted-foreground">{(metricShown === "cycle" ? CYCLE_HELP[cycleKind] : METRIC_HELP[metricShown]).replaceAll("{p}", String(pct))}</p>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="overflow-x-auto">

@@ -58,7 +58,7 @@ function restoreDeep(v: unknown, restore: (s: string) => string): unknown {
 export function skipReasonOf(err: unknown): AiSkipReason {
   const code = aiErrorCode(err);
   if (code === "budget") return "budget";
-  if (code === "disabled" || code === "not_configured") return "disabled";
+  if (code === "disabled" || code === "not_configured" || code === "eu_only") return "disabled";
   return "error";
 }
 

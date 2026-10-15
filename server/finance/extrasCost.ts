@@ -10,19 +10,31 @@
  *     (saída antecipada respeitada) × tarifa; cidade = a da escala;
  *     team leaders EXCLUÍDOS (o salário mensal já os paga);
  *   - o que "conta": real até hoje, previsto só nos dias futuros;
- *   - terminal (aeroporto, interruptor PONTO_TERMINAL, `opts.terminal`): o
- *     troço de terminal paga à taxa do nível SEGUINTE — a mesma regra do
- *     ordenado (shared/pontoTerminal.ts payLevelForShift). Desligado → igual.
+ *   - terminal (aeroporto, interruptor PONTO_TERMINAL, `opts.terminal`): as
+ *     horas de terminal do troço pagam à taxa do nível SEGUINTE e o resto à
+ *     dele — a mesma regra do ordenado (shared/pontoTerminal.ts
+ *     terminalSplitOfShift): troço todo terminal, ou "partial" (saída fora do
+ *     aeroporto) só da entrada até à última recolha/entrega. Plano 56 B2
+ *     (terminal pelo perfil): sem estado antigo, as horas das sessões do extra
+ *     (`terminal_sessions`, payUplift = 1) na interseção com o turno, só as que
+ *     contam (`q.terminal` lê as sessões e a entrada de cada turno). Desligado → igual.
  */
 import { and, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { employees, extrasDiaAssignments, timeRecords } from "../../drizzle/schema";
 import { rateFor, type ExtraRates } from "../extraRates";
 import { matchCityKey, type CityKey } from "../../shared/city";
 import * as R from "./rules";
-import { normalizeExtraLevel, payLevelForShift } from "../../shared/pontoTerminal";
+import { normalizeExtraLevel, terminalLevelOf, terminalSplitOfShift } from "../../shared/pontoTerminal";
+import type { TerminalPaySessionLike } from "../../shared/terminalWatch";
 
 export interface ExtrasAssignmentRow { date: string; city: string | null; level: string | null; isTeamLeader: number | boolean | null; startHour: number; endHour: number; sentHomeHour: number | null }
-export interface ExtrasPontoRow { recordedAt: string | null; hours: unknown; level: number | null; employeeId: number; projectId: number | null; terminalStatus?: string | null }
+export interface ExtrasPontoRow {
+  recordedAt: string | null; hours: unknown; level: number | null; employeeId: number; projectId: number | null; terminalStatus?: string | null;
+  /** 0575 — "partial": o terminal conta até aqui (UTC) */
+  terminalUntil?: string | null;
+  /** "partial" (e, com o terminal ligado, todos): a entrada do troço (UTC) */
+  shiftInAt?: string | null;
+}
 
 export interface ExtrasCostQuery {
   from: string; to: string;
@@ -31,10 +43,12 @@ export interface ExtrasCostQuery {
   projectIds?: number[];
   /** cidades da escala (lisbon|porto|faro) */
   cities?: string[] | null;
+  /** Plano 56 B2: interruptor PONTO_TERMINAL ligado → lê a entrada de cada turno e as sessões do terminal */
+  terminal?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function loadExtrasCostRows(db: any, q: ExtrasCostQuery): Promise<{ assignments: ExtrasAssignmentRow[]; ponto: ExtrasPontoRow[] }> {
+export async function loadExtrasCostRows(db: any, q: ExtrasCostQuery): Promise<{ assignments: ExtrasAssignmentRow[]; ponto: ExtrasPontoRow[]; terminalSessions?: Map<number, TerminalPaySessionLike[]> }> {
   const extrasConds: any[] = [gte(extrasDiaAssignments.assignmentDate, q.from), lte(extrasDiaAssignments.assignmentDate, q.to)];
   if (q.cities) extrasConds.push(q.cities.length ? inArray(extrasDiaAssignments.city, q.cities) : sql`1 = 0`);
   const assignments = await db
@@ -56,12 +70,30 @@ export async function loadExtrasCostRows(db: any, q: ExtrasCostQuery): Promise<{
     ),
   ];
   if (q.projectIds) pontoConds.push(q.projectIds.length ? inArray(employees.projectId, q.projectIds) : sql`1 = 0`);
+  // "partial" (terminal até à última recolha/entrega): precisa da entrada do
+  // troço — a última entrada antes desta saída (só nesses registos).
+  // Plano 56 B2 (terminal ligado): a entrada de TODOS os turnos (as sessões cruzam-se com o turno).
+  const lastIn = sql`(SELECT DATE_FORMAT(MAX(ti.recordedAt), '%Y-%m-%d %H:%i:%s') FROM time_records ti WHERE ti.employeeId = ${timeRecords.employeeId} AND ti.type = 'check_in' AND ti.recordedAt < ${timeRecords.recordedAt})`;
+  const shiftInAt = q.terminal
+    ? sql<string | null>`${lastIn}`
+    : sql<string | null>`CASE WHEN ${timeRecords.terminalStatus} = 'partial' THEN ${lastIn} END`;
   const ponto = await db
-    .select({ recordedAt: timeRecords.recordedAt, hours: timeRecords.hoursWorked, level: employees.extraLevel, employeeId: timeRecords.employeeId, projectId: employees.projectId, terminalStatus: timeRecords.terminalStatus })
+    .select({ recordedAt: timeRecords.recordedAt, hours: timeRecords.hoursWorked, level: employees.extraLevel, employeeId: timeRecords.employeeId, projectId: employees.projectId, terminalStatus: timeRecords.terminalStatus, terminalUntil: timeRecords.terminalUntil, shiftInAt })
     .from(timeRecords)
     .innerJoin(employees, eq(employees.id, timeRecords.employeeId))
     .where(and(...pontoConds));
-  return { assignments, ponto };
+  if (!q.terminal || !ponto.length) return { assignments, ponto };
+  const ids = Array.from(new Set((ponto as ExtrasPontoRow[]).map((r) => Number(r.employeeId))));
+  const from = (ponto as ExtrasPontoRow[]).reduce((m, r) => (r.shiftInAt && r.shiftInAt < m ? r.shiftInAt : m), q.pontoRange?.start ?? `${q.from} 00:00:00`);
+  const to = q.pontoRange?.endExclusive ?? `${q.to} 23:59:59`;
+  const { loadTerminalPaySessions } = await import("../terminalPay");
+  try {
+    return { assignments, ponto, terminalSessions: await loadTerminalPaySessions(ids, from, to) };
+  } catch (err) {
+    // o custo é uma estimativa: sem as sessões fica sem as horas de terminal pelo perfil (registado no log)
+    console.warn("[extras-cost] sessões do terminal não lidas — custo sem as horas de terminal:", String((err as Error)?.message ?? err).slice(0, 160));
+    return { assignments, ponto };
+  }
 }
 
 type LevelAgg = { level: string; hours: number; headcount: number; cost: number };
@@ -69,7 +101,7 @@ const LEVEL_BY_NUMBER: Record<number, string> = { 1: "junior", 2: "senior", 3: "
 
 /** Agrega (PURO) as linhas em mapas por dia, por dia × cidade e por nível. */
 export function aggregateExtrasCost(
-  rows: { assignments: ExtrasAssignmentRow[]; ponto: ExtrasPontoRow[] },
+  rows: { assignments: ExtrasAssignmentRow[]; ponto: ExtrasPontoRow[]; terminalSessions?: Map<number, TerminalPaySessionLike[]> },
   rates: ExtraRates,
   opts: { dayOfRecord: (recordedAt: string | null) => string; cityOfProject: (projectId: number | null) => CityKey | null; terminal?: boolean },
 ) {
@@ -105,9 +137,15 @@ export function aggregateExtrasCost(
     const hours = Number(r.hours ?? 0) || 0;
     if (hours <= 0) continue;
     const lvName = LEVEL_BY_NUMBER[Number(r.level ?? 1)] ?? "junior";
-    // terminal: o troço paga ao nível seguinte (mesma regra do ordenado); senão o dele
-    const payLevel = payLevelForShift(r.level ?? 1, { terminalStatus: r.terminalStatus, enabled: !!opts.terminal });
-    const cost = hours * rateFor(rates, payLevel === normalizeExtraLevel(r.level ?? 1) ? lvName : LEVEL_BY_NUMBER[payLevel]);
+    // terminal: as horas de terminal do troço pagam ao nível seguinte e o resto
+    // ao dele (mesma regra do ordenado: terminalSplitOfShift; "partial" divide-se)
+    const part = terminalSplitOfShift({
+      hours, terminalStatus: r.terminalStatus, terminalUntil: r.terminalUntil, inAt: r.shiftInAt, outAt: r.recordedAt,
+      sessions: rows.terminalSessions?.get(Number(r.employeeId)) ?? null,
+    }, !!opts.terminal);
+    const tLevel = terminalLevelOf(r.level ?? 1);
+    const tName = tLevel === normalizeExtraLevel(r.level ?? 1) ? lvName : LEVEL_BY_NUMBER[tLevel];
+    const cost = part.normalHours * rateFor(rates, lvName) + (part.terminalHours > 0 ? part.terminalHours * rateFor(rates, tName) : 0);
     const day = opts.dayOfRecord(r.recordedAt);
     if (cost) {
       realByDay.set(day, (realByDay.get(day) ?? 0) + cost);
