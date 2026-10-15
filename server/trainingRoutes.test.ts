@@ -42,13 +42,14 @@ describe('rotas de avaliações', () => {
   });
   it('aplica âmbito próprio mesmo que frontoffice peça outro colaborador', async () => {
     await caller('frontoffice').training.careerExamAttempts({ employeeId: 999 });
-    expect(f.attempts).toHaveBeenCalledWith(999, undefined, { employeeId: 7, projectIds: [] });
+    // plano 64 (D7): o procedimento do dashboard passa também { forStats: true } (taxa dos exames)
+    expect(f.attempts).toHaveBeenCalledWith(999, undefined, { employeeId: 7, projectIds: [] }, { forStats: true });
   });
   it('limita supervisores aos seus centros e preserva o acesso dos administradores', async () => {
     await caller('supervisor').training.careerExamAttempts({});
-    expect(f.attempts).toHaveBeenLastCalledWith(undefined, undefined, { employeeId: 7, projectIds: [10, 11] });
+    expect(f.attempts).toHaveBeenLastCalledWith(undefined, undefined, { employeeId: 7, projectIds: [10, 11] }, { forStats: true });
     await caller('admin').training.careerExamAttempts({});
-    expect(f.attempts).toHaveBeenLastCalledWith(undefined, undefined, undefined);
+    expect(f.attempts).toHaveBeenLastCalledWith(undefined, undefined, undefined, { forStats: true });
   });
   it('mantém o arquivo reservado ao perfil autorizado', async () => {
     await expect(caller('admin').training.deleteCareerExam({ id: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });

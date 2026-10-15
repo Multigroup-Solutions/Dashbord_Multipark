@@ -5,7 +5,7 @@ pagina: dashboards
 titulo: Dashboards (Geral, Financeiro, Operações, Pessoas, Suporte)
 separadores: geral=Geral, financeiro=Financeiro, operacoes=Operações, pessoas=Pessoas, suporte=Suporte, marketing=Marketing
 rotas: /dashboards, /dashboard, /financeiro, /operacoes-dashboard, /pessoas-dashboard, /suporte-dashboard
-palavras: dashboards, dashboard geral, dashboard financeiro, dashboard operações, dashboard pessoas, dashboard suporte, entregues s/ iva, custos s/ iva, margem realizada, pagamentos nos próximos 7 dias, contratos a expirar, taxa aprovação exames, fichas ativas, documentos em falta, funcionários e extras, rating médio google, briefing do dia, km por condutor, sem acesso no dashboard, dívida atual
+palavras: dashboards, dashboard geral, dashboard financeiro, dashboard operações, dashboard pessoas, dashboard suporte, entregues s/ iva, custos s/ iva, margem realizada, pagamentos nos próximos 7 dias, contratos a expirar, taxa aprovação exames, fichas ativas, documentos em falta, rating médio google, briefing do dia, km por condutor, sem acesso no dashboard, dívida atual
 ---
 # Dashboards
 
