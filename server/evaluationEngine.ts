@@ -158,23 +158,31 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
   // Tarefa 62 (Q8): horários fixos do RH (fichas ativas, funcionários — os extras regem-se pela escala) e
   // férias/baixas — o atraso conta para quem tem horário. A cidade da ficha só serve para o feriado municipal.
   let fixedSchedules: any[] = [], leaveRows: any[] = [];
+  let leavesRead = false;
   try {
     fixedSchedules = rowsOf(await db.execute(sql`
-      SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
+      SELECT s.id, s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
              DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
         FROM schedules s JOIN employees e ON e.id = s.employeeId
        WHERE e.isActive = 1 AND s.isWorkDay = 1
-         AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+         AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'
+       ORDER BY s.id`));
     // Plano 63 (passo 11): só as ausências APROVADAS (as pedidas não tiram o atraso); a de parte do dia também conta (justificada).
     leaveRows = rowsOf(await db.execute(sql`
       SELECT employeeId, fromDate, toDate FROM employee_leaves
        WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)} AND ${approvedLeaveSql()}`));
+    leavesRead = true;
   } catch (err: any) {
     // Sem horários: só a escala (como antes). Plano 63 (auditoria): se os horários vieram mas as ausências
     // falharam, larga-se também os horários — senão quem está de férias levava −5 de atraso.
     fixedSchedules = []; leaveRows = [];
     console.warn("[avaliação] horários fixos/ausências não lidos (conta só a escala):", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
   }
+  // Plano 63, passo 10b: exceções por data (fins de semana, folgas) — só com FINS_DE_SEMANA ligado; senão [].
+  // Sem as ausências lidas também não (conta só a escala): uma exceção "trabalha" num dia de férias dava −5.
+  const scheduleOverrides = leavesRead
+    ? await (await import("./scheduleOverrides")).loadActiveOverridesForReaders(db, addDays(startDay, -1), addDays(endDay, 1))
+    : [];
   const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
     ? await (await import("./aiOps/cities")).projectCityResolver(db)
     : () => null;
@@ -278,11 +286,13 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       driverPenaltyPoints: Number(r.driverPoints ?? 0),
     })),
     fixedSchedules: fixedSchedules.map((r) => ({
-      employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
+      // plano 63 (10a): nos dias duplicados conta a linha de TRABALHO de id mais baixo (workRowOn)
+      id: r.id != null ? Number(r.id) : null, employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
       isWorkDay: Number(r.isWorkDay) === 1, contractStart: r.contractStart ? String(r.contractStart).slice(0, 10) : null, contractEnd: r.contractEnd ? String(r.contractEnd).slice(0, 10) : null,
       city: cityOfProjectId(r.projectId != null ? Number(r.projectId) : null),
     })),
     leaves: leaveRows.map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) })),
+    scheduleOverrides,
     gpsDays: gpsRows.map((r) => ({
       employeeId: Number(r.employeeId), day: typeof r.day === "string" ? r.day.slice(0, 10) : r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day ?? "").slice(0, 10),
       maxSpeed: Number(r.maxSpeed ?? 0), collectedThresholdKmh: r.speedThresholdKmh != null ? Number(r.speedThresholdKmh) : null,

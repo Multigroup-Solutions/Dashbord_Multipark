@@ -22,7 +22,7 @@ import {
 import { addDays, lisbonDayOf, lisbonHourOf, lisbonWallTimeUtcMs, operationalDayOf, operationalSlotOf, utcMs } from "../shared/lisbonDay";
 import { classifyMovement, type MovementKind } from "../shared/multiparkMovements";
 import { gpsDayOverThreshold } from "../shared/speedRules";
-import { fixedScheduledStarts, type FixedScheduleRow, type LeaveRow } from "../shared/workSchedule";
+import { fixedScheduledStarts, type FixedScheduleRow, type LeaveRow, type ScheduleOverrideRow } from "../shared/workSchedule";
 import { pontoShiftHours } from "../shared/pontoHours";
 import type { EvaluationIdentity } from "./evaluationIdentity";
 
@@ -299,6 +299,11 @@ export interface EngineInput {
   fixedSchedules?: FixedScheduleRow[];
   /** Férias/baixas (employee_leaves): nesses dias não há hora de entrada pelo horário fixo. */
   leaves?: LeaveRow[];
+  /**
+   * Plano 63, passo 10b: exceções por data ao horário fixo (schedule_overrides, ativas; só com FINS_DE_SEMANA
+   * ligado) — "trabalha das HH:MM às HH:MM" ou "folga" ganham ao horário fixo nesse dia (dayPlan).
+   */
+  scheduleOverrides?: ScheduleOverrideRow[];
   /** 14 out 2026: dias com GPS do Zello (a velocidade máxima); acima de `speedThresholdKmh` = 1 excesso nesse dia. */
   gpsDays?: EngineGpsDay[];
   /** Limiar de velocidade (km/h, já com a tolerância) — shared/gpsRules.ts → speedThresholdKmh. */
@@ -492,13 +497,13 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
 
   // ── Tarefa 62 (Q8): quem tem horário fixo no RH também tem atraso ao trabalho (≥ 5 min, −5, no máximo 1
   // por dia, o mesmo contador da escala). Nos dias em que a pessoa está na escala do Extras-Dia vale a escala.
-  if (input.fixedSchedules?.length) {
+  if (input.fixedSchedules?.length || input.scheduleOverrides?.length) {
     const inEscala = new Set<string>();
     for (const a of input.assignments) {
       const who = identity.assignment({ employeeId: a.employeeId, personName: a.personName });
       if (who.employeeId != null) inEscala.add(`${who.employeeId}|${a.assignmentDate}`);
     }
-    for (const f of fixedScheduledStarts(startDay, endDay, input.fixedSchedules, input.leaves ?? [])) {
+    for (const f of fixedScheduledStarts(startDay, endDay, input.fixedSchedules ?? [], input.leaves ?? [], input.scheduleOverrides ?? [])) {
       const k = `${f.employeeId}|${f.day}`;
       if (inEscala.has(k) || (lateArrivalsByDay.get(k) ?? 0) >= MAX_LATE_ARRIVALS_PER_DAY) continue;
       if (!isLateArrival(checkInsByEmp.get(f.employeeId) ?? [], f.startMs)) continue;

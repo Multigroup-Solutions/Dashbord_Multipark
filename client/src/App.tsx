@@ -64,6 +64,7 @@ import FinanceiroDashboard from "./pages/FinanceiroDashboard";
 import OperacoesDashboard from "./pages/OperacoesDashboard";
 import PessoasDashboard from "./pages/PessoasDashboard";
 import RhDashboardPage from "./pages/RhDashboardPage";
+import FinsDeSemanaPage from "./pages/FinsDeSemanaPage";
 import SuporteDashboard from "./pages/SuporteDashboard";
 import MultisFalhasPage from "./pages/MultisFalhasPage";
 import { GlobalFiltersProvider } from "./contexts/GlobalFiltersContext";
@@ -117,6 +118,13 @@ function Router() {
         {() => (
           <DashboardLayout>
             <RhDashboardPage />
+          </DashboardLayout>
+        )}
+      </Route>
+      <Route path="/rh/fins-de-semana">
+        {() => (
+          <DashboardLayout>
+            <FinsDeSemanaPage />
           </DashboardLayout>
         )}
       </Route>

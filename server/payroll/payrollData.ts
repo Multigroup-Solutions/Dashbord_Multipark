@@ -97,7 +97,8 @@ export async function computePayrollForMonth(year: number, month: number, opts: 
   const leavesByEmp = new Map<number, typeof leaves>();
   for (const l of leaves) { if (!leavesByEmp.has(l.employeeId)) leavesByEmp.set(l.employeeId, []); leavesByEmp.get(l.employeeId)!.push(l); }
 
-  const scheds = await db.select().from(schedules).where(inArray(schedules.employeeId, empIds));
+  // por id: nos dias duplicados conta a linha mais antiga (plano 63, 10a — compute.ts workRowOn)
+  const scheds = await db.select().from(schedules).where(inArray(schedules.employeeId, empIds)).orderBy(schedules.id);
   // Terminal no ponto (aeroporto): interruptor PONTO_TERMINAL (desligado → como antes)
   const { pontoTerminalEnabled } = await import("../pontoTerminal");
   const terminalEnabled = await pontoTerminalEnabled();

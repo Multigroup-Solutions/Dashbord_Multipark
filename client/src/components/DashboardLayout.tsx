@@ -45,7 +45,7 @@ import { currentPath, getLoginUrl } from "@/const";
 import { ACCESS_DENIED_MSG } from "@shared/const";
 import { isComebackPosition, isInactivitySuspensionText } from "@shared/comeback";
 import ProfilePhotoPrompt from "@/components/ProfilePhotoPrompt";
-import CameraCapture from "@/components/CameraCapture";
+import CameraCapture, { type CaptureMeta } from "@/components/CameraCapture";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { fmtPTTime } from "@/lib/lisbonTime";
@@ -535,7 +535,7 @@ function DashboardLayoutContent({
     },
     onError: (e) => { toast.error(e.message); setPontoMode(null); },
   });
-  const submitPonto = (base64: string, mimeType: string) => {
+  const submitPonto = (base64: string, mimeType: string, meta?: CaptureMeta) => {
     const employeeId = pontoQ.data?.employeeId;
     if (!employeeId || !pontoMode) return;
     const doSubmit = (lat: number, lng: number, accuracy: number) => {
@@ -546,6 +546,8 @@ function DashboardLayoutContent({
         latitude: String(lat),
         longitude: String(lng),
         locationName: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+        // Plano 63 (passo 1): rasto da picagem (o servidor só o guarda com o interruptor PONTO_MODOS)
+        trail: { photoSource: meta?.source ?? null, photoFileAgeS: meta?.fileAgeS ?? null, gpsAccuracyM: Number.isFinite(accuracy) ? Math.round(accuracy) : null },
       };
       if (pontoMode === "check_in") quickCheckIn.mutate({ ...payload, ...(pontoTerminal && terminalOn ? { terminal: true, accuracy } : {}) });
       else quickCheckOut.mutate(payload);

@@ -1,8 +1,8 @@
 ---
 modulo: rh
 titulo: RH e ponto
-rotas: /rh, /rh/dashboard, /perfil, /ferias
-palavras: mapa de férias, férias, marcar férias, pedir férias, aprovar férias, recusar férias, férias por aprovar, quem aprova as férias, não vou estar, indisponível, indisponibilidade dos extras, avisou que não está, baixa, ausência, ausência justificada, parte do dia, cancelar férias, mapa de férias em pdf, 22 dias de férias, parceiro empresa, parceiro (empresa), falta horário fixo, feriados, falta num feriado, faltas de funcionários, limpeza dos pdas, conta google do pda, oferecer para guardar, início de sessão automático, gestor de palavras-passe, pda mudou de aparelho, registar pda, qr do pda, só o tl regista, a sessão termina em 10 s, estou no terminal, sair do terminal, terminal ocupado, pedir para passar, passar o terminal, ainda estou, terminal pelo perfil, candidatos, candidato, aprovar candidato, quer voltar, inativo pode voltar, inativos e desativados, pedido de ligação, possível duplicado, pedir documentos, pedir documentos em falta, documentos em falta, pedido de documentos, último pedido, template documentos, enviar documentos em falta, lembrar documentos, terminal, horas terminal, terminal no ponto, terminal até, última recolha, última entrega, terminal parcial, aeroporto, ponto no aeroporto, terminal por confirmar, confirmar terminal, desmarcar terminal, nível seguinte, conta não ligada, entra com a google como, sem conta ligada, email da ficha, contas sem ficha, entraram sem ficha, conta como utilizador, a minha ficha, carta validada, carta pendente de validação, carta < 3 anos, carta com menos de 3 anos, sem carta, validar carta, data de emissão da carta, anos de carta, validar documentos, recusar documento, documento recusado, pendente de validação, documentos por validar, substituir documento, documento validado, notas internas, nota interna, trabalhou mal, back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar, entra como, entrar com código, ainda estás no terminal, sim estou, já saí, lugar libertado, reabrir o terminal, sem resposta, gps do zello, horas que contam, horas desaparecidas, picagens noutra ficha, duas fichas, ponto de um mês, mês anterior, pago duas vezes, horas sobrepostas, inativa sem data de fim, resumo do zello na saída, último gps, troços de terminal, corrigir terminal, sobreposição, mês fechado
+rotas: /rh, /rh/dashboard, /perfil, /ferias, /rh/fins-de-semana
+palavras: mapa de férias, férias, marcar férias, pedir férias, aprovar férias, recusar férias, férias por aprovar, quem aprova as férias, não vou estar, indisponível, indisponibilidade dos extras, avisou que não está, baixa, ausência, ausência justificada, parte do dia, cancelar férias, mapa de férias em pdf, 22 dias de férias, parceiro empresa, parceiro (empresa), falta horário fixo, feriados, falta num feriado, faltas de funcionários, limpeza dos pdas, conta google do pda, oferecer para guardar, início de sessão automático, gestor de palavras-passe, pda mudou de aparelho, registar pda, qr do pda, só o tl regista, a sessão termina em 10 s, estou no terminal, sair do terminal, terminal ocupado, pedir para passar, passar o terminal, ainda estou, terminal pelo perfil, candidatos, candidato, aprovar candidato, quer voltar, inativo pode voltar, inativos e desativados, pedido de ligação, possível duplicado, pedir documentos, pedir documentos em falta, documentos em falta, pedido de documentos, último pedido, template documentos, enviar documentos em falta, lembrar documentos, terminal, horas terminal, terminal no ponto, terminal até, última recolha, última entrega, terminal parcial, aeroporto, ponto no aeroporto, terminal por confirmar, confirmar terminal, desmarcar terminal, nível seguinte, conta não ligada, entra com a google como, sem conta ligada, email da ficha, contas sem ficha, entraram sem ficha, conta como utilizador, a minha ficha, carta validada, carta pendente de validação, carta < 3 anos, carta com menos de 3 anos, sem carta, validar carta, data de emissão da carta, anos de carta, validar documentos, recusar documento, documento recusado, pendente de validação, documentos por validar, substituir documento, documento validado, notas internas, nota interna, trabalhou mal, back office gere rh, backoffice rh nacional, supervisor gere rh, criar ficha supervisor, desativar extra, posto, centro de custos, acesso bloqueado, carregar documentos bloqueado, número do cc, número da carta, possíveis faltas, marcar falta, libertar, faltas em massa, falta a extra, dashboard rh, detalhe por colaborador, movimentos, horas trabalhadas, cartões, lista, ver em cartões, ver em lista, foto, iban, nib, mudar o iban, pedido de iban, aprovar iban, comprovativo de iban, pedido de alteração, nif escondido, mostrar nif, pedir a cidade, extra sem cidade, márcia, não enviar, desligar mensagens, desligar emails, telefonar ao colaborador, escrever email ao colaborador, rh, recursos humanos, ponto, picar o ponto, check-in, check-out, dar entrada, dar saída, gps, horas, horário, documentos, ficha, colaborador, novo colaborador, recibos, recibo de vencimento, folha de ordenados, extras, agentes, ligações, ligacoes, juntar contas, conta duplicada, conta perdida, dois emails, anexar agente, retirar agente, agente extra, conta extra, ficha sem cidade, cidade, centro de custo, agentes de teste, por ligar, agentes em lado nenhum, agente sem utilizador, utilizador sem agente, cruzar agentes, zello e multipark, todos os agentes, abrir agente, abrir na multipark, copiar id, separar conta, ligar conta, suspender, inativar, entra como, entrar com código, ainda estás no terminal, sim estou, já saí, lugar libertado, reabrir o terminal, sem resposta, gps do zello, horas que contam, horas desaparecidas, picagens noutra ficha, duas fichas, ponto de um mês, mês anterior, pago duas vezes, horas sobrepostas, inativa sem data de fim, resumo do zello na saída, último gps, troços de terminal, corrigir terminal, sobreposição, mês fechado, horários por rever, pôr folga, horário só com folgas, dias duplicados, horas esperadas, fora das faltas automáticas, impressão digital, dispensar com motivo, picagem perdida, falta justificada, falta de funcionário no extras-dia, fins de semana, fim de semana de serviço, rotação do fim de semana, repetir a rotação, quem está de serviço, pôr de serviço, exceções por data, exceção ao horário, folga numa data, folga de compensação, compensação noutro mês, 7 dias sem folga, dia de descanso, feriado de serviço, troca de turno, não é a vez, o meu horário, modo do ponto, modos do ponto, horário fixo, isenção, isenção de horário, sempre em serviço, reformados, aviso escrito, leitura em papel, aviso por ler, rasto das picagens, foto da galeria, alertas do ponto
 ---
 # RH e ponto
 
@@ -31,6 +31,7 @@ palavras: mapa de férias, férias, marcar férias, pedir férias, aprovar féri
 - Se o **mesmo tempo** foi picado nas duas fichas, as duas linhas avisam "o mesmo tempo está picado também na ficha #… (N h sobrepostas)": rejeita a picagem a mais antes de fechar o mês.
 - Uma conta que já está numa ficha ativa **não fica ligada sozinha a outra ficha** com o mesmo email (no login, no site ou na volta de hora a hora). Isso fica para decidires em **Ligações**.
 - Se a conta já está em **duas fichas ativas**, o ponto fica na ficha onde a pessoa picou por último: **não muda de ficha sozinho** a meio do mês.
+- **Horas esperadas pelo horário da ficha** (as horas extra são as normais acima delas): um horário **só com folgas** conta como **sem horário** (176 h por mês, como quando se apagava o dia); nos **dias duplicados** conta a linha de trabalho **mais antiga**, a mesma da ficha, da Avaliação e das faltas. Se isto der um valor diferente do de antes (um horário que já estava só com folgas contava 0 h esperadas e pagava as horas todas como extra; nos duplicados contava a última linha), a linha da folha **diz os dois valores** ("Pela regra antiga eram…"): confirma o horário na ficha antes de fechar o mês.
 
 **Estou no terminal** (extras, condutores e team leaders) — só com o interruptor **"Terminal no ponto (aeroporto)"** ligado (Definições → Automações; desligado por omissão)
 1. Carrega na tua **fotografia** lá em cima → **Estou no terminal**. Se ainda não deste entrada, abre a entrada do ponto (foto + GPS) com **Estou no terminal** já marcado.
@@ -189,6 +190,68 @@ palavras: mapa de férias, férias, marcar férias, pedir férias, aprovar féri
 - Ordenados, recibos e folha para o contabilista só para admin.
 - **Folha para o contabilista** gera o PDF da folha do mês, abre-o num separador novo e avisa o RH com o link. O envio ao contabilista faz-se à mão (descarrega o PDF e envia-o).
 
+## Modo do ponto (horário fixo, isenção, sempre em serviço)
+
+Só com o interruptor **"Ponto: modo de cada pessoa"** ligado (Definições → Automações; desligado por omissão e só o super admin o liga). Desligado, nada disto aparece e o ponto fica como até aqui.
+
+**O que é**: cada ficha pode ter um modo do ponto. **Por agora o modo fica só marcado**: horas, ordenado, atrasos e faltas não mudam. As regras de cada modo entram depois, cada uma com o seu interruptor.
+- **Sem modo — regras de hoje**: a omissão de toda a gente; pica como até aqui.
+- **1 · Horário fixo**: back office e front office.
+- **2 · Isenção**: isenção de horário (pica onde quiser; só o fim de semana se paga à parte, depois de validado).
+- **3 · Sempre em serviço**: os reformados (as entradas e saídas vão ficar registadas sozinhas, com a foto de perfil).
+
+**Mudar o modo** (só o super admin): **RH → ficha → Horário** → cartão **Modo do ponto**.
+1. Escolhe o modo (ou **Sem modo**).
+2. Escolhe **A partir de** e escreve o **motivo**.
+3. Carrega em **Gravar o modo**. Antes de gravar, o cartão mostra a vermelho o que impede e a laranja os avisos.
+
+Regras da mudança:
+- Os **extras** não têm horário fixo nem isenção: só podem ficar em **Sempre em serviço**, com o aviso de que as horas automáticas não pagam.
+- A **isenção** e o **Sempre em serviço** (pôr ou tirar) só valem **a partir de hoje**: para trás mudavam horas já picadas. O **horário fixo** pode ir para trás, mas só dentro de meses abertos (no máximo um ano).
+- Nada muda num mês com o **ordenado fechado** (aprovado ou pago).
+- **Sempre em serviço** pede que a pessoa não tenha uma entrada do ponto aberta. Sem conta Zello ou sem agente da Multipark na ficha, só avisa.
+- Datas no futuro não. "Hoje" é o dia operacional (até às 03:00 ainda conta o dia anterior).
+- Fica tudo no **Histórico** do cartão (modo, a partir de quando, motivo, quem e quando) e no registo de atividade. Uma mudança com uma data igual ou anterior a outra substitui-a: a antiga fica marcada "substituída", nunca é apagada.
+- O RH e quem vê o ponto da ficha veem o modo e o histórico; só o super admin muda. Na própria ficha a pessoa vê o seu modo e o histórico, mas não o motivo (é interno, como as notas internas).
+- Se o posto ou o contrato de alguém em **Horário fixo** ou **Isenção** passar a extra, o cartão avisa a laranja para mudar o modo (os extras só podem ficar em **Sempre em serviço**).
+
+**Aviso escrito ("Li")**
+- Cada modo tem um aviso que diz à pessoa o que se guarda e como contam as horas. No cartão aparece **Por ler** ou **Lido em … (na app / em papel)**.
+- A própria pessoa abre a sua ficha → **Horário**, lê o aviso e carrega em **Li**.
+- Se a pessoa assinou o aviso em papel, o RH carrega em **Registar leitura em papel** (fica em nome de quem registou). Ninguém regista o papel na própria ficha.
+
+**Alertas do ponto** (no mesmo cartão, só quando houver): fora da zona, GPS, caras, turnos longos, fim de semana da isenção… Ninguém vê os alertas da própria ficha; a zona, as caras e o fim de semana da isenção só o super admin vê; os outros, o RH da cidade. Cada um revê-se com **Visto**, **Justificado** ou **Confirmado**. Por agora ainda nada cria alertas.
+
+**Rasto das picagens**: com o interruptor ligado, cada entrada e saída guarda também o modo desse dia, se a selfie veio da **câmara** ou de **"Escolher foto"** (e, num ficheiro, a idade dele), a imprecisão do GPS e a conta que picou. É só informação: não muda horas, ordenado, atrasos nem faltas, e nunca impede o ponto.
+
+## Fins de semana e exceções por data
+
+Cada funcionário tem o **seu horário fixo** (ficha → **Horário**: 07–17, 11–20…), sempre o mesmo. O **fim de semana roda**: marca-se por data, com **exceções** ao horário fixo. Só com o interruptor **"RH: fins de semana e exceções por data"** ligado (Definições → Automações; desligado por omissão). Desligado, nada disto aparece e só conta o horário fixo.
+
+**Exceções por data** (ficha → **Horário**, por baixo do horário fixo)
+- Uma exceção é **"trabalha das HH:MM às HH:MM"** (fim de semana de serviço, feriado de serviço, troca) ou **"folga"** (folga de compensação, um sábado do horário fixo que não é a vez da pessoa). Escolhe o **motivo** e, se quiseres, escreve uma nota.
+- É pelo **dia em que a pessoa entra**: uma saída antes da entrada é no dia seguinte (turno da noite). Uma "folga" no sábado não mexe no turno de sexta das 23:00 às 07:00.
+- **Uma por dia**: marcar outra no mesmo dia substitui a anterior. **Cancelar não apaga**: nesse dia volta o horário fixo e a cancelada continua em **Ver as canceladas**. Fica tudo no registo de atividade (Logs).
+- Nesse dia a exceção **ganha ao horário fixo**: no **atraso ao trabalho** (−5) da Avaliação e nas **possíveis faltas**. A ordem é: escala do Extras-Dia, depois a exceção da data, depois o horário fixo.
+- Num **feriado** não há horário fixo; com uma exceção "trabalha" nessa data conta (feriado de serviço).
+- Férias e baixas **aprovadas** e os dias fora do contrato continuam sem horário, mesmo com exceção. Por isso não dá para pôr de serviço (nem marcar "trabalha") num dia de férias ou de baixa aprovada: marca outra pessoa. Um pedido de férias **por aprovar** (ou recusado, ou cancelado) não bloqueia, e o "indisponível" dos extras também não (é só do Extras-Dia).
+- Para trás só se marca nos dias que a Avaliação ainda não fechou; para a frente, até um ano.
+- **Quem marca**: o supervisor da cidade, o RH (back office) e os administradores. Ninguém marca o próprio horário, nem os administradores: marca-o outra pessoa. Os extras escalam-se no Extras-Dia.
+
+**RH → Fins de semana** (no menu **⋮** do RH; supervisor, back office e administradores)
+1. Escolhe a **cidade**, **a partir de** que dia e **quantos fins de semana** (4, 8, 12 ou 26).
+2. Cada fim de semana mostra, no **sábado** e no **domingo**, quem está de serviço: marcado por data, ou pelo **horário fixo** (quem já tem esse dia no horário). Os feriados aparecem a roxo.
+3. **Pôr de serviço**: escolhe a pessoa, o sábado, o domingo ou os dois, e as horas. As horas vêm do horário dela nesse dia; sem ele, **09:00–18:00**.
+4. **Marcar a folga de compensação no mesmo mês** (ligado por omissão): a app marca a folga no **dia útil mais perto** em que a pessoa trabalha (a sexta antes do sábado, a segunda depois do domingo…), **no mesmo mês**. Se não houver nenhum nesse mês, fica no mês seguinte e aparece o aviso. Porquê: as horas fecham mês a mês; uma folga noutro mês não desconta e o dia de serviço paga-se como horas a mais.
+5. Quem tem o sábado no horário fixo mas **não é a vez**: carrega em **Folga** ao lado do nome (fica "folga (não é a vez)"; o **X** desfaz).
+6. O **X** ao lado de quem foi marcado tira-o de serviço (cancela a exceção; volta o horário fixo). A **folga de compensação** desse dia, se ainda não passou, também é cancelada (o mesmo na ficha, ao cancelar ou ao trocar um dia de serviço por folga).
+7. **Repetir a rotação**: escolhe os fins de semana do **modelo** (de um sábado a outro) e **quantas semanas** repetir. A mesma ordem continua: com o modelo A, B, C fica A, B, C, A, B, C… com as mesmas horas. **Ver o que vai marcar** mostra tudo antes, também as folgas de compensação que vai marcar; só depois **Marcar**. Nunca mexe num dia que já tem exceção, em férias/baixas aprovadas, fora do contrato nem no passado, e nunca marca duas vezes o mesmo dia (repetir outra vez não muda nada). Vai no máximo um ano para a frente. Repete só o que foi marcado aqui (de serviço e "não é a vez").
+- **Avisos** (em cima, a amarelo; só avisam, não bloqueiam):
+  - um sábado ou domingo **sem ninguém de serviço**;
+  - alguém com **7 dias seguidos sem folga** (a lei pede pelo menos um dia de descanso por semana);
+  - uma **folga de compensação noutro mês**.
+- Com o interruptor **"RH: aviso à pessoa quando é posta de serviço"** ligado (desligado por omissão), a pessoa recebe no sino (e por email, se o ligar no Perfil) os dias em que foi posta de serviço, as folgas marcadas e o que foi cancelado, de hoje para a frente. Vê tudo no **Perfil → O meu horário**.
+
 ## Mapa de férias (férias, baixas e ausências)
 
 Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Definições → Automações; **desligado** por omissão, só o super admin o liga). Abre-se em **RH → Mapa de férias** (botão no topo) ou em **Perfil → As minhas férias**. Desligado, não aparece a ninguém e nada muda: as férias e as baixas já lançadas continuam a contar como até aqui.
@@ -245,7 +308,7 @@ Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Defini
 **Regras que valem sempre**
 - **Nada se apaga.** Cancelar deixa a ausência no histórico, como "Cancelado".
 - Um **mês fechado** (ordenado aprovado ou pago) não muda: não se pede, aprova, cancela nem lança nada nesse mês.
-- Só as ausências **aprovadas** contam na folha, na Avaliação (atraso) e nas possíveis faltas. As pedidas, as recusadas e as canceladas não contam. O "indisponível" dos extras só conta no Extras-Dia.
+- Só as ausências **aprovadas** contam na folha, na Avaliação (atraso), nas possíveis faltas e nos **Fins de semana** (não se põe de serviço num dia de férias ou baixa aprovada). As pedidas, as recusadas e as canceladas não contam. O "indisponível" dos extras só conta no Extras-Dia.
 - As datas são validadas (AAAA-MM-DD, início antes do fim, no máximo um ano).
 - **Parceiro (empresa)**: tipo de contrato para os parceiros-empresa. Ficam fora do mapa de férias e da folha de ordenados; o salário fica só como referência para os custos. Como tira a pessoa da folha, **só um administrador** põe ou tira este tipo (o supervisor e o back office mudam os outros).
 
@@ -255,14 +318,43 @@ Em **RH → Dashboard** (super admin).
 
 **Possíveis faltas por validar** (no fim da página, fechado; abre-se ao carregar)
 - Todas as noites (e no botão **Processar faltas (ontem)**) cada extra escalado sem ponto no turno fica como **possível falta**, que não conta pontos enquanto não for confirmada.
+- **Funcionários escalados no Extras-Dia** (condutor com salário, back office… numa linha que não é de TL): a possível falta fica **sem pontos** (a nota diz "funcionário: sem pontos"). Confirmada, fica marcada como falta mas **nunca bloqueia** — as faltas dos funcionários não contam para os 3 pontos. Os **extras** continuam com 1 ponto. As linhas de **TL** não dão possível falta. As que já estavam por validar antes desta mudança ficam com o ponto que tinham. Com o **mapa de férias** ligado, quem **avisou antes de ser escalado** (extra ou funcionário) fica com a falta **sem pontos** e a nota diz quando avisou.
 - **Não** fica como possível falta: o turno só **proposto** (escala automática por confirmar), quem foi **mandado para casa** e quem **mexeu em carros na Multipark** nesse dia (trabalhou sem picar o ponto). Se a Multipark não responder, a nota diz "movimentos da Multipark não lidos".
-- **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **"RH: possíveis faltas de quem tem horário fixo"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Fora: quem estava na escala do Extras-Dia nesse dia, férias e baixas, dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro) e quem mexeu em carros na Multipark. Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).
+- **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **"RH: possíveis faltas de quem tem horário fixo"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Corre de madrugada, **só para ontem**. Com **"RH: fins de semana e exceções por data"** ligado, contam também as **exceções por data**: quem está **de serviço num fim de semana** (ou num feriado de serviço) e não picou também fica aqui (a nota diz "exceção por data"); quem tem **folga** marcada nesse dia não. Fora: quem estava na escala do Extras-Dia nesse dia (mesmo só proposta), férias e baixas **aprovadas** de dia inteiro (um pedido de férias por aprovar não tira a falta; uma ausência de parte do dia também não), dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro), quem mexeu em carros na Multipark e quem está na lista **Fora das faltas automáticas** (ver "Horários por rever"). Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).
+- Nas **Falta (horário fixo)**, em vez de **Libertar** há **Dispensar ▾**, com o motivo:
+  - **Não foi falta: picou noutro sistema / picagem perdida** — fica dispensada e marcada; aparece em "Horários por rever" como prova para a verificação do ponto. Se o turno tem de contar, acrescenta-o no ponto da ficha.
+  - **Férias**, **Baixa** ou **Falta justificada** (consulta, funeral…) — lança na ficha a **ausência desse dia** (férias, baixa ou "outra"), para não voltar a aparecer e para sair das horas esperadas. Só quem gere a ficha (como lançar uma ausência). Se já houver ausência nesse dia, não cria outra.
+  - **Libertar sem motivo** — como antes.
+  - Nada se apaga: a possível falta fica dispensada, com o motivo e quem dispensou. Se outra pessoa já a reviu entretanto, aparece "já foi revista" e não se cria nada.
 - O número entre parênteses é o **total real** das tuas cidades; a lista mostra as 200 mais recentes.
-- **Falta** / **Libertar** em cada linha, ou em massa: **Marcar falta a todas** / **Libertar todas** (as da lista), ou escolhe algumas e os botões passam a "as N escolhidas". Cada falta confirmada vale 1 ponto e com 3 pontos o acesso fica bloqueado. As que não der para rever (ex.: foste tu a propor) ficam e vêm contadas.
+- **Falta** / **Libertar** em cada linha, ou em massa: **Marcar falta a todas** / **Libertar todas** (as da lista), ou escolhe algumas e os botões passam a "as N escolhidas". Cada falta confirmada de um **extra** vale 1 ponto e com 3 pontos o acesso fica bloqueado (as dos funcionários e as do horário fixo valem 0). As que não der para rever (ex.: foste tu a propor) ficam e vêm contadas.
 
 **Detalhe por colaborador**
 - **Horas mês**: as do ponto; sem ponto, aparecem as da escala dos Extras, a cinzento, com "(escala)".
 - **Movimentos (Multipark)**: ações na Multipark no mês, até ontem (vêm da avaliação diária, recalculada todas as noites). Passa o rato para ver recolhas, entregas, movimentos e dias com ações. Todas as colunas ordenam.
+
+
+## Horários por rever (antes de ligar as faltas automáticas)
+
+Em **Pessoas → Recursos Humanos → ⋮ → Horários por rever** (quem gere o RH: supervisor da cidade, back office, administrador e super admin; cada um vê as suas cidades). **Só leitura**: diz o que está mal e onde se corrige. Vê-o antes de o super admin ligar **"RH: possíveis faltas de quem tem horário fixo"**.
+
+- No topo, se as **faltas automáticas** estão **ligadas** ou **desligadas**. Ao ligar não acontece nada logo: na madrugada seguinte correm só para ontem, com 0 pontos e sem bloquear ninguém.
+- **Funcionários sem horário**: sem nenhum dia de trabalho no horário. Para eles não há possível falta nem atraso, e a folha conta 176 h esperadas. Se trabalham com horário, preenche-o na ficha → **Horário**. Quem tem o horário **só com folgas** aparece marcado: a folha passou a contá-lo como sem horário (antes contava 0 h e pagava as horas todas como extra) e a linha da folha mostra os dois valores.
+- **Dias duplicados**: o mesmo dia da semana em mais de uma linha. A ficha, a Avaliação, as faltas e a folha de ordenados usam a linha de trabalho mais antiga (antes, a folha usava a última: quando isso muda o valor, a linha da folha mostra os dois). Abre a ficha → Horário e carrega em **Guardar** nesse dia: as linhas ficam iguais (nenhuma se apaga).
+- **Horas inválidas**: horas que não são HH:MM (ex.: "9h") ou entrada igual à saída. Corrige na ficha → Horário.
+- **Com horário e sem picar há 14 dias** (ou sem nenhuma entrada no último ano): quase de certeza ainda picam na **impressão digital** ou noutro sistema. Com as faltas ligadas levavam uma possível falta por cada dia de trabalho. **Tirar das faltas até…**: escolhe a data (por omissão, o fim do mês seguinte) e o motivo.
+- **Sábado ou domingo no horário fixo**: o fim de semana roda. Quem tem o sábado ou o domingo no horário fixo e não está de serviço leva uma possível falta. Com **"RH: fins de semana e exceções por data"** ligado, marca-o em **RH → Fins de semana** (**Folga**: não é a vez — ver "Fins de semana e exceções por data"); senão dispensa-a, ou tira o dia do horário se não for fixo.
+- **Fora das faltas automáticas**: a lista de quem não leva possível falta pelo horário fixo até à data (inclusive), com o motivo e quem a pôs. **Mudar**, **Tirar da lista** ou **+ Pôr outra pessoa com horário**. Só quem gere a ficha da pessoa. O histórico fica em Definições → Parâmetros → Histórico de alterações e nos Logs.
+- **Férias deste mês**: quantas ausências **aprovadas** (dias inteiros) estão lançadas. Quem está de férias sem a ausência aprovada leva uma possível falta por dia (um pedido por aprovar não a tira): dispensa-a com **Férias**.
+- **Dispensadas como picagem perdida (60 dias)**: as possíveis faltas dispensadas com "picou noutro sistema / picagem perdida" — a prova para a verificação das horas que desapareceram.
+- Em baixo, as **possíveis faltas do horário fixo por validar**, com **Falta** e **Dispensar ▾** (ver acima).
+
+**Ficha → Horário**
+- Cada dia: **Trabalha/Folga**, entrada e saída (HH:MM) e **Guardar**. Uma saída antes da entrada é no dia seguinte (ex.: 23:00–07:00). Não grava horas que não sejam HH:MM, nem entrada igual à saída.
+- **Pôr folga** deixa o dia como folga — já não se apaga a linha. Na folha de ordenados dá o mesmo que apagar o dia: um horário só com folgas conta como sem horário (176 h).
+- Se o dia está em mais de uma linha, o ecrã mostra a de trabalho mais antiga (a que conta).
+- Se o dia estiver em mais de uma linha ou tiver uma hora gravada que não se lê, aparece o aviso por baixo; **Guardar** acerta todas as linhas desse dia.
+- Cada mudança fica no **registo de atividade** (Logs), com o antes e o depois (ex.: "Horário Qua: 09:00–18:00 → 08:00–17:00").
 
 ## Ligações (fichas, contas de login e agentes da Multipark)
 
@@ -321,6 +413,7 @@ A regra é que **cada agente é um utilizador e cada utilizador tem um agente**.
 - Caso típico: a ficha do RH e outra criada sozinha a partir de um login ou de um agente (ex.: "ribeirohelio662", "Agent DRIVER").
 - No cartão **Uma pessoa**, escolhe a ficha que fica e, em **Ficha duplicada da mesma pessoa**, a outra. Carrega em **Juntar nesta ficha**: vês antes o que passa (ponto, PDAs, escalas, documentos…).
 - Tudo o que era da outra passa para esta, com o utilizador e o agente da Multipark (principal se esta não tiver, senão extra). A outra fica **desativada** ("ficha duplicada"), nunca apagada.
+- Se as duas fichas têm **modo do ponto** diferente (ou as duas têm histórico do modo), a pré-visualização avisa e diz com que modo fica. O histórico das duas passa para a que fica; confirma o modo em **RH → ficha → Horário** depois de juntar.
 
 **Agentes que não são pessoas**
 - "system", "api" e "API User" são ações automáticas da Multipark: nunca se ligam a fichas e deixam de aparecer nos conflitos. Agentes de teste, agências e textos de formulário ("NOME DO RESPONSÁVEL…") também não. A ligação de hora a hora (e **Reconciliar agora**) tira-os das fichas onde tivessem ficado presos, e fica registado.

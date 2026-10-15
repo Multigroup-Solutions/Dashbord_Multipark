@@ -938,7 +938,74 @@ export const employees = mysqlTable("employees", {
 	deactivatedById: int(),
 	// 0585 (49c): a pessoa INATIVA carregou em "Voltei, quero trabalhar" (o RH vê "Quer voltar").
 	comebackRequestedAt: datetime({ mode: 'string' }),
+	// 0690 (plano 63): cópia do modo do ponto de HOJE (NULL = sem modo; fixed | exempt | always_on).
+	// Só para mostrar — o ordenado e a Avaliação leem o histórico (employee_ponto_modes).
+	pontoMode: varchar({ length: 12 }),
 });
+
+// 0690 (plano 63, passo 1): histórico do modo do ponto — "a partir de" (dia
+// operacional). Uma mudança posterior com data igual ou anterior substitui as
+// seguintes (shared/pontoMode.ts). Nada se apaga.
+export const employeePontoModes = mysqlTable("employee_ponto_modes", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	mode: varchar({ length: 12 }),
+	effectiveFrom: date({ mode: 'string' }).notNull(),
+	note: varchar({ length: 255 }),
+	setById: int(),
+	setAt: datetime({ mode: 'string' }).notNull(),
+},
+(table) => [
+	index("idx_employee_ponto_modes_emp").on(table.employeeId, table.effectiveFrom),
+]);
+
+// 0690: alertas do ponto (zona, caras, turnos longos, fim de semana da isenção…).
+// Um por (ficha, dedupeKey); a chave não leva o id da ficha (juntar fichas).
+export const pontoAlerts = mysqlTable("ponto_alerts", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	timeRecordId: int(),
+	faceCheckId: int(),
+	autoDayId: int(),
+	detail: varchar({ length: 500 }),
+	severity: varchar({ length: 8 }).default('amber').notNull(),
+	status: varchar({ length: 12 }).default('open').notNull(),
+	notifiedAt: datetime({ mode: 'string' }),
+	reviewedById: int(),
+	reviewedAt: datetime({ mode: 'string' }),
+	reviewNote: varchar({ length: 255 }),
+	dedupeKey: varchar({ length: 120 }).notNull(),
+	createdAt: datetime({ mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+},
+(table) => [
+	uniqueIndex("uq_ponto_alerts_dedupe").on(table.employeeId, table.dedupeKey),
+	index("idx_ponto_alerts_status").on(table.status, table.kind, table.day),
+	index("idx_ponto_alerts_emp_day").on(table.employeeId, table.day),
+]);
+
+// 0690: avisos escritos lidos ("Li" na app ou em papel, registado pelo RH).
+// As colunas da ativação do modo 3 (foto, GPS, Zello) só se preenchem no passo 8.
+export const pontoModeAcks = mysqlTable("ponto_mode_acks", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	mode: varchar({ length: 12 }),
+	notice: varchar({ length: 24 }).notNull(),
+	channel: varchar({ length: 8 }).default('app').notNull(),
+	ackAt: datetime({ mode: 'string' }).notNull(),
+	ackByUserId: int(),
+	note: varchar({ length: 255 }),
+	photoKey: varchar({ length: 512 }),
+	latitude: decimal({ precision: 10, scale: 7 }),
+	longitude: decimal({ precision: 10, scale: 7 }),
+	gpsAccuracyM: int(),
+	zelloUsername: varchar({ length: 128 }),
+	zelloSeenAt: datetime({ mode: 'string' }),
+},
+(table) => [
+	index("idx_ponto_mode_acks_emp").on(table.employeeId, table.notice),
+]);
 
 // 0585 (49c): "Liga a tua conta" — conta Google sem ficha diz com que email/
 // telefone se candidatou (kind "link"), ou possível duplicado criado pelo
@@ -2423,6 +2490,31 @@ export const schedules = mysqlTable("schedules", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
+// 0725 (plano 63, passo 10b): exceções por data ao horário fixo — "trabalha das HH:MM às HH:MM" ou "folga".
+// Uma ativa por pessoa e dia (activeFlag 1; NULL quando cancelada). Cancelar não apaga.
+export const scheduleOverrides = mysqlTable("schedule_overrides", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	kind: varchar({ length: 8 }).notNull(),
+	startTime: varchar({ length: 5 }),
+	endTime: varchar({ length: 5 }),
+	reason: varchar({ length: 16 }).default('other').notNull(),
+	city: varchar({ length: 16 }),
+	note: varchar({ length: 255 }),
+	activeFlag: tinyint().default(1),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedById: int(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+	cancelledAt: timestamp({ mode: 'string' }),
+	cancelledById: int(),
+},
+(table) => [
+	uniqueIndex("uq_schedule_overrides_active").on(table.employeeId, table.day, table.activeFlag),
+	index("idx_schedule_overrides_day").on(table.day, table.activeFlag),
+]);
+
 export const services = mysqlTable("services", {
 	id: int().autoincrement().primaryKey(),
 	projectId: int(),
@@ -2592,6 +2684,14 @@ export const timeRecords = mysqlTable("time_records", {
 	reviewedAt: timestamp({ mode: 'string' }),
 	reviewNote: varchar({ length: 255 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	// 0690 (plano 63) — rasto da picagem, só informação (nenhuma conta de horas o lê):
+	// o modo do ponto nesse dia, de onde veio a selfie (camera | file), a idade do
+	// ficheiro (s), a imprecisão do GPS (m) e a conta que picou.
+	pontoMode: varchar({ length: 12 }),
+	photoSource: varchar({ length: 8 }),
+	photoFileAgeS: int(),
+	gpsAccuracyM: int(),
+	createdByUserId: int(),
 });
 
 // ─── Terminal pelo perfil (0625, plano 56 B; shared/terminalSession.ts) ──────

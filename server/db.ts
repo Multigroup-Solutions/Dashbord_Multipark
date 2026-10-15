@@ -1605,35 +1605,52 @@ export async function getAllEmployeesDocumentStatus(): Promise<Map<number, Array
 export async function getEmployeeSchedules(employeeId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(schedules).where(eq(schedules.employeeId, employeeId)).orderBy(schedules.weekday);
+  // por dia da semana e, nos dias duplicados, a linha de id mais baixo primeiro (a que a Avaliação e as faltas usam)
+  return db.select().from(schedules).where(eq(schedules.employeeId, employeeId)).orderBy(schedules.weekday, schedules.id);
 }
 
-export async function deleteSchedule(employeeId: number, weekday: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db
-    .delete(schedules)
-    .where(and(eq(schedules.employeeId, employeeId), eq(schedules.weekday, weekday)));
-}
-
-export async function upsertSchedule(data: InsertSchedule) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  // A tabela schedules não tem UNIQUE(employeeId, weekday) — fazer
-  // SELECT + UPDATE/INSERT manualmente em vez de onDuplicateKeyUpdate.
-  const [existing] = await db
-    .select({ id: schedules.id })
+type ScheduleDayRow = { id: number; startTime: string; endTime: string; isWorkDay: number };
+async function scheduleDayRows(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, employeeId: number, weekday: number): Promise<ScheduleDayRow[]> {
+  return db.select({ id: schedules.id, startTime: schedules.startTime, endTime: schedules.endTime, isWorkDay: schedules.isWorkDay })
     .from(schedules)
-    .where(and(eq(schedules.employeeId, data.employeeId), eq(schedules.weekday, data.weekday)))
-    .limit(1);
-  if (existing) {
+    .where(and(eq(schedules.employeeId, employeeId), eq(schedules.weekday, weekday)))
+    .orderBy(schedules.id);
+}
+
+/**
+ * Plano 63 (10a): "apagar" um dia do horário passa a FOLGA (isWorkDay = 0) em
+ * todas as linhas desse dia — nada se apaga. Devolve as linhas como estavam.
+ */
+export async function setScheduleDayOff(employeeId: number, weekday: number): Promise<{ before: ScheduleDayRow[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const before = await scheduleDayRows(db, employeeId, weekday);
+  if (before.length) {
+    await db.update(schedules).set({ isWorkDay: 0 })
+      .where(and(eq(schedules.employeeId, employeeId), eq(schedules.weekday, weekday)));
+  }
+  return { before };
+}
+
+/**
+ * Grava um dia do horário. A tabela schedules não tem UNIQUE(employeeId,
+ * weekday): plano 63 (10a) — muda TODAS as linhas desse dia (assim gravar no
+ * ecrã acerta os duplicados, sem apagar nenhum); sem nenhuma, cria uma.
+ * Devolve as linhas como estavam (para o registo de atividade).
+ */
+export async function upsertSchedule(data: InsertSchedule): Promise<{ before: ScheduleDayRow[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const before = await scheduleDayRows(db, data.employeeId, data.weekday);
+  if (before.length) {
     await db
       .update(schedules)
       .set({ startTime: data.startTime, endTime: data.endTime, isWorkDay: data.isWorkDay })
-      .where(eq(schedules.id, existing.id));
-    return;
+      .where(and(eq(schedules.employeeId, data.employeeId), eq(schedules.weekday, data.weekday)));
+    return { before };
   }
   await db.insert(schedules).values(data);
+  return { before };
 }
 
 // ─── RH: TIME RECORDS ─────────────────────────────────────────────────────────

@@ -8,12 +8,19 @@ import { toast } from "sonner";
 // câmara; (2) getUserMedia bloqueado/indisponível → fallback para escolher/
 // tirar foto via input de ficheiro (capture) — resolve o "não deixa fazer
 // upload da foto" nos PDAs.
-export default function CameraCapture({ onCapture, onCancel }: { onCapture: (base64: string, mimeType: string) => void; onCancel: () => void }) {
+//
+// Plano 63 (passo 1): o 3.º argumento de `onCapture` diz de onde veio a foto
+// (câmara ou "Escolher foto") e, num ficheiro, a idade dele em segundos — o
+// rasto da picagem (só informação; nunca impede o ponto).
+export interface CaptureMeta { source: "camera" | "file"; fileAgeS: number | null }
+
+export default function CameraCapture({ onCapture, onCancel }: { onCapture: (base64: string, mimeType: string, meta?: CaptureMeta) => void; onCancel: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [previewMeta, setPreviewMeta] = useState<CaptureMeta>({ source: "camera", fileAgeS: null });
   const [cameraFailed, setCameraFailed] = useState(false);
 
   const openCamera = async (): Promise<MediaStream | null> => {
@@ -52,6 +59,7 @@ export default function CameraCapture({ onCapture, onCancel }: { onCapture: (bas
     canvas.height = video.videoHeight;
     canvas.getContext("2d")?.drawImage(video, 0, 0);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+    setPreviewMeta({ source: "camera", fileAgeS: null });
     setPreview(dataUrl);
     stream?.getTracks().forEach(t => t.stop());
   };
@@ -62,6 +70,7 @@ export default function CameraCapture({ onCapture, onCancel }: { onCapture: (bas
   const onFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const ageS = Number.isFinite(file.lastModified) && file.lastModified > 0 ? Math.max(0, Math.round((Date.now() - file.lastModified) / 1000)) : null;
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -72,6 +81,7 @@ export default function CameraCapture({ onCapture, onCancel }: { onCapture: (bas
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height);
+      setPreviewMeta({ source: "file", fileAgeS: ageS });
       setPreview(canvas.toDataURL("image/jpeg", 0.8));
       stream?.getTracks().forEach(t => t.stop());
       URL.revokeObjectURL(url);
@@ -83,7 +93,7 @@ export default function CameraCapture({ onCapture, onCancel }: { onCapture: (bas
   const confirm = () => {
     if (!preview) return;
     const base64 = preview.split(",")[1];
-    onCapture(base64, "image/jpeg");
+    onCapture(base64, "image/jpeg", previewMeta);
   };
 
   const retake = () => {

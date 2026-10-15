@@ -6,10 +6,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 
-const state = vi.hoisted(() => ({ rows: [] as any[], leaves: [] as any[], inserted: [] as any[] }));
+const state = vi.hoisted(() => ({ rows: [] as any[], leaves: [] as any[], inserted: [] as any[], people: [] as any[] }));
 
 vi.mock("./db", async (original) => {
-  const { extrasDiaAssignments, employeePenalties } = await import("../drizzle/schema");
+  const { extrasDiaAssignments, employeePenalties, employees } = await import("../drizzle/schema");
   const dialect = new MySqlDialect();
   const db = {
     execute: async (q: any) => {
@@ -19,7 +19,8 @@ vi.mock("./db", async (original) => {
     },
     select: () => ({
       from: (table: any) => ({
-        where: () => (table === extrasDiaAssignments ? Promise.resolve(state.rows) : { limit: async () => [] }),
+        // plano 63 (2b): o posto e o contrato de quem falta (extra 1 ponto, funcionário 0)
+        where: () => (table === extrasDiaAssignments ? Promise.resolve(state.rows) : table === employees ? Promise.resolve(state.people) : { limit: async () => [] }),
       }),
     }),
     insert: (table: any) => ({
@@ -38,7 +39,7 @@ import { detectExtraDiaNoShows } from "./rhService";
 const row = (o: Record<string, unknown> = {}) => ({ id: 10, employeeId: 5, personName: "Zé Extra", startHour: 9, endHour: 17, city: "lisbon", status: "confirmed", sentHomeHour: null, createdAt: "2026-11-01 10:00:00", ...o });
 const aviso = (o: Record<string, unknown> = {}) => ({ employeeId: 5, leaveType: "unavailable", status: "approved", fromDate: "2026-11-02", toDate: "2026-11-02", hours: null, requestedAt: "2026-10-30 08:00:00", createdAt: "2026-10-30 08:00:00", ...o });
 
-beforeEach(() => { state.rows = [row()]; state.leaves = []; state.inserted = []; process.env.FERIAS_MAPA = "on"; });
+beforeEach(() => { state.rows = [row()]; state.leaves = []; state.inserted = []; state.people = [{ id: 5, position: "extra", contractType: "extra" }]; process.env.FERIAS_MAPA = "on"; });
 afterEach(() => { delete process.env.FERIAS_MAPA; });
 
 describe("falta ao Extras-Dia de quem avisou que não estava", () => {
@@ -66,8 +67,12 @@ describe("falta ao Extras-Dia de quem avisou que não estava", () => {
     expect(state.inserted[0]).toMatchObject({ points: 1 });
   });
   it("férias aprovadas antes de ser escalado (funcionário escalado) também tiram os pontos", async () => {
+    state.people = [{ id: 5, position: "driver", contractType: "permanent" }];
     state.leaves = [aviso({ leaveType: "vacation", fromDate: "2026-11-01", toDate: "2026-11-06" })];
     await detectExtraDiaNoShows("2026-11-02");
     expect(state.inserted[0]).toMatchObject({ points: 0 });
+    // com o 2b o funcionário já ficava com 0: a nota diz que foi pelo aviso (não "funcionário: sem pontos")
+    expect(state.inserted[0].notes).toContain("tinha avisado a 30/10");
+    expect(state.inserted[0].notes).not.toContain("funcionário: sem pontos");
   });
 });

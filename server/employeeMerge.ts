@@ -50,6 +50,9 @@ export async function previewEmployeeMerge(d: Db, keepId: number, dropId: number
   if (Number(x.isActive) !== 1) warnings.push("A ficha que sai já estava desativada.");
   if (k.userId && x.userId && Number(k.userId) !== Number(x.userId)) warnings.push("As duas fichas têm utilizador: o da que sai passa a conta extra desta pessoa (se for a mesma pessoa com dois logins, junta-os depois em \"Juntar contas\").");
   if (k.multiparkAgentUserId && x.multiparkAgentUserId && k.multiparkAgentUserId !== x.multiparkAgentUserId) warnings.push("As duas fichas têm agente da Multipark: o da que sai passa a agente extra.");
+  // Plano 63 (passo 1): modo do ponto nas duas fichas → o histórico das duas passa para a que fica; confirma-se depois.
+  const modeWarning = await pontoModeMergeWarningFor(d, keepId, dropId);
+  if (modeWarning) warnings.push(modeWarning);
   return {
     keep: { id: Number(k.id), fullName: String(k.fullName), email: k.email ?? null, isActive: Number(k.isActive) === 1 },
     drop: { id: Number(x.id), fullName: String(x.fullName), email: x.email ?? null, isActive: Number(x.isActive) === 1 },
@@ -105,5 +108,44 @@ export async function mergeEmployees(d: Db, o: { keepId: number; dropId: number 
       personalEmail = COALESCE(NULLIF(personalEmail, ''), ${otherEmail})
     WHERE id = ${o.keepId}`);
 
+  // 6. Plano 63: a cópia do modo do ponto de hoje (employees.pontoMode) segue o histórico junto — nas
+  // duas fichas (a que sai ficou sem histórico, por isso fica sem modo).
+  await refreshPontoModeCache(d, o.keepId);
+  await refreshPontoModeCache(d, o.dropId);
+
   return p;
+}
+
+/** Histórico do modo do ponto de uma ficha; null se não deu para ler (ex.: a tabela ainda não existe). */
+async function pontoModeHistoryOf(d: Db, employeeId: number): Promise<Array<{ id: number; mode: string | null; effectiveFrom: string }> | null> {
+  try {
+    const rows = rowsOf(await d.execute(sql`SELECT id, mode, DATE_FORMAT(effectiveFrom, '%Y-%m-%d') AS effectiveFrom FROM employee_ponto_modes WHERE employeeId = ${employeeId} ORDER BY id`));
+    return rows.map((r) => ({ id: Number(r.id), mode: r.mode == null ? null : String(r.mode), effectiveFrom: String(r.effectiveFrom).slice(0, 10) }));
+  } catch {
+    return null;
+  }
+}
+
+/** Aviso da pré-visualização quando as duas fichas têm modo do ponto (shared/pontoMode.ts). */
+async function pontoModeMergeWarningFor(d: Db, keepId: number, dropId: number): Promise<string | null> {
+  const [{ pontoModeMergeWarning }, { operationalDayOf }] = await Promise.all([import("../shared/pontoMode"), import("../shared/lisbonDay")]);
+  const [keepHistory, dropHistory] = await Promise.all([pontoModeHistoryOf(d, keepId), pontoModeHistoryOf(d, dropId)]);
+  return pontoModeMergeWarning({ keepHistory: keepHistory ?? [], dropHistory: dropHistory ?? [], today: operationalDayOf(Date.now()) });
+}
+
+/**
+ * Recalcula a cópia do modo de hoje depois de juntar (melhor esforço: a junção
+ * nunca falha por isto). Sem histórico → sem modo; só escreve se mudar; se o
+ * histórico não se leu, não mexe.
+ */
+async function refreshPontoModeCache(d: Db, employeeId: number): Promise<void> {
+  try {
+    const history = await pontoModeHistoryOf(d, employeeId);
+    if (history == null) return;
+    const [{ pontoModeOn }, { operationalDayOf }] = await Promise.all([import("../shared/pontoMode"), import("../shared/lisbonDay")]);
+    const mode = pontoModeOn(operationalDayOf(Date.now()), history);
+    await d.execute(sql`UPDATE employees SET pontoMode = ${mode} WHERE id = ${employeeId} AND NOT (pontoMode <=> ${mode})`);
+  } catch (err) {
+    console.warn("[juntar fichas] modo do ponto: cópia não atualizada:", String((err as any)?.message ?? err).slice(0, 160));
+  }
 }

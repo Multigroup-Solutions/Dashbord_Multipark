@@ -18,6 +18,7 @@ import { CallPushCard } from "@/components/whatsapp/CallPushCard";
 import { PasswordCard } from "@/components/login/PasswordCard";
 import { PushAlertsCard } from "@/components/login/PushAlertsCard";
 import { PersonalDeviceCard } from "@/components/PersonalDeviceCard";
+import { MyScheduleCard } from "@/components/rh/MyScheduleCard";
 import { useCodeLoginOption } from "@/lib/loginOptions";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
@@ -157,6 +158,9 @@ export default function ProfilePage() {
           </button>
         ))}
       </div>
+
+      {/* Plano 63 (passo 10b): o horário fixo e os fins de semana de serviço (só com FINS_DE_SEMANA ligado). */}
+      {employee !== null && <MyScheduleCard />}
 
       {codeLogin && user && <PasswordCard name={user.name ?? null} email={user.email ?? null} />}
 

@@ -2,7 +2,7 @@
 modulo: ficha
 titulo: Perfil (foto, notificações, palavra-passe, sessões, contas Google)
 rotas: /perfil
-palavras: as minhas férias, marcar férias, quando não vou estar, não vou estar, férias por aprovar, menu da fotografia, menu do avatar, o meu perfil no computador, este telemóvel, registar este telemóvel como meu, telemóvel pessoal, deixar de ser pessoal, sessão do pda, avisos no pda, tens um aviso, a sessão termina em 10 s, palavra-passe, mudar a palavra-passe, criar palavra-passe, esqueci a palavra-passe, ativar avisos, avisos no telemóvel, códigos de entrada, liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha
+palavras: as minhas férias, marcar férias, quando não vou estar, não vou estar, férias por aprovar, menu da fotografia, menu do avatar, o meu perfil no computador, este telemóvel, registar este telemóvel como meu, telemóvel pessoal, deixar de ser pessoal, sessão do pda, avisos no pda, tens um aviso, a sessão termina em 10 s, palavra-passe, mudar a palavra-passe, criar palavra-passe, esqueci a palavra-passe, ativar avisos, avisos no telemóvel, códigos de entrada, liga a tua conta, sou novo, já me candidatei, código por email, voltei quero trabalhar, bem-vindo de volta, candidatura por aprovar, a minha disponibilidade, conta não ligada a nenhuma ficha, escolher a conta, conta google no pda, perfil, o meu perfil, foto de perfil, trocar foto, adicionar foto, notificações, silenciar notificações, notificações obrigatórias, também por email, terminar sessões, outros aparelhos, perdi o telemóvel, pda partilhado, sair, conta google, tarefas google, calendário google, contactos google, sugestões, o meu ponto, a minha ficha, o meu horário, horário fixo, fins de semana de serviço, estou de serviço, folga de compensação
 ---
 # Perfil
 
@@ -15,6 +15,12 @@ O **Perfil** tem o teu cartão, atalhos e o que é só teu. Abre para todos (ext
 - **A minha ficha** abre a tua ficha nos RH (dados, documentos, IBAN — ver a ajuda "RH e ponto").
 - **A minha disponibilidade** abre a página onde marcas os dias e turnos em que podes trabalhar (ver a ajuda "Disponibilidade").
 - **As minhas férias** (nos extras, **Quando não vou estar**) abre o mapa de férias no separador das tuas: marcas as férias (ficam por aprovar) ou avisas que não vais estar. Se tiveres pedidos para aprovar, diz quantos e abre logo **Por aprovar**. Só aparece com o mapa de férias ligado (ver a ajuda "RH e ponto" → Mapa de férias).
+
+**O meu horário** (só com **"RH: fins de semana e exceções por data"** ligado nas Definições; só para quem tem ficha de funcionário — os extras escalam-se no Extras-Dia)
+- Mostra o teu **horário fixo** (de segunda a domingo) e os **próximos 8 fins de semana** em que estás **de serviço**, com as horas.
+- Em **Outros dias diferentes** aparecem as folgas de compensação, as trocas e os outros dias marcados fora do teu horário fixo.
+- É só para ver: quem muda é o RH ou o teu supervisor (RH → Fins de semana, ou a tua ficha → Horário → Exceções por data).
+- Com o aviso ligado, recebes no sino quando te põem de serviço ou mudam um dia.
 
 **Este telemóvel** (no telemóvel; num PDA não aparece)
 - **Registar este telemóvel como meu**: o teu telemóvel passa a **telemóvel pessoal** (não é um PDA partilhado). Aparece em Operacional → PDAs → Telemóveis pessoais com o nome de quem tem sessão nele e usa o teu Zello (o da tua ficha).

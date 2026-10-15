@@ -28,6 +28,7 @@
 import { countableShifts, type Shift } from "./shifts";
 import { normalizeExtraLevel, splitTerminalHours, terminalLevelOf } from "../../shared/pontoTerminal";
 import type { TerminalPaySessionLike } from "../../shared/terminalWatch";
+import { workRowOn } from "../../shared/workSchedule";
 
 export const PAYROLL_PARAMS = {
   standardMonthlyHours: 176,
@@ -47,7 +48,8 @@ export const PAYROLL_PARAMS = {
  * (o modelo das 40 h, passo 6, tira essas horas às esperadas).
  */
 export interface LeaveLike { leaveType: "vacation" | "sick" | "unpaid" | "other" | "unavailable"; fromDate: string; toDate: string; hours?: string | number | null }
-export interface ScheduleLike { weekday: number; startTime: string; endTime: string; isWorkDay: number | boolean }
+/** Uma linha do horário (`schedules`); `id` decide os dias duplicados (plano 63, 10a). */
+export interface ScheduleLike { id?: number | null; weekday: number; startTime: string; endTime: string; isWorkDay: number | boolean }
 
 export interface EmployeeMonthInput {
   employee: {
@@ -116,16 +118,36 @@ export function contractDaysInMonth(e: EmployeeMonthInput["employee"], year: num
   return { days: d, from, to };
 }
 
-/** Horas esperadas do mês a partir do horário semanal (dias de calendário do vínculo). */
-export function expectedHoursFromSchedule(schedules: ScheduleLike[] | undefined, from: string, to: string): number | null {
+/**
+ * Horas esperadas do mês a partir do horário semanal (dias de calendário do vínculo).
+ * Plano 63 (10a):
+ *  - "apagar" um dia do horário passa a folga (isWorkDay = 0) em vez de apagar a
+ *    linha — um horário só com folgas conta como SEM horário (null → as 176 h),
+ *    como contava quando os dias apagados desapareciam (o "Pôr folga" em todos os
+ *    dias dá o mesmo dinheiro que o caixote do lixo dava);
+ *  - dias duplicados: conta a linha de trabalho de id mais baixo (`workRowOn`, a
+ *    mesma da Avaliação, das faltas e da ficha). `pick: "legacy"` = a regra de antes
+ *    (a última linha lida, por id) e "só folgas" = 0 h — só para o aviso da folha.
+ */
+export function expectedHoursFromSchedule(schedules: ScheduleLike[] | undefined, from: string, to: string, opts: { pick?: "first" | "legacy" } = {}): number | null {
   if (!schedules || schedules.length === 0) return null;
-  const byWeekday = new Map<number, number>();
-  for (const s of schedules) {
-    if (!s.isWorkDay) continue;
+  const legacy = opts.pick === "legacy";
+  if (!legacy && !schedules.some((s) => s.isWorkDay)) return null;
+  const hoursOf = (s: ScheduleLike) => {
     const [sh, sm] = s.startTime.split(":").map(Number), [eh, em] = s.endTime.split(":").map(Number);
     let h = (eh + em / 60) - (sh + sm / 60);
     if (h < 0) h += 24; // turno que atravessa a meia-noite
-    byWeekday.set(s.weekday, h);
+    return h;
+  };
+  const byWeekday = new Map<number, number>();
+  if (legacy) {
+    const ordered = [...schedules].sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+    for (const s of ordered) if (s.isWorkDay) byWeekday.set(s.weekday, hoursOf(s));
+  } else {
+    for (let wd = 0; wd < 7; wd++) {
+      const s = workRowOn(schedules, wd);
+      if (s) byWeekday.set(wd, hoursOf(s));
+    }
   }
   let total = 0;
   for (let d = from; d <= to; d = addDay(d)) {
@@ -212,13 +234,34 @@ export function computeEmployeeMonth(inp: EmployeeMonthInput): EmployeeMonthResu
     const hourlyBase = monthlySalary > 0 ? monthlySalary / P.standardMonthlyHours : 0;
     nightPayment = r2(nightHours * hourlyBase * (P.nightMultiplier - 1));
     weekendPayment = r2(weekendHours * hourlyBase * (P.weekendMultiplier - 1));
+    const standardHours = r2(P.standardMonthlyHours * contractShare);
+    const overtimeFor = (expected: number) => {
+      if (!(normalHours > expected)) return { hours: 0, payment: 0 };
+      const hours = r2(normalHours - expected);
+      const firstPortion = Math.min(hours, daysWorkedSet.size);
+      const rest = Math.max(0, hours - firstPortion);
+      return { hours, payment: r2(firstPortion * hourlyBase * P.overtimeFirstHour + rest * hourlyBase * P.overtimeSubsequent) };
+    };
     const fromSchedule = expectedHoursFromSchedule(inp.schedules, cFrom, cTo);
-    expectedHours = fromSchedule ?? r2(P.standardMonthlyHours * contractShare);
-    if (normalHours > expectedHours) {
-      overtimeHours = r2(normalHours - expectedHours);
-      const firstPortion = Math.min(overtimeHours, daysWorkedSet.size);
-      const rest = Math.max(0, overtimeHours - firstPortion);
-      overtimePayment = r2(firstPortion * hourlyBase * P.overtimeFirstHour + rest * hourlyBase * P.overtimeSubsequent);
+    expectedHours = fromSchedule ?? standardHours;
+    ({ hours: overtimeHours, payment: overtimePayment } = overtimeFor(expectedHours));
+    // Plano 63 (10a): onde a regra nova do horário (só folgas = sem horário; dias duplicados =
+    // a linha mais antiga, como a Avaliação e as faltas) dá outro valor que a de antes, a linha
+    // diz os dois — nenhum ordenado muda sem quem fecha o mês ver.
+    if (inp.schedules?.length) {
+      // uma hora gravada que não se lê (ex.: "9h"): como antes, não há horas extra — mas diz-se
+      if (Number.isNaN(expectedHours)) warnings.push("horário da ficha com horas que não se leem (ex.: \"9h\"): as horas esperadas não se calculam e as horas extra ficam a 0 — corrige em RH → ficha → Horário (HH:MM)");
+      const legacyExpected = expectedHoursFromSchedule(inp.schedules, cFrom, cTo, { pick: "legacy" }) ?? standardHours;
+      const legacy = overtimeFor(legacyExpected);
+      const sameHours = legacyExpected === expectedHours || (Number.isNaN(legacyExpected) && Number.isNaN(expectedHours));
+      if (legacy.payment !== overtimePayment || !sameHours) {
+        const fmt = (v: number) => v.toFixed(2).replace(".", ",");
+        const hrs = (h: number) => (Number.isNaN(h) ? "horas que não se leem" : `${h} h esperadas`);
+        const why = fromSchedule == null
+          ? "horário só com folgas: conta como sem horário"
+          : "horário com dias duplicados e horas diferentes: conta a linha mais antiga de cada dia (a da ficha, da Avaliação e das faltas)";
+        warnings.push(`${why} — ${hrs(expectedHours)}, ${fmt(overtimePayment)} € de horas extra. Pela regra antiga eram ${hrs(legacyExpected)} e ${fmt(legacy.payment)} € — confirma o horário na ficha antes de fechar o mês`);
+      }
     }
     thirteenth = r2(monthlySalary * P.provisionThirteenth * paidShare);
     fourteenth = r2(monthlySalary * P.provisionFourteenth * paidShare);

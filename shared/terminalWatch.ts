@@ -508,8 +508,10 @@ export function correctionRange(startedAt: string, fromHHMM: string, untilHHMM: 
     const t = lisbonWallTimeUtcMs(d, a);
     if (Math.abs(t - start) < Math.abs(fromMs - start)) { day = d; fromMs = t; }
   }
-  let untilMs = lisbonWallTimeUtcMs(day, b);
-  if (untilMs <= fromMs) untilMs = lisbonWallTimeUtcMs(addDays(day, 1), b);
+  // o dia seguinte decide-se pela hora de relógio (fim ≤ início); igual a comparar instantes, menos dentro da
+  // hora que não existe na mudança de março (01:30 → 02:30): aí "01:30–02:00" dava 23 h 30 e fica vazio
+  let untilMs = lisbonWallTimeUtcMs(b > a ? day : addDays(day, 1), b);
+  if (untilMs < fromMs) untilMs = fromMs;
   return { from: toDbUtc(fromMs), until: toDbUtc(untilMs) };
 }
 

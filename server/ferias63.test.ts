@@ -306,7 +306,8 @@ describe("extras: \"não vou estar\" antes de ser escalado → falta sem pontos;
     const s = src("server/rhService.ts");
     const fn = s.slice(s.indexOf("export async function detectExtraDiaNoShows"), s.indexOf("// ─── Tarefa 62 (Q8)"));
     expect(fn).toContain("createdAt: extrasDiaAssignments.createdAt");
-    expect(fn).toContain("points: notice ? 0 : 1");
+    // com o 2b: avisou antes → 0 (com a nota); senão funcionário 0, extra 1
+    expect(fn).toContain("const points = notice ? 0 : extraDiaNoShowPoints(kindOf.get(r.employeeId));");
     const helper = s.slice(s.indexOf("async function noticesForNoShows"), s.indexOf("export interface NoShowReport"));
     expect(helper).toContain("if (!isFeatureEnabled(FERIAS_MAPA_FLAG, { defaultEnabled: automationFlagDefault(FERIAS_MAPA_FLAG) })) return out;");
   });
@@ -354,6 +355,9 @@ describe("leitores: só ausências aprovadas (approvedLeaveSql)", () => {
     expect(ev).toMatch(/FROM employee_leaves\s+WHERE fromDate <= \$\{addDays\(endDay, 1\)\} AND toDate >= \$\{addDays\(startDay, -1\)\} AND \$\{approvedLeaveSql\(\)\}/);
     const rh = src("server/rhService.ts");
     expect(rh).toMatch(/FROM employee_leaves\s+WHERE fromDate <= \$\{addDays\(dateStr, 1\)\} AND toDate >= \$\{addDays\(dateStr, -1\)\} AND \$\{approvedLeaveSql\(\)\} AND \$\{fullDayLeaveSql\(\)\}/);
+    // os leitores que vieram com os passos 10a e 10b (horários por rever, fins de semana e exceções por data)
+    expect(src("server/scheduleOverrides.ts")).toMatch(/FROM employee_leaves\s+WHERE employeeId IN \(\$\{ids\}\) AND fromDate <= \$\{toDay\} AND toDate >= \$\{fromDay\} AND \$\{approvedLeaveSql\(\)\} AND \$\{fullDayLeaveSql\(\)\}/);
+    expect(src("server/scheduleReview.ts")).toMatch(/FROM employee_leaves\s+WHERE fromDate <= \$\{monthEnd\} AND toDate >= \$\{monthStart\} AND employeeId IN \(\$\{idList\(ids\)\}\) AND \$\{approvedLeaveSql\(\)\} AND \$\{fullDayLeaveSql\(\)\}/);
     const db = src("server/db.ts");
     const days = db.slice(db.indexOf("export async function getLeaveDaysForMonth"), db.indexOf("export async function getLeaveDaysForMonth") + 1200);
     expect(days).toContain("approvedLeaveSql(),");
