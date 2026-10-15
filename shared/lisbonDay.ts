@@ -155,12 +155,22 @@ export function utcMs(at: Date | number | string): number {
 // de RELÓGIO de Lisboa (não horas decorridas), por isso a mudança de hora não
 // empurra ações para o dia errado.
 
-/** Instante UTC (ms) da hora de RELÓGIO `hour` (0–23) de Lisboa no dia `day`. */
+/**
+ * Instante UTC (ms) da hora de RELÓGIO `hour` (0–23) de Lisboa no dia `day`.
+ * Na mudança de outubro, uma hora que acontece duas vezes (01:00–01:59) é a
+ * 1.ª (a de verão). Na de março, a hora que NÃO existe (01:00–01:59: o relógio
+ * salta das 01:00 para as 02:00) passa para a hora de verão seguinte (01:30 →
+ * 02:30); antes ia uma hora para trás (00:30) e dava um atraso falso de −5 a
+ * quem entrasse às 02:30 (plano 63, passo 10b).
+ */
 export function lisbonWallTimeUtcMs(day: string, hour: number): number {
   const midnight = lisbonMidnightUtcMs(day);
   const t = midnight + hour * 3_600_000;
   // se o offset mudou entre a meia-noite e essa hora (mudança de hora), corrige
-  return t - (lisbonOffsetMs(t) - lisbonOffsetMs(midnight));
+  const r = t - (lisbonOffsetMs(t) - lisbonOffsetMs(midnight));
+  // a correção caiu antes da mudança: essa hora de relógio não existe → a mesma distância depois da mudança
+  if (lisbonOffsetMs(r) !== lisbonOffsetMs(t)) return t;
+  return r;
 }
 
 /** Hora (Lisboa) em que começa o dia operacional (turno da manhã). */

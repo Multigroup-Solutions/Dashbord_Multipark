@@ -2407,6 +2407,31 @@ export const schedules = mysqlTable("schedules", {
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
 });
 
+// 0725 (plano 63, passo 10b): exceções por data ao horário fixo — "trabalha das HH:MM às HH:MM" ou "folga".
+// Uma ativa por pessoa e dia (activeFlag 1; NULL quando cancelada). Cancelar não apaga.
+export const scheduleOverrides = mysqlTable("schedule_overrides", {
+	id: int().autoincrement().primaryKey(),
+	employeeId: int().notNull(),
+	day: date({ mode: 'string' }).notNull(),
+	kind: varchar({ length: 8 }).notNull(),
+	startTime: varchar({ length: 5 }),
+	endTime: varchar({ length: 5 }),
+	reason: varchar({ length: 16 }).default('other').notNull(),
+	city: varchar({ length: 16 }),
+	note: varchar({ length: 255 }),
+	activeFlag: tinyint().default(1),
+	createdById: int(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedById: int(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+	cancelledAt: timestamp({ mode: 'string' }),
+	cancelledById: int(),
+},
+(table) => [
+	uniqueIndex("uq_schedule_overrides_active").on(table.employeeId, table.day, table.activeFlag),
+	index("idx_schedule_overrides_day").on(table.day, table.activeFlag),
+]);
+
 export const services = mysqlTable("services", {
 	id: int().autoincrement().primaryKey(),
 	projectId: int(),

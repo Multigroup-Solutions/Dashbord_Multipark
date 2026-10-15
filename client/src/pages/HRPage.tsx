@@ -27,6 +27,7 @@ import { LicencePanel } from "@/components/rh/LicencePanel";
 import { RejectDocumentDialog } from "@/components/rh/RejectDocumentDialog";
 import { EmployeeNotesPanel } from "@/components/rh/EmployeeNotesPanel";
 import { DocsRequestBulkDialog, DocsRequestCard } from "@/components/rh/DocsRequestDialog";
+import { ScheduleOverridesSection } from "@/components/rh/ScheduleOverridesSection";
 import { licenceRelevant, LICENCE_STATUS_LABELS, LICENCE_STATUSES, type LicenceStatus } from "@shared/drivingLicence";
 import { docsSummaryLabel, type DocsSummary as DocsSummaryView } from "@shared/employeeDocuments";
 
@@ -2065,7 +2066,7 @@ function EmployeeDetail({ employeeId, onBack }: { employeeId: number; onBack: ()
               : undefined} />
         </TabsContent>
         <TabsContent value="timerecords" className="mt-4"><TimeRecordsTab employeeId={employeeId} canManage={!!access.canManage} isExtra={emp.position === "extra" || (emp as any).contractType === "extra"} /></TabsContent>
-        <TabsContent value="schedules" className="mt-4"><SchedulesTab employeeId={employeeId} /></TabsContent>
+        <TabsContent value="schedules" className="mt-4"><SchedulesTab employeeId={employeeId} /><ScheduleOverridesSection employeeId={employeeId} /></TabsContent>
         {access.canViewNotes && <TabsContent value="notes" className="mt-4"><EmployeeNotesPanel employeeId={employeeId} /></TabsContent>}
       </Tabs>
     </div>
@@ -2585,6 +2586,8 @@ export default function HRPage() {
   // 41c: o supervisor gere o RH da cidade (cria, importa) — os botões aparecem a quem tem "gerir".
   const canManageRh = can(user as any, "rh", "manage");
   const canSalaries = can(user as any, "rh_salarios", "view");
+  // Plano 63 (passo 10b): RH → Fins de semana, só com FINS_DE_SEMANA ligado (supervisor, back office, admin).
+  const { data: weekendsStatus } = trpc.rh.weekends.status.useQuery(undefined, { enabled: canManageRh && !isExtra, staleTime: 60_000 });
 
   // Extra users: show only their own profile
   const { data: myEmployee, isLoading: myLoading, error: myError, refetch: refetchMe, isFetching: myFetching } = trpc.rh.me.useQuery(undefined, { enabled: isExtra });
@@ -2889,6 +2892,11 @@ export default function HRPage() {
               {canSalaries && (
                 <DropdownMenuItem onClick={() => setShowRates(true)}>
                   <Euro className="w-4 h-4 mr-2" /> Taxas Extra
+                </DropdownMenuItem>
+              )}
+              {weekendsStatus?.canManage && (
+                <DropdownMenuItem onClick={() => navigate("/rh/fins-de-semana")}>
+                  <Calendar className="w-4 h-4 mr-2" /> Fins de semana
                 </DropdownMenuItem>
               )}
               {canManageRh && (

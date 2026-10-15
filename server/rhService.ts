@@ -259,22 +259,25 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
   const { addDays } = await import("../shared/lisbonDay");
   const rowsOf = (res: unknown): any[] => (Array.isArray(res) ? (Array.isArray(res[0]) ? res[0] : res) : []) as any[];
   const scheduleRows = rowsOf(await db.execute(sql`
-    SELECT s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
+    SELECT s.id, s.employeeId, s.weekday, s.startTime, s.endTime, s.isWorkDay, e.projectId,
            DATE_FORMAT(e.contractStart, '%Y-%m-%d') AS contractStart, DATE_FORMAT(e.contractEnd, '%Y-%m-%d') AS contractEnd
       FROM schedules s JOIN employees e ON e.id = s.employeeId
      WHERE e.isActive = 1 AND s.isWorkDay = 1
-       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'`));
+       AND COALESCE(e.position, '') <> 'extra' AND COALESCE(e.contractType, '') <> 'extra'
+     ORDER BY s.id`));
   // a cidade da ficha só serve para o feriado municipal (os nacionais ficam sempre fora)
   const cityOf: (projectId: number | null) => string | null = scheduleRows.length ? await (await import("./aiOps/cities")).projectCityResolver(db) : () => null;
   const schedules = scheduleRows.map((r) => ({
-    employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
+    id: r.id != null ? Number(r.id) : null, employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
     isWorkDay: true, contractStart: r.contractStart ?? null, contractEnd: r.contractEnd ?? null,
     city: cityOf(r.projectId != null ? Number(r.projectId) : null),
   }));
   const leaves = rowsOf(await db.execute(sql`SELECT employeeId, fromDate, toDate FROM employee_leaves
      WHERE fromDate <= ${addDays(dateStr, 1)} AND toDate >= ${addDays(dateStr, -1)}`))
     .map((r) => ({ employeeId: Number(r.employeeId), fromDate: String(r.fromDate).slice(0, 10), toDate: String(r.toDate).slice(0, 10) }));
-  const starts = fixedScheduledStarts(dateStr, dateStr, schedules, leaves);
+  // Plano 63, passo 10b: exceções por data (fim de semana de serviço, folgas) — só com FINS_DE_SEMANA ligado; senão [].
+  const overrides = await (await import("./scheduleOverrides")).loadActiveOverridesForReaders(db, addDays(dateStr, -1), addDays(dateStr, 1));
+  const starts = fixedScheduledStarts(dateStr, dateStr, schedules, leaves, overrides);
   const escala = new Set((await db.select({ employeeId: extrasDiaAssignments.employeeId }).from(extrasDiaAssignments)
     .where(and(eq(extrasDiaAssignments.assignmentDate, dateStr), isNotNull(extrasDiaAssignments.employeeId)))).map((r) => Number(r.employeeId)));
   const candidates: typeof starts = [];
@@ -316,7 +319,7 @@ export async function detectFixedScheduleNoShows(dateStr: string): Promise<Fixed
         // points 0: marca a falta (Q8: "não vem: marca-se falta") sem somar pontos de penalização — nos extras, 3 pontos
         // confirmados bloqueiam a entrada na app; para quem tem horário fixo isso fica para o Jorge decidir
         employeeId: f.employeeId, reason: "other", severity: "penalty", points: 0, relatedId: fixedNoShowRelatedId(dateStr), status: "pending",
-        notes: `${FIXED_NO_SHOW_NOTE_PREFIX} Possível falta em ${f.calendarDay} (horário ${hhmm(f.startMs)}${f.endMs ? `–${hhmm(f.endMs)}` : ""}) — sem entrada no ponto${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
+        notes: `${FIXED_NO_SHOW_NOTE_PREFIX} Possível falta em ${f.calendarDay} (${f.source === "override" ? "exceção por data" : "horário"} ${hhmm(f.startMs)}${f.endMs ? `–${hhmm(f.endMs)}` : ""}) — sem entrada no ponto${multiparkRead ? " nem movimentos na Multipark" : " (movimentos da Multipark não lidos)"}; confirmar com a operação`.slice(0, 512),
       });
       created++;
     } catch (err: any) {
