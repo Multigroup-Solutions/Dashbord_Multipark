@@ -406,7 +406,8 @@ export async function classifyEmailWithAi(
     ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
     ...(opts.thinkingFromCaller ? { thinkingFromCaller: true } : {}),
   });
-  if (cacheKey) mailReadCacheSet(cacheKey, { output: r.output, model: r.model });
+  // Só se guarda a leitura do modelo da chave (uma queda 404/429 para outro modelo não fica com a chave deste).
+  if (cacheKey && call && r.model === call.model) mailReadCacheSet(cacheKey, { output: r.output, model: r.model });
   return { output: r.output, restore: req.restore, model: r.model };
 }
 
