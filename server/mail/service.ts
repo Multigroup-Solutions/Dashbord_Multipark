@@ -143,6 +143,11 @@ async function runPipeline(
     // liga ao registo que existe, sem o contar como novo.
     const { getInboundEmailByMessageId } = await import("../db");
     const row: any = await getInboundEmailByMessageId(p.rfcMessageId).catch(() => null);
+    // R2 (F6b): a 1.ª cópia não era crítica → esta cópia também segue para a triagem normal.
+    if (row?.targetModule === "not_review") {
+      if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, "not_review").catch(() => {});
+      return { targetModule: "not_review", existing: true };
+    }
     if (row?.targetModule && row?.targetId) return { targetModule: String(row.targetModule), targetId: Number(row.targetId), existing: true };
   }
   return null;
@@ -557,6 +562,11 @@ export async function retryPipelineMessage(messageId: number, opts: { manual?: b
       if (seen) aiIntake = pipeline === "perdidos" ? { forceLostFoundId: seen.lostFoundId, replyOnly: true } : { forceComplaintId: seen.complaintId, replyOnly: true };
     }
     const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline, aiIntake);
+    // R2 (F6b): não era crítica → segue para a triagem normal (como na sincronização).
+    if (routed?.targetModule === "not_review") {
+      const { triageReleasedMessage } = await import("../commsRouting");
+      await triageReleasedMessage(messageId).catch((err: any) => console.warn("[mail] triagem depois do pipeline falhou:", messageId, String(err?.message ?? err).slice(0, 160)));
+    }
     if (routed?.targetId) {
       const links = await proposeLinks({ contactEmail: null, subject: "", bodyText: "", gmThreadId: null, refs: [], sentAt: null, pipeline: routed }, dbAutoLinkDeps);
       for (const l of links) await addAutoLink({ threadId, messageId, entityType: l.entityType, entityId: l.entityId, confidence: l.confidence, reason: l.reason });

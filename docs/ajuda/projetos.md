@@ -1,5 +1,7 @@
 ---
 modulo: projetos
+grupo: Financeiro
+pagina: projetos
 titulo: Projetos e custos por projeto
 rotas: /projetos, /projetos/custos
 palavras: projetos, projeto, árvore, nó, nós, grupo, cidade, marca, centro de custos, orçamento, orçamento anual, budget, custos por projeto, custo do projeto, pessoal, comissões, por atribuir, desativar nó, gestor, utilização, excedido, em risco
@@ -8,12 +10,12 @@ palavras: projetos, projeto, árvore, nó, nós, grupo, cidade, marca, centro de
 
 Os **Projetos** são a árvore de centros de custos: **Grupo → Cidade → Marca → Projeto**. Cada despesa, pessoa e reserva pertence a um nó, e os totais sobem pela árvore.
 
-**Gerir a árvore** (admin)
+## Gerir a árvore (admin)
 - **Novo nó**: nome, nível, pai, cor, gestor e **Orçamento anual (€)**. O nível não muda depois de criado.
 - **Mover** um nó para outro pai (não pode ir para dentro de si próprio).
 - **Eliminar = desativar**: o nó sai das listas, mas o histórico continua a contar. Só o super admin apaga de vez, e só nós sem filhos e sem nada associado.
 
-**Custos por projeto** (botão **Custos**, admin)
+## Custos por projeto (botão **Custos**, admin)
 - Mostra o **custo realizado** de cada nó no ano ou no mês escolhido, com as **mesmas regras da Faturação**, sem IVA:
   - **Despesas**;
   - **Pessoal**: salários com subsídios, variável do RH, TSU e extras pelo ponto aprovado;

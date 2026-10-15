@@ -2594,9 +2594,10 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireRole(ctx.user.role, "admin");
       const { undoReviewCleanup } = await import("./reviewCleanup");
-      const r = await undoReviewCleanup(input.kind, input.ids, ctx.user.id);
-      if (r.undone) await logActivity({ userId: ctx.user.id, action: "review_cleanup_undo", entity: "google_review", details: `Desfeita a marca "${input.kind === "not_review" ? "não é crítica" : "repetida"}" em ${r.undone} crítica(s)` });
-      return r;
+      const r = await undoReviewCleanup(input.kind, input.ids);
+      // Quem desfez fica no registo (userId), com as críticas.
+      if (r.undone) await logActivity({ userId: ctx.user.id, action: "review_cleanup_undo", entity: "google_review", ...(r.ids.length === 1 ? { entityId: r.ids[0] } : {}), details: `Desfeita a marca "${input.kind === "not_review" ? "não é crítica" : "repetida"}" em ${r.undone} crítica(s): #${r.ids.slice(0, 30).join(", #")}${r.ids.length > 30 ? "…" : ""}` });
+      return { undone: r.undone };
     }),
     generateResponse: protectedProcedure.input(z.object({
       id: z.number(),

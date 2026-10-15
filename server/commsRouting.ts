@@ -672,6 +672,21 @@ export async function triageStoredMessage(
 }
 
 /**
+ * Um email que o pipeline da caixa largou (R2, plano MPV F6b: entrou pelas
+ * Críticas e não era crítica) passa pela triagem normal: pré-triagem → regra
+ * ou IA (uma leitura; sem leitura nesta corrida fica "pending" e o varrimento
+ * apanha-o). Usado pela nova tentativa dos casos (retryPipelineMessage).
+ */
+export async function triageReleasedMessage(messageId: number, deps: EmailRoutingDeps = dbEmailRoutingDeps): Promise<EmailRoutingResult | null> {
+  const stored = await loadStoredTriageMessage(messageId, "sync");
+  if (!stored) return null;
+  const pre = preTriageMail(stored.pre);
+  if (pre.action === "skip") return null;
+  if (pre.action === "rule") return applyRuleTriage(stored.msg, pre, deps);
+  return routeEmailMessage(stored.msg, deps, { left: 1 });
+}
+
+/**
  * Varrimento (ai-comms, de 15 em 15 min): as mensagens que ficaram "pending"
  * (teto da corrida, sem tempo, a Multipark não respondeu) e as que a IA não
  * conseguiu ler (até 3 tentativas). Só as dos últimos 2 dias.

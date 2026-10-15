@@ -106,8 +106,13 @@ async function routeToModule(
     // REVIEWS_EMAIL_STRICT só o aviso de avaliação (ou um email com estrelas).
     // O resto segue para a triagem normal das caixas (server/mail/service.ts) —
     // nunca fica "ignored".
-    const { emailReviewVerdict } = await import("../../shared/reviewDedup");
-    const verdict = emailReviewVerdict({ fromEmail: ctx.fromEmail, rating: g.rating, subject: ctx.subject, body: ctx.bodyText, strict, dedup });
+    const { emailReviewVerdict, reviewCommentFromEmail } = await import("../../shared/reviewDedup");
+    // O texto da crítica tira-se pela positiva (entre o nome/estrelas e o "Responder").
+    const comment = reviewCommentFromEmail(ctx.bodyText, g.reviewerName);
+    const verdict = emailReviewVerdict({
+      fromEmail: ctx.fromEmail, rating: g.rating, subject: ctx.subject, body: ctx.bodyText, strict, dedup,
+      reviewerWithText: !!g.reviewerName && !!comment,
+    });
     if (verdict === "summary") return { targetModule: "review_summary" };
     if (verdict === "not_review") return { targetModule: "not_review" };
     // O GBP manda também notificações ADMINISTRATIVAS (recursos recusados,
@@ -146,12 +151,12 @@ async function routeToModule(
     let duplicateOf: number | null = null;
     if (dedup) {
       const { findEmailReviewDuplicate } = await import("../reviewCleanup");
-      const { reviewDateMs, reviewTextKey, reviewerFirstNameKey } = await import("../../shared/reviewDedup");
+      const { reviewDateMs, reviewTextKeyFromEmail, reviewerNameKey } = await import("../../shared/reviewDedup");
       duplicateOf = await findEmailReviewDuplicate({
         parkKey: projectId != null ? `p${projectId}` : null,
         rating: g.rating,
-        textKey: reviewTextKey(text, reviewer),
-        firstName: reviewerFirstNameKey(reviewer),
+        textKey: reviewTextKeyFromEmail(ctx.bodyText, reviewer),
+        name: reviewerNameKey(reviewer),
         atMs: reviewDateMs(sourceEmailDate) ?? Date.now(),
         apiKey: false,
       });
@@ -180,7 +185,8 @@ async function routeToModule(
         await autoDraftEmailReview(id, sourceEmailDate, { timeoutMs: 15_000 });
       } catch { /* IA opcional */ }
     }
-    return { targetModule: "review", targetId: id };
+    // A repetida: a conversa liga-se à ORIGINAL (é essa que se trata).
+    return { targetModule: "review", targetId: duplicateOf ?? id };
   }
 
   // Faturação automática de parceiros (ex.: "Auto-fatura" mensal do

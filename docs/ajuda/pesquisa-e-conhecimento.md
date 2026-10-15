@@ -1,5 +1,7 @@
 ---
 modulo: pesquisa_conhecimento
+grupo: Pessoas
+pagina: conhecimento
 titulo: Pesquisa global (Ctrl+K) e Base de conhecimento
 rotas: /formacao/conhecimento
 palavras: faqs da base de conhecimento, quiz da base de conhecimento, pesquisa global, ctrl+k, ctrl k, cmd k, paleta, procurar em tudo, pesquisas recentes, perguntar à ia, perguntar ao multis, base de conhecimento, manuais do drive, pasta do drive, procedimentos da empresa, carregar documento, carregar manual, documento duplicado, voltar a incluir, excluir documento, sincronizar pastas, visibilidade do documento, fontes, citações, perguntas a partir de documento
@@ -31,7 +33,7 @@ Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente
 - Ficheiros carregados na app (PDF, DOCX, TXT ou MD até 25 MB; o ficheiro vai direto para o armazenamento). Um ficheiro grande pode ficar uns minutos "Por processar" antes de aparecer como Sincronizado. Carregar o mesmo ficheiro outra vez não cria um duplicado: a app avisa e usa o documento que já existe.
 - A ajuda da própria app (atualiza-se sozinha).
 
-**Gerir** (administradores: menu **Pessoas → Base de conhecimento** ou **Formação → Base de conhecimento**)
+### Gerir (administradores: menu **Pessoas → Base de conhecimento** ou **Formação → Base de conhecimento**)
 1. **Definições**: liga **Sincronizar pastas do Drive**, indica as pastas (caminho a partir da raiz do Shared Drive, ex.: `Procedimentos/Porto`) e quem vê cada pasta (papéis e cidades; nada marcado = todos). Ao gravar, a visibilidade passa logo para os documentos dessas pastas e a próxima sincronização volta a ler as pastas. Se uma pasta estiver dentro de outra (ex.: `Procedimentos` e `Procedimentos/Porto`), vale a regra da mais específica. Liga ou desliga o índice por IA e se o assistente/tutor usam a base.
 2. **Carregar documento**: escolhe o ficheiro, o título e quem o vê.
 3. Em cada documento: **pré-visualizar** o texto lido (em texto corrido, com os títulos a negrito), **visibilidade**, **voltar a sincronizar**, **perguntas de quiz** (rascunhos) e **excluir** (sai do índice e das respostas, mas nada se apaga: o ficheiro fica no Drive ou guardado na app e **Voltar a incluir** trá-lo de volta). As mudanças de visibilidade e as exclusões ficam no registo.

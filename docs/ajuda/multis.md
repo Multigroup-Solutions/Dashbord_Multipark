@@ -1,7 +1,9 @@
 ---
 modulo: multis
+grupo: Sistema
+pagina: multis
 titulo: Multis (o assistente de IA da equipa)
-rotas: /perfil, /multis/falhas
+rotas: /multis/falhas, /perfil
 palavras: multis, piloto do multis, modo económico, modelo smart, argon, separador aberto, ia, inteligência artificial, assistente, chat, perguntar, perguntar à ia, perguntar ao multis, painel ao lado, conversa, conversas anteriores, nova conversa, apagar conversa, estrela, memória, memória do multis, memória da empresa, lembra-te, lembrar, memorizar, não te esqueças, notas do multis, guardar nota, arquivar nota, avaliar resposta, gosto, polegar, resposta errada, perguntas que falharam, falhas do multis
 ---
 # Multis (o assistente de IA da equipa)
@@ -38,7 +40,7 @@ O **Multis** é o assistente de IA da Multipark dentro da aplicação. Apresenta
 - Por baixo de cada resposta há **👍** e **👎**. No 👎 escolhes o que estava errado (**Resposta errada**, **Incompleta**, **Não percebeu a pergunta**, **Não sabia / sem dados**, **Outro**) e podes escrever o que esperavas. Podes mudar de ideias.
 - Quando o Multis diz que não sabe, que não tem acesso, que não encontrou nos manuais, ou uma consulta dá erro, a resposta fica marcada **sozinha**.
 
-**Perguntas que falharam** (só administradores)
+## Perguntas que falharam (só administradores)
 1. Abre no relógio do Multis → **Perguntas que falharam**, ou em **Definições → Automações → Inteligência artificial → Multis: perguntas que falharam**.
 2. Filtra por **período** (7, 30 ou 90 dias), **motivo** e **Por tratar / Tratadas**. Cada linha tem a pessoa, a página, a pergunta, a resposta, o motivo, as consultas feitas e a ajuda usada, e se foi **👎 da pessoa** ou **Automática**. Em cima, os totais de 👍 e 👎 do período.
 3. Depois de corrigir a ajuda ou a ferramenta, **Marcar como tratada** com uma nota (tem **Desfazer**). Nada se apaga; as perguntas ficam guardadas mesmo depois de a conversa desaparecer (30 dias).

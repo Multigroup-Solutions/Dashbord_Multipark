@@ -120,6 +120,12 @@ export function isReviewNoticeSender(sender: string | null | undefined): boolean
   return !!s && REVIEW_SENDER_RES.some((re) => re.test(s));
 }
 
+/** Só o Google Business Profile (plano MPV F6b: os emails-resumo de críticas). PURA. */
+export function isGoogleBusinessSender(sender: string | null | undefined): boolean {
+  const s = normalizeAddress(sender);
+  return !!s && REVIEW_SENDER_RES[0].test(s);
+}
+
 /** Livro de Reclamações eletrónico (plataforma oficial). PURA. */
 export function isLivroNoticeSender(sender: string | null | undefined): boolean {
   const s = normalizeAddress(sender);

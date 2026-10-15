@@ -65,8 +65,9 @@ export async function noteInboundForTriage(
       })
       .from(whatsappConversations).where(eq(whatsappConversations.id, conversationId)).limit(1);
     if (!c) return false;
-    // Plano MPV F6b (W1, WA_TRIAGE_SKIP_STAFF): colaboradores e conversas já
+    // Plano MPV F6b (W1, WA_TRIAGE_SKIP_STAFF): conversas de colaboradores já
     // lidas não voltam à IA — salvo palavra de urgência, sem intenção ou > 24 h.
+    // Clientes: como até aqui (o debounce decide).
     const urgentWords = whatsappUrgentByWords(opts.body);
     const gate = whatsappTriageGate({
       skipStaff: await skipStaffOn(), isStaff: isStaffWhatsappConversation(c), urgentWords,

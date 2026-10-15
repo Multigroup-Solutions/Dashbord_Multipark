@@ -116,6 +116,8 @@ export async function importReview(locationId: number, payload: GoogleReview, us
       if (resolution?.existingId) {
         [existing] = await tx.select().from(googleReviews).where(eq(googleReviews.id, resolution.existingId)).limit(1).for('update');
         if (!existing || existing.googleReviewKey || (existing.projectId !== null && existing.projectId !== location.projectId)) throw new Error('A crítica escolhida já está associada ou pertence a outro parque.');
+        // Plano MPV F6b: uma crítica marcada (não é crítica / repetida) não se liga — desfaz-se primeiro.
+        if (Number(existing.notAReview ?? 0) === 1 || existing.duplicateOf != null) throw new Error('A crítica escolhida está marcada como "não é crítica" ou "repetida" — desfaz a marca em Críticas → Limpeza antes de a ligar.');
       } else if (!resolution) {
         // Plano MPV F6b: as marcadas (não é crítica / repetida) nunca são candidatas.
         const byName = await tx.select({ id: googleReviews.id }).from(googleReviews).where(and(
@@ -184,8 +186,8 @@ export async function importReview(locationId: number, payload: GoogleReview, us
  * os dois forem conhecidos e diferentes (shared/reviewDedup.ts `sameReview`).
  */
 async function emailCandidatesByText(tx: any, projectId: number, review: ReturnType<typeof normalizeReview>): Promise<Array<{ id: number }>> {
-  const { REVIEW_DEDUP_MIN_TEXT, REVIEW_DEDUP_WINDOW_HOURS, reviewDateMs, reviewTextKey, reviewerFirstNameKey, sameReview } = await import('../../../shared/reviewDedup');
-  const textKey = reviewTextKey(review.reviewText, review.reviewerName);
+  const { REVIEW_DEDUP_MIN_TEXT, REVIEW_DEDUP_WINDOW_HOURS, reviewDateMs, reviewTextKeyFromApi, reviewerNameKey, sameReview } = await import('../../../shared/reviewDedup');
+  const textKey = reviewTextKeyFromApi(review.reviewText);
   const atMs = reviewDateMs(review.reviewDate);
   if (textKey.length < REVIEW_DEDUP_MIN_TEXT || atMs == null || !(review.rating >= 1)) return [];
   const at = new Date(atMs).toISOString().slice(0, 19).replace('T', ' ');
@@ -197,10 +199,11 @@ async function emailCandidatesByText(tx: any, projectId: number, review: ReturnT
     or(eq(googleReviews.rating, review.rating), eq(googleReviews.rating, 0)),
     sql`COALESCE(${googleReviews.reviewDate}, ${googleReviews.sourceEmailDate}, ${googleReviews.createdAt}) BETWEEN DATE_SUB(${at}, INTERVAL ${REVIEW_DEDUP_WINDOW_HOURS} HOUR) AND DATE_ADD(${at}, INTERVAL ${REVIEW_DEDUP_WINDOW_HOURS} HOUR)`,
   )).limit(50);
-  const { dedupFactsOfRow } = await import('../../reviewCleanup');
-  const { parseGoogleReviewNotification } = await import('../../emailParse');
-  const me = { id: -1, parkKey: `p${projectId}`, rating: review.rating, textKey, firstName: reviewerFirstNameKey(review.reviewerName), atMs, apiKey: true };
-  return rows.filter((r: any) => sameReview(me, dedupFactsOfRow(r, (b, s) => parseGoogleReviewNotification(b, s)), { requireFirstName: false })).map((r: any) => ({ id: Number(r.id) }));
+  const { dedupFactsOfRow, emailParser, loadRawEmails } = await import('../../reviewCleanup');
+  const parse = await emailParser();
+  const raw = await loadRawEmails(tx, rows.map((r: any) => r.sourceEmailId));
+  const me = { id: -1, parkKey: `p${projectId}`, rating: review.rating, textKey, name: reviewerNameKey(review.reviewerName), atMs, apiKey: true };
+  return rows.filter((r: any) => sameReview(me, dedupFactsOfRow(r, parse, r.sourceEmailId ? raw.get(String(r.sourceEmailId)) : null), { requireName: false })).map((r: any) => ({ id: Number(r.id) }));
 }
 
 /**
@@ -260,7 +263,9 @@ export async function pendingReviews() {
   const ids = [...new Set(pending.flatMap(p => p.candidates))];
   const candidates = ids.length ? await db.select({ id: googleReviews.id, reviewerName: googleReviews.reviewerName,
     rating: googleReviews.rating, reviewText: googleReviews.reviewText, reviewDate: googleReviews.reviewDate,
-    complaintId: googleReviews.complaintId }).from(googleReviews).where(inArray(googleReviews.id, ids)) : [];
+    complaintId: googleReviews.complaintId }).from(googleReviews)
+    // Plano MPV F6b: as marcadas (não é crítica / repetida) não são oferecidas.
+    .where(and(inArray(googleReviews.id, ids), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf))) : [];
   return pending.map(p => ({ ...p, candidateReviews: candidates.filter(c => p.candidates.includes(c.id)) }));
 }
 export async function resolvePending(key: string, existingId: number | null, userId: number) {

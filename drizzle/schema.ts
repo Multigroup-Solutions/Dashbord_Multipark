@@ -1521,7 +1521,11 @@ export const googleReviews = mysqlTable("google_reviews", {
 	reviewMarkedById: int(),
 	reviewMarkUndoneAt: datetime({ mode: 'string' }),
 	reviewMarkBackup: text(),
-});
+},
+(table) => [
+	// 0700 — "repetidas desta" sem ler a tabela toda.
+	index("idx_google_reviews_duplicate_of").on(table.duplicateOf),
+]);
 
 /** 0285 — alertas "a trabalhar sem PDA ou Zello ligado" (shared/opsPresence.ts). */
 export const opsPresenceAlerts = mysqlTable("ops_presence_alerts", {

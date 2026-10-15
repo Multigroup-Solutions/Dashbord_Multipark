@@ -295,27 +295,41 @@ export function whatsappTriagePlan(
  * Raízes de palavras de urgência (sem acentos, minúsculas; comparadas com
  * `matchWords`): uma palavra da mensagem que COMECE por uma destas conta.
  * Acidente, avaria, roubo/furto/assalto, batida/colisão, incêndio, feridos,
- * polícia, reboque, emergência — PT e EN. A bateria fica de fora (carregamento
- * de carros elétricos é um serviço normal).
+ * polícia, reboque, emergência, portão — PT e EN. A bateria fica de fora
+ * (carregamento de carros elétricos é um serviço normal).
  */
 const URGENT_STEMS: readonly string[] = [
   "acident", "avari", "roub", "furt", "furad", "assalt", "colis", "colid", "choque", "embat", "sinistr", "incendi", "ferid",
-  "magoad", "hospital", "ambulanc", "policia", "reboqu", "reboc", "urgen", "emergenc", "socorr",
+  "magoad", "hospital", "ambulanc", "policia", "reboqu", "reboc", "urgen", "emergenc", "socorr", "portao", "portoes",
   "accident", "crash", "stolen", "theft", "robber", "breakdown", "injur", "police", "emergency",
 ];
-const URGENT_WORDS: ReadonlySet<string> = new Set(["bateu", "bati", "batida", "bateram", "fogo", "fumo", "psp", "gnr", "inem", "fire"]);
+const URGENT_WORDS: ReadonlySet<string> = new Set(["bateu", "bati", "batida", "bateram", "fogo", "fumo", "psp", "gnr", "inem", "fire", "ajuda", "help", "preso", "presa", "presos", "presas", "stuck"]);
+/** "não abre" / "não abrem" / "não abriu" (portão, cancela, porta do carro). */
+const OPEN_VERBS: ReadonlySet<string> = new Set(["abre", "abrem", "abriu", "abrir", "abria"]);
+/** "sem urgência", "não é urgente", "nada urgente" — negação logo antes: não conta. */
+const NEGATIONS: ReadonlySet<string> = new Set(["sem", "nao", "nada", "nenhuma", "nenhum", "no", "not"]);
 
-/** A mensagem tem uma palavra de urgência (acidente, avaria, roubo…)? PURA. */
+/** A mensagem tem uma palavra de urgência (acidente, avaria, roubo, preso, "não abre"…)? PURA. */
 export function whatsappUrgentByWords(text: string | null | undefined): boolean {
-  return matchWords(text).some((w) => URGENT_WORDS.has(w) || URGENT_STEMS.some((s) => w.startsWith(s)));
+  const w = matchWords(text);
+  return w.some((word, i) => {
+    if (OPEN_VERBS.has(word)) return w[i - 1] === "nao" || (w[i - 2] === "nao" && w[i - 1] === "se");
+    if (!(URGENT_WORDS.has(word) || URGENT_STEMS.some((s) => word.startsWith(s)))) return false;
+    // "urgen…" negado ("sem urgência", "não é urgente") não é urgência.
+    if (word.startsWith("urgen")) {
+      const before = w.slice(Math.max(0, i - 2), i);
+      if (before.some((b) => NEGATIONS.has(b))) return false;
+    }
+    return true;
+  });
 }
 
-/** Uma conversa já lida pela IA só volta a ser lida passadas estas horas (ou sem intenção, ou com urgência). */
+/** Uma conversa de colaborador já lida só volta a ser lida passadas estas horas (ou sem intenção, ou com urgência). */
 export const WHATSAPP_RETRIAGE_HOURS = 24;
 
 export type WhatsappTriageGate =
-  | { triage: true; why: "off" | "urgent" | "no_intent" | "stale" }
-  | { triage: false; why: "staff" | "recent" | "availability_ai" };
+  | { triage: true; why: "off" | "customer" | "urgent" | "no_intent" | "stale" }
+  | { triage: false; why: "staff" | "availability_ai" };
 
 /**
  * Esta mensagem vai à IA da intenção/urgência? Com o interruptor
@@ -323,9 +337,9 @@ export type WhatsappTriageGate =
  * depois). Ligado:
  *  - a resposta a um pedido de disponibilidade que a IA da disponibilidade já
  *    leu → não (UMA leitura de IA por mensagem; a urgência marca-se por regra);
- *  - palavra de urgência → sim (também nos colaboradores);
- *  - colaborador/candidato (caixa RH por regra) → não;
- *  - conversa sem intenção → sim; lida há mais de 24 h → sim; senão não.
+ *  - clientes → sempre, como até aqui (o debounce decide);
+ *  - colaborador/candidato (caixa RH por regra) → só com palavra de urgência,
+ *    sem intenção (vazia ou "outro") ou lida há mais de 24 h.
  * PURA.
  */
 export function whatsappTriageGate(f: {
@@ -339,13 +353,14 @@ export function whatsappTriageGate(f: {
 }): WhatsappTriageGate {
   if (!f.skipStaff) return { triage: true, why: "off" };
   if (f.availabilityAiRead) return { triage: false, why: "availability_ai" };
+  if (!f.isStaff) return { triage: true, why: "customer" };
   if (f.urgentWords) return { triage: true, why: "urgent" };
-  if (f.isStaff) return { triage: false, why: "staff" };
-  if (!String(f.intent ?? "").trim()) return { triage: true, why: "no_intent" };
+  const intent = String(f.intent ?? "").trim();
+  if (!intent || intent === "outro") return { triage: true, why: "no_intent" };
   const raw = String(f.lastTriagedAt ?? "");
   const last = raw ? Date.parse(raw.includes("T") ? raw : raw.replace(" ", "T") + "Z") : NaN;
   if (!Number.isFinite(last) || f.nowMs - last > WHATSAPP_RETRIAGE_HOURS * 3_600_000) return { triage: true, why: "stale" };
-  return { triage: false, why: "recent" };
+  return { triage: false, why: "staff" };
 }
 
 /** Conversa de colaborador ou candidato: tem ficha, ou está na caixa RH por regra. PURA. */
