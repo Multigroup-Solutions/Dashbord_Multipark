@@ -27,6 +27,14 @@ const storageLinks = t.middleware(async (opts) => {
   const raw = await opts.getRawInput();
   const clean = canonicalStorageUrlsDeep(raw);
   const result = clean !== raw ? await opts.next({ getRawInput: async () => clean }) : await opts.next();
+  // Plano MPV F4: a pessoa mudou alguma coisa → as leituras lentas guardadas do Multis dela deixam de servir
+  // (só apaga entradas em memória; nunca parte o pedido).
+  if (opts.type === "mutation" && opts.ctx.user?.id != null) {
+    try {
+      const { forgetSlowCallsOf } = await import("../assistant/slowCallCache");
+      forgetSlowCallsOf(opts.ctx.user.id);
+    } catch { /* só a cache */ }
+  }
   if (!result.ok) return result;
   const { makeViewerSigner } = await import("../fileRoute");
   const data = await signStorageUrlsDeep(result.data, { canSign: makeViewerSigner(opts.ctx.user as any) });

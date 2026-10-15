@@ -51,6 +51,9 @@ import {
   summarizeTimesGrid, weekdayArg,
 } from "./mpvDataTools";
 import { mpvSuggestions } from "./mpv";
+import { CACHE_HINT, SLOW_PROJECTIONS, readAtLabel } from "./mpvDataTools";
+import { LATE_CACHE_MAX, SLOW_CALL_INFLIGHT_MAX_MS, SLOW_CALL_LATE_CACHE_MS, SlowCallTimeout, forgetSlowCallsOf, slowCallSizesForTests, slowRead } from "./slowCallCache";
+import { publicProcedure, router as trpcRouter } from "../_core/trpc";
 
 const KEYS = ["GEMINI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY", "AI_ENABLED", "AI_ASSISTANT", "AI_ASSISTANT_SMART", "MPV", "AI_MODEL_SMART",
   "AI_MONTHLY_BUDGET_EUR", "AI_PROVIDER", "AI_ASSISTANT_MEMORY"];
@@ -672,6 +675,8 @@ describe("o que cada ferramenta devolve", () => {
     const c = await runTool(ctx, "pressao_explicar", { dia: 5, hora: 9 });
     expect(c.result.error).toBeUndefined();
     expect(c.result).toMatchObject({ percentilDaCidade: "p75", celula: { hora: "09h" } });
+    // Dados de uma leitura anterior: com a hora (Lisboa).
+    expect(String(c.result.lidoAs)).toMatch(/^\d{2}:\d{2} \(Lisboa\)/);
     expect(pressureCalls).toBe(1);
     // Outra pessoa (ou outras cidades) não aproveita a leitura desta.
     const other = { ...ctx, user: { id: 8, role: "supervisor" } } as StaffToolCtx;
@@ -679,8 +684,147 @@ describe("o que cada ferramenta devolve", () => {
     await new Promise((r) => setTimeout(r, 1));
     expect(pressureCalls).toBe(2);
     release(pressure);
-    expect((await d).result.error).toBeUndefined();
+    const dr = (await d).result;
+    expect(dr.error).toBeUndefined();
+    expect(dr.lidoAs).toBeUndefined(); // lida agora, a tempo
   });
+});
+
+// ─── Cache das leituras lentas ───────────────────────────────────────────────
+
+describe("cache das leituras lentas (dados velhos, totais, memória)", () => {
+  /** Uma leitura que só chega quando se manda (para simular "chegou tarde"). */
+  const deferred = () => {
+    let release!: (v: unknown) => void;
+    const promise = new Promise((res) => { release = res; });
+    return { promise, release };
+  };
+  const lateEntry = async (key: string, userId: number, value: unknown = { ok: true }) => {
+    const d = deferred();
+    await expect(slowRead({ key, userId, ms: 5, read: () => d.promise, project: (x) => x })).rejects.toBeInstanceOf(SlowCallTimeout);
+    d.release(value);
+    await new Promise((r) => setTimeout(r, 1));
+  };
+
+  it("as ferramentas lentas dizem ao modelo que indique a hora («lidoAs»); readAtLabel é a hora de Lisboa", () => {
+    for (const name of ["parcerias_resumo", "pressao_explicar", "tempos_resumo", "avaliacao_minha", "criticas_por_responder", "extras_dia_situacao"]) {
+      expect(MPV_DATA_TOOLS.find((t) => t.name === name)!.description, name).toContain(CACHE_HINT);
+    }
+    expect(readAtLabel(Date.parse("2026-10-15T13:05:00Z"))).toBe("14:05");
+    expect(readAtLabel(Date.parse("2026-12-15T13:05:00Z"))).toBe("13:05");
+  });
+
+  it("se outro chamador recebeu o resultado a tempo, não vai para a cache", async () => {
+    const d = deferred();
+    const read = vi.fn(() => d.promise);
+    const quick = slowRead({ key: "k", userId: 7, ms: 5, read, project: (x) => x });
+    const patient = slowRead({ key: "k", userId: 7, ms: 2000, read, project: (x) => x });
+    await expect(quick).rejects.toBeInstanceOf(SlowCallTimeout);
+    d.release({ v: 1 });
+    expect(await patient).toEqual({ data: { v: 1 }, cachedAt: null });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(slowCallSizesForTests()).toEqual({ inflight: 0, cached: 0 });
+    // Só quem esperou e desistiu: aí sim.
+    await lateEntry("k2", 7);
+    expect(slowCallSizesForTests().cached).toBe(1);
+  });
+
+  it("uma mutação tRPC da pessoa apaga as entradas dela (e só dela); a leitura em curso deixa de ser guardada", async () => {
+    await lateEntry("a|7", 7);
+    await lateEntry("b|8", 8);
+    // Uma em curso da pessoa 7, que chega depois da mutação: não se guarda.
+    const d = deferred();
+    await expect(slowRead({ key: "c|7", userId: 7, ms: 5, read: () => d.promise, project: (x) => x })).rejects.toBeInstanceOf(SlowCallTimeout);
+    expect(slowCallSizesForTests()).toEqual({ inflight: 1, cached: 2 });
+    const r = trpcRouter({ mexer: publicProcedure.mutation(() => "feito"), ler: publicProcedure.query(() => "lido") });
+    const caller7 = r.createCaller({ user: { id: 7, role: "supervisor" }, req: {} as any, res: {} as any } as any);
+    await caller7.ler();
+    expect(slowCallSizesForTests().cached).toBe(2); // uma query não apaga nada
+    expect(await caller7.mexer()).toBe("feito");
+    expect(slowCallSizesForTests()).toEqual({ inflight: 0, cached: 1 });
+    d.release({ velho: true });
+    await new Promise((res) => setTimeout(res, 1));
+    expect(slowCallSizesForTests().cached).toBe(1); // a do 8 fica; a do 7 (antes da mutação) não entra
+    forgetSlowCallsOf(8);
+    expect(slowCallSizesForTests().cached).toBe(0);
+  });
+
+  it("a chave inclui os totais financeiros da pessoa (e a pessoa, mesmo com as mesmas permissões e cidades)", async () => {
+    const srv = fakeServer({ totals: true });
+    let reads = 0;
+    const pending: Array<(v: unknown) => void> = [];
+    const call = vi.fn(async (p: string, i?: any) => {
+      if (p !== "partnerships.live") return srv.call(p, i);
+      reads++;
+      const real = await srv.call(p, i);
+      return new Promise((res) => pending.push(() => res(real)));
+    });
+    const base = { ...ctxFor("supervisor", LISBOA, srv), call, slowCallMs: 10 } as StaffToolCtx;
+    // Pessoa 7 sem totais: chega tarde → guardada.
+    expect((await runTool({ ...base, financeAllowed: false }, "parcerias_resumo")).result).toEqual({ error: SLOW_CALL_MESSAGE });
+    pending.splice(0).forEach((f) => f(null));
+    await new Promise((r) => setTimeout(r, 2));
+    expect(slowCallSizesForTests().cached).toBe(1);
+    // A MESMA pessoa com totais: outra chave → outra leitura (não usa a guardada).
+    const withTotals = runTool({ ...base, financeAllowed: true }, "parcerias_resumo");
+    await new Promise((r) => setTimeout(r, 1));
+    expect(reads).toBe(2);
+    pending.splice(0).forEach((f) => f(null));
+    await withTotals;
+    // Outra pessoa com as mesmas permissões e cidades: nem a guardada nem a em curso.
+    const p8 = runTool({ ...base, user: { id: 8, role: "supervisor" }, financeAllowed: false }, "parcerias_resumo");
+    const p8b = runTool({ ...base, user: { id: 9, role: "supervisor" }, financeAllowed: false }, "parcerias_resumo");
+    await new Promise((r) => setTimeout(r, 1));
+    expect(reads).toBe(4);
+    pending.splice(0).forEach((f) => f(null));
+    await Promise.all([p8, p8b]);
+    // A pessoa 7 sem totais continua a ter a sua (com a hora).
+    const again = await runTool({ ...base, financeAllowed: false }, "parcerias_resumo");
+    expect(reads).toBe(4);
+    expect(String(again.result.lidoAs)).toMatch(/Lisboa/);
+  });
+
+  it("memória: no máximo 20 entradas; as vencidas saem ao escrever; só a projeção; penduradas saem aos 90 s", async () => {
+    for (let i = 0; i < LATE_CACHE_MAX + 5; i++) await lateEntry(`m${i}`, 7);
+    expect(slowCallSizesForTests().cached).toBe(LATE_CACHE_MAX);
+    // Vencidas: 6 min depois, uma escrita limpa as velhas.
+    const realNow = Date.now;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + SLOW_CALL_LATE_CACHE_MS + 60_000);
+    try {
+      await lateEntry("nova", 7);
+      expect(slowCallSizesForTests().cached).toBe(1);
+    } finally { spy.mockRestore(); }
+    // Projeção: o que se partilha e se guarda é só o que a ferramenta usa.
+    const ev = SLOW_PROJECTIONS["evaluation.mine"]({ employee: { id: 5, fullName: "Rui Gomes Lopes", phone: "912345678" }, totals: { days: 1, secret: 1 }, days: [], disputes: [{ status: "open", note: "liga 912345678" }] }) as any;
+    expect(JSON.stringify(ev)).not.toMatch(/Rui|912345678|secret/);
+    expect(ev).toMatchObject({ employee: true, disputes: [{ status: "open" }] });
+    const rv = SLOW_PROJECTIONS["reviews.list"]([{ id: 1, reviewerEmail: "a@b.pt", vehiclePlate: "AA-12-BB", reviewText: "x", reviewerName: "Ana" }]) as any[];
+    expect(rv[0]).toEqual({ id: 1, reviewText: "x", reviewerName: "Ana" });
+    const late = deferred();
+    const raw = { employee: { fullName: "Rui Gomes Lopes" }, totals: { days: 2 }, days: [], disputes: [] };
+    const ctx = { ...ctxFor("extra", LISBOA, fakeServer()), slowCallMs: 5 } as StaffToolCtx;
+    const ctxLate = { ...ctx, call: vi.fn(() => late.promise) } as StaffToolCtx;
+    expect((await runTool(ctxLate, "avaliacao_minha")).result).toEqual({ error: SLOW_CALL_MESSAGE });
+    late.release(raw);
+    await new Promise((r) => setTimeout(r, 1));
+    const fromCache = await runTool(ctx, "avaliacao_minha");
+    expect(String(fromCache.result.lidoAs)).toMatch(/Lisboa/);
+    expect((ctx.call as any)).not.toHaveBeenCalled();
+    // Penduradas: uma leitura que nunca acaba sai do mapa aos 90 s.
+    vi.useFakeTimers();
+    try {
+      const hung = slowRead({ key: "pendurada", userId: 7, ms: 10, read: () => new Promise(() => {}), project: (x) => x });
+      const caught = hung.catch((e) => e);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await caught).toBeInstanceOf(SlowCallTimeout);
+      expect(slowCallSizesForTests().inflight).toBeGreaterThanOrEqual(1);
+      await vi.advanceTimersByTimeAsync(SLOW_CALL_INFLIGHT_MAX_MS + 10);
+      expect(slowCallSizesForTests().inflight).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+describe("o que cada ferramenta devolve (continuação)", () => {
 
   it("avaliacao_minha: evaluation.mine + as regras em vigor (sem IA): dias com mais negativos e as regras desses pontos primeiro", async () => {
     const ctx = PEOPLE.extra();
