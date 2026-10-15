@@ -36,14 +36,15 @@ import { createFakeDb, createFakeProvider, okResponse, type FakeQuery } from "..
 import { invalidateSettingsCache } from "../appSettings";
 import type { CityAccess } from "../cityAccess";
 import { chunkText } from "../knowledge/chunker";
-import { VECTOR_NEIGHBORS, kbViewerFrom, onceQueryEmbed, retrieveKnowledge, withinMs } from "../knowledge/retrieve";
-import { VECTORS_VERSION_KEY, unembeddedDocIds } from "../knowledge/store";
-import { HELP_SECTIONS_EMBED_PER_RUN, embedHelpSections, embedText, runKnowledgeSync } from "../knowledge/sync";
+import { VECTOR_NEIGHBORS, kbViewerFrom, onceQueryEmbed, rankCandidates, retrieveKnowledge, vectorOnlyThreshold, withinMs, type CandidateRow } from "../knowledge/retrieve";
+import { VECTORS_VERSION_KEY, saveEmbeddings, unembeddedDocIds } from "../knowledge/store";
+import { HELP_SECTIONS_EMBED_PER_RUN, embedDoc, embedHelpSections, embedText, runKnowledgeSync } from "../knowledge/sync";
+import { runChatTurn } from "../_core/ai/chat/engine";
 import {
   VECTOR_CACHE_MAX_CHUNKS, VECTOR_VERSION_CHECK_MS, buildVectorIndex, getVectorIndex, nearestNeighbors, resetVectorCacheForTests, vectorCacheStats,
 } from "../knowledge/vectorIndex";
 import { HELP_FILES } from "./helpDocs.generated";
-import { SECTION_MIN_COSINE, rankHelpSections, searchHelpSectionsHybrid, sectionIdOfRef } from "./helpSearch";
+import { rankHelpSections, searchHelpSectionsHybrid, sectionIdOfRef } from "./helpSearch";
 import { HELP_NAV_TOOLS, canSeeHelpPage, searchHelpSections, type HelpSectionHit } from "./helpTools";
 import { knowledgeTree } from "./knowledgeTree";
 import { mpvTurnKnowledge, mpvTurnKnowledgeAsync } from "./mpv";
@@ -107,6 +108,7 @@ function sectionsDb(secs: FakeSec[], opts: { version?: () => string | null; conf
       const v = opts.version ? opts.version() : "v1";
       return [[...(v != null ? [{ value: v }] : [])]];
     }
+    if (q.sql.includes("COUNT(*)") && q.sql.includes("c.embedding IS NOT NULL")) return [[{ n: q.sql.includes("d.source = 'help_sec'") ? secs.length : 0 }]];
     if (q.sql.includes("c.embedding IS NOT NULL") && q.sql.includes("d.source = 'help_sec'")) return [secs.map((s) => row(s))];
     if (q.sql.includes("c.embedding IS NOT NULL")) return [[]];
     if (q.sql.includes("MATCH(")) return [(opts.ft ?? []).map((x) => row(x.sec, x.ft))];
@@ -129,7 +131,7 @@ describe("candidatos: lexical/FULLTEXT ∪ vizinhos por vetor, depois a pontuaç
     }
   });
 
-  it("um vizinho por vetor SEM palavras em comum entra (cosseno ≥ 0,6); um afastado não; a lexical forte continua", () => {
+  it("um vizinho por vetor SEM palavras em comum entra (cosseno ≥ max(0,7; melhor − 0,08)); um afastado não; a lexical forte continua", () => {
     const near = sectionWithText("caixa").id;
     const far = sectionWithText("multis").id;
     const q = "nota de crédito";
@@ -192,7 +194,7 @@ describe("cache dos vetores por instância (kb_sync_state, ≤ 1 leitura por 60 
   const secs: FakeSec[] = [{ section: "caixa.md#x", chunk: 1, doc: 1, cos: 0.9 }, { section: "caixa.md#y", chunk: 2, doc: 2, cos: 0.5 }];
   const count = (d: { queries: FakeQuery[] }) => ({
     version: d.queries.filter((q) => q.sql.includes("FROM kb_sync_state")).length,
-    load: d.queries.filter((q) => q.sql.includes("c.embedding IS NOT NULL")).length,
+    load: d.queries.filter((q) => q.sql.includes("c.embedding IS NOT NULL") && !q.sql.includes("COUNT(*)")).length,
   });
 
   it("lê uma vez; dentro dos 60 s não volta à BD; depois lê só a versão; versão nova → volta a ler os vetores", async () => {
@@ -240,7 +242,8 @@ describe("cache dos vetores por instância (kb_sync_state, ≤ 1 leitura por 60 
     expect(await getVectorIndex(d as any, "help_sec", 1)).toBeNull();
     expect(vectorCacheStats().help_sec).toMatchObject({ overCap: true, chunks: 0 });
     // A consulta pede só até ao teto + 1 (nunca a tabela toda).
-    expect(d.queries.find((q) => q.sql.includes("c.embedding IS NOT NULL"))!.params).toContain(VECTOR_CACHE_MAX_CHUNKS.help_sec + 1);
+    // Contou primeiro e nem leu os vetores (B1).
+    expect(d.queries.filter((q) => q.sql.includes("c.embedding IS NOT NULL")).map((q) => q.sql.includes("COUNT(*)"))).toEqual([true]);
     const v768 = Array.from({ length: 768 }, (_, k) => Math.sin(k));
     const rows = Array.from({ length: 444 }, (_, i) => ({ id: i + 1, docId: i + 1, embedding: encodeVector(v768), driveFileId: `help:pagina.md#seccao-numero-${i}`, visibilityRoles: "[]", visibilityCities: "[]" }));
     const index = await buildVectorIndex("help_sec", "v", rows);
@@ -510,7 +513,7 @@ describe("vetores das secções (help_sec): mesmo modelo e backfill, quota próp
     expect(d.queries.filter((q) => q.sql.includes("INSERT INTO kb_sync_state")).map((q) => q.params[0])).toEqual([VECTORS_VERSION_KEY]);
     // A IA em baixo: nada se marca e tenta na próxima corrida.
     const down = await embedHelpSections(d as any, async () => { throw new Error("orçamento"); }, { deadlineAt: Date.now() + 60_000 });
-    expect(down).toEqual({ embedded: 0, done: false });
+    expect(down).toMatchObject({ embedded: 0, done: false, error: "orçamento" });
     // Sem tempo: nem pede.
     expect(await embedHelpSections(d as any, embed, { deadlineAt: Date.now() + 5_000 })).toEqual({ embedded: 0, done: false });
     expect(HELP_SECTIONS_EMBED_PER_RUN).toBeGreaterThanOrEqual(80);
@@ -567,7 +570,181 @@ describe("vetores das secções (help_sec): mesmo modelo e backfill, quota próp
   });
 });
 
-it("a cosseno mínima dos vizinhos é a da base de conhecimento (0,6)", () => {
-  expect(SECTION_MIN_COSINE).toBe(0.6);
+// ─── Auditoria (M1–M3, B1–B4) ───────────────────────────────────────────────
+
+describe("M1: quem entra SÓ pelo vetor precisa de cos ≥ max(0,7; melhor − 0,08)", () => {
+  const all = { canSee: () => true };
+  const LOG = /^\[knowledge\] vetor (kb|help_sec): limiar \d\.\d{3} aceites \[[\d.,]*\] rejeitados \[[\d.,]*\]$/;
+
+  it("o limiar: nunca abaixo de 0,7; perto do melhor sobe com ele", () => {
+    expect(vectorOnlyThreshold(0.6)).toBe(0.7);
+    expect(vectorOnlyThreshold(0.75)).toBe(0.7);
+    expect(vectorOnlyThreshold(0.95)).toBeCloseTo(0.87, 6);
+  });
+
+  it("secções: 0,65 já não entra só pelo vetor; 0,72 entra se o melhor for 0,78 e não entra se for 0,95; a lexical não muda", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const [a, b, c] = pages.filter((p) => p.id !== "despesas").map((p) => p.sections.find((s) => s.text.trim())).filter(Boolean).slice(0, 3).map((s) => s!.id);
+    const q = "zzzz qqqq";
+    const run = (cos: Array<[string, number]>) => rankHelpSections(tree, q, { ...all, max: 8 }, { cos: new Map(cos), neighbors: cos.map(([id]) => id), ft: new Map() }).map((x) => x.section.id);
+    expect(run([[a, 0.65]])).toEqual([]);
+    expect(run([[a, 0.78], [b, 0.72]])).toEqual([a, b]);
+    expect(run([[c, 0.95], [b, 0.72]])).toEqual([c]);
+    // Só números no registo (nunca ids nem títulos).
+    const lines = info.mock.calls.map((x) => String(x[0])).filter((x) => x.includes("vetor help_sec"));
+    expect(lines).toHaveLength(3);
+    for (const l of lines) {
+      expect(l).toMatch(LOG);
+      expect(l).not.toContain(".md");
+    }
+    expect(lines[2]).toContain("limiar 0.870 aceites [0.950] rejeitados [0.720]");
+    // Quem passa na lexical não depende do vetor.
+    const lex = searchHelpSections(tree, "nota de crédito", all);
+    const withLowCos = rankHelpSections(tree, "nota de crédito", { ...all, max: 8 }, { cos: new Map(lex.map((h) => [h.section.id, 0.1])), neighbors: [], ft: new Map() });
+    expect(withLowCos.map((x) => x.section.id).sort()).toEqual(lex.map((x) => x.section.id).sort());
+  });
+
+  it("manuais: no MPV a mesma regra (0,65 só pelo vetor fica de fora); o v1 continua com 0,6", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const row = (id: number, cos: number): CandidateRow => ({
+      id, docId: id, section: null, text: "zzz", embedding: encodeVector(atCos(cos)), title: "Manual", webViewLink: null, source: "drive",
+      visibilityRoles: "[]", visibilityCities: "[]", ft: 0, ref: null,
+    });
+    const rows = [row(1, 0.65), row(2, 0.9), row(3, 0.84)];
+    const v1 = await rankCandidates("cofre", rows, QUERY, 8);
+    expect(v1.hits.map((h) => h.chunkId)).toEqual([2, 3, 1]);
+    const mpv = await rankCandidates("cofre", rows, QUERY, 8, { strictVector: { scope: "kb" } });
+    expect(mpv.hits.map((h) => h.chunkId)).toEqual([2, 3]);
+    const line = info.mock.calls.map((x) => String(x[0])).find((x) => x.includes("vetor kb"))!;
+    expect(line).toMatch(LOG);
+    expect(line).toContain("limiar 0.820 aceites [0.900,0.840] rejeitados [0.650]");
+    // No v1 nada se regista.
+    expect(info.mock.calls.filter((x) => String(x[0]).includes("vetor kb"))).toHaveLength(1);
+  });
+});
+
+describe("M2: uma corrida que refaz os trechos não deixa o documento como \"com vetores\"", () => {
+  /** BD em memória: só o que interessa (trechos com/sem vetor e o embedded do documento). */
+  function memDb() {
+    const chunks = new Map<number, { docId: number; embedding: string | null }>([[1, { docId: 5, embedding: null }], [2, { docId: 5, embedding: null }]]);
+    const doc = { embedded: 0 };
+    const d = createFakeDb((q) => {
+      if (q.sql.startsWith("SELECT id, ord, section, text")) {
+        return [[...chunks].filter(([, c]) => c.docId === 5).map(([id, c]) => ({ id, ord: id, section: null, text: "t", hasEmb: c.embedding ? 1 : 0 }))];
+      }
+      if (q.sql.startsWith("UPDATE kb_chunks SET embedding")) {
+        const [vec, id] = q.params as [string, number];
+        const c = chunks.get(id);
+        if (c) c.embedding = vec;
+        return [{ affectedRows: c ? 1 : 0 }];
+      }
+      if (q.sql.startsWith("UPDATE kb_documents SET embedded = 1")) {
+        expect(q.sql).toContain("NOT EXISTS (SELECT 1 FROM kb_chunks k WHERE k.docId = ? AND k.embedding IS NULL)");
+        const left = [...chunks.values()].some((c) => c.docId === 5 && !c.embedding);
+        if (!left) doc.embedded = 1;
+        return [{ affectedRows: left ? 0 : 1 }];
+      }
+      return [[]];
+    });
+    return { d, chunks, doc };
+  }
+
+  it("lê os trechos antigos → outra corrida reescreve-os → grava: o documento continua por vetorizar", async () => {
+    const { d, chunks, doc } = memDb();
+    const embed = async (texts: string[]) => {
+      // A meio: outra corrida refez o documento (trechos novos, sem vetor).
+      chunks.clear();
+      chunks.set(3, { docId: 5, embedding: null });
+      return { vectors: texts.map(() => [1, 0]), model: "m" };
+    };
+    expect(await embedDoc(d as any, 5, "Manual", embed)).toBe(true);
+    expect(doc.embedded).toBe(0);
+    expect(chunks.get(3)!.embedding).toBeNull();
+  });
+
+  it("sem corrida pelo meio: fica com vetores (como sempre)", async () => {
+    const { d, doc } = memDb();
+    expect(await embedDoc(d as any, 5, "Manual", async (t) => ({ vectors: t.map(() => [1, 0]), model: "m" }))).toBe(true);
+    expect(doc.embedded).toBe(1);
+  });
+});
+
+describe("M3: as duas partes vetoriais em paralelo, só depois do limite de pedidos", () => {
+  it("o bloco da página (função) e a base correm ao mesmo tempo; com o limite atingido nenhum corre", async () => {
+    setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse("Ok.")]) });
+    const events: string[] = [];
+    const slow = (name: string, value: any) => async () => {
+      events.push(`${name}:início`);
+      await new Promise((r) => setTimeout(r, 40));
+      events.push(`${name}:fim`);
+      return value;
+    };
+    const pageKnowledge = vi.fn(slow("página", { block: "<pagina_atual>\nx\n</pagina_atual>", refs: ["caixa.md#inicio"] }));
+    const knowledge = vi.fn(slow("base", null));
+    const base = {
+      feature: "assistant" as const, channel: "staff" as const, ownerKey: "user:7", userId: 7, question: "Como fecho a caixa?",
+      limits: { perMinute: 1, perDay: 10, maxInputChars: 1000 }, rateKey: "assistant:f5-paralelo", system: "s", pageKnowledge, knowledge,
+    };
+    const r = await runChatTurn(base as any);
+    expect(r).toMatchObject({ ok: true, helpFiles: ["caixa.md#inicio"] });
+    expect(events.slice(0, 2).sort()).toEqual(["base:início", "página:início"]);
+    // O segundo pedido no mesmo minuto é recusado ANTES de qualquer pesquisa.
+    const again = await runChatTurn(base as any);
+    expect(again).toMatchObject({ ok: false, reason: "rate_limited" });
+    expect(pageKnowledge).toHaveBeenCalledTimes(1);
+    expect(knowledge).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("B1–B4", () => {
+  it("B4: o índice só lê os vetores do modelo atual", async () => {
+    const d = sectionsDb([{ section: "caixa.md#x", chunk: 1, doc: 1, cos: 0.9 }]);
+    await getVectorIndex(d as any, "help_sec", 1);
+    const loads = d.queries.filter((q) => q.sql.includes("c.embedding IS NOT NULL"));
+    expect(loads).toHaveLength(2);
+    for (const q of loads) {
+      expect(q.sql).toContain("d.embedModel = ?");
+      expect(q.params).toContain("gemini-embedding-001");
+    }
+  });
+
+  it("B3: a IA dos vetores falhou no Drive → as secções nem se tentam; uma falha das secções vai para os erros da corrida", async () => {
+    const mk = (opts: { sectionsFail?: boolean } = {}) => createFakeDb((q) => {
+      if (q.sql.startsWith("SELECT d.id FROM kb_documents d WHERE d.deletedAt IS NULL AND d.status = 'synced' AND d.embedded = 0")) {
+        return q.sql.includes("d.source = 'help_sec'") ? [[{ id: 900 }]] : opts.sectionsFail ? [[]] : [[{ id: 1 }]];
+      }
+      if (q.sql.includes("FROM kb_documents d WHERE d.id = ?")) return [[{ id: 1, source: "drive", title: "Manual", status: "synced", visibilityRoles: "[]", visibilityCities: "[]" }]];
+      if (q.sql.startsWith("SELECT id, ord, section, text")) return [[{ id: 5, ord: 0, section: null, text: "x", hasEmb: 0 }]];
+      if (q.sql.includes("c.embedding IS NULL")) return [[{ id: 7, docId: 900, section: null, text: "y", title: "Ajuda: X" }]];
+      return [[]];
+    });
+    const down = vi.fn(async () => { throw new Error("orçamento"); });
+    const d1 = mk();
+    const r1 = await runKnowledgeSync({ deadlineAt: Date.now() + 60_000, d: d1 as any, drive: null, embed: down, helpFiles: [], helpSections: true });
+    expect(down).toHaveBeenCalledTimes(1); // só o do Drive
+    expect(d1.queries.some((q) => q.sql.includes("d.source = 'help_sec'") && q.sql.startsWith("SELECT d.id"))).toBe(false);
+    expect(r1.done).toBe(false);
+    // O Drive sem nada por fazer e as secções a falhar: o erro fica na corrida.
+    const d2 = mk({ sectionsFail: true });
+    const r2 = await runKnowledgeSync({ deadlineAt: Date.now() + 60_000, d: d2 as any, drive: null, embed: down, helpFiles: [], helpSections: true });
+    expect(r2.errors.some((e) => e.startsWith("Ajuda (vetores das secções):"))).toBe(true);
+    expect(r2.help.sectionsEmbedded).toBe(0);
+  });
+
+  it("B3: gravar a versão falhar não faz o embedDoc (v1) devolver false", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const d = createFakeDb((q) => {
+      if (q.sql.startsWith("SELECT id, ord, section, text")) return [[{ id: 1, ord: 0, section: null, text: "t", hasEmb: 0 }]];
+      if (q.sql.includes("INSERT INTO kb_sync_state")) return Promise.reject(new Error("BD"));
+      return [{ affectedRows: 1 }];
+    });
+    expect(await embedDoc(d as any, 5, "Manual", async (t) => ({ vectors: t.map(() => [1]), model: "m" }))).toBe(true);
+    expect(warn.mock.calls.some((x) => String(x[0]).includes("versão dos vetores por gravar"))).toBe(true);
+    // E o saveEmbeddings também não lança.
+    await expect(saveEmbeddings(d as any, 5, [{ chunkId: 1, vector: "x" }], "m")).resolves.toBeUndefined();
+  });
+});
+
+it("vetores falsos de 4 dimensões", () => {
   expect(DIM).toBe(4);
 });

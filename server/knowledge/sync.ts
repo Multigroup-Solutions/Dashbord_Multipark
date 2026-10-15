@@ -409,7 +409,7 @@ export async function defaultEmbed(texts: string[]): Promise<{ vectors: number[]
  * são ≈ 430 secções e ≈ 120 mil tokens (≈ 0,02 €, ver docs/ia.md): umas 4 corridas.
  * Devolve quantas ficaram com vetores e se ficou alguma por fazer.
  */
-export async function embedHelpSections(d: store.Db, embed: EmbedFn, opts: { deadlineAt: number; maxPerRun?: number }): Promise<{ embedded: number; done: boolean }> {
+export async function embedHelpSections(d: store.Db, embed: EmbedFn, opts: { deadlineAt: number; maxPerRun?: number }): Promise<{ embedded: number; done: boolean; error?: string }> {
   const { encodeVector } = await import("../_core/ai/embed");
   const max = Math.max(1, opts.maxPerRun ?? HELP_SECTIONS_EMBED_PER_RUN);
   // Margem: o pedido de embeddings tem 25 s de prazo; sem tempo para ele, fica para a próxima.
@@ -425,11 +425,12 @@ export async function embedHelpSections(d: store.Db, embed: EmbedFn, opts: { dea
       await store.saveEmbeddings(d, docId, mine.map((x) => ({ chunkId: x.c.id, vector: encodeVector(r.vectors[x.i] ?? []) })), r.model || "", { bumpVersion: false });
     }
     // Uma só mudança de versão por lote: as instâncias voltam a ler os vetores (≤ 60 s).
-    await store.bumpVectorsVersion(d);
+    // Uma falha aqui só se regista (os vetores já estão gravados).
+    await store.bumpVectorsVersionSafe(d);
     return { embedded: batch.length, done: ids.length <= max };
   } catch (err) {
     console.warn(`[knowledge] vetores das secções da ajuda por gerar: ${String((err as any)?.code ?? (err as any)?.name ?? "erro")}`);
-    return { embedded: 0, done: false };
+    return { embedded: 0, done: false, error: errText(err) };
   }
 }
 
@@ -524,7 +525,14 @@ export async function runKnowledgeSync(opts: {
     report.drive.configured = !!drive;
     if (drive && cfg.driveEnabled && cfg.folders.length) await discoverDrive(d, drive, cfg.folders, opts.deadlineAt, report, opts.now);
 
-    const embed = opts.embed !== undefined ? opts.embed : (await embeddingsWanted(cfg)) ? defaultEmbed : null;
+    const baseEmbed = opts.embed !== undefined ? opts.embed : (await embeddingsWanted(cfg)) ? defaultEmbed : null;
+    // A IA dos vetores falhou nesta corrida (orçamento, em baixo)? Então as secções da ajuda ficam para a próxima.
+    let embedFailed = false;
+    const embed: EmbedFn | null = baseEmbed
+      ? async (texts) => {
+          try { return await baseEmbed(texts); } catch (err) { embedFailed = true; throw err; }
+        }
+      : null;
     // Presos que já esgotaram as tentativas → erro visível (18d).
     await store.failStuckProcessing(d).catch((err) => { report.errors.push(`Presos: ${errText(err)}`); });
     // Os que falham nesta corrida saem da volta (18d: antes o mesmo voltava a
@@ -550,13 +558,14 @@ export async function runKnowledgeSync(opts: {
         if (doc && (await embedDoc(d, id, doc.title, embed))) report.embedded++;
         else break; // orçamento/IA em baixo: tenta na próxima corrida
       }
-      // Plano MPV (F5): vetores das secções da ajuda — DEPOIS do Drive e com quota própria.
-      if (sectionsOn) {
-        const r = await embedHelpSections(d, embed, { deadlineAt: opts.deadlineAt }).catch((err) => { report.errors.push(`Ajuda (vetores das secções): ${errText(err)}`); return null; });
-        if (r) {
-          report.help.sectionsEmbedded = r.embedded;
-          if (!r.done) report.done = false;
-        }
+      // Plano MPV (F5): vetores das secções da ajuda — DEPOIS do Drive e com quota própria;
+      // não se tenta se o Drive parou porque a IA dos vetores falhou (orçamento/em baixo).
+      if (sectionsOn && embedFailed) report.done = false;
+      else if (sectionsOn) {
+        const r = await embedHelpSections(d, embed, { deadlineAt: opts.deadlineAt }).catch((err) => ({ embedded: 0, done: false, error: errText(err) }));
+        report.help.sectionsEmbedded = r.embedded;
+        if (r.error) report.errors.push(`Ajuda (vetores das secções): ${r.error}`);
+        if (!r.done) report.done = false;
       }
     }
   } catch (err) {

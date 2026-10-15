@@ -131,6 +131,23 @@ export async function chunksByIds(d: Db, ids: readonly number[], viewer: KbViewe
   return rows.filter((r) => canSeeKbDoc(parseVisibility(r.visibilityRoles, r.visibilityCities), viewer));
 }
 
+/** MPV (F5): quem entra SÓ pelo vetor precisa de pelo menos isto… */
+export const VECTOR_ONLY_MIN_COSINE = 0.7;
+/** …e de não ficar mais do que isto abaixo do melhor cosseno da pergunta. */
+export const VECTOR_ONLY_BELOW_BEST = 0.08;
+/** Limiar de quem entra só pelo vetor: max(0,7; melhor − 0,08). PURA. */
+export const vectorOnlyThreshold = (best: number): number => Math.max(VECTOR_ONLY_MIN_COSINE, best - VECTOR_ONLY_BELOW_BEST);
+
+/**
+ * Regista os cossenos de quem tentou entrar só pelo vetor (aceites e
+ * rejeitados), para calibrar o limiar no piloto. SÓ números (nunca texto, ids
+ * ou títulos); no máx. 10 de cada.
+ */
+export function logVectorGate(scope: string, threshold: number, accepted: readonly number[], rejected: readonly number[]): void {
+  const fmt = (xs: readonly number[]) => `[${[...xs].sort((a, b) => b - a).slice(0, 10).map((x) => x.toFixed(3)).join(",")}]`;
+  console.info(`[knowledge] vetor ${scope === "kb" ? "kb" : "help_sec"}: limiar ${threshold.toFixed(3)} aceites ${fmt(accepted)} rejeitados ${fmt(rejected)}`);
+}
+
 /** Quantos vizinhos por vetor entram nos candidatos (plano MPV §3.4: FULLTEXT top 40 ∪ vetor top 20). */
 export const VECTOR_NEIGHBORS = 20;
 /** Prazo da parte vetorial (vetor da pergunta + memória + confirmação na BD); passado isto, fica a lexical. */
@@ -184,27 +201,42 @@ export async function mpvQueryEmbedder(): Promise<QueryEmbedFn | null> {
 }
 
 /** Ordena os candidatos (palavras-chave, e cosseno se houver vetor da pergunta). PURA (salvo decodificar vetores). */
-export async function rankCandidates(question: string, rows: CandidateRow[], queryVector: number[] | null, topK: number): Promise<{ hits: KbHit[]; usedEmbeddings: boolean }> {
+export async function rankCandidates(question: string, rows: CandidateRow[], queryVector: number[] | null, topK: number,
+  /**
+   * MPV (F5): quem passa SÓ pelo vetor (sem passar nas palavras nem no
+   * FULLTEXT) precisa de `cos ≥ max(0,7; melhor − 0,08)` (vectorOnlyThreshold),
+   * e os cossenos aceites/rejeitados ficam no registo (só números). Omisso = como sempre (0,6).
+   */
+  opts: { strictVector?: { scope: string } } = {}): Promise<{ hits: KbHit[]; usedEmbeddings: boolean }> {
   const { cosine, decodeVector } = await import("../_core/ai/embed");
   const maxFt = Math.max(0, ...rows.map((r) => r.ft));
   let usedEmbeddings = false;
-  const scored = rows.map((r) => {
+  const cosOf = (r: CandidateRow): number | null => {
+    if (!queryVector?.length) return null;
+    const v = decodeVector(r.embedding);
+    return v && v.length === queryVector.length ? cosine(queryVector, v) : null;
+  };
+  const strict = opts.strictVector ? { cos: rows.map(cosOf) } : null;
+  const threshold = strict ? vectorOnlyThreshold(Math.max(0, ...strict.cos.map((c) => c ?? 0))) : 0.6;
+  const gate = { accepted: [] as number[], rejected: [] as number[] };
+  const scored = rows.map((r, i) => {
     const kw = keywordScore(question, `${r.title} ${r.section ?? ""} ${r.text}`);
     const ft = maxFt > 0 ? r.ft / maxFt : 0;
     const base = 0.7 * kw + 0.3 * ft;
     let score = base;
     let pass = kw >= 0.25 || ft >= 0.6;
     if (queryVector?.length) {
-      const v = decodeVector(r.embedding);
-      if (v && v.length === queryVector.length) {
+      const cos = strict ? strict.cos[i] : cosOf(r);
+      if (cos != null) {
         usedEmbeddings = true;
-        const cos = cosine(queryVector, v);
         score = 0.65 * cos + 0.35 * base;
-        pass = pass || cos >= 0.6;
+        if (!pass && strict) (cos >= threshold ? gate.accepted : gate.rejected).push(cos);
+        pass = pass || cos >= threshold;
       }
     }
     return { r, score, pass };
   }).filter((x) => x.pass).sort((a, b) => b.score - a.score);
+  if (strict && (gate.accepted.length || gate.rejected.length)) logVectorGate(opts.strictVector!.scope, threshold, gate.accepted, gate.rejected);
   const hits: KbHit[] = [];
   const perDoc = new Map<number, number>();
   for (const x of scored) {
@@ -308,7 +340,9 @@ export async function retrieveKnowledge(input: {
         try { qv = await embedQuery(question); } catch { qv = null; }
       }
     }
-    const main = visible.length ? await rankCandidates(question, visible, qv, Math.max(1, Math.min(8, input.topK ?? 4))) : { hits: [] as KbHit[], usedEmbeddings: false };
+    const main = visible.length
+      ? await rankCandidates(question, visible, qv, Math.max(1, Math.min(8, input.topK ?? 4)), input.vectorNeighbors ? { strictVector: { scope: "kb" } } : {})
+      : { hits: [] as KbHit[], usedEmbeddings: false };
     const help = helpRows.length ? await rankCandidates(question, helpRows, qv, helpTopK) : { hits: [] as KbHit[], usedEmbeddings: false };
     return {
       hits: main.hits,

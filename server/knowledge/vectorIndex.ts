@@ -116,11 +116,16 @@ export async function buildVectorIndex(scope: VectorScope, version: string, rows
 
 async function loadIndex(d: Db, scope: VectorScope, version: string, now: number): Promise<{ index: VectorIndex | null; overCap: boolean }> {
   const cap = VECTOR_CACHE_MAX_CHUNKS[scope];
-  const rows = rowsOf(await d.execute(sql`SELECT c.id, c.docId, c.embedding, d.driveFileId, d.visibilityRoles, d.visibilityCities
+  const { embedModelFor } = await import("../_core/ai/embed");
+  // Só os vetores do modelo atual (outro modelo = outro espaço: o cosseno não vale nada).
+  const where = sql`d.deletedAt IS NULL AND d.status = 'synced' AND c.embedding IS NOT NULL AND ${SCOPE_SQL[scope]} AND d.embedModel = ${embedModelFor()}`;
+  // Contar primeiro: acima do teto nem se leem os vetores (≈ 4 KB cada em base64).
+  const n = Number(rowsOf(await d.execute(sql`SELECT COUNT(*) AS n FROM kb_chunks c JOIN kb_documents d ON d.id = c.docId WHERE ${where}`))[0]?.n ?? 0);
+  const rows = n > cap ? [] : rowsOf(await d.execute(sql`SELECT c.id, c.docId, c.embedding, d.driveFileId, d.visibilityRoles, d.visibilityCities
     FROM kb_chunks c JOIN kb_documents d ON d.id = c.docId
-    WHERE d.deletedAt IS NULL AND d.status = 'synced' AND c.embedding IS NOT NULL AND ${SCOPE_SQL[scope]}
+    WHERE ${where}
     ORDER BY c.id LIMIT ${cap + 1}`));
-  if (rows.length > cap) {
+  if (n > cap || rows.length > cap) {
     if (!warned.has(`${scope}:cap`)) {
       warned.add(`${scope}:cap`);
       console.warn(`[knowledge] vetores "${scope}" acima do teto (${cap} trechos): fica só a pesquisa lexical.`);

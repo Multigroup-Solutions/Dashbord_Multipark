@@ -14,8 +14,10 @@
  *   - FULLTEXT a dividir pelo melhor, com o peso da base de conhecimento:
  *     base = 0,7 × lexical + 0,3 × FULLTEXT (retrieve.rankCandidates);
  *   - com o vetor da secção: 0,65 × cosseno + 0,35 × base (rankCandidates);
- *   - passa se passar na lexical de hoje (≥ 2 pontos e ≥ metade da melhor)
- *     OU se o cosseno chegar a 0,6 (a regra da base de conhecimento).
+ *   - passa se passar na lexical de hoje (≥ 2 pontos e ≥ metade da melhor);
+ *     quem entra SÓ pelo vetor precisa de cos ≥ max(0,7; melhor − 0,08)
+ *     (o FULLTEXT só soma pontos). Os cossenos de quem tentou entrar só pelo
+ *     vetor ficam no registo (só números), para calibrar no piloto.
  *
  * Visibilidade igual à de hoje: os vizinhos e o FULLTEXT são confirmados na
  * BD (`kbVisibilitySql` + `canSeeKbDoc`) e TODAS as secções passam pelo filtro
@@ -29,7 +31,7 @@
  */
 import { canSeeKbDoc, parseVisibility, type KbViewer } from "../../shared/knowledge";
 import { treePages, type HelpTree, type HelpTreePage, type HelpTreeSection } from "../../shared/helpTree";
-import { candidateChunks, chunksByIds, withinMs, VECTOR_PART_DEADLINE_MS, type QueryEmbedFn } from "../knowledge/retrieve";
+import { candidateChunks, chunksByIds, logVectorGate, vectorOnlyThreshold, withinMs, VECTOR_PART_DEADLINE_MS, type QueryEmbedFn } from "../knowledge/retrieve";
 import type { Db } from "../knowledge/store";
 import { compareHits, lexicalPasses, scoreHelpSections, searchHelpSections, type HelpSectionHit, type SectionSearchFn } from "./helpTools";
 import { knowledgeTree } from "./knowledgeTree";
@@ -38,8 +40,6 @@ import { knowledgeTree } from "./knowledgeTree";
 export const SECTION_LEXICAL_CANDIDATES = 40;
 /** Vizinhos por vetor (secções distintas). */
 export const SECTION_VECTOR_NEIGHBORS = 20;
-/** Cosseno a partir do qual uma secção passa só pelo significado (a regra da base). */
-export const SECTION_MIN_COSINE = 0.6;
 
 const REF_PREFIX = "help:";
 /** "help:caixa.md#confirmacao" → "caixa.md#confirmacao" (só secções). PURA. */
@@ -97,13 +97,21 @@ export function rankHelpSections(tree: HelpTree, question: string, opts: SearchO
   }
   const maxLex = Math.max(0, ...cands.map((c) => c.lex));
   const maxFt = Math.max(0, ...cands.map((c) => c.ft));
+  // Quem entra SÓ pelo vetor precisa de cos ≥ max(0,7; melhor − 0,08) (o FULLTEXT nas secções só soma pontos).
+  const threshold = vectorOnlyThreshold(Math.max(0, ...cands.map((c) => c.cos ?? 0)));
+  const gate = { accepted: [] as number[], rejected: [] as number[] };
   const scored: HelpSectionHit[] = [];
   for (const c of cands) {
     const base = 0.7 * (maxLex > 0 ? c.lex / maxLex : 0) + 0.3 * (maxFt > 0 ? c.ft / maxFt : 0);
     const score = c.cos != null ? 0.65 * c.cos + 0.35 * base : base;
-    const pass = lexicalPasses(c.lex, bestPassing) || (c.cos != null && c.cos >= SECTION_MIN_COSINE);
+    let pass = lexicalPasses(c.lex, bestPassing);
+    if (!pass && c.cos != null) {
+      pass = c.cos >= threshold;
+      (pass ? gate.accepted : gate.rejected).push(c.cos);
+    }
     if (pass) scored.push({ page: c.page, section: c.section, score: Math.round(score * 1000) / 1000 });
   }
+  if (gate.accepted.length || gate.rejected.length) logVectorGate("help_sec", threshold, gate.accepted, gate.rejected);
   scored.sort(compareHits);
   return scored.slice(0, max);
 }

@@ -215,8 +215,22 @@ export async function saveEmbeddings(d: Db, docId: number, items: Array<{ chunkI
   /** false: quem chama marca a versão dos vetores uma vez no fim (lote). */
   opts: { bumpVersion?: boolean } = {}): Promise<void> {
   for (const it of items) await d.execute(sql`UPDATE kb_chunks SET embedding = ${it.vector} WHERE id = ${it.chunkId} AND docId = ${docId}`);
-  await d.execute(sql`UPDATE kb_documents SET embedded = 1, embedModel = ${model} WHERE id = ${docId}`);
-  if (opts.bumpVersion !== false) await bumpVectorsVersion(d);
+  // Só fica "com vetores" se não sobrar nenhum trecho sem vetor: se outra corrida refez os
+  // trechos entre a leitura e a gravação (ids novos, sem vetor), o documento continua por vetorizar.
+  await d.execute(sql`UPDATE kb_documents SET embedded = 1, embedModel = ${model} WHERE id = ${docId}
+    AND NOT EXISTS (SELECT 1 FROM kb_chunks k WHERE k.docId = ${docId} AND k.embedding IS NULL)`);
+  if (opts.bumpVersion !== false) await bumpVectorsVersionSafe(d);
+}
+
+/** Muda a versão dos vetores; uma falha só se regista (os vetores já estão gravados). Nunca lança. */
+export async function bumpVectorsVersionSafe(d: Db): Promise<boolean> {
+  try {
+    await bumpVectorsVersion(d);
+    return true;
+  } catch (err) {
+    console.warn(`[knowledge] versão dos vetores por gravar: ${String((err as any)?.code ?? (err as any)?.name ?? "erro")}`);
+    return false;
+  }
 }
 
 /**

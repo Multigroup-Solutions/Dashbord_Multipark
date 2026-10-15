@@ -331,7 +331,13 @@ export async function askAssistant(
   const embedQuery = rawEmbed ? onceQueryEmbed(rawEmbed) : null;
   const sectionSearch = mpv && embedQuery ? makeSectionSearch({ viewer: kbViewerFrom(user.role, toolCtx.access), embedQuery }) : null;
   const turnCtx: StaffToolCtx = sectionSearch ? { ...toolCtx, sectionSearch } : toolCtx;
-  const pageKnowledge = mpv ? await mpvTurnKnowledgeAsync({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx }, sectionSearch) : null;
+  // O bloco da página calcula-se no motor (depois do limite de pedidos), EM PARALELO com a base
+  // de conhecimento, e UMA vez por pedido (a descida smart → lite reaproveita-o).
+  let pkOnce: Promise<{ block: string; refs: string[] }> | null = null;
+  const pageKnowledge = mpv
+    ? () => (pkOnce ??= mpvTurnKnowledgeAsync({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx }, sectionSearch)
+        .then((r) => ({ block: r.block, refs: r.refs })))
+    : null;
   const knowledgeFor = (q: string) => assistantKnowledge(q, user.role, toolCtx.access, mpv ? { helpTopK: 0, vectorNeighbors: true, embedQuery } : {});
   const kbSource = hooks.knowledge === null ? undefined : (hooks.knowledge ?? knowledgeFor);
   // A base de conhecimento consulta-se UMA vez por pedido (a descida smart → lite reaproveita-a).
@@ -358,7 +364,7 @@ export async function askAssistant(
     ...(deadlineMs != null ? { deadlineMs } : {}),
     context,
     memory,
-    ...(pageKnowledge ? { pageKnowledge: { block: pageKnowledge.block, refs: pageKnowledge.refs } } : { helpDocs: toolCtx.helpDocs }),
+    ...(pageKnowledge ? { pageKnowledge } : { helpDocs: toolCtx.helpDocs }),
     path: input.path,
     // Plano MPV (F2/F3): no piloto as ferramentas do MPV (ajuda_abrir/ajuda_procurar, regras_em_vigor, sem abrir_ajuda); fora dele, o de sempre.
     tools,
