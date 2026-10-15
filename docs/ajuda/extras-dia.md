@@ -146,6 +146,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 5. **3. Medianas por condutor** (últimos 28 dias): Fila, Trânsito, Nosso e Cliente de cada condutor, com o **n** de cada uma, e as da cidade em cima. Com menos de 10 casos (a cinzento) a mediana diz pouco.
 6. **Markdown** descarrega o relatório para anexar ao go/no-go; se correste o **Diagnóstico dos tempos** nesta página, o resumo dele vai junto. **CSV amostra**, **CSV condutores** e **CSV cobertura** descarregam cada tabela.
 - **Só lê**: não grava nada nem avisa ninguém. A base de dados da Multipark só é lida.
+- Se a leitura da tabela dos tempos (ou das entregas da amostra) passar de **12 s**, é cancelada e o relatório sai na mesma, com um aviso a amarelo a dizer o que ficou vazio. Tenta outra vez daqui a pouco.
 
 ## Escalar a equipa (Team Leader, Supervisor e acima)
 1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar**, **escreve o nome** da pessoa e escolhe-a da lista do RH; depois as horas de início e de fim.

@@ -2587,7 +2587,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "\"Os tempos estão péssimos — é verdade?\" Antes de o Multis explicar tempos, este relatório mostra se os tempos medidos batem com a realidade.",
        "children": [],
        "container": false,
-       "chars": 2072
+       "chars": 2278
       },
       {
        "id": "extras-dia.md#escalar-a-equipa-team-leader-supervisor-e-acima",
@@ -6015,7 +6015,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "O eval faz perguntas de teste ao Multis e dá uma nota a cada resposta, para decidir se o Multis por página vai para toda a gente.",
        "children": [],
        "container": false,
-       "chars": 2668
+       "chars": 2916
       }
      ]
     },

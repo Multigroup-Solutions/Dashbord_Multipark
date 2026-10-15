@@ -19,7 +19,7 @@ O relatório sai em `eval-multis/` (Markdown e JSON; a pasta não vai para o git
 | `conjuntoA/` | **Conjunto A**: perguntas reais, escritas pelo Jorge e por 2 TL **sem olhar para as secções**. É o único que conta para os critérios. Ficheiros `*.json`. |
 | `conjuntoB/` (opcional) | Perguntas extra para o B. O B é **gerado** das secções da árvore (`server/assistant/multisEvalSetB.ts`), com os casos de injeção. |
 | `gravacoes/` | Respostas gravadas das ferramentas, partilhadas por várias perguntas (`*.json`). |
-| `rascunhoA/` | Rascunhos exportados do `/multis/falhas` e do 👎 (`scripts/export-multis-eval-draft.ts`). **Fora do git** e **nunca** lidos pelo eval. |
+| `rascunhoA/` | Rascunhos exportados do `/multis/falhas` e do 👎 (`scripts/export-multis-eval-draft.ts`), anonimizados por regras simples — **TÊM de ser revistos à mão**. **Fora do git** e **nunca** lidos pelo eval. |
 
 ## Formato de uma pergunta
 

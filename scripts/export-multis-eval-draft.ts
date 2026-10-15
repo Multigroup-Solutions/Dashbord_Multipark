@@ -65,11 +65,11 @@ async function main() {
     const draft = buildSetADraft(list, (people as any[]).map((p) => String(p.n)), { vocab: await defaultAppVocabulary() });
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, JSON.stringify({
-      nota: `RASCUNHO do conjunto A (${days} dias, ${list.length} linhas do 👎 e das falhas). Anonimizado por regras simples (contactos, matrículas, NIF/IBAN, nomes da equipa e palavras com maiúscula que parecem nomes, ids das páginas): REVER À MÃO cada pergunta, preencher seccaoEsperada, ferramentaEsperada, factos e gravações, e só depois passar para server/fixtures/multisEval/conjuntoA/.`,
+      nota: `RASCUNHO do conjunto A (${days} dias, ${list.length} linhas do 👎 e das falhas). Anonimizado por regras simples (contactos, matrículas, NIF/IBAN, nomes da equipa, nomes e apelidos portugueses comuns, o nome a seguir a Sr./Sra./D./Dr./Dra./Eng., palavras com maiúscula que parecem nomes, ids das páginas) — TEM de ser revisto À MÃO: rever cada pergunta, preencher seccaoEsperada, ferramentaEsperada, factos e gravações, e só depois passar para server/fixtures/multisEval/conjuntoA/.`,
       perguntas: draft.questions,
     }, null, 2) + "\n");
     console.log(`${draft.questions.length} perguntas de rascunho (${draft.skipped} sem texto) em ${out}`);
-    console.log("Revê o ficheiro à mão antes de o usar: a anonimização é por regras simples (pode deixar passar um nome no início de uma frase ou um código).");
+    console.log("Revê o ficheiro à mão antes de o usar: a anonimização é por regras simples (pode deixar passar um nome raro ou um código).");
   } finally {
     await conn.end();
   }

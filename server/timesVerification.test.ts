@@ -15,6 +15,7 @@ import {
   type TvSampleSource,
 } from "../shared/timesVerification";
 import { coverageRowOf, runTimesVerification, type VerifyDeps } from "./timesVerification";
+import { isQueryTimeoutError, maxExecutionHint } from "./serviceTimesRead";
 import { buildServiceBookingsHistorySql } from "./multiparkDb/serviceRows";
 import { assertReadOnlySql } from "./multiparkDb/client";
 import type { ServiceEvent } from "../shared/serviceTimes";
@@ -159,11 +160,34 @@ describe("F8 — o relatório", () => {
     const r = await runTimesVerification({ today: "2026-10-18", cityKeys: null, tableTimeoutMs: 20 }, { ...d, serviceRows: () => never, sampleRows: () => never });
     expect(r.notes.join(" ")).toMatch(/tabela dos tempos \(8 semanas\) passou de/);
     expect(r.notes.join(" ")).toMatch(/entregas da amostra passou de/);
+    expect(r.notes).toHaveLength(2);
     expect(r.sample.items).toEqual([]);
     expect(timesVerificationMarkdown(r)).toContain("Aviso:");
     const mod = readFileSync(resolve(__dirname, "timesVerification.ts"), "utf8");
     expect(mod).toMatch(/VERIFY_DEADLINE_MS = 42_000/);
     expect(mod).toMatch(/VERIFY_TABLE_TIMEOUT_MS = 12_000/);
+  });
+
+  it("o MySQL cancela a consulta que passa do prazo (MAX_EXECUTION_TIME no SELECT); o aviso diz que foi cancelada", async () => {
+    const { d } = deps();
+    const asked: Array<number | undefined> = [];
+    const r = await runTimesVerification({ today: "2026-10-18", cityKeys: null, tableTimeoutMs: 5_000 }, {
+      ...d,
+      serviceRows: async (o) => { asked.push(o.maxExecutionMs); return { rows: [], truncated: false, error: "prazo" }; },
+      sampleRows: async (o) => { asked.push(o.maxExecutionMs); throw new Error("prazo"); },
+    });
+    expect(asked).toEqual([5_000, 5_000]);
+    expect(r.notes.join(" ")).toMatch(/passou de 5 s e foi cancelada/);
+    expect(r.notes).toHaveLength(2);
+    expect(String(maxExecutionHint(12_000).queryChunks?.[0]?.value?.[0] ?? "")).toBe("/*+ MAX_EXECUTION_TIME(12000) */ ");
+    expect(isQueryTimeoutError({ errno: 3024 })).toBe(true);
+    expect(isQueryTimeoutError({ cause: { message: "Query execution was interrupted, maximum statement execution time exceeded" } })).toBe(true);
+    expect(isQueryTimeoutError(new Error("ECONNRESET"))).toBe(false);
+    // O SELECT da tabela leva a dica (e só quando se pede um prazo).
+    const read = readFileSync(resolve(__dirname, "serviceTimesRead.ts"), "utf8");
+    expect(read).toContain("SELECT ${maxExecutionHint(o.maxExecutionMs)}${cols} FROM service_times");
+    const mod = readFileSync(resolve(__dirname, "timesVerification.ts"), "utf8");
+    expect(mod).toContain("SELECT ${read.maxExecutionHint(o.maxExecutionMs)}bookingId");
   });
 
   it("a History falha → a ficha fica \"não deu para ler\" com o motivo (o resto sai na mesma)", async () => {

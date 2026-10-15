@@ -390,6 +390,18 @@ describe("F8 — rascunho do conjunto A (do /multis/falhas e do 👎)", () => {
     // Início da frase: uma palavra com maiúscula fica; duas seguidas (nome e apelido) tapam-se.
     expect(anonymizeText("Quantas reservas há amanhã?", team, vocab)).toBe("Quantas reservas há amanhã?");
     expect(anonymizeText("Joaquim Ferreira ligou.", team, vocab)).toBe("[NOME] ligou.");
+    // Seguimento F8: nomes comuns (sem ligar a maiúsculas), títulos, falsos positivos e siglas.
+    expect(anonymizeText("Joaquim ligou a reclamar.", team, vocab)).toBe("[NOME] ligou a reclamar.");
+    expect(anonymizeText("o joaquim ligou", team, vocab)).toBe("o [NOME] ligou");
+    expect(anonymizeText("O JOAQUIM LIGOU", team, vocab)).toBe("O [NOME] LIGOU");
+    expect(anonymizeText("o Sr. Manuel ligou", team, vocab)).toBe("o Sr. [NOME] ligou");
+    expect(anonymizeText("A Sra. D. Rosa Silva ligou.", team, vocab)).toBe("A Sra. D. [NOME] ligou.");
+    expect(anonymizeText("Falei com a Dra. Pires e o Eng. Tavares", team, vocab)).toBe("Falei com a Dra. [NOME] e o Eng. [NOME]");
+    expect(anonymizeText("a rosa do jardim e a luz da garagem", team, vocab)).toBe("a rosa do jardim e a luz da garagem");
+    expect(anonymizeText("leite e santos populares na cruz da paz", team, vocab)).toBe("leite e santos populares na cruz da paz");
+    expect(anonymizeText("Rosa ligou; fala com o Cruz.", team, vocab)).toBe("[NOME] ligou; fala com o [NOME].");
+    expect(anonymizeText("há 3 dias que a costa está fechada", team, vocab)).toBe("há 3 dias que a costa está fechada");
+    expect(anonymizeText("O carro passou do P2 para o T1 no PDA 4 (caso B-INJ-5).", team, vocab)).toBe("O carro passou do P2 para o T1 no PDA 4 (caso B-INJ-5).");
     expect(anonymizePath("/reservas/12345?tab=x")).toBe("/reservas/:id");
     expect(anonymizePath("/crm/cliente/MP-8811/historico")).toBe("/crm/cliente/:id/historico");
     expect(anonymizePath("/extras-dia")).toBe("/extras-dia");
