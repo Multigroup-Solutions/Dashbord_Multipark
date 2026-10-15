@@ -1,7 +1,7 @@
 /**
  * Plano 63, passo 11 — mapa de férias: regras puras (tabela 11.3, quem vê o
  * quê, datas, mês fechado, aviso antes de escalado), os leitores só com as
- * aprovadas, a migração 0730, os interruptores e as definições.
+ * aprovadas, a migração 0830, os interruptores e as definições.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -395,10 +395,10 @@ describe("PDF do mapa", () => {
   });
 });
 
-describe("migração 0730", () => {
+describe("migração 0830", () => {
   it("estado (o que existe fica aprovado), aprovação, parte do dia, 'unavailable' no fim do ENUM, partner_company", async () => {
-    const m = await import("./migrations/migration_0730");
-    const all = m.MIGRATION_0730_STATEMENTS.join("\n");
+    const m = await import("./migrations/migration_0830");
+    const all = m.MIGRATION_0830_STATEMENTS.join("\n");
     expect(all).toContain("ADD COLUMN `status` VARCHAR(10) NOT NULL DEFAULT 'approved'");
     expect(all).toContain("MODIFY COLUMN `leaveType` ENUM('vacation','sick','unpaid','other','unavailable') NOT NULL DEFAULT 'vacation'");
     expect(all).toContain("ADD COLUMN `hours` DECIMAL(4,2) NULL");
@@ -406,9 +406,9 @@ describe("migração 0730", () => {
     for (const c of ["requestedById", "requestedAt", "decidedById", "decidedAt", "decisionNote", "cancelledById", "cancelledAt"]) expect(all).toContain(`ADD COLUMN \`${c}\``);
     expect(all).toContain("MODIFY COLUMN `contractType` ENUM('permanent','fixed_term','extra','partner_company') NULL DEFAULT 'permanent'");
     expect(all).not.toMatch(/\bDROP\b|\bDELETE\b|\bTRUNCATE\b/i);
-    expect([...m.IDEMPOTENT_ERROR_CODES_0730].sort()).toEqual(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);
+    expect([...m.IDEMPOTENT_ERROR_CODES_0830].sort()).toEqual(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);
     const { SCHEMA_MIGRATION_IDS } = await import("./migrations/index");
-    expect(SCHEMA_MIGRATION_IDS).toContain("0730");
+    expect(SCHEMA_MIGRATION_IDS).toContain("0830");
     expect([...SCHEMA_MIGRATION_IDS].sort()).toEqual([...SCHEMA_MIGRATION_IDS]);
   });
 });

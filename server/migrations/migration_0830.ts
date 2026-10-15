@@ -1,4 +1,4 @@
-// Migration 0730 — Mapa de férias (plano 63, passo 11).
+// Migration 0830 — Mapa de férias (plano 63, passo 11).
 //
 // `employee_leaves` ganha o estado e a aprovação:
 //  - `status` ('requested' | 'approved' | 'rejected' | 'cancelled'), NOT NULL
@@ -20,7 +20,7 @@
 // Idempotente e só acrescenta: ADD COLUMN → ER_DUP_FIELDNAME, ADD INDEX →
 // ER_DUP_KEYNAME (calados); os MODIFY só acrescentam um valor no fim do ENUM e
 // podem correr N vezes.
-export const MIGRATION_0730_STATEMENTS: string[] = [
+export const MIGRATION_0830_STATEMENTS: string[] = [
   "ALTER TABLE `employee_leaves` MODIFY COLUMN `leaveType` ENUM('vacation','sick','unpaid','other','unavailable') NOT NULL DEFAULT 'vacation'",
   "ALTER TABLE `employee_leaves` ADD COLUMN `status` VARCHAR(10) NOT NULL DEFAULT 'approved'",
   "ALTER TABLE `employee_leaves` ADD COLUMN `hours` DECIMAL(4,2) NULL",
@@ -36,4 +36,4 @@ export const MIGRATION_0730_STATEMENTS: string[] = [
   "ALTER TABLE `employees` MODIFY COLUMN `contractType` ENUM('permanent','fixed_term','extra','partner_company') NULL DEFAULT 'permanent'",
 ];
 
-export const IDEMPOTENT_ERROR_CODES_0730 = new Set<string>(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);
+export const IDEMPOTENT_ERROR_CODES_0830 = new Set<string>(["ER_DUP_FIELDNAME", "ER_DUP_KEYNAME"]);
