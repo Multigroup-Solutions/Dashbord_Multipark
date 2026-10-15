@@ -17,6 +17,7 @@ import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/a
 import { excerptHelp, type HelpDoc } from "../_core/ai/chat/retrieval";
 import { lateArrivalsOf } from "../../shared/evaluationRules";
 import { RULES_IN_FORCE_TOOL } from "./rulesTool";
+import { HELP_NAV_TOOLS } from "./helpTools";
 
 export interface StaffUser {
   id: number;
@@ -354,11 +355,13 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
 ];
 
 /**
- * Plano MPV (F2): no modo MPV (piloto) o Multis tem também `regras_em_vigor`
- * (./rulesTool.ts); fora dele, o conjunto de sempre (princípio 1: o Multis não
+ * Plano MPV (F2/F3): no modo MPV (piloto) o Multis tem também `regras_em_vigor`
+ * (./rulesTool.ts) e navega na árvore da ajuda com `ajuda_abrir`/`ajuda_procurar`
+ * em vez do `abrir_ajuda`; fora dele, o conjunto de sempre (princípio 1: o Multis não
  * muda para quem não está no piloto).
  */
-export const MPV_STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [...STAFF_TOOLS, RULES_IN_FORCE_TOOL];
+// F3: ajuda_abrir/ajuda_procurar (./helpTools.ts) no lugar do abrir_ajuda; a ordem é a mesma para toda a gente (uma cache por modelo).
+export const MPV_STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [...HELP_NAV_TOOLS, ...STAFF_TOOLS.filter((t) => t.name !== "abrir_ajuda"), RULES_IN_FORCE_TOOL];
 export function staffToolsFor(mode: { pilot: boolean }): ChatTool<StaffToolCtx>[] {
   return mode.pilot ? MPV_STAFF_TOOLS : STAFF_TOOLS;
 }

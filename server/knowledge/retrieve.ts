@@ -10,7 +10,7 @@
  *   palavras-chave. Tudo com LIMIT e dentro de poucos segundos.
  */
 import { sql, type SQL } from "drizzle-orm";
-import { canSeeKbDoc, parseVisibility, type KbCitation, type KbSource, type KbViewer } from "../../shared/knowledge";
+import { KB_HELP_SECTION_SOURCE, canSeeKbDoc, parseVisibility, type KbCitation, type KbSource, type KbViewer } from "../../shared/knowledge";
 import { normalizeText, tokenize } from "../trainingTutorRules";
 import { kbVisibilitySql, rowsOf, type Db } from "./store";
 
@@ -80,6 +80,8 @@ export async function candidateChunks(d: Db, question: string, viewer: KbViewer,
   const base: SQL[] = [sql`d.deletedAt IS NULL`, sql`d.status = 'synced'`, kbVisibilitySql(viewer)];
   if (opts.excludeSources?.length) base.push(sql`d.source NOT IN (${sql.join(opts.excludeSources.map((x) => sql`${x}`), sql`, `)})`);
   if (opts.onlySources?.length) base.push(sql`d.source IN (${sql.join(opts.onlySources.map((x) => sql`${x}`), sql`, `)})`);
+  // As secções da ajuda (MPV) só entram quando pedidas (repetem o texto da ajuda por ficheiro).
+  if (!opts.onlySources?.includes(KB_HELP_SECTION_SOURCE)) base.push(sql`d.source <> 'help_sec'`);
   if (opts.docIds?.length) base.push(sql`d.id IN (${sql.join(opts.docIds.map((x) => sql`${x}`), sql`, `)})`);
   const cols = sql`c.id, c.docId, c.section, c.text, c.embedding, d.title, d.webViewLink, d.source, d.visibilityRoles, d.visibilityCities, d.driveFileId`;
   const ftq = fulltextQuery(question);

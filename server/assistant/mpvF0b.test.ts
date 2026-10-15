@@ -124,7 +124,7 @@ describe("piloto do Multis (assistant_smart)", () => {
     expect(await assistantModeFor(9)).toMatchObject({ feature: "assistant_smart", economy: false });
   });
 
-  it("piloto dentro do teto: responde o smart (Argon), limites e chave próprios, teto de saída 2048, versão v1", async () => {
+  it("piloto dentro do teto: responde o smart (Argon), limites e chave próprios, teto de saída 2048, conteúdo do MPV (F3)", async () => {
     h.db = dbWith({ pilot: [7] });
     process.env.MPV = "on";
     process.env.AI_ASSISTANT_SMART = "on";
@@ -138,7 +138,7 @@ describe("piloto do Multis (assistant_smart)", () => {
     const rl = h.db.queries.filter((q: FakeQuery) => q.sql.includes("INSERT INTO ai_rate_limits")).map((q: FakeQuery) => q.params[0]);
     expect(rl).toContain("minute:assistant_smart:user:7");
     const usage = h.db.queries.filter((q: FakeQuery) => q.sql.includes("INSERT INTO ai_usage_log")).at(-1)!;
-    expect(usage.params).toEqual(expect.arrayContaining(["assistant_smart", "smart", "gemini-4-argon", "v1"]));
+    expect(usage.params).toEqual(expect.arrayContaining(["assistant_smart", "smart", "gemini-4-argon", "mpv"]));
     expect((await assistantLimits("assistant_smart")).perDay).toBe(80);
   });
 

@@ -46,6 +46,13 @@ export interface ChatTool<Ctx> {
   pii?: ToolPiiFields;
 }
 
+/**
+ * Resposta a uma ferramenta declarada que a pessoa não pode usar (MPV:
+ * declaram-se todas; plano §3.7). O texto diz "Sem acesso", como a regra do
+ * sistema do MPV.
+ */
+export const TOOL_REFUSED_ERROR = "Sem acesso: esta ferramenta não está nas permissões desta pessoa.";
+
 /** Erro que o modelo pode ver (acesso negado, parâmetro inválido…). */
 export class ToolUserError extends Error {}
 
@@ -113,8 +120,18 @@ export function makeToolExecutor<Ctx>(
   hooks: {
     onCall?: (name: string, args: Record<string, unknown>) => Promise<void> | void;
     onError?: (name: string, error: string) => void;
+    /** Com `refuseUnavailable`: uma chamada recusada (sem acesso) — não passa por onCall nem onError. */
+    onRefused?: (name: string, args: Record<string, unknown>) => Promise<void> | void;
   } = {},
-  opts: { redact?: RedactionContext; maskPeople?: boolean } = {},
+  opts: {
+    redact?: RedactionContext; maskPeople?: boolean;
+    /**
+     * MPV (todas declaradas): uma ferramenta conhecida que a pessoa não pode
+     * usar é RECUSADA à parte (TOOL_REFUSED_ERROR; não conta como usada nem
+     * como erro). Omisso: como sempre.
+     */
+    refuseUnavailable?: boolean;
+  } = {},
 ): (call: AiToolCall) => Promise<Record<string, unknown>> {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const run = async (call: AiToolCall, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
@@ -132,6 +149,15 @@ export function makeToolExecutor<Ctx>(
   };
   return async (call) => {
     const args = call.args && typeof call.args === "object" ? call.args : {};
+    if (opts.refuseUnavailable) {
+      const tool = byName.get(call.name);
+      let ok = false;
+      try { ok = !!tool && tool.available(ctx); } catch { ok = false; }
+      if (tool && !ok) {
+        try { await hooks.onRefused?.(call.name, args); } catch { /* idem */ }
+        return { error: TOOL_REFUSED_ERROR };
+      }
+    }
     try { await hooks.onCall?.(call.name, args); } catch { /* o registo nunca parte o chat */ }
     const result = await run(call, args);
     if (typeof result?.error === "string") {

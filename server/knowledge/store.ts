@@ -92,6 +92,8 @@ export async function listDocs(d: Db, f: { q?: string | null; status?: KbStatus 
   const conds: SQL[] = [sql`d.deletedAt IS NULL`];
   if (f.status) conds.push(sql`d.status = ${f.status}`);
   if (f.source) conds.push(sql`d.source = ${f.source}`);
+  // As secções da ajuda (MPV, centenas) só aparecem quando se filtra por elas.
+  else conds.push(sql`d.source <> 'help_sec'`);
   const q = String(f.q ?? "").trim().toLowerCase().slice(0, 100);
   if (q) conds.push(sql`(LOWER(d.title) LIKE ${`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`} OR LOWER(COALESCE(d.folderPath, '')) LIKE ${`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`})`);
   const rows = rowsOf(await d.execute(sql`SELECT ${DOC_COLS} FROM kb_documents d WHERE ${sql.join(conds, sql` AND `)}
@@ -173,8 +175,9 @@ export async function pendingDocIds(d: Db, limit: number, _now: Date = new Date(
 
 /** Sincronizados sem vetores (para completar quando os embeddings ficam disponíveis). */
 export async function unembeddedDocIds(d: Db, limit: number): Promise<number[]> {
+  // As secções da ajuda (MPV, "help_sec") ficam sem vetores enquanto ninguém as ler (F5).
   const rows = rowsOf(await d.execute(sql`SELECT d.id FROM kb_documents d WHERE d.deletedAt IS NULL AND d.status = 'synced'
-    AND d.embedded = 0 AND d.chunkCount > 0 ORDER BY d.updatedAt LIMIT ${limit}`));
+    AND d.embedded = 0 AND d.chunkCount > 0 AND d.source <> 'help_sec' ORDER BY d.updatedAt LIMIT ${limit}`));
   return rows.map((r) => Number(r.id));
 }
 
@@ -218,7 +221,7 @@ export async function uploadByChecksum(d: Db, sha: string): Promise<{ id: number
 
 export async function statusCounts(d: Db): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
-  for (const r of rowsOf(await d.execute(sql`SELECT status, COUNT(*) AS n FROM kb_documents WHERE deletedAt IS NULL GROUP BY status`))) out[String(r.status)] = Number(r.n);
+  for (const r of rowsOf(await d.execute(sql`SELECT status, COUNT(*) AS n FROM kb_documents WHERE deletedAt IS NULL AND source <> 'help_sec' GROUP BY status`))) out[String(r.status)] = Number(r.n);
   return out;
 }
 

@@ -148,8 +148,16 @@ export async function loadMessages(channel: ChatChannel, ownerKey: string, conve
 }
 
 /** Lista de nomes para uma coluna VARCHAR(255) ("a,b,c"; vazia → null). PURA. */
-export const joinNames = (names: readonly string[] | undefined | null): string | null =>
-  [...new Set((names ?? []).filter(Boolean))].join(",").slice(0, 255) || null;
+/** Nomes separados por vírgulas, no máx. 255 car. — corta por nome INTEIRO (nunca um id a meio). */
+export const joinNames = (names: readonly string[] | undefined | null): string | null => {
+  let out = "";
+  for (const n of new Set((names ?? []).filter(Boolean))) {
+    const next = out ? `${out},${n}` : n;
+    if (next.length > 255) break;
+    out = next;
+  }
+  return out || null;
+};
 
 /**
  * Guarda a pergunta e a resposta (e atualiza o título/data da conversa).
