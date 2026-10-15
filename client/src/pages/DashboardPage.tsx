@@ -167,7 +167,6 @@ export default function DashboardPage() {
   const retryBk = () => { bkQ.refetch(); };
   // 20d: atalhos só para o que a pessoa pode abrir (pela matriz).
   const modules = dashboardModules.filter((m) => can(user as any, m.module, "view"));
-  const reservasMarketplace = bookingStats ? bookingStats.reservasHoje - bookingStats.reservasHojeNossos : 0;
 
   return (
     <div className="space-y-8">
@@ -182,7 +181,7 @@ export default function DashboardPage() {
           label="Reservas criadas hoje"
           note={TODAY_ALL_PARKS}
           value={fmtNum(bookingStats?.reservasHoje ?? 0)}
-          subtitle={`${fmtNum(bookingStats?.reservasHojeNossos ?? 0)} em parques nossos · ${fmtNum(reservasMarketplace)} em parques do Marketplace · este mês: ${fmtNum(bookingStats?.reservasMes ?? 0)}`}
+          subtitle={`${fmtNum(bookingStats?.reservasHojeNossos ?? 0)} em parques nossos · ${fmtNum(bookingStats?.reservasHojeMarketplace ?? 0)} em parques do Marketplace · este mês: ${fmtNum(bookingStats?.reservasMes ?? 0)}`}
           loading={bkLoading}
           failed={bkFailed}
           onRetry={retryBk}
@@ -230,7 +229,7 @@ export default function DashboardPage() {
           label="Entregas hoje (c/ IVA)"
           note={TODAY_OPERATED_PARKS}
           value={fmtCurrency(deliveries?.today.gross ?? 0)}
-          subtitle={`${fmtNum(deliveries?.today.count ?? 0)} carros · este mês: ${fmtCurrency(deliveries?.month.gross ?? 0)}`}
+          subtitle={`${fmtNum(deliveries?.today.count ?? 0)} carros · este mês: ${fmtCurrency(deliveries?.month.gross ?? 0)} c/ IVA (${fmtNum(deliveries?.month.count ?? 0)} carros)`}
           loading={seesFinance && delLoading}
           failed={financeFail(delQ)}
           onRetry={() => { delQ.refetch(); }}

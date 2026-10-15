@@ -21,13 +21,15 @@ const h = vi.hoisted(() => ({
   ctx: null as any,
   levels: {} as Record<number, string>,
   overrides: {} as Record<string, string>,
+  /** Âmbito de cidade de quem pede (null = nacional). */
+  access: null as any,
 }));
 
 const national = vi.hoisted(() => ({ all: true, defaultCityId: null, cityName: null, cityIds: [10, 20], projectIds: [1, 10, 11, 12, 20, 21, 22], missingCostCenter: false }));
 vi.mock("./cityAccess", async (original) => ({
   ...(await original<object>()),
-  loadCityAccess: async () => national,
-  loadCityAccessParts: async () => ({ access: national, base: national, all: national }),
+  loadCityAccess: async () => h.access ?? national,
+  loadCityAccessParts: async () => ({ access: h.access ?? national, base: h.access ?? national, all: national }),
 }));
 
 const TREE = vi.hoisted(() => [
@@ -84,6 +86,9 @@ import {
   type OpsEventId, type OpsStatusRule,
 } from "./multiparkDb/opsEvents";
 import { mapParks } from "./multiparkDb/dayBookings";
+import { APPROX_CANCEL_GRACE_DAYS } from "./multiparkDb/opsEvents";
+import { DELIVERED } from "./multiparkDb/financeAgg";
+import { excludeParks, movementDone } from "../shared/reservasDoDia";
 import { buildFinanceAggSql, FINANCE_AGG_LIMIT, type FinanceAggRow } from "./multiparkDb/financeAgg";
 import { createLiveCache } from "./multiparkDb/liveCache";
 import {
@@ -147,6 +152,7 @@ beforeEach(() => {
   h.ctx = CTX;
   h.levels = { 1: "group", 10: "city", 11: "brand", 12: "brand", 20: "city", 21: "brand", 22: "brand" };
   h.overrides = {};
+  h.access = null;
   resetScopeParksCache(); resetOpsCountsCache(); resetDeliveriesCache();
 });
 afterEach(() => { if (savedEnv === undefined) delete process.env[ENV]; else process.env[ENV] = savedEnv; });
@@ -280,6 +286,10 @@ describe("B1–B3 — Reservas, Entradas, Saídas e Cancelados do Geral = as lis
     const active = summarizeOps("reservas", toAggRows("reservas", bookings, TODAY, "active"), parks);
     expect(stats.reservasHojeNossos).toBe(active.ours);
     expect(stats.reservasHojeNossos).toBe(2);
+    // Auditoria: a divisão do Marketplace vem do servidor (o ecrã não faz contas) e soma o total.
+    expect(stats.reservasHojeMarketplace).toBe(active.total - active.ours);
+    expect(stats.reservasHojeNossos + stats.reservasHojeMarketplace).toBe(stats.reservasHoje);
+    expect(countsOnly(stats).reservasHojeMarketplace).toBe(2);
   });
 
   it("Entradas e Saídas hoje = o total das Recolhas / Entregas do dia (canceladas fora, por pagar dentro)", () => {
@@ -324,6 +334,31 @@ describe("B3 — cancelada em: a linha Cancellation mais recente (senão a últi
       expect(q.sql).not.toContain(`cx."bookingId" = b."id"`);
     }
     expect(buildSource(spec, new ParamList(), bounds.start, bounds.end, false)).toContain(`cx."id" AS cx_id`);
+  });
+});
+
+describe("auditoria — cancelada sem registo: a última alteração só data o cancelamento até 2 dias depois da saída prevista", () => {
+  const bounds = { start: "2026-10-14 23:00:00", end: "2026-10-15 23:00:00" };
+  const BOUND = `b."updatedAt" < b."checkOut" + interval '${APPROX_CANCEL_GRACE_DAYS} days'`;
+  it("a regra vive em opsEvents e chega à lista E às contagens (a mesma parte ≈)", () => {
+    expect(APPROX_CANCEL_GRACE_DAYS).toBe(2);
+    const p = new ParamList();
+    const [withRow, approx] = opsEventParts("cancelled", p, bounds.start, bounds.end);
+    expect(approx.approx).toBe(true);
+    expect(approx.where).toContain(BOUND);
+    // a parte com a linha Cancellation tem a data certa: não leva o limite
+    expect(withRow.where).not.toContain(BOUND);
+    const list = buildSource({ kind: "cancelados", parkIds: ["p1"], ourParkIds: ["p1"] }, new ParamList(), bounds.start, bounds.end, false);
+    const counts = buildOpsCountsSql({ events: ["cancelled"], parkIds: ["p1"], ...bounds }).sql;
+    for (const sql of [list, counts]) expect(sql.split(BOUND)).toHaveLength(2);
+    // as outras listas não mudam
+    for (const kind of ["reservas", "entradas", "saidas"] as const) {
+      expect(buildSource({ kind, parkIds: ["p1"], ourParkIds: ["p1"] }, new ParamList(), bounds.start, bounds.end, false)).not.toContain(BOUND);
+    }
+  });
+  it("a ajuda explica o ≈ e o limite (listas e Geral)", () => {
+    expect(src("docs/ajuda/operacoes-listas.md")).toContain("até 2 dias depois da saída prevista");
+    expect(src("docs/ajuda/dashboards.md")).toContain("só se for até 2 dias depois da saída prevista");
   });
 });
 
@@ -385,6 +420,35 @@ describe("B4 — Entregas hoje / este mês, c/ IVA, nos parques que operamos", (
     await expect(caller("admin").invoices.deliveries({})).rejects.toMatchObject({ code: "FORBIDDEN" });
     h.overrides = {};
     await expect(caller("admin").invoices.deliveries({ projectId: 10 })).resolves.toMatchObject({ month: { count: 0 } });
+  });
+});
+
+describe("auditoria — Entregas: os parques e a regra de 'feita' são os das Reservas do dia", () => {
+  const ids = (ps: Array<{ id: string }>) => ps.map((p) => p.id).sort();
+  it("parques que operamos = os das Reservas do dia (mapParks + excludeParks), por cidade e no nacional", () => {
+    // nacional
+    expect(operatedParkIds(CTX, undefined, ["pX"]).sort()).toEqual(ids(excludeParks(mapParks(PARK_ROWS), ["pX"])));
+    // Lisboa (o âmbito de um supervisor de Lisboa) e Porto
+    expect(operatedParkIds(CTX, LISBOA.projectIds, ["pX"]).sort()).toEqual(ids(excludeParks(mapParks(PARK_ROWS, ["Lisboa"]), ["pX"])));
+    expect(operatedParkIds(CTX, PORTO.projectIds, ["pX"]).sort()).toEqual(ids(excludeParks(mapParks(PARK_ROWS, ["Porto"]), ["pX"])));
+    // e nunca um terceiro que não operamos (lista do dono ou Definições)
+    expect(operatedParkIds(CTX, undefined, ["pX"])).not.toEqual(expect.arrayContaining(["pT"]));
+    expect(operatedParkIds(CTX, undefined, ["pX"])).not.toEqual(expect.arrayContaining(["pX"]));
+  });
+  it("'entregue' (Faturação, CHECKED_OUT) = a saída 'feita' das Reservas do dia, para todos os estados", () => {
+    const ALL = ["BOOKED", "CHECKING_IN", "CHECKED_IN", "CHECKING_OUT", "CHECKED_OUT", "MOVING", "CANCELLED", "PENDING", "PENDING_CHECKOUT"];
+    for (const st of ALL) {
+      // As Reservas do dia contam as saídas sem as canceladas; "feitas" = saídas − por fazer.
+      const feita = st !== "CANCELLED" && movementDone("saida", st);
+      expect((DELIVERED as readonly string[]).includes(st), st).toBe(feita);
+    }
+  });
+  it("um supervisor de Lisboa sem cidade escolhida: só os parques de Lisboa (nunca o nacional)", async () => {
+    const seen: unknown[][] = [];
+    await cityScope.run(LISBOA as any, () => liveDeliveries({}, NOW, async (_sql, params = []) => { seen.push(params); return []; }));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual(expect.arrayContaining(["pA", "pB"]));
+    for (const id of ["pP", "pM", "pT", "pX"]) expect(seen[0]).not.toContain(id);
   });
 });
 
@@ -520,6 +584,31 @@ describe("B14 — o Resumo de /operacoes conta o mesmo universo que as listas", 
   });
 });
 
+describe("auditoria — o Resumo fora do scopeCityQuery não abre fuga: as cidades de quem pede", () => {
+  it("supervisor de Lisboa, sem cidade escolhida: o Resumo lê só os parques de Lisboa e nenhum projectId é posto à força", async () => {
+    h.access = LISBOA;
+    await caller("supervisor").multipark.operationsSummary({ startDate: TODAY, endDate: TODAY });
+    const q = countsSqlCalls().at(-1)!;
+    expect(q.params).toEqual(expect.arrayContaining(["pA", "pB", "pT", "pX"]));
+    for (const id of ["pP", "pM"]) expect(q.params).not.toContain(id);
+    // e uma cidade de fora no pedido é recusada (não alarga o âmbito)
+    await expect(caller("supervisor").multipark.operationsSummary({ startDate: TODAY, endDate: TODAY, projectId: 20 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("as contagens e as Entregas do Geral, com o âmbito de Lisboa e sem cidade escolhida: só Lisboa", async () => {
+    // (o âmbito vem do centro de custos; o papel só abre os módulos)
+    h.access = LISBOA;
+    await caller("admin").multipark.opsBookingCounts({});
+    const q = countsSqlCalls().at(-1)!;
+    expect(q.params).toEqual(expect.arrayContaining(["pA", "pB", "pT", "pX"]));
+    for (const id of ["pP", "pM"]) expect(q.params).not.toContain(id);
+    h.calls = [];
+    await caller("admin").invoices.deliveries({});
+    const d = h.calls.find((c) => c.sql.includes(`b."checkOut"`))!;
+    expect(d.params).toEqual(expect.arrayContaining(["pA", "pB"]));
+    for (const id of ["pP", "pM", "pT", "pX"]) expect(d.params).not.toContain(id);
+  });
+});
+
 describe("B16 — as listas de Operações seguem a cidade/marca do topo", () => {
   const ids = (r: any) => (r.available ? r.parks.map((p: any) => p.id).sort() : r);
   const input = { kind: "entradas" as const, from: TODAY, to: TODAY };
@@ -559,7 +648,9 @@ describe("B5–B9, B13 — cartões do Geral e textos", () => {
   it("B1–B3: os rótulos dizem o dia e que são todos os parques", () => {
     for (const l of ["Reservas criadas hoje", "Entradas hoje", "Saídas hoje", "Cancelados hoje"]) expect(page).toContain(`label="${l}"`);
     expect(page).toContain(`"00h–24h · todos os parques"`);
-    expect(page).toContain("em parques nossos · ${fmtNum(reservasMarketplace)} em parques do Marketplace");
+    expect(page).toContain("em parques nossos · ${fmtNum(bookingStats?.reservasHojeMarketplace ?? 0)} em parques do Marketplace");
+    // o ecrã só mostra o que o servidor dá: nenhuma conta com os números das reservas
+    expect(page).not.toMatch(/bookingStats\.reservasHoje\s*-/);
   });
   it("B6–B8: Reclamações abertas, Média Google e Colaboradores pelas consultas das páginas, com a cidade do topo", () => {
     expect(page).toContain("trpc.complaints.stats.useQuery(scope");

@@ -145,8 +145,9 @@ export interface BookingStats {
   /** Total de reservas destes parques (só o painel do MCP o lê; null = não lido). */
   total: number | null;
   reservasHoje: number; checkinHoje: number; checkoutHoje: number; canceladosHoje: number;
-  /** B1: das reservas criadas hoje, quantas são de parques NOSSOS (o resto é Marketplace). */
+  /** B1: das reservas criadas hoje, quantas são de parques NOSSOS e quantas do Marketplace (pelo PARQUE; somam reservasHoje). */
   reservasHojeNossos: number;
+  reservasHojeMarketplace: number;
   reservasMes: number; checkinMes: number; checkoutMes: number; canceladosMes: number;
   /** Entradas / saídas no período pedido (o relatório semanal, PR H). */
   checkinPeriodo: number; checkoutPeriodo: number;
@@ -199,6 +200,7 @@ export function summarizeBookingStats(rows: readonly OpsCountRow[], o: { total: 
     total: o.total,
     reservasHoje: sum("created", t, t).count, checkinHoje: ciHoje.count, checkoutHoje: sum("checkout", t, t).count, canceladosHoje: sum("cancelled", t, t).count,
     reservasHojeNossos: sum("created", t, t, (r) => !!o.parkInfo.get(r.parkId)?.ours).count,
+    reservasHojeMarketplace: sum("created", t, t, (r) => !o.parkInfo.get(r.parkId)?.ours).count,
     reservasMes: sum("created", m, t).count, checkinMes: ciMes.count, checkoutMes: sum("checkout", m, t).count, canceladosMes: sum("cancelled", m, t).count,
     checkinPeriodo: ciPeriodo.count, checkoutPeriodo: sum("checkout", o.periodFrom, o.periodTo).count,
     receitaHoje: ciHoje.revenue, receitaMes: ciMes.revenue, receitaPeriodo: ciPeriodo.revenue,
@@ -209,7 +211,7 @@ export function summarizeBookingStats(rows: readonly OpsCountRow[], o: { total: 
 }
 
 const EMPTY_STATS: BookingStats = {
-  total: 0, reservasHoje: 0, checkinHoje: 0, checkoutHoje: 0, canceladosHoje: 0, reservasHojeNossos: 0, reservasMes: 0, checkinMes: 0, checkoutMes: 0, canceladosMes: 0,
+  total: 0, reservasHoje: 0, checkinHoje: 0, checkoutHoje: 0, canceladosHoje: 0, reservasHojeNossos: 0, reservasHojeMarketplace: 0, reservasMes: 0, checkinMes: 0, checkoutMes: 0, canceladosMes: 0,
   checkinPeriodo: 0, checkoutPeriodo: 0, receitaHoje: 0, receitaMes: 0, receitaPeriodo: 0, byCity: [], byDay: [], byBrand: [],
 };
 
@@ -279,7 +281,7 @@ export async function liveOpsBookingStats(filters?: { from?: string; to?: string
 /** Só contagens (sem receita) — o painel de Operações não precisa dos totais financeiros (22a, D5). */
 export interface OpsBookingCounts {
   total: number | null; reservasHoje: number; checkinHoje: number; checkoutHoje: number; canceladosHoje: number;
-  reservasHojeNossos: number;
+  reservasHojeNossos: number; reservasHojeMarketplace: number;
   reservasMes: number; checkinMes: number; checkoutMes: number; canceladosMes: number;
   checkinPeriodo: number; checkoutPeriodo: number;
   byCity: { name: string; bookings: number }[];
@@ -291,7 +293,7 @@ export interface OpsBookingCounts {
 export function countsOnly(s: BookingStats): OpsBookingCounts {
   return {
     total: s.total, reservasHoje: s.reservasHoje, checkinHoje: s.checkinHoje, checkoutHoje: s.checkoutHoje, canceladosHoje: s.canceladosHoje,
-    reservasHojeNossos: s.reservasHojeNossos,
+    reservasHojeNossos: s.reservasHojeNossos, reservasHojeMarketplace: s.reservasHojeMarketplace,
     reservasMes: s.reservasMes, checkinMes: s.checkinMes, checkoutMes: s.checkoutMes, canceladosMes: s.canceladosMes,
     checkinPeriodo: s.checkinPeriodo, checkoutPeriodo: s.checkoutPeriodo,
     byCity: s.byCity.map(({ name, bookings }) => ({ name, bookings })),

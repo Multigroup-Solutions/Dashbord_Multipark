@@ -17,7 +17,11 @@
  *
  * Cancelada em: a linha "Cancellation" MAIS RECENTE da reserva (a mesma
  * LATERAL do Financeiro, financeAgg.ts); sem nenhuma linha, a última
- * alteração da reserva (Booking.updatedAt), marcada como data aproximada (≈).
+ * alteração da reserva (Booking.updatedAt), marcada como data aproximada (≈)
+ * — só se essa alteração for até APPROX_CANCEL_GRACE_DAYS depois da saída
+ * prevista: uma cancelada há meses e mexida hoje (nota, acerto, rotina da
+ * Multipark) já não diz QUANDO foi cancelada e não pode contar como
+ * "cancelada hoje" (auditoria do plano 64, PR B).
  *
  * Regras de read.ts: SQL parametrizado e construtores PUROS.
  */
@@ -51,6 +55,16 @@ export const LATEST_CANCELLATION_JOIN =
 
 const BOOKING = `"Booking" b`;
 
+/**
+ * Cancelada SEM linha "Cancellation": a última alteração só data o
+ * cancelamento (≈) se for até estes dias depois da saída prevista. Mais tarde
+ * a reserva foi mexida depois de a estadia acabar — a data já não diz quando
+ * foi cancelada, por isso não entra em nenhum dia (nem na lista, nem nas
+ * contagens). Constante (não é Definição): muda-se aqui, com 1 linha.
+ */
+export const APPROX_CANCEL_GRACE_DAYS = 2;
+const APPROX_CANCEL_BOUND = `b."updatedAt" < b."checkOut" + interval '${APPROX_CANCEL_GRACE_DAYS} days'`;
+
 const shiftTs = (ts: string, days: number) =>
   new Date(Date.parse(`${ts.replace(" ", "T")}Z`) + days * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
 
@@ -58,7 +72,8 @@ const shiftTs = (ts: string, days: number) =>
  * O predicado de um acontecimento em [start, end) UTC ("YYYY-MM-DD HH:MM:SS").
  * Entradas/saídas: a hora real (checkIn/checkOut) com um pré-filtro de 1 dia
  * de folga na coluna indexada ("…Date"). Cancelados: duas partes (com a linha
- * "Cancellation" mais recente; sem nenhuma, pela última alteração). PURA.
+ * "Cancellation" mais recente; sem nenhuma, pela última alteração, se for até
+ * APPROX_CANCEL_GRACE_DAYS depois da saída prevista). PURA.
  */
 export function opsEventParts(e: OpsEventId, p: ParamList, start: string, end: string): OpsEventPart[] {
   const range = (col: string) => `${col} >= ${p.add(start)}::timestamp AND ${col} < ${p.add(end)}::timestamp`;
@@ -76,7 +91,7 @@ export function opsEventParts(e: OpsEventId, p: ParamList, start: string, end: s
         { from: [BOOKING, LATEST_CANCELLATION_JOIN], where: range(`cx."createdAt"`), at: `cx."createdAt"`, approx: false, hasCx: true },
         {
           from: [BOOKING],
-          where: `${range(`b."updatedAt"`)} AND NOT EXISTS (SELECT 1 FROM "Cancellation" c2 WHERE c2."bookingId" = b."id")`,
+          where: `${range(`b."updatedAt"`)} AND ${APPROX_CANCEL_BOUND} AND NOT EXISTS (SELECT 1 FROM "Cancellation" c2 WHERE c2."bookingId" = b."id")`,
           at: `b."updatedAt"`, approx: true, hasCx: false,
         },
       ];

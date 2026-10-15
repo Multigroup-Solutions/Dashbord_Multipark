@@ -92,7 +92,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Os números de hoje, de relance, e atalhos para os outros dashboards.",
        "children": [],
        "container": false,
-       "chars": 4465
+       "chars": 4613
       },
       {
        "id": "dashboards.md#financeiro-financeiro",
@@ -3083,7 +3083,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "A lista é só da operação: estão as entradas e saídas de todos os parques da base de dados da Multipark (das tuas cidades), porque a operação recolhe e entrega…",
        "children": [],
        "container": false,
-       "chars": 1732
+       "chars": 1742
       },
       {
        "id": "reservas-do-dia.md#por-cidade-por-hora-e-por-marca",
@@ -3227,7 +3227,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Reservas canceladas no período, pela data do cancelamento (o registo de cancelamento mais recente: cada reserva conta uma vez, com o motivo e o reembolso…",
        "children": [],
        "container": false,
-       "chars": 539
+       "chars": 788
       },
       {
        "id": "operacoes-listas.md#ler-as-listas",
@@ -3277,7 +3277,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "O Dashboard (primeira aba), o Dashboard das Operações e o Geral contam o mesmo que estas listas: todos os parques das tuas cidades (os nossos e todo o…",
        "children": [],
        "container": false,
-       "chars": 1104
+       "chars": 1135
       },
       {
        "id": "operacoes-listas.md#filtros-e-tabela",
