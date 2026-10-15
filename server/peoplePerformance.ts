@@ -54,6 +54,7 @@ import {
 import { applyAdjustments, emptyDayMetrics, EVALUATION_RULES_VERSION, lateArrivalsOf, METRIC_KEYS, normalisationHours, scoreOf, withAccidentCutoff, type DayMetrics } from "../shared/evaluationRules";
 import { operationalDayOf, operationalDayRangeUtc } from "../shared/lisbonDay";
 import type { MultiparkRead } from "./multiparkDb/read";
+import { reviewInCriticasSql } from "./reviewVisibility";
 
 const rowsOf = (res: unknown): any[] => {
   const r = Array.isArray(res) ? res[0] : (res as any)?.rows ?? res;
@@ -131,7 +132,8 @@ export function userSources(start: string, end: string): Array<{ key: PerfMetric
     src("emails", "emails", sql`mail_messages`, EMAIL_AUTHOR, sql`sentAt`, sql`direction = 'out' AND automated = 0`),
     src("complaintMsgs", "respostas em reclamações", sql`complaint_messages`, sql`authorId`, sql`createdAt`, sql`isInternal = 0`),
     src("complaintsClosed", "reclamações fechadas", sql`complaints`, sql`closedById`, sql`closedAt`),
-    src("reviewsReplied", "críticas Google", sql`google_reviews`, sql`respondedBy`, sql`respondedAt`),
+    // 15 out 2026: só as críticas que estão nas Críticas (as que entraram sozinhas por email ficaram só na caixa).
+    src("reviewsReplied", "críticas Google", sql`google_reviews`, sql`respondedBy`, sql`respondedAt`, reviewInCriticasSql()),
     src("expenses", "despesas", sql`expenses`, sql`insertedById`, sql`createdAt`),
     src("expensesApproved", "despesas aprovadas", sql`expenses`, sql`approvedById`, sql`approvedAt`),
     src("cashCounts", "contagens de caixa", sql`cash_counts`, sql`countedBy`, sql`countedAt`),

@@ -5,6 +5,7 @@ import { accountPattern, locationPattern, normalizeReview, reviewPattern, safeEr
 import { accessToken, connection, database, saveConnection } from './oauth';
 import { PROVIDER } from './config';
 import { reviewAutoDraftEligible } from '../../../shared/reviewRules';
+import { reviewInCriticas } from "../../reviewVisibility";
 
 export interface Location {
   id: number; locationName: string; accountName: string; title: string; address: string | null;
@@ -120,9 +121,11 @@ export async function importReview(locationId: number, payload: GoogleReview, us
         if (Number(existing.notAReview ?? 0) === 1 || existing.duplicateOf != null) throw new Error('A crítica escolhida está marcada como "não é crítica" ou "repetida" — desfaz a marca em Críticas → Limpeza antes de a ligar.');
       } else if (!resolution) {
         // Plano MPV F6b: as marcadas (não é crítica / repetida) nunca são candidatas.
+        // 15 out 2026: nem as que ficaram só na caixa de correio (entraram sozinhas por email) — senão a da API
+        // ficava "por conciliar" à espera de uma que já não está nas Críticas.
         const byName = await tx.select({ id: googleReviews.id }).from(googleReviews).where(and(
           isNull(googleReviews.googleReviewKey), or(eq(googleReviews.projectId, location.projectId), isNull(googleReviews.projectId)),
-          eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf),
+          eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf), reviewInCriticas(),
           eq(googleReviews.reviewerName, review.reviewerName),
           or(eq(googleReviews.rating, review.rating), eq(googleReviews.rating, 0)))).limit(30);
         // R3 (REVIEWS_DEDUP): também a de email com as MESMAS estrelas e o MESMO
@@ -195,7 +198,7 @@ async function emailCandidatesByText(tx: any, projectId: number, review: ReturnT
     reviewDate: googleReviews.reviewDate, sourceEmailDate: googleReviews.sourceEmailDate, createdAt: googleReviews.createdAt, projectId: googleReviews.projectId,
     googleReviewKey: googleReviews.googleReviewKey, sourceEmailId: googleReviews.sourceEmailId }).from(googleReviews).where(and(
     isNull(googleReviews.googleReviewKey), or(eq(googleReviews.projectId, projectId), isNull(googleReviews.projectId)),
-    eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf),
+    eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf), reviewInCriticas(),
     or(eq(googleReviews.rating, review.rating), eq(googleReviews.rating, 0)),
     sql`COALESCE(${googleReviews.reviewDate}, ${googleReviews.sourceEmailDate}, ${googleReviews.createdAt}) BETWEEN DATE_SUB(${at}, INTERVAL ${REVIEW_DEDUP_WINDOW_HOURS} HOUR) AND DATE_ADD(${at}, INTERVAL ${REVIEW_DEDUP_WINDOW_HOURS} HOUR)`,
   )).limit(50);
@@ -285,8 +288,8 @@ export async function pendingReviews() {
   const candidates = ids.length ? await db.select({ id: googleReviews.id, reviewerName: googleReviews.reviewerName,
     rating: googleReviews.rating, reviewText: googleReviews.reviewText, reviewDate: googleReviews.reviewDate,
     complaintId: googleReviews.complaintId }).from(googleReviews)
-    // Plano MPV F6b: as marcadas (não é crítica / repetida) não são oferecidas.
-    .where(and(inArray(googleReviews.id, ids), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf))) : [];
+    // Plano MPV F6b: as marcadas (não é crítica / repetida) não são oferecidas; 15 out 2026: nem as que ficaram só no email.
+    .where(and(inArray(googleReviews.id, ids), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf), reviewInCriticas())) : [];
   return pending.map(p => ({ ...p, candidateReviews: candidates.filter(c => p.candidates.includes(c.id)) }));
 }
 export async function resolvePending(key: string, existingId: number | null, userId: number) {

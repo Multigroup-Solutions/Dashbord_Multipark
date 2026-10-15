@@ -12,7 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
   MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
-  isHrMailThread, mailAttachmentDriveAllowed, extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, mailboxIsMine, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
+  isHrMailThread, isReviewMailbox, mailAttachmentDriveAllowed, extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, mailboxIsMine, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
   pickFromAddress, type MailLinkType, type MailViewer, type MailThreadStatus,
 } from "../../shared/mail";
 import { can, grantFor } from "../../shared/access";
@@ -351,9 +351,19 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
       pipeline: r.pipeline ?? null, pipelineStatus: r.pipelineStatus ?? null,
       rfcMessageId: r.rfcMessageId ?? null,
       archived: !!r.archivedAt,
+      /** 15 out 2026: a crítica deste email (caixa das Críticas): inCriticas = conta nas Críticas. */
+      review: null as { id: number; inCriticas: boolean } | null,
     });
   }
   const links = await linksForThreads([threadId]);
+  // 15 out 2026: na caixa das Críticas, cada email recebido diz se já está nas Críticas
+  // ("Nas Críticas #N") ou deixa importá-lo ("Importar para as Críticas") — os emails ficam só na caixa.
+  const reviewBox = isReviewMailbox(acc.mailbox);
+  const canImportReview = reviewBox && acc.canAct && can(viewer, "criticas", "edit");
+  const reviewsByRfc = reviewBox
+    ? await (await import("../reviewEmailImport")).reviewsOfMessageIds(messages.filter((m) => m.direction === "in").map((m) => m.rfcMessageId ?? ""))
+    : new Map<string, { id: number; inCriticas: boolean }>();
+  for (const m of messages) m.review = m.rfcMessageId ? reviewsByRfc.get(m.rfcMessageId) ?? null : null;
   // Destinatários sugeridos para "Responder" / "Responder a todos".
   let fromOptions: string[] = [];
   let defaultFrom: string | null = null;
@@ -385,6 +395,8 @@ export async function getThread(viewer: MailViewer, threadId: number, opts: { sh
       : [],
     routedFrom: acc.thread.routedFromKey ? { key: acc.thread.routedFromKey, label: (await getMailbox(acc.thread.routedFromKey))?.label ?? acc.thread.routedFromKey, by: acc.thread.routedBy } : null,
     messages,
+    /** 15 out 2026: caixa das Críticas e quem pode importar um email para as Críticas (editar Críticas + agir na caixa). */
+    reviewImport: { reviewBox, allowed: canImportReview },
     /** Super admin: mensagens arquivadas (+5 anos) escondidas nesta conversa — "Mostrar arquivadas". */
     archivedHidden,
     blockedImages: blocked,
@@ -575,7 +587,33 @@ export async function assignTriagedThread(viewer: MailViewer, threadId: number, 
     await logActivity({ userId: viewer.id, action: "update", entity: "mail_thread", entityId: threadId, details: `Por classificar → ${mailbox.key}${alias ? ` (${alias.address})` : ""}${newAddr ? ` +alias ${newAddr}` : ""}` } as any);
   } catch { /* registo */ }
   const { reprocessThreadPipeline } = await import("./service");
-  return reprocessThreadPipeline(threadId, mailbox, alias);
+  // 15 out 2026: atribuir à caixa das Críticas é uma pessoa a dizer "é uma crítica" — importa (fica registado quem).
+  return reprocessThreadPipeline(threadId, mailbox, alias, { manualBy: viewer.id });
+}
+
+// ─── "Importar para as Críticas" (15 out 2026) ──────────────────────────────
+
+/**
+ * Um email recebido na caixa das Críticas → crítica (Jorge, 15 out 2026: "só
+ * quando alguém põe que aquilo é uma crítica é que importa para as Críticas").
+ * Quem: pode agir na caixa (e vê a cidade da conversa) e pode editar as
+ * Críticas. Funciona com o interruptor REVIEWS_FROM_EMAIL ligado ou desligado.
+ */
+export async function importMessageAsReview(viewer: MailViewer, messageId: number): Promise<import("../reviewEmailImport").ReviewImportResult> {
+  const d = await db();
+  const m = rowsOf(await d.execute(sql`SELECT threadId, direction FROM mail_messages WHERE id = ${messageId} LIMIT 1`))[0];
+  if (!m) throw notFound("Email não encontrado.");
+  const acc = await requireAct(viewer, Number(m.threadId));
+  if (!isReviewMailbox(acc.mailbox)) throw bad("Só os emails da caixa das Críticas se importam para as Críticas (move a conversa para lá primeiro).");
+  if (!can(viewer, "criticas", "edit")) throw forbidden("Não podes editar as Críticas.");
+  if (m.direction !== "in") throw bad("Só um email recebido pode ser importado para as Críticas.");
+  const { importMailMessageAsReview, ReviewImportError } = await import("../reviewEmailImport");
+  try {
+    return await importMailMessageAsReview(messageId, viewer.id);
+  } catch (err) {
+    if (err instanceof ReviewImportError) throw bad(err.message);
+    throw err;
+  }
 }
 
 // ─── Ligações manuais ───────────────────────────────────────────────────────

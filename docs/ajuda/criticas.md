@@ -5,7 +5,7 @@ pagina: criticas
 titulo: Críticas Google
 separadores: dashboard=Dashboard, list=Reviews, cleanup=Limpeza
 rotas: /criticas
-palavras: 5 estrelas, cinco estrelas, resposta automática, responder sozinho, publicar sozinho, cancelar resposta automática, retomar, 6 horas, limpeza, não é crítica, repetida, crítica repetida, duplicada, crítica duplicada, desfazer limpeza, resumo de críticas, lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
+palavras: importar para as críticas, críticas por email, vieram por email, mostrar as que vieram por email, fora das críticas, criticas@, só na caixa de correio, 5 estrelas, cinco estrelas, resposta automática, responder sozinho, publicar sozinho, cancelar resposta automática, retomar, 6 horas, limpeza, não é crítica, repetida, crítica repetida, duplicada, crítica duplicada, desfazer limpeza, resumo de críticas, lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---
 # Críticas Google
 
@@ -14,8 +14,8 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 **De onde vêm**
 - **Pela API do Google** (perfis ligados em Integrações): ficam no parque escolhido para o perfil e a resposta publica-se daqui.
 - **Pela Windsor** (quando a conta Google não está ligada diretamente): os mesmos perfis e avaliações chegam pela Windsor e entram aqui da mesma maneira (1–3★ → Reclamação). Interruptor **Críticas: importar do Google Business pela Windsor** (Definições → Automações; vem desligado). A 1.ª vez traz até 3 anos; depois os últimos 60 dias.
-- **Por email** (criticas@): o parque vem do título do perfil Google no email. Sem correspondência exata não se adivinha o parque (ver **Parque, marca ou lixo**).
-- Entram **sozinhas** por estes caminhos: no topo já não há "Sincronizar Gmail" nem "Importar Review" (não faziam nada).
+- **Por email só à mão** (15 out 2026): os emails que chegam à **criticas@** ficam **só na caixa Críticas** da Comunicação — não entram sozinhos aqui. Para pôr um email nas Críticas, abre-o na caixa Críticas e carrega em **Importar para as Críticas** (ver **Críticas que chegam por email**). O parque vem do título do perfil Google no email. Sem correspondência exata não se adivinha o parque (ver **Parque, marca ou lixo**).
+- Entram **sozinhas** pela API do Google e pela Windsor: no topo já não há "Sincronizar Gmail" nem "Importar Review" (não faziam nada).
 - Os **avisos de avaliação que chegam a outras caixas** (info@, reservas@…) e os elogios de clientes por email **não criam** críticas aqui (já entram pelos caminhos acima). Com o interruptor **"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas"** (desligado por omissão) vão para a caixa **Críticas** da Comunicação e ficam **lidos**. Uma opinião negativa de um cliente que quer resposta é tratada como **reclamação**.
 
 ## Parque, marca ou lixo (já não há "Sem parque")
@@ -56,8 +56,20 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 **Quando a leitura falha**
 - Lista, números, parques e crítica mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem avaliações" ou "sem dados".
 
+## Críticas que chegam por email (15 out 2026)
+As críticas do Google entram pela **API do Google** (ou pela Windsor). Trustpilot e Tripadvisor ainda não têm ligação: quando tiverem, entram pela API deles. Os emails ficam na caixa de correio.
+- **A criticas@ não cria críticas sozinha.** Interruptor **"Críticas: criar críticas sozinho a partir dos emails da criticas@"** (Definições → Automações; **desligado** por omissão; só o super admin o liga). Desligado, nenhum caminho automático (sincronização, push do Gmail, novas tentativas, IA) cria uma crítica nem pede um rascunho à IA a partir de um email. O email fica na caixa **Críticas** da Comunicação, lido ou por ler como sempre (com o interruptor dos avisos ligado, os avisos da Google ficam lidos).
+- Uma **reclamação** ou um **perdido** escrito para a criticas@ continua a abrir o caso (pela triagem da IA) e a conversa vai para as Reclamações / Perdidos. Tudo o resto (elogios, candidaturas, perguntas) fica na caixa Críticas.
+- **Importar à mão**: na Comunicação → caixa **Críticas**, abre o email e carrega em **Importar para as Críticas** (team leader e acima, com acesso à caixa e às Críticas, nas suas cidades). A crítica passa a contar aqui (lista, números, rascunho da IA). Fica registado **quem e quando** (registo de atividade "review_email_import"). Atribuir uma conversa **Por classificar** à caixa Críticas também importa (admin). Um email já importado mostra **Nas Críticas (#N)**, que abre a crítica.
+  - O rascunho automático da IA segue as regras de sempre (só críticas dos últimos 14 dias, pela data do email). Com **"Críticas: juntar a mesma crítica que chega duas vezes"** ligado, uma importada que já existe (pela API) fica marcada como **repetida** e não aparece duas vezes.
+- **As que já tinham entrado por email saíram das Críticas** (repetiam as da API). Não se apagaram, nem os emails: ficam guardadas, fora da lista e de **todos os números** — média, total, por responder, Dashboards (Geral "Média Google", Suporte), Marketing → perfil Google, alertas das sem resposta, fila dos rascunhos da IA, respostas automáticas às 5★, Desempenho, ficha do cliente, Multis e MCP.
+  - Uma dessas que a API do Google depois liga à sua crítica volta a contar (é a da API).
+  - Se for mesmo uma crítica (ex.: Trustpilot), importa o email na caixa Críticas: a crítica guardada volta (não se cria outra).
+  - O **super admin** vê-as em Reviews → **Mostrar as que vieram por email**, só para consulta: na crítica aparece "Veio por email — fora das Críticas" e não há botões (responder, aprovar, publicar, dispensar, parque, reclamação).
+- Ligar o interruptor volta a criar a crítica de cada email da criticas@ sozinho, como antes (com os dois interruptores abaixo). Ligar **não** traz de volta as antigas.
+
 ## Emails que não são críticas e críticas repetidas
-- Dois interruptores em **Definições → Automações**, desligados por omissão.
+- Dois interruptores em **Definições → Automações**, desligados por omissão. O primeiro só conta com **"Críticas: criar críticas sozinho a partir dos emails da criticas@"** ligado; o segundo vale também para um email importado à mão.
 - **Críticas: só cria crítica a partir de um aviso de avaliação**: um email que chega pelas Críticas (inclui o que a reservas@ apanha) só vira crítica se for o aviso da Google/Trustpilot/Tripadvisor ou trouxer as estrelas. Candidaturas, respostas de clientes e alertas seguem para a **triagem normal da Comunicação** (vão para a caixa do tema) — nunca ficam ignorados.
 - **Críticas: juntar a mesma crítica que chega duas vezes**: lê também o assunto do email (nome e perfil); os emails-resumo da Google ("recebeu 3 novas críticas") nunca viram crítica. A mesma crítica (mesmo parque, mesmas estrelas, mesmo avaliador, o mesmo texto com 20 ou mais letras, até 48 h) fica **repetida** da primeira.
   - O texto é só o que está entre o nome/estrelas e o botão **Responder** do email; sem isso conta como sem texto.
@@ -93,5 +105,6 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 
 **Quem pode**
 - Condutores e extras **não veem** as Críticas — nem as em que estão envolvidos. Só a partir de team leader.
-- Responder, aprovar, dispensar, converter e importar: team leader e acima, nas suas cidades.
+- Responder, aprovar, dispensar, converter e importar: team leader e acima, nas suas cidades. **Importar para as Críticas** (na Comunicação) pede também acesso à caixa Críticas.
+- **Mostrar as que vieram por email**: só o super admin (só consulta).
 - **CSV** (leva emails dos clientes): só quem pode exportar.

@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
-  Archive, ArrowLeft, Forward, ImageOff, Image as ImageIcon, Link2, Loader2, MailOpen, Paperclip, Reply, ReplyAll, Unlink, UserRound,
+  Archive, ArrowLeft, Forward, ImageOff, Image as ImageIcon, Link2, Loader2, MailOpen, Paperclip, Reply, ReplyAll, Star, Unlink, UserRound,
 } from "lucide-react";
 import {
   MAIL_LINK_LABELS, MAIL_LINK_TYPES, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_LABELS, type MailLinkType, type MailThreadStatus,
@@ -184,7 +184,8 @@ export function MailThreadView({ threadId, onBack, onChanged, canAi }: { threadI
       <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-muted/30">
         {t.messages.length === 0 && <p className="text-xs text-muted-foreground">Sem mensagens à vista nesta conversa.</p>}
         {t.messages.map((m, i) => (
-          <MessageCard key={m.id} m={m} defaultOpen={i >= t.messages.length - 3} />
+          <MessageCard key={m.id} m={m} defaultOpen={i >= t.messages.length - 3}
+            reviewImport={t.reviewImport} onImported={() => { q.refetch(); onChanged(); }} />
         ))}
       </div>
 
@@ -213,9 +214,48 @@ type Msg = {
   id: number; direction: "in" | "out"; fromName: string | null; fromEmail: string | null; to: string[]; cc: string[];
   subject: string; snippet: string; text: string; htmlDocument: string | null; attachments: Array<{ index: number; filename: string; size: number; href: string; driveAllowed?: boolean }>;
   sentAt: string | null; sentByName: string | null; pipeline: string | null; pipelineStatus: string | null; archived?: boolean;
+  /** 15 out 2026: a crítica deste email (caixa das Críticas). inCriticas = conta nas Críticas. */
+  review?: { id: number; inCriticas: boolean } | null;
 };
 
-function MessageCard({ m, defaultOpen }: { m: Msg; defaultOpen: boolean }) {
+/**
+ * Caixa das Críticas (Jorge, 15 out 2026): os emails ficam só na caixa; uma
+ * pessoa decide o que é crítica — "Importar para as Críticas". Já importado →
+ * "Nas Críticas #N" (abre a crítica).
+ */
+function ReviewImportBar({ m, allowed, onImported }: { m: Msg; allowed: boolean; onImported: () => void }) {
+  const importMut = trpc.mail.threads.importReview.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.status === "already" ? `Já estava nas Críticas (#${r.reviewId}).`
+        : r.status === "restored" ? `Voltou às Críticas (#${r.reviewId}).`
+        : "duplicateOf" in r && r.duplicateOf ? `Importada — é repetida da crítica #${r.duplicateOf} (fica marcada, não aparece duas vezes).`
+        : `Importada para as Críticas (#${r.reviewId}).`);
+      onImported();
+    },
+    onError: (e) => toast.error(e.message || "Não foi possível importar."),
+  });
+  if (m.direction !== "in") return null;
+  if (m.review?.inCriticas) {
+    return (
+      <Link href={`/criticas?id=${m.review.id}`} className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-300 hover:underline">
+        <Star className="h-3.5 w-3.5" />Nas Críticas (#{m.review.id})
+      </Link>
+    );
+  }
+  if (!allowed) return null;
+  return (
+    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={importMut.isPending}
+      title="Este email é uma crítica? Passa a contar nas Críticas (fica registado quem importou). Os emails da criticas@ não entram lá sozinhos."
+      onClick={() => importMut.mutate({ messageId: m.id })}>
+      {importMut.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Star className="h-3.5 w-3.5 mr-1" />}
+      Importar para as Críticas
+    </Button>
+  );
+}
+
+function MessageCard({ m, defaultOpen, reviewImport, onImported }: {
+  m: Msg; defaultOpen: boolean; reviewImport?: { reviewBox: boolean; allowed: boolean }; onImported?: () => void;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className={`rounded-xl border bg-card shadow-sm ${m.direction === "out" ? "border-primary/30" : ""}`}>
@@ -240,6 +280,7 @@ function MessageCard({ m, defaultOpen }: { m: Msg; defaultOpen: boolean }) {
       </button>
       {open && (
         <div className="px-3 pb-3 space-y-2">
+          {reviewImport?.reviewBox && <ReviewImportBar m={m} allowed={reviewImport.allowed} onImported={() => onImported?.()} />}
           {m.htmlDocument ? <EmailHtmlFrame doc={m.htmlDocument} /> : <pre className="whitespace-pre-wrap break-words text-sm font-sans">{m.text || m.snippet}</pre>}
           {m.attachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5">

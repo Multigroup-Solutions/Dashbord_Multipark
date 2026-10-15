@@ -519,10 +519,15 @@ describe("rascunho automático das críticas", () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");
     const src = readFileSync(resolve(__dirname, "jobs/emailInboundSync.ts"), "utf8");
-    const block = src.split('if (alias === "criticas")')[1].split('return { targetModule: "review"')[0];
-    expect(block).toContain("autoDraftEmailReview(id, sourceEmailDate");
+    // 15 out 2026: o ramo "criticas" passou para `reviewFromEmail` (o mesmo para o pipeline e para o "Importar
+    // para as Críticas"); o rascunho fica em `reviewEmailFollowUps`, sempre com a data do EMAIL.
+    expect(src.split('if (alias === "criticas")')[1].split("\n  }")[0]).toContain("return reviewFromEmail(");
+    const block = src.split("export async function reviewFromEmail(")[1].split("export async function reviewEmailFollowUps(")[0];
     expect(block).toContain("sourceEmailDate = sqlUtcOrNull(ctx.receivedAt)");
-    expect(block).not.toContain("autoDraftReview(id");
+    expect(block).toContain("reviewEmailFollowUps({ id: Number(id), manualBy, messageId: ctx.messageId, duplicateOf, sourceEmailDate })");
+    const follow = src.split("export async function reviewEmailFollowUps(")[1].split("\n}\n")[0];
+    expect(follow).toContain("autoDraftEmailReview(f.id, f.sourceEmailDate");
+    expect(src).not.toContain("autoDraftReview(id");
     const { sqlUtcOrNull } = await import("../shared/reviewRules");
     expect(sqlUtcOrNull("2026-09-25T10:00:00+01:00")).toBe("2026-09-25 09:00:00");
     expect(sqlUtcOrNull("2026-09-25 10:00:00")).toBe("2026-09-25 10:00:00");

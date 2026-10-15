@@ -395,6 +395,7 @@ describe("um perdido aberto pela IA não fica em silêncio", () => {
   it("o aviso de email novo só se cala para a reclamação (que tem o seu); o perdido avisa quem vê a caixa Perdidos", () => {
     const svc = src("server/mail/service.ts");
     expect(svc).toContain('if ((r.status === "created" || r.status === "linked") && "complaintId" in r) aiComplaint = true;');
-    expect(svc).toContain("if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified)");
+    // 15 out 2026: + o email da criticas@ que ficou só na caixa (importação desligada) — como quando criava a crítica.
+    expect(svc).toContain("if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified && !stayedAsReviewMail)");
   });
 });

@@ -13,7 +13,8 @@ import { complaints, googleReviews } from "../drizzle/schema";
 import { getDb } from "./db";
 import { COMPLAINT_TYPE_LABEL_PT, reviewSentiment, type ComplaintType } from "../shared/commsAi";
 import { isStopAiError } from "./complaintTriage";
-import { REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, reviewAutoDraftEligible } from "../shared/reviewRules";
+import { REVIEW_AUTO_DRAFT_MAX_AGE_DAYS, isEmailOnlyReview, reviewAutoDraftEligible } from "../shared/reviewRules";
+import { reviewInCriticas } from "./reviewVisibility";
 
 const nowStr = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
@@ -49,6 +50,8 @@ export async function autoDraftReview(reviewId: number, opts: { timeoutMs?: numb
   if (!r) return { ok: false, error: "not_found" };
   // Plano MPV F6b: marcada como não-crítica ou repetida → sem rascunho automático.
   if (Number(r.notAReview ?? 0) === 1 || r.duplicateOf != null) return { ok: false, error: "marked" };
+  // 15 out 2026: a que ficou só na caixa de correio (entrou sozinha por email) não está nas Críticas → sem IA.
+  if (isEmailOnlyReview(r)) return { ok: false, error: "email_only" };
   const sentiment = reviewSentiment(r.rating, r.reviewText);
   try {
     const { draftReviewReply } = await import("./_core/ai/reviewReply");
@@ -130,6 +133,8 @@ export async function draftPendingReviewReplies(opts: { limit?: number; deadline
       // Plano MPV F6b: as que não são críticas e as repetidas nunca têm rascunho automático.
       eq(googleReviews.notAReview, 0),
       isNull(googleReviews.duplicateOf),
+      // 15 out 2026: nem as que entraram sozinhas por email (estão fora das Críticas).
+      reviewInCriticas(),
       sql`${googleReviews.status} IN ('pending_response', 'converted_complaint')`,
       // = COALESCE(reviewDate, sourceEmailDate, createdAt) >= corte, sem a
       // função à volta das colunas (forma pronta para índices; hoje não há
