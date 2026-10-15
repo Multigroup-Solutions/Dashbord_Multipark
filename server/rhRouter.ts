@@ -1500,7 +1500,9 @@ export const rhRouter = router({
             console.warn("[pda] ponto→PDA automático (check-in) falhou:", err);
           }
         }
-        return { success: true, warning: [fichaWarning, missingAgentWarning].filter(Boolean).join(" ") || null, outsideGeofence: !!geoNoteIn, pdaAttached, terminalSession };
+        // `fichaWarning` à parte: o ponto rápido do topo só mostra este (o do agente
+        // por ligar aparecia todos os dias a quem não tem agente; fica na ficha → Ponto).
+        return { success: true, warning: [fichaWarning, missingAgentWarning].filter(Boolean).join(" ") || null, fichaWarning, outsideGeofence: !!geoNoteIn, pdaAttached, terminalSession };
       }),
 
     checkOut: protectedProcedure

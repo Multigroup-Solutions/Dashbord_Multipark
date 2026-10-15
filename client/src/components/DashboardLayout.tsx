@@ -515,8 +515,8 @@ function DashboardLayoutContent({
   const quickCheckIn = trpc.rh.timeRecords.checkIn.useMutation({
     onSuccess: (d) => {
       toast.success("Entrada registada!");
-      // ex.: a conta está em duas fichas (as horas ficavam divididas) ou falta o agente
-      if (d?.warning) toast.warning(d.warning, { duration: 12000 });
+      // a conta está em duas fichas ativas (as horas podem ficar divididas) — avisa logo
+      if (d?.fichaWarning) toast.warning(d.fichaWarning, { duration: 12000 });
       // "Estou no terminal" marcado: a entrada fica feita mesmo com o terminal ocupado
       if (d?.terminalSession) terminal.handleOpenResult(d.terminalSession as any);
       pontoDone();

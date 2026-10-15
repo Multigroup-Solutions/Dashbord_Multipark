@@ -240,7 +240,11 @@ describe("ligações no código (para não voltar atrás)", () => {
   it("a entrada do ponto avisa quando a conta está em mais do que uma ficha ativa", () => {
     const src = read("server/rhRouter.ts");
     expect(src).toMatch(/pontoFichaSplitWarning\(input\.employeeId, await activeFichaIdsOfAccount\(/);
-    expect(src).toMatch(/warning: \[fichaWarning, missingAgentWarning\]\.filter\(Boolean\)\.join\(" "\) \|\| null/);
+    expect(src).toMatch(/warning: \[fichaWarning, missingAgentWarning\]\.filter\(Boolean\)\.join\(" "\) \|\| null, fichaWarning,/);
+    // o ponto rápido do topo mostra só o aviso das fichas (não o do agente por ligar, todos os dias)
+    const layout = read("client/src/components/DashboardLayout.tsx");
+    expect(layout).toContain("if (d?.fichaWarning) toast.warning(d.fichaWarning, { duration: 12000 });");
+    expect(layout).not.toContain("if (d?.warning) toast.warning(d.warning");
   });
   it("ficha → Ponto: as picagens (fotos, GPS) só para quem vê a lista do ponto; o team leader continua a ver; mês validado", () => {
     const src = read("server/rhRouter.ts");
