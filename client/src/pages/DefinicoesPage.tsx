@@ -606,7 +606,7 @@ function ParametersCard() {
           <CardHeader className="pb-2"><CardTitle className="text-base">{GROUP_LABEL[group] ?? group}</CardTitle></CardHeader>
           <CardContent className="space-y-5">
             {items.map((s) => s.key === NO_SHOW_SKIP_SETTING_KEY ? <NoShowSkipSummary key={s.key} item={s} /> : (
-              <SettingEditor key={s.key} item={s} saving={save.isPending}
+              <SettingEditor key={s.key} item={s} saving={save.isPending} isSuperAdmin={isSuperAdmin}
                 locked={!canEdit || (!!s.superAdminOnly && !isSuperAdmin)}
                 codeValue={s.key === "finance.vat" ? code.data?.vatRate : s.key === "finance.tsu" ? code.data?.tsuEmployerRate : undefined}
                 onSave={(value) => save.mutate({ key: s.key, value, expectedUpdatedAt: s.updatedAt ?? null })} />
@@ -680,7 +680,7 @@ const PRESENCE_PHONE_FIELDS: { id: "lisbon" | "porto" | "faro" | "copy"; label: 
   { id: "copy", label: "Cópia (todas as cidades)" },
 ];
 
-function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: SettingItem; saving: boolean; onSave: (v: unknown) => void; codeValue?: number; locked?: boolean }) {
+function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }: { item: SettingItem; saving: boolean; onSave: (v: unknown) => void; codeValue?: number; locked?: boolean; isSuperAdmin?: boolean }) {
   const current = item.isSet ? item.value : item.defaultValue;
   const isPhones = item.key === "ops.presencePhones";
   // Aeroportos do terminal no ponto: lat/lng/raio por cidade (o editor por cidade genérico só tem um campo).
@@ -724,6 +724,9 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
   type ZoneDraft = { label: string; lat: string; lng: string; radiusM: string };
   const [airports, setAirports] = useState<Record<string, { lat: string; lng: string; radiusM: string; zones: ZoneDraft[] }>>({});
   const parkPoints = trpc.terminal.parkPoints.useQuery(undefined, { enabled: isAirports, staleTime: 5 * 60_000, retry: false });
+  // Plano 62 (P3b): "Sugerir T1/T2" pelas posições das assinaturas (só o super admin; só leitura, nada se grava)
+  const terminalSuggest = trpc.settings.values.terminalZonesSuggest.useQuery(undefined, { enabled: false, retry: false, staleTime: 5 * 60_000 });
+  const terminalSuggestions = terminalSuggest.data?.available ? terminalSuggest.data.cities : null;
   const [bool, setBool] = useState(false);
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
@@ -832,6 +835,13 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
     ? parksInsideZones(Object.fromEntries(Object.entries(airportsValue()).filter(([, f]) => Number.isFinite(f.lat) && Number.isFinite(f.lng) && Number.isFinite(f.radiusM))
       .map(([k, f]) => [k, { ...f, zones: (f.zones ?? []).filter((z) => Number.isFinite(z.lat) && Number.isFinite(z.lng) && Number.isFinite(z.radiusM)) }])), parkPoints.data)
     : [];
+  const applyTerminalSuggestion = (city: string, z: { label: string; lat: number; lng: number; radiusM: number }) => setAirports((p) => {
+    const cur = p[city] ?? { lat: "", lng: "", radiusM: "", zones: [] };
+    const draft: ZoneDraft = { label: z.label, lat: String(z.lat).replace(".", ","), lng: String(z.lng).replace(".", ","), radiusM: String(z.radiusM) };
+    const i = cur.zones.findIndex((x) => x.label.trim().toUpperCase() === z.label);
+    const zones = i >= 0 ? cur.zones.map((x, j) => (j === i ? draft : x)) : [...cur.zones, draft].slice(0, 6);
+    return { ...p, [city]: { ...cur, zones } };
+  });
   const setZone = (city: string, i: number, patch: Partial<ZoneDraft>) => setAirports((p) => ({
     ...p, [city]: { ...(p[city] ?? { lat: "", lng: "", radiusM: "", zones: [] }), zones: (p[city]?.zones ?? []).map((z, j) => (j === i ? { ...z, ...patch } : z)) },
   }));
@@ -950,6 +960,39 @@ function SettingEditor({ item, saving, onSave, codeValue, locked }: { item: Sett
               </div>
             </div>
           ))}
+          {isSuperAdmin && (
+            <div className="sm:col-span-3 rounded-md border p-2 space-y-1.5 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" className="h-7 text-xs" disabled={locked || terminalSuggest.isFetching} onClick={() => terminalSuggest.refetch()}>
+                  {terminalSuggest.isFetching ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}Sugerir T1/T2 pelas assinaturas
+                </Button>
+                <span className="text-muted-foreground">Mediana das posições onde se assinaram as entregas e as recolhas nas últimas 4 semanas (só leitura da Multipark). "Usar" preenche a zona; só fica quando carregas em Guardar. Com zonas, o ponto também passa a contar só as zonas.</span>
+              </div>
+              {terminalSuggest.data && !terminalSuggest.data.available && (
+                <p className="text-amber-800 dark:text-amber-300"><AlertTriangle className="inline h-3 w-3 mr-1" />Não deu para ler a Multipark ({terminalSuggest.data.reason}).</p>
+              )}
+              {terminalSuggest.error && <p className="text-destructive">{terminalSuggest.error.message}</p>}
+              {terminalSuggestions && (
+                <ul className="space-y-1">
+                  {CITY_FIELDS.map((c) => {
+                    const list = terminalSuggestions[c.id as keyof typeof terminalSuggestions] ?? [];
+                    return (
+                      <li key={c.id}>
+                        <span className="font-medium">{AIRPORT_LABELS[c.id as AirportCityId] ?? c.label}:</span>{" "}
+                        {list.length === 0 ? <span className="text-muted-foreground">assinaturas a menos para propor (precisa de 20 por terminal).</span> : list.map((z) => (
+                          <span key={z.label} className="mr-3 inline-flex flex-wrap items-center gap-1">
+                            <b>{z.label}</b> · {z.n} assinaturas · metade a ≤ {z.p50M} m, 90 % a ≤ {z.p90M} m ({Math.round(z.near * 100)} % a ≤ 300 m) ·
+                            <a className="text-primary hover:underline" href={`https://www.google.com/maps?q=${z.lat},${z.lng}&z=17`} target="_blank" rel="noopener noreferrer">ver no mapa</a>
+                            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-primary" disabled={locked} onClick={() => applyTerminalSuggestion(c.id, z)}>Usar ({z.radiusM} m)</Button>
+                          </span>
+                        ))}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
           {(() => {
             // Plano 62 (P5): rótulo T1/T2 (os tempos de entrega usam-no) e zona do terminal a tocar no P2 — só avisos
             const unlabeled = unlabeledTerminalZones(airportsValue());

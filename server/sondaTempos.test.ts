@@ -10,7 +10,7 @@ import {
 } from "./sondaTemposCompute";
 import { gpsNeeds, loadProbeGps, probeDayError, probeErrText, runTimesProbe, type ProbeDeps, type ProbeGpsSource } from "./sondaTempos";
 import {
-  LOG_LINE_MAX_BYTES, SondaAcc, T2_LATE_AFTER_MIN, buildSondaReport, emptySondaResult, histAdd, histPercentile, histShareAtLeast, mergeSondaResults, newHist,
+  LOG_LINE_MAX_BYTES, SondaAcc, T2_LATE_AFTER_MIN, buildSondaReport, emptySondaResult, histAdd, histPercentile, histShareAtLeast, histTotal, mergeSondaResults, newHist,
   sondaLogLines, sondaReportText, type SondaResult,
 } from "../shared/sondaTempos";
 import { operationalDayRangeUtc } from "../shared/lisbonDay";
@@ -277,6 +277,23 @@ describe("coordenadas das garagens (Q6)", () => {
     expect(sec.item).toBe(16);
     expect(sec.table?.rows[0].slice(0, 5)).toEqual(["P2", "—", "colunas lat/lng da Garage", "38.76120, -9.11850", "sim"]);
     expect(report[0].rows.find((x) => x.label.startsWith("Garagens com coordenadas válidas"))?.value).toBe("1 de 2");
+  });
+  it("(a) centro pelas marcas \"estacionado aqui\": o GPS no \"em entrega\" mede-se contra a garagem mais perto (o que os tempos usam), não só contra o Park", () => {
+    // 5 fins de movimento na PD (sem coordenadas na Multipark), à volta de PARK, de manhã
+    const marks = [[0, 0], [0.0001, 0], [-0.0001, 0], [0, 0.0001], [0, -0.0001]].map(([dy, dx], i) =>
+      ev({ bookingId: DEL, type: "MOVEMENT", atMs: at(`06:0${i}`), uid: "agent-uid-DRV1", agentName: "João Condutor", lat: PARK.lat + dy, lng: PARK.lng + dx, moveKind: "lugar", garageFrom: "pd", garageTo: "pd" }));
+    const r = computeProbeCity(cityInput({ events: [...dayEvents(), ...marks] }));
+    expect(r.l["garagens.centro_marcas"]).toEqual({ PD: 1 });
+    expect(histTotal(r.h["distancia.marca_garagem"])).toBe(5);
+    expect(histPercentile(r.h["distancia.marca_garagem"], 0.9)!.value).toBeLessThan(25);
+    expect(r.n["garagens.marca_sem_centro"]).toBe(1); // o fim no P2 (uma marca só: sem centro)
+    expect(histPercentile(r.h["distancia.gps_s_garagem"], 0.5)!.value).toBeLessThan(25);
+    const report = buildSondaReport(r);
+    const ent = report.find((x) => x.id === "entregas")!;
+    expect(ent.rows.find((x) => x.label.startsWith("GPS em S → garagem mais perto"))?.value).toMatch(/p50/);
+    const g = report.find((x) => x.id === "garagens_coord")!;
+    expect(g.rows.find((x) => x.label.startsWith("Centro pelas marcas"))?.value).toContain("PD");
+    noSecrets(JSON.stringify(r) + sondaReportText(r, report, { cities: "Lisboa", ranAt: "x" }) + sondaLogLines(r).join("\n"));
   });
 });
 

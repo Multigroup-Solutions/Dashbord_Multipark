@@ -9,8 +9,9 @@
  *    nada se grava (quem vê carrega em Guardar). Por esta ordem:
  *   a) o link do mapa da garagem (`Garage.mapLink`), quando tem coordenadas;
  *   b) a MEDIANA das posições da app nas linhas MOVEMENT que acabam nessa
- *      garagem nas últimas 4 semanas (só a mediana e a contagem, nunca as linhas);
- *   c) o parque (`Park.lat/lng`).
+ *      garagem nas últimas 4 semanas (só a mediana e a contagem, nunca as linhas).
+ *   O centro do parque (`Park.lat/lng`) já NÃO se propõe: a P0 mostrou que fica
+ *   junto ao aeroporto, não na garagem (uma zona lá era uma garagem no terminal).
  * A cidade das medianas sai da latitude (Porto ~41°, Lisboa ~38,7°, Faro
  * ~37°): assim uma garagem com o mesmo nome em duas cidades não se mistura,
  * sem juntar a "History" a outras tabelas.
@@ -75,7 +76,7 @@ export interface ZoneSuggestion {
   kind: ParkZoneKind;
   lat: number;
   lng: number;
-  source: "mapa" | "app" | "parque";
+  source: "mapa" | "app";
   /** Linhas da app na mediana (fonte "app"). */
   n: number | null;
   parkName: string | null;
@@ -116,9 +117,9 @@ export async function readGarageCoords(query: Query): Promise<GarageCoord[]> {
 
 
 /**
- * Junta as três fontes: uma sugestão por (cidade, garagem), pela ordem
- * mapa → app → parque. Garagens de parques sem cidade reconhecida ficam de
- * fora. PURA.
+ * Junta as fontes: uma sugestão por (cidade, garagem), pela ordem mapa → app
+ * (sem nenhuma das duas, não se propõe nada: nunca o Park.lat/lng). Garagens
+ * de parques sem cidade reconhecida ficam de fora. PURA.
  */
 export function suggestZoneCenters(input: {
   garages: Array<Record<string, unknown>>;
@@ -155,7 +156,6 @@ export function suggestZoneCenters(input: {
     const fromApp = medians.get(`${park.city}|${matchKey(name)}`);
     if (fromMap) push(park.city, { garage: name, kind, lat: fromMap.lat, lng: fromMap.lng, source: "mapa", n: null, parkName: park.name });
     else if (fromApp) push(park.city, { garage: name, kind, lat: fromApp.lat, lng: fromApp.lng, source: "app", n: fromApp.n, parkName: park.name });
-    else if (park.lat != null && park.lng != null) push(park.city, { garage: name, kind, lat: park.lat, lng: park.lng, source: "parque", n: null, parkName: park.name });
   }
   // garagens que só aparecem nos movimentos (ex.: um "P2" sem linha em "Garage")
   for (const [k, m] of medians) {

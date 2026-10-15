@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_GARAGE_ZONE_RADIUS_M, G_GOOD_S, G_WEAK_S, R_SIGNATURE_M, V_WALK_KMH, effectiveParkZones, kindOfGarageName,
+  DEFAULT_GARAGE_ZONE_RADIUS_M, D_EXIT_MARGIN_M, G_GOOD_S, G_WEAK_S, GARAGE_MARK_MIN_N, PARK_EXIT_RADIUS_M, R_SIGNATURE_M, T_CONFIRM_S, T_STOP_MIN_S, V_CAR_KMH, V_STOP_KMH, V_WALK_KMH,
+  effectiveParkZones, garageMarkCenters, kindOfGarageName, nearestPark, parkExitZone, parkRefsFor, parkZoneCityOf,
   arrivalZoneFor, detectExit, detectStop, insideZone, lastZoneArrival, mapLinkCoords, mapLinkKind, median, p2TerminalConflicts, p2ZoneOf,
   parkZoneOverlaps, positionAt, startCoherence, terminalLabelOf, terminalZoneFor, unlabeledTerminalZones,
-  type GpsFix, type ParkZonesMap, type Zone,
+  type GpsFix, type ParkZone, type ParkZonesMap, type Zone,
 } from "../shared/serviceGps";
 import type { AirportFence } from "../shared/pontoTerminal";
 
@@ -34,9 +35,112 @@ function trip(startMs: number, arriveMs: number, endMs: number, stepS: number): 
 }
 const S = T("16:10"), E = T("16:40");
 
+describe("parâmetros fechados pela P0 (29 set–12 out 2026, PR dos parâmetros)", () => {
+  it("paragem, intervalo e saída: os valores medidos", () => {
+    // item 3: a melhor combinação é ≤ 7 km/h durante 60 s; o raio à volta da assinatura é indiferente (fica 150 m)
+    expect([V_STOP_KMH, V_WALK_KMH, T_STOP_MIN_S, T_CONFIRM_S, R_SIGNATURE_M]).toEqual([3, 7, 60, 360, 150]);
+    // item 1: p90 do intervalo dentro das entregas 26 s (≤ 6 min) → G_GOOD/G_WEAK como propostos
+    expect([G_GOOD_S, G_WEAK_S]).toEqual([360, 900]);
+    // item 11: 5/10/15 km/h e 150/300 m dão o mesmo
+    expect([V_CAR_KMH, D_EXIT_MARGIN_M]).toEqual([10, 300]);
+  });
+
+  it("com pontos a cada 7 s (o p50 medido) a chegada fica ao segundo e sem precisão fraca", () => {
+    const pts = trip(S, T("16:25"), E, 7);
+    const r = detectStop({ points: pts, startAt: S, endAt: E, zone: T2, parks: [PARK] });
+    expect(r.kind).toBe("chegada");
+    if (r.kind !== "chegada") return;
+    expect(Math.abs(r.at - T("16:25"))).toBeLessThanOrEqual(7_000);
+    expect(r.precisionS).toBeLessThanOrEqual(4);
+    expect(r.flags).not.toContain("precisao_fraca");
+  });
+});
+
+describe("o \"parque\" são as garagens, não o Park.lat/lng (P0: o Park fica junto ao aeroporto)", () => {
+  // Lisboa como a P0 a viu: o Park da Multipark a 150 m do ponto de encontro do T2; a garagem (PD) a 3,6 km
+  const PARK_MP = at(T2, 150);
+  const PD = PARK;
+  const go = [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 2000, 50), fix(S + 10 * MIN, 400, 40), fix(S + 11 * MIN, 30, 0), fix(S + 12 * MIN, 30, 0)];
+
+  it("o carro sai da garagem (PD) e pára no T2: chegada — um ponto da lista dentro da zona (como o Park antigo) já não a torna ambígua", () => {
+    // antes: park = Park.lat/lng (a 150 m do T2) → "o parque está na zona" → `destino_ambiguo` em todas as entregas
+    expect(detectStop({ points: go, startAt: S, endAt: E, zone: T2, parks: [PD], startRow: PD })).toMatchObject({ kind: "chegada" });
+    // agora só conta a garagem de onde o carro SAIU (a mais perto da posição em S): a PD, longe do T2
+    expect(detectStop({ points: go, startAt: S, endAt: E, zone: T2, parks: [PD, PARK_MP], startRow: PD })).toMatchObject({ kind: "chegada" });
+  });
+
+  it("só a garagem de ORIGEM dentro da zona dá `destino_ambiguo` (outra garagem da cidade ao pé do terminal não)", () => {
+    const nearTerminal = at(T2, 60);
+    expect(detectStop({ points: go, startAt: S, endAt: E, zone: T2, parks: [PD, nearTerminal], startRow: PD })).toMatchObject({ kind: "chegada" });
+    // o carro estava na garagem ao pé do terminal (posição em S lá dentro) → não se sabe se saiu ou chegou
+    const fromThere = [fix(S - MIN, 60, 0), fix(S + 5 * MIN, 60, 0), fix(S + 6 * MIN, 30, 0)];
+    expect(detectStop({ points: fromThere, startAt: S, endAt: E, zone: T2, parks: [PD, nearTerminal] })).toMatchObject({ kind: "sem_chegada", status: "destino_ambiguo" });
+    // sem posição em S (nem ponto nem linha): qualquer garagem dentro da zona é ambígua (como antes)
+    const noPos = [fix(S + 5 * MIN, 2000, 50), fix(S + 10 * MIN, 30, 0), fix(S + 11 * MIN, 30, 0)];
+    expect(detectStop({ points: noPos, startAt: S, endAt: E, zone: T2, parks: [PD, nearTerminal] })).toMatchObject({ kind: "sem_chegada", status: "destino_ambiguo" });
+  });
+
+  it("coerência pela garagem mais perto; \"em entrega\" no terminal sem GPS: a ≥ 1 km de TODAS as garagens", () => {
+    expect(startCoherence(at(PD, 0, 300), [PARK_MP, PD], null)).toBe("ok");
+    expect(startCoherence(at(PD, 0, 800), [PARK_MP, PD], null)).toBe("duvidosa");
+    expect(startCoherence(at(PD, 0, 2500), [PARK_MP, PD], null)).toBe("gps_nao_bate");
+    expect(startCoherence(at(PD, 0, 2500), [], null)).toBe("ok");
+    const after = [fix(S + 5 * MIN, 30, 0), fix(S + 6 * MIN, 30, 0)];
+    expect(detectStop({ points: after, startAt: S, endAt: E, zone: T2, parks: [PD], startRow: at(T2, 10) }).kind).toBe("inicio_no_terminal");
+    expect(detectStop({ points: after, startAt: S, endAt: E, zone: T2, parks: [PD, at(T2, 700)], startRow: at(T2, 10) }).kind).not.toBe("inicio_no_terminal");
+    expect(nearestPark(at(PD, 0, 300), [PARK_MP, PD])).toMatchObject({ park: PD });
+    expect(nearestPark(at(PD, 0, 300), [PD], 200)).toBeNull();
+    expect(nearestPark(null, [PD])).toBeNull();
+  });
+
+  it("saída do parque: à volta da garagem de onde o carro saiu (a mais perto da posição antes de sair); longe de todas → null", () => {
+    const central = at(PD, 0, 900);
+    const pts = [fix(S - 20 * MIN, 0, 0, true, central), fix(S - 15 * MIN, 0, 0, true, central), fix(S - 13 * MIN, 900, 40, true, central)];
+    expect(parkExitZone(pts, S - 20 * MIN, S, [PD, central, PARK_MP])).toEqual({ label: "parque", lat: central.lat, lng: central.lng, radiusM: PARK_EXIT_RADIUS_M });
+    // sem ponto até G_GOOD antes: o 1.º ponto da janela
+    expect(parkExitZone(pts.slice(1), S - 20 * MIN, S, [PD, central])).toMatchObject({ lat: central.lat });
+    expect(parkExitZone(pts, S - 20 * MIN, S, [PD])).toBeNull();
+    expect(parkExitZone([], S - 20 * MIN, S, [PD])).toBeNull();
+  });
+});
+
+describe("centro das garagens pelas marcas \"estacionado aqui\" (fim dos movimentos)", () => {
+  const PD = at(T1, 3500);
+  const marksAt = (garage: string, c: { lat: number; lng: number }, offsets: Array<[number, number]>) => offsets.map(([dx, dy]) => ({ garage, ...at(c, dx, dy) }));
+  const tight: Array<[number, number]> = [[0, 0], [20, 0], [-20, 0], [0, 20], [0, -20], [10, 10]];
+
+  it("mediana das marcas; a grafia mais usada; só com ≥ 5 marcas e ≥ 60 % a ≤ 300 m", () => {
+    const r = garageMarkCenters([...marksAt("PD", PD, tight), { garage: " pd ", ...PD }, ...marksAt("Central", at(PD, 0, 900), tight.slice(0, GARAGE_MARK_MIN_N - 1))]);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ city: "lisbon", garage: "PD", n: 7, near: 1 });
+    expect(Math.abs(r[0].lat - PD.lat)).toBeLessThan(1e-4);
+    expect(Math.abs(r[0].lng - PD.lng)).toBeLessThan(1e-4);
+    // marcas espalhadas (feitas longe da garagem, ex.: no escritório): sem centro
+    const spread = marksAt("COBERTO", PD, [[0, 0], [10, 0], [2000, 0], [-2500, 0], [0, 3000], [0, -1800]]);
+    expect(garageMarkCenters(spread)).toEqual([]);
+    // sem posição, posição 0,0 ou sem garagem: não contam
+    expect(garageMarkCenters([{ garage: "PD", lat: null, lng: null }, { garage: "PD", lat: 0, lng: 0 }, { garage: null, ...PD }])).toEqual([]);
+  });
+
+  it("a mesma garagem em duas cidades fica separada (pela latitude); fora de Portugal não conta", () => {
+    const porto = { lat: 41.25, lng: -8.68 }, faro = { lat: 37.02, lng: -7.97 };
+    const r = garageMarkCenters([...marksAt("PD", PD, tight), ...marksAt("PD", porto, tight), ...marksAt("PD", faro, tight), ...marksAt("PD", { lat: 48.85, lng: 2.35 }, tight)]);
+    expect(r.map((x) => x.city)).toEqual(["faro", "lisbon", "porto"]);
+    expect([parkZoneCityOf(41.25, -8.68), parkZoneCityOf(38.77, -9.13), parkZoneCityOf(37.02, -7.97), parkZoneCityOf(48.85, 2.35)]).toEqual(["porto", "lisbon", "faro", null]);
+  });
+
+  it("as garagens da cidade: as zonas da operação primeiro; as marcas só para as garagens sem zona", () => {
+    const zone: ParkZone = { label: "Zona central", kind: "central", lat: 38.75, lng: -9.11, radiusM: 200, garages: ["CENTRAL", "CENTRAL COBERTO"] };
+    const marks = garageMarkCenters([...marksAt("PD", PD, tight), ...marksAt("Central", at(PD, 0, 900), tight)]);
+    expect(parkRefsFor([zone], marks)).toEqual([{ lat: 38.75, lng: -9.11 }, { lat: marks.find((m) => m.garage === "PD")!.lat, lng: marks.find((m) => m.garage === "PD")!.lng }]);
+    expect(parkRefsFor([], [])).toEqual([]);
+    expect(parkRefsFor(null, marks)).toHaveLength(2);
+  });
+});
+
 describe("detectStop — paragem no destino (§4.4)", () => {
   it("pontos de 30 s: chegada perto do instante real, precisão de segundos", () => {
-    const r = detectStop({ points: trip(S, T("16:22"), E, 30), startAt: S, endAt: E, zone: T2, park: PARK });
+    const r = detectStop({ points: trip(S, T("16:22"), E, 30), startAt: S, endAt: E, zone: T2, parks: [PARK] });
     expect(r.kind).toBe("chegada");
     if (r.kind !== "chegada") return;
     expect(Math.abs(r.at - T("16:22"))).toBeLessThanOrEqual(30_000);
@@ -45,26 +149,26 @@ describe("detectStop — paragem no destino (§4.4)", () => {
 
   it("pontos de 3 e 6 min: meio do intervalo, precisão ±g/2; 10 min → `precisao_fraca`; 16 min → `buraco_no_gps`", () => {
     for (const step of [180, 360]) {
-      const r = detectStop({ points: trip(S, T("16:22"), E, step), startAt: S, endAt: E, zone: T2, park: PARK });
+      const r = detectStop({ points: trip(S, T("16:22"), E, step), startAt: S, endAt: E, zone: T2, parks: [PARK] });
       expect(r.kind, String(step)).toBe("chegada");
       if (r.kind === "chegada") {
         expect(Math.abs(r.at - T("16:22"))).toBeLessThanOrEqual((step / 2) * 1000 + 1000);
         expect(r.flags).not.toContain("precisao_fraca");
       }
     }
-    const ten = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 10 * MIN, 3000, 50), fix(S + 20 * MIN, 10, 0), fix(S + 25 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, park: PARK });
+    const ten = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 10 * MIN, 3000, 50), fix(S + 20 * MIN, 10, 0), fix(S + 25 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, parks: [PARK] });
     expect(ten).toMatchObject({ kind: "chegada", at: S + 15 * MIN });
     if (ten.kind === "chegada") expect(ten.flags).toContain("precisao_fraca");
-    const hole = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + MIN, 3500, 50), fix(S + MIN + 16 * MIN, 10, 0), fix(S + 25 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, park: PARK });
+    const hole = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + MIN, 3500, 50), fix(S + MIN + 16 * MIN, 10, 0), fix(S + 25 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, parks: [PARK] });
     expect(hole).toMatchObject({ kind: "sem_chegada", status: "buraco_no_gps" });
     // dois pontos parados na zona com 10 min entre eles e a assinatura 25 min depois do último → chegou (precisão fraca), não "sem paragem"
-    const tenStay = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1800, 50), fix(S + 10 * MIN, 10, 0), fix(S + 20 * MIN, 10, 0)], startAt: S, endAt: S + 45 * MIN, zone: T2, park: PARK });
+    const tenStay = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1800, 50), fix(S + 10 * MIN, 10, 0), fix(S + 20 * MIN, 10, 0)], startAt: S, endAt: S + 45 * MIN, zone: T2, parks: [PARK] });
     expect(tenStay).toMatchObject({ kind: "chegada", at: S + 7.5 * MIN });
     // um só ponto devagar na zona e o seguinte, 10 min depois, fora a andar → passou (não chegou)
-    const pass = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1800, 50), fix(S + 10 * MIN, 10, 5), fix(S + 20 * MIN, 2500, 50), fix(S + 30 * MIN, 5000, 50)], startAt: S, endAt: S + 45 * MIN, zone: T2, park: PARK });
+    const pass = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1800, 50), fix(S + 10 * MIN, 10, 5), fix(S + 20 * MIN, 2500, 50), fix(S + 30 * MIN, 5000, 50)], startAt: S, endAt: S + 45 * MIN, zone: T2, parks: [PARK] });
     expect(pass).toMatchObject({ kind: "sem_chegada", status: "sem_paragem" });
     // espaçados (8 min) e já parados na zona: a chegada conta desde o 1.º ponto parado (não do último)
-    const sparse = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 4 * MIN, 2000, 50), fix(S + 12 * MIN, 10, 0), fix(S + 20 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, park: PARK });
+    const sparse = detectStop({ points: [fix(S - MIN, 3600, 0), fix(S + 4 * MIN, 2000, 50), fix(S + 12 * MIN, 10, 0), fix(S + 20 * MIN, 10, 0)], startAt: S, endAt: E, zone: T2, parks: [PARK] });
     expect(sparse).toMatchObject({ kind: "chegada", at: S + 8 * MIN, precisionS: 240 });
     expect(G_GOOD_S).toBe(360);
     expect(G_WEAK_S).toBe(900);
@@ -72,7 +176,7 @@ describe("detectStop — paragem no destino (§4.4)", () => {
 
   it("a pé a sair da zona: dentro devagar e o ponto seguinte fora, a pé → chegou", () => {
     const pts = [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1500, 50), fix(S + 10 * MIN, 400, 40), fix(S + 11 * MIN, 150, 5), fix(S + 12 * MIN, 260, 4)];
-    const r = detectStop({ points: pts, startAt: S, endAt: E, zone: T2, park: PARK });
+    const r = detectStop({ points: pts, startAt: S, endAt: E, zone: T2, parks: [PARK] });
     expect(r).toMatchObject({ kind: "chegada", at: S + 10.5 * MIN });
     if (r.kind === "chegada") expect(r.flags).toContain("chegada_a_pe");
   });
@@ -80,74 +184,74 @@ describe("detectStop — paragem no destino (§4.4)", () => {
   it("passa pela zona a andar (ou pelo T1 a caminho do T2) não conta; fila de trânsito dentro da zona conta", () => {
     // pelo T1 a caminho do T2: os pontos no T1 não estão na zona T2
     const viaT1 = [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 0, 3, true, T1), fix(S + 6 * MIN, 0, 2, true, T1), fix(S + 10 * MIN, 400, 30), fix(S + 11 * MIN, 30, 0), fix(S + 12 * MIN, 30, 0)];
-    expect(detectStop({ points: viaT1, startAt: S, endAt: E, zone: T2, park: PARK })).toMatchObject({ kind: "chegada", at: S + 10.5 * MIN });
+    expect(detectStop({ points: viaT1, startAt: S, endAt: E, zone: T2, parks: [PARK] })).toMatchObject({ kind: "chegada", at: S + 10.5 * MIN });
     // atravessa a zona T2 a andar e sai a andar → sem paragem
     const through = [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1500, 50), fix(S + 8 * MIN, 0, 30), fix(S + 9 * MIN, -900, 50), fix(S + 15 * MIN, -3000, 60)];
-    expect(detectStop({ points: through, startAt: S, endAt: E, zone: T2, park: PARK })).toMatchObject({ kind: "sem_chegada", status: "sem_paragem" });
+    expect(detectStop({ points: through, startAt: S, endAt: E, zone: T2, parks: [PARK] })).toMatchObject({ kind: "sem_chegada", status: "sem_paragem" });
     // fila de trânsito dentro da zona (devagar, ainda a mexer) → chegou (de propósito)
     const queue = [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1500, 50), fix(S + 9 * MIN, 190, 6), fix(S + 10 * MIN, 120, 5), fix(S + 11 * MIN, 60, 4)];
-    expect(detectStop({ points: queue, startAt: S, endAt: E, zone: T2, park: PARK }).kind).toBe("chegada");
+    expect(detectStop({ points: queue, startAt: S, endAt: E, zone: T2, parks: [PARK] }).kind).toBe("chegada");
   });
 
   it("o último ponto antes da assinatura (sem mais pontos, a ≤ 20 min dela) conta", () => {
     const pts = [fix(S - MIN, 3600, 0), fix(S + 6 * MIN, 1500, 50), fix(S + 12 * MIN, 30, 0)];
-    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: T2, park: PARK })).toMatchObject({ kind: "chegada", at: S + 9 * MIN });
+    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: T2, parks: [PARK] })).toMatchObject({ kind: "chegada", at: S + 9 * MIN });
     const far = [fix(S - MIN, 3600, 0), fix(T("15:00") + 20 * MIN, 1500, 50), fix(T("15:00") + 22 * MIN, 30, 0)];
-    expect(detectStop({ points: far, startAt: T("15:00"), endAt: E, zone: T2, park: PARK }).kind).toBe("sem_chegada");
+    expect(detectStop({ points: far, startAt: T("15:00"), endAt: E, zone: T2, parks: [PARK] }).kind).toBe("sem_chegada");
   });
 
   it("ponto impreciso à beira da zona não conta", () => {
     const pts = [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1500, 50), fix(S + 8 * MIN, 150, 0, false), fix(S + 9 * MIN, 150, 0, false), fix(S + 14 * MIN, 1200, 45), fix(S + 20 * MIN, 2500, 50)];
-    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: T2, park: PARK })).toMatchObject({ kind: "sem_chegada", status: "sem_paragem" });
+    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: T2, parks: [PARK] })).toMatchObject({ kind: "sem_chegada", status: "sem_paragem" });
   });
 
   it("parque perto do aeroporto: último ponto ≤ S no parque e o 1.º depois de S já na zona → chegada (A ≥ S), não início no terminal", () => {
     const nearPark = at(T2, 900);
     const pts = [{ ...fix(S - 2 * MIN, 0, 0), lat: nearPark.lat, lon: nearPark.lng }, fix(S + 4 * MIN, 50, 0), fix(S + 5 * MIN, 50, 0)];
-    const r = detectStop({ points: pts, startAt: S, endAt: E, zone: T2, park: nearPark });
+    const r = detectStop({ points: pts, startAt: S, endAt: E, zone: T2, parks: [nearPark] });
     expect(r.kind).toBe("chegada");
     if (r.kind === "chegada") expect(r.at).toBeGreaterThanOrEqual(S);
   });
 
   it("último ponto ≤ S já na zona → `inicio_no_terminal`; sem GPS antes de S, a linha \"em entrega\" no terminal (longe do parque)", () => {
     const pts = [fix(S - 2 * MIN, 30, 0), fix(S + 5 * MIN, 30, 0)];
-    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: T2, park: PARK }).kind).toBe("inicio_no_terminal");
+    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: T2, parks: [PARK] }).kind).toBe("inicio_no_terminal");
     const after = [fix(S + 5 * MIN, 30, 0), fix(S + 6 * MIN, 30, 0)];
-    expect(detectStop({ points: after, startAt: S, endAt: E, zone: T2, park: PARK, startRow: at(T2, 10) }).kind).toBe("inicio_no_terminal");
-    expect(detectStop({ points: after, startAt: S, endAt: E, zone: T2, park: at(T2, 400), startRow: at(T2, 10) }).kind).not.toBe("inicio_no_terminal");
+    expect(detectStop({ points: after, startAt: S, endAt: E, zone: T2, parks: [PARK], startRow: at(T2, 10) }).kind).toBe("inicio_no_terminal");
+    expect(detectStop({ points: after, startAt: S, endAt: E, zone: T2, parks: [at(T2, 400)], startRow: at(T2, 10) }).kind).not.toBe("inicio_no_terminal");
   });
 
   it("coerência: posição no início a > 1 km do parque e da linha → `gps_nao_bate`; nunca se afasta 500 m → `gps_parado`; sem pontos → `sem_pontos`", () => {
     const wrong = [fix(S - MIN, 9000, 0), fix(S + 5 * MIN, 9000, 0), fix(S + 10 * MIN, 9100, 30)];
-    expect(detectStop({ points: wrong, startAt: S, endAt: E, zone: T2, park: PARK, startRow: PARK })).toMatchObject({ kind: "sem_chegada", status: "gps_nao_bate" });
+    expect(detectStop({ points: wrong, startAt: S, endAt: E, zone: T2, parks: [PARK], startRow: PARK })).toMatchObject({ kind: "sem_chegada", status: "gps_nao_bate" });
     const stuck = [fix(S - MIN, 3600, 0), fix(S + 10 * MIN, 3650, 0), fix(S + 20 * MIN, 3600, 0)];
-    expect(detectStop({ points: stuck, startAt: S, endAt: E, zone: T2, park: at(T2, 3600) })).toMatchObject({ kind: "sem_chegada", status: "gps_parado" });
+    expect(detectStop({ points: stuck, startAt: S, endAt: E, zone: T2, parks: [at(T2, 3600)] })).toMatchObject({ kind: "sem_chegada", status: "gps_parado" });
     expect(detectStop({ points: [fix(S - 30 * MIN, 0, 0)], startAt: S, endAt: E, zone: T2 })).toMatchObject({ kind: "sem_chegada", status: "sem_pontos" });
-    expect(startCoherence(at(T2, 3600, 100), PARK, null)).toBe("ok");
-    expect(startCoherence(at(T2, 3600, 800), PARK, null)).toBe("duvidosa");
+    expect(startCoherence(at(T2, 3600, 100), [PARK], null)).toBe("ok");
+    expect(startCoherence(at(T2, 3600, 800), [PARK], null)).toBe("duvidosa");
   });
 
   it("coerência com pontos espaçados: o ponto mais perto de S é de 4 min depois, já a 3 km (o carro a andar) → não é `gps_nao_bate`; a 15 km logo a seguir a S → é", () => {
     // sem ponto até 6 min antes de S; o 1.º depois de S, 4 min depois, já a meio caminho
     const moving = [fix(S + 4 * MIN, 600, 50), fix(S + 7 * MIN, 150, 30), fix(S + 9 * MIN, 20, 0), fix(S + 12 * MIN, 20, 0)];
-    expect(detectStop({ points: moving, startAt: S, endAt: E, zone: T2, park: PARK, startRow: PARK })).toMatchObject({ kind: "chegada" });
+    expect(detectStop({ points: moving, startAt: S, endAt: E, zone: T2, parks: [PARK], startRow: PARK })).toMatchObject({ kind: "chegada" });
     const far = [fix(S + 30_000, 18_000, 0), fix(S + 5 * MIN, 18_000, 0), fix(S + 10 * MIN, 18_100, 30)];
-    expect(detectStop({ points: far, startAt: S, endAt: E, zone: T2, park: PARK, startRow: PARK })).toMatchObject({ kind: "sem_chegada", status: "gps_nao_bate" });
-    expect(startCoherence(at(T2, 3600, 1500), PARK, null, 240 * 15)).toBe("ok");
+    expect(detectStop({ points: far, startAt: S, endAt: E, zone: T2, parks: [PARK], startRow: PARK })).toMatchObject({ kind: "sem_chegada", status: "gps_nao_bate" });
+    expect(startCoherence(at(T2, 3600, 1500), [PARK], null, 240 * 15)).toBe("ok");
   });
 
   it("chegada já depois da assinatura (> 60 s) → `chegada_depois_da_assinatura`; até 60 s → a própria assinatura", () => {
     const late = [fix(S - MIN, 3600, 0), fix(S + 20 * MIN, 1500, 50), fix(E + 70_000, 400, 40), fix(E + 90_000, 30, 0), fix(E + 100_000, 30, 0)];
-    expect(detectStop({ points: late, startAt: S, endAt: E, zone: T2, park: PARK })).toMatchObject({ kind: "sem_chegada", status: "chegada_depois_da_assinatura" });
+    expect(detectStop({ points: late, startAt: S, endAt: E, zone: T2, parks: [PARK] })).toMatchObject({ kind: "sem_chegada", status: "chegada_depois_da_assinatura" });
     const just = [fix(S - MIN, 3600, 0), fix(E - 10_000, 1500, 50), fix(E + 40_000, 30, 0), fix(E + 50_000, 30, 0)];
-    const r = detectStop({ points: just, startAt: S, endAt: E, zone: T2, park: PARK });
+    const r = detectStop({ points: just, startAt: S, endAt: E, zone: T2, parks: [PARK] });
     expect(r).toMatchObject({ kind: "chegada", at: E });
     if (r.kind === "chegada") expect(r.flags).toContain("chegada_ajustada");
   });
 
   it("o parque dentro da zona de chegada → `destino_ambiguo`", () => {
     const pts = [fix(S - MIN, 3600, 0), fix(S + 5 * MIN, 1500, 50), fix(S + 10 * MIN, 30, 0), fix(S + 11 * MIN, 30, 0)];
-    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: { ...T2, radiusM: 5000 }, park: PARK })).toMatchObject({ kind: "sem_chegada" });
+    expect(detectStop({ points: pts, startAt: S, endAt: E, zone: { ...T2, radiusM: 5000 }, parks: [PARK] })).toMatchObject({ kind: "sem_chegada" });
     expect(V_WALK_KMH).toBe(7);
   });
 });
