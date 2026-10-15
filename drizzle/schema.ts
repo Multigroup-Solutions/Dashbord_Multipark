@@ -1514,6 +1514,13 @@ export const googleReviews = mysqlTable("google_reviews", {
 	// 0123 — sentimento (positivo/neutro/negativo) e rascunho automático já tentado
 	aiSentiment: varchar({ length: 10 }),
 	aiDraftAttemptedAt: timestamp({ mode: 'string' }),
+	// 0700 (plano MPV F6b) — marcas reversíveis: não é crítica / repetida de outra (nunca se apaga).
+	notAReview: tinyint().default(0).notNull(),
+	duplicateOf: int(),
+	reviewMarkedAt: datetime({ mode: 'string' }),
+	reviewMarkedById: int(),
+	reviewMarkUndoneAt: datetime({ mode: 'string' }),
+	reviewMarkBackup: text(),
 });
 
 /** 0285 — alertas "a trabalhar sem PDA ou Zello ligado" (shared/opsPresence.ts). */

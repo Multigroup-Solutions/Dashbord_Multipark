@@ -873,7 +873,12 @@ export async function coverageReport(date: string, city: CityId): Promise<{ gaps
 
 // ─── 6. Respostas pelo WhatsApp ─────────────────────────────────────────────
 
-export interface WhatsappReplyOutcome { action: "none" | "confirmed" | "declined" | "day_marked" | "week_link"; reply?: string }
+export interface WhatsappReplyOutcome {
+  action: "none" | "confirmed" | "declined" | "day_marked" | "week_link";
+  reply?: string;
+  /** A IA da disponibilidade leu esta mensagem (plano MPV F6b, W1: a triagem do WhatsApp não volta a ler). */
+  aiRead?: boolean;
+}
 
 export interface PendingRequest {
   id: number;
@@ -987,6 +992,12 @@ export function availabilityAutoReplyOn(): boolean {
  * Best-effort: nunca lança (o webhook tem de responder 200 à Meta).
  */
 export async function handleWhatsappReply(input: { employeeId: number; conversationId: number; body: string }): Promise<WhatsappReplyOutcome> {
+  const seen = { aiRead: false };
+  const out = await handleWhatsappReplyInner(input, seen);
+  return seen.aiRead ? { ...out, aiRead: true } : out;
+}
+
+async function handleWhatsappReplyInner(input: { employeeId: number; conversationId: number; body: string }, seen: { aiRead: boolean }): Promise<WhatsappReplyOutcome> {
   try {
     // Resposta automática desligada → não se marca nem se responde sozinho (17a):
     // a mensagem fica na caixa para uma pessoa. O webhook não passa pelo tRPC,
@@ -1005,6 +1016,7 @@ export async function handleWhatsappReply(input: { employeeId: number; conversat
       if (await requestAlreadyAnswered(pending.id)) return { action: "none" };
       const { classifyUnclearAvailability, reviewNote } = await import("./aiOps/availabilityAi");
       const d = await classifyUnclearAvailability(input.body, pending, { employeeId: input.employeeId });
+      seen.aiRead = d.action !== "review" || !!d.ai;
       if (d.action === "apply_no") verdict = "no";
       else if (d.action === "apply_yes") { verdict = "yes"; aiYes = { days: d.days, fromHour: d.fromHour, toHour: d.toHour }; }
       else {

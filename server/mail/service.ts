@@ -134,7 +134,9 @@ async function runPipeline(
     },
     aiIntake,
   });
-  if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, out.status).catch(() => {});
+  // R2 (F6b): não era crítica → "not_review" — a triagem (também a do varrimento) lê-o como de uma caixa sem pipeline.
+  const pipelineStatus = out.status === "processed" && out.routed.targetModule === "not_review" ? "not_review" : out.status;
+  if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, pipelineStatus).catch(() => {});
   if (out.status === "processed") return out.routed;
   if (out.status === "duplicate") {
     // Já tratado (outra conta, ou uma tentativa anterior que criou o caso):
@@ -220,6 +222,7 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     const alias = e.classification.alias ?? null;
     let routed: { targetModule: string; targetId?: number; existing?: true } | null = null;
     let pipelineUsed: string | null = null;
+    let releasedFromPipeline = false;
     const external = !!p.fromEmail && !isCompanyAddress(p.fromEmail, brandDomains)
       && !isAutomatedSender(p.fromEmail, { autoSubmitted: p.autoSubmitted, precedence: p.precedence, listUnsubscribe: p.listUnsubscribe, listId: p.listId }, { ownListDomains: Object.values(brandDomains).flat() });
     // 1) Pipeline temático — só emails RECEBIDOS (de pessoas), recentes, de caixas partilhadas.
@@ -258,6 +261,10 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
         try {
           routed = await runPipeline(e, api, pipeline, aiIntake);
           if (routed && !routed.existing && ["complaint", "lostfound", "review", "incident"].includes(routed.targetModule)) report.pipelineCreated++;
+          // Plano MPV F6b (R2, REVIEWS_EMAIL_STRICT): entrou pelas Críticas mas não é
+          // um aviso de avaliação → segue para a triagem normal (como se não houvesse
+          // pipeline): a IA lê-o e põe-no na caixa do tema. Nunca fica ignorado.
+          if (routed?.targetModule === "not_review") { pipelineUsed = null; releasedFromPipeline = true; }
         } catch (err: any) {
           // O caso NÃO foi criado: fica marcado para nova tentativa e o cron
           // não fica verde (antes perdia-se em silêncio). O resto (ligações,
@@ -309,7 +316,7 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     let aiLostFound = false;
     if (mailbox && e.result.messageId) {
       const target = await triageNewMessage(e, mailbox, {
-        automated: automatedValue, pipeline: pipelineUsed, createdCase, routingRun, loadBudget, api, company,
+        automated: automatedValue, pipeline: pipelineUsed, releasedFromPipeline, createdCase, routingRun, loadBudget, api, company,
         onCase: (r) => {
           // Só a RECLAMAÇÃO tem o seu aviso ("Nova reclamação" / "por confirmar (IA)"). Ronda 2: um perdido
           // aberto pela IA não avisa ninguém por si — o aviso de email novo vai a quem vê a caixa Perdidos.
@@ -373,6 +380,8 @@ async function triageNewMessage(
   from: MailboxConfig,
   ctx: {
     automated: number; pipeline: string | null; createdCase: boolean;
+    /** O pipeline da caixa não ficou com o email (R2: não era crítica) — tria como uma caixa sem pipeline. */
+    releasedFromPipeline?: boolean;
     routingRun: { left: number; deadlineAt?: number }; loadBudget: () => Promise<void>;
     api: Pick<GmailApi, "getAttachment" | "getMessage"> | null; company: (a: string) => boolean;
     onCase?: (r: import("../complaintMailIntake").IntakeResult) => void; onAi?: () => void;
@@ -386,7 +395,7 @@ async function triageNewMessage(
   const state = await threadTriageState(e.result.threadId, e.result.newThread);
   const pre = preTriageMail({
     outbound: p.outbound, personal: e.classification.personal, systemMail: !!p.systemMail, automated: ctx.automated,
-    mailboxKey: from.key, pipeline: ctx.pipeline ?? from.pipeline ?? null, fromEmail: p.fromEmail, text,
+    mailboxKey: from.key, pipeline: ctx.releasedFromPipeline ? null : ctx.pipeline ?? from.pipeline ?? null, fromEmail: p.fromEmail, text,
     senderIsCompany: senderKind === "company", createdCase: ctx.createdCase, threadHasCase: state.threadHasCase, humanTouched: state.humanTouched,
   });
   if (pre.action === "skip") return null;

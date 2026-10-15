@@ -96,7 +96,20 @@ async function routeToModule(
     // Notificação do Google Business Profile: extrai estrelas + nome real do
     // avaliador + texto limpo (sem links de tracking/rodapé).
     const { parseGoogleReviewNotification } = await import("../emailParse");
-    const g = parseGoogleReviewNotification(ctx.bodyText);
+    // Plano MPV F6b: interruptores das críticas por email (desligados por omissão).
+    const { reviewFlagOn } = await import("../reviewCleanup");
+    const strict = await reviewFlagOn("REVIEWS_EMAIL_STRICT");
+    const dedup = await reviewFlagOn("REVIEWS_DEDUP");
+    // R3: com o REVIEWS_DEDUP lê também o ASSUNTO (o nome e o perfil podem vir só lá).
+    const g = parseGoogleReviewNotification(ctx.bodyText, dedup ? ctx.subject : "");
+    // R2/R3: resumos ("recebeu N críticas") nunca viram crítica; com o
+    // REVIEWS_EMAIL_STRICT só o aviso de avaliação (ou um email com estrelas).
+    // O resto segue para a triagem normal das caixas (server/mail/service.ts) —
+    // nunca fica "ignored".
+    const { emailReviewVerdict } = await import("../../shared/reviewDedup");
+    const verdict = emailReviewVerdict({ fromEmail: ctx.fromEmail, rating: g.rating, subject: ctx.subject, body: ctx.bodyText, strict, dedup });
+    if (verdict === "summary") return { targetModule: "review_summary" };
+    if (verdict === "not_review") return { targetModule: "not_review" };
     // O GBP manda também notificações ADMINISTRATIVAS (recursos recusados,
     // mudanças de proprietário do perfil, verificações…) — não são críticas e
     // poluíam a lista com rating 0. Sem padrão de crítica + com padrão admin
@@ -127,6 +140,23 @@ async function routeToModule(
     const { projectIdForReviewPark } = await import("../reviewOps");
     const projectId = await projectIdForReviewPark(g.parkName);
     const sourceEmailDate = sqlUtcOrNull(ctx.receivedAt);
+    // R3: a mesma crítica (a Google manda 2 emails; a Windsor pode já a ter
+    // trazido) fica marcada como repetida da primeira — guarda-se, não se
+    // apaga, e sai das listas e dos rascunhos automáticos.
+    let duplicateOf: number | null = null;
+    if (dedup) {
+      const { findEmailReviewDuplicate } = await import("../reviewCleanup");
+      const { reviewDateMs, reviewTextKey, reviewerFirstNameKey } = await import("../../shared/reviewDedup");
+      duplicateOf = await findEmailReviewDuplicate({
+        parkKey: projectId != null ? `p${projectId}` : null,
+        rating: g.rating,
+        textKey: reviewTextKey(text, reviewer),
+        firstName: reviewerFirstNameKey(reviewer),
+        atMs: reviewDateMs(sourceEmailDate) ?? Date.now(),
+        apiKey: false,
+      });
+    }
+    const markedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
     const id = await createGoogleReview({
       reviewerName: reviewer,
       reviewerEmail: parsed.clientEmail,
@@ -138,11 +168,13 @@ async function routeToModule(
       sourceEmailId: ctx.messageId,
       sourceEmailDate,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+      ...(duplicateOf ? { duplicateOf, reviewMarkedAt: markedAt, aiDraftAttemptedAt: markedAt } : {}),
     } as any);
     // rascunho de resposta por IA (prompt central + sentimento/contexto),
     // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
     // MPV R1: só para críticas recentes (14 dias, pela data do email; sem ela, agora).
-    if (id) {
+    // R3: a repetida nunca tem rascunho (a original já tem).
+    if (id && !duplicateOf) {
       try {
         const { autoDraftEmailReview } = await import("../reviewAutoDraft");
         await autoDraftEmailReview(id, sourceEmailDate, { timeoutMs: 15_000 });

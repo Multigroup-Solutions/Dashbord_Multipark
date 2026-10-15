@@ -2,7 +2,7 @@
 modulo: criticas
 titulo: Críticas Google
 rotas: /criticas
-palavras: lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
+palavras: limpeza, não é crítica, repetida, crítica repetida, duplicada, crítica duplicada, desfazer limpeza, resumo de críticas, lixo, marca, sem parque nem marca, mudar parque, escolher parque, quadrado por parque, críticas, criticas, reviews, avaliações, google, estrelas, responder, resposta, publicar, aprovar, rascunho, ia, já publiquei, desfazer, dispensar, reabrir, reclamação, converter, por responder, respondidas, parque, sem parque, csv, sincronizar gmail, windsor
 ---
 # Críticas Google
 
@@ -52,6 +52,17 @@ As avaliações do Google de todos os parques, juntas e separadas por parque, co
 
 **Quando a leitura falha**
 - Lista, números, parques e crítica mostram **"Não foi possível carregar…"** com **Tentar de novo**, nunca "sem avaliações" ou "sem dados".
+
+**Emails que não são críticas e críticas repetidas** (interruptores em **Definições → Automações**, desligados por omissão)
+- **Críticas: só cria crítica a partir de um aviso de avaliação**: um email que chega pelas Críticas (inclui o que a reservas@ apanha) só vira crítica se for o aviso da Google/Trustpilot/Tripadvisor ou trouxer as estrelas. Candidaturas, respostas de clientes e alertas seguem para a **triagem normal da Comunicação** (vão para a caixa do tema) — nunca ficam ignorados.
+- **Críticas: juntar a mesma crítica que chega duas vezes**: lê também o assunto do email (nome e perfil), os emails-resumo ("recebeu 3 novas críticas") nunca viram crítica, e a mesma crítica (mesmo parque, mesmas estrelas, mesmo 1.º nome, o mesmo texto com 20 ou mais letras, até 48 h) fica **repetida** da primeira. Sem texto nunca se junta sozinha ("Excelente serviço" de duas pessoas fica como duas). Na Windsor, a que bate pelas estrelas e pelo texto fica **por conciliar** (uma pessoa escolhe).
+- Nada se apaga: as marcadas saem da lista, dos números e dos rascunhos automáticos. Na crítica aparece **Não é crítica** ou **Repetida de #…**.
+
+**Limpeza** (separador, admin e super admin) — para as que já existem; nunca corre sozinha
+1. Escolhe **Emails que não são críticas** ou **Críticas repetidas**.
+2. Vês **Vão ser marcadas** e **Batem na regra mas ficam** (com o porquê: tem reclamação, já respondida, ou desfeita à mão).
+3. **Marcar…** aplica (pede confirmação). Nas "não é crítica", o rascunho da IA é guardado à parte.
+4. Em **Marcadas**, **Desfazer** (uma) ou **Desfazer todas** volta a pô-las nas listas (o rascunho guardado também volta). A que desfazes não volta a ser proposta.
 
 **Quem pode**
 - Condutores e extras **não veem** as Críticas — nem as em que estão envolvidos. Só a partir de team leader.
