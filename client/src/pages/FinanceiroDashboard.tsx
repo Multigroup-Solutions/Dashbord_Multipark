@@ -38,6 +38,7 @@ import { AXIS_TICK, CHART_PALETTE, CHART_TOOLTIP_STYLE, CHART_TOOLTIP_ITEM, eurA
 import { failureNote, queryFailure, retryTransient, type QueryFailure } from "@/lib/queryRetry";
 import { can } from "@shared/access";
 import { daysUntil, lisbonToday, shortDayLabel } from "@shared/expensePeriods";
+import { categorySlices } from "@shared/expenseCategorySlices";
 
 const COLORS = CHART_PALETTE;
 
@@ -296,13 +297,13 @@ export default function FinanceiroDashboard() {
   // C3 (Jorge: "sim, mas COM IVA"): despesas do PERÍODO por categoria, c/ IVA —
   // as MESMAS despesas dos "Custos s/ IVA" da Faturação (sem as categorias
   // fora da margem: salários, extras), com o IVA. Do maior para o menor.
-  const categoryRows = Object.entries(fin?.expensesByCategoryGross ?? {}).map(([name, value]) => ({ name, value }));
-  // o total leva tudo (uma nota de crédito maior do que as despesas da categoria
-  // desconta); o gráfico só desenha as fatias positivas
-  const categoryTotal = categoryRows.reduce((s, c) => s + c.value, 0);
-  const categoryData = categoryRows.filter((c) => c.value > 0).sort((a, b) => b.value - a.value);
+  // O total leva tudo (uma nota de crédito maior do que as despesas da categoria
+  // desconta); o gráfico só desenha as fatias positivas e a nota diz quais
+  // ficaram de fora (saldo negativo).
+  const { total: categoryTotal, slices: categoryData, outside: categoryOutside } = categorySlices(fin?.expensesByCategoryGross);
   const categoryTitle = "Despesas por categoria (período, c/ IVA, sem salários, como na Faturação)";
-  const categoryNote = `${fmt(categoryTotal)} c/ IVA · as mesmas despesas dos Custos (${fmt(fin?.costs.expensesNet ?? 0)} s/ IVA)${fin?.isCurrentPeriod ? " · até hoje" : ""}`;
+  const categoryNote = `${fmt(categoryTotal)} c/ IVA · as mesmas despesas dos Custos (${fmt(fin?.costs.expensesNet ?? 0)} s/ IVA)${fin?.isCurrentPeriod ? " · até hoje" : ""}`
+    + (categoryOutside.length ? ` · fora do gráfico (saldo negativo, notas de crédito): ${categoryOutside.map((c) => `${c.name} ${fmt(c.value)}`).join(", ")}` : "");
 
   return (
     <div className="space-y-6">
@@ -404,7 +405,13 @@ export default function FinanceiroDashboard() {
                   </div>
                 )}
                 {/* C3: Top 5 das categorias do PERÍODO (c/ IVA, sem salários, como na Faturação) */}
-                {categoryData.length > 0 && (
+                {finFailed ? (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Por categoria — Top 5 (período, c/ IVA, sem salários)</p>
+                    <p className="text-lg font-bold text-muted-foreground">—</p>
+                    <FailNote failed={finFailed} onRetry={retryFin} />
+                  </div>
+                ) : categoryData.length > 0 && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-2">Por categoria — Top 5 (período, c/ IVA, sem salários)</p>
                     <div className="space-y-1.5">

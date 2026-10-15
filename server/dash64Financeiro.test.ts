@@ -75,15 +75,21 @@ vi.mock("./finance/adCosts", async (original) => ({
   ...(await original<object>()),
   loadAdCosts: async () => ({ rows: h.adRows, totals: { platform: 0, invoice: 0 }, invoicesWithoutPeriod: [] }),
 }));
+// C6: o valor das reservas por cidade/marca sem a BD da Multipark (aqui só interessa a porta).
+vi.mock("./opsStatsLive", async (original) => ({
+  ...(await original<object>()),
+  liveOpsBookingValues: async () => ({ byCity: [{ name: "Lisboa", bookings: 2, revenue: 246 }], byBrand: [{ name: "Airpark", bookings: 2, revenue: 246 }] }),
+}));
 
 import { appRouter } from "./routers";
 import { computeFinance } from "./finance/engine";
 import { expensesByCategory } from "./finance/expenseCategories";
-import { SHEET_REPORTS } from "./google/sheetsExport";
+import { SHEET_REPORTS, assertCanExportReport } from "./google/sheetsExport";
 import { adCostCategory } from "../shared/adInvoices";
 import { can } from "../shared/access";
 import { daysUntil, lisbonToday, shortDayLabel } from "../shared/expensePeriods";
-import { failureNote, queryFailure } from "../client/src/lib/queryRetry";
+import { categorySlices } from "../shared/expenseCategorySlices";
+import { failureNote, queryFailure, retryTransient } from "../client/src/lib/queryRetry";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const caller = (role: string) => appRouter.createCaller({ user: { id: 77, role, name: "Rita" }, req: { headers: {} }, res: {} } as any);
@@ -335,7 +341,8 @@ describe("C5 — 'Sem acesso' em vez de 0 €; as consultas já não dependem de
     ]) expect(page).toContain(q);
     for (const q of ["finQ", "expQ", "valuesQ", "upQ"]) expect(page).toContain(`queryFailure(${q}.error, seesFinance)`);
     // os cartões e os gráficos do motor (3 + evolução e categorias) e das despesas (2 grandes + 4 pequenos)
-    expect(page.match(/failed=\{finFailed\}/g)).toHaveLength(5);
+    // (+ a nota do Top 5 do bloco das despesas)
+    expect(page.match(/failed=\{finFailed\}/g)).toHaveLength(6);
     expect(page.match(/failed=\{expFailed\}/g)).toHaveLength(6);
   });
 });
@@ -373,5 +380,204 @@ describe("igual — o motor, a Faturação, a Caixa e os entregues ficam como es
     expect(fs.match(/computeFinance\(/g)).toHaveLength(1); // uma só corrida do motor
     expect(fs).toContain(`expensesByCategory(r.details.expenses, "net")`);
     expect(fs).toContain(`expensesByCategory(r.details.expenses, "gross")`);
+  });
+});
+
+// ─── Auditoria do PR C ───────────────────────────────────────────────────────
+
+/** O agrupamento de ANTES, copiado tal e qual de origin/main:server/routers.ts (invoices.financeSummary). */
+const oldExpensesByCategory = (r: { details: { expenses: Array<{ categoryName: string | null; totalNet: number }> } }) =>
+  r.details.expenses.reduce((acc, e) => { const k = e.categoryName ?? "Sem categoria"; acc[k] = (acc[k] ?? 0) + e.totalNet; return acc; }, {} as Record<string, number>);
+/** A folha de ANTES, copiada de origin/main:server/google/sheetsExport.ts ("Despesas por categoria"). */
+const oldR2 = (v: unknown) => Math.round((Number(v ?? 0) || 0) * 100) / 100;
+const oldSheetRows = (f: any) => [["Categoria", "s/ IVA"], ...Object.entries(f.expensesByCategory ?? {}).map(([k, v]) => [k, oldR2(v)])];
+
+/**
+ * Despesas com cêntimos (a vírgula flutuante a sério): a mesma categoria em
+ * vários centros e dias, as "fora da margem" (salários e extras), a TSU paga,
+ * uma nota de crédito (negativa) maior do que as despesas da categoria no
+ * período e uma renda datada depois de hoje.
+ */
+const row = (o: { day: string; projectId: number | null; categoryName: string | null; gross: number; net: number; excluded?: 0 | 1; count?: number }) => ({
+  day: o.day, projectId: o.projectId, projectName: o.projectId == null ? null : `Centro ${o.projectId}`, categoryId: null, categoryName: o.categoryName,
+  excluded: o.excluded ?? 0, count: o.count ?? 1, totalAmount: o.gross, totalNet: o.net,
+});
+const DECIMAL_EXPENSES = [
+  row({ day: "2026-09-02", projectId: 10, categoryName: "Combustível", gross: 123.45, net: 100.37, count: 3 }),
+  row({ day: "2026-09-04", projectId: 11, categoryName: "Combustível", gross: 0.1, net: 0.08 }),
+  row({ day: "2026-09-04", projectId: 10, categoryName: "Combustível", gross: 0.2, net: 0.16 }),
+  row({ day: "2026-09-05", projectId: 10, categoryName: "Limpeza", gross: 33.33, net: 27.1 }),
+  row({ day: "2026-09-06", projectId: 11, categoryName: "Limpeza", gross: 66.67, net: 54.2 }),
+  row({ day: "2026-09-07", projectId: 10, categoryName: "Salários", gross: 5000, net: 5000, excluded: 1 }),
+  row({ day: "2026-09-07", projectId: 10, categoryName: "Extras", gross: 812.5, net: 812.5, excluded: 1 }),
+  row({ day: "2026-09-08", projectId: 10, categoryName: "TSU", gross: 1187.63, net: 1187.63 }),
+  // NC de uma fatura de agosto: neste período a categoria fica negativa
+  row({ day: "2026-09-09", projectId: 10, categoryName: "Peças", gross: -246, net: -200 }),
+  row({ day: "2026-09-10", projectId: null, categoryName: null, gross: 19.99, net: 16.25 }),
+  row({ day: "2026-09-28", projectId: 10, categoryName: "Rendas", gross: 984, net: 800 }), // depois de hoje
+];
+const DECIMAL_AD = { date: "2026-09-11", projectId: 10, provider: "meta_ads" as const, source: "plataforma" as const, cost: 77.77, invoiceId: null };
+
+describe("auditoria — o s/ IVA de antes fica igual ao bit (ordem e valores), com cêntimos", () => {
+  beforeEach(() => {
+    h.expenseRows = DECIMAL_EXPENSES.map((r) => ({ ...r }));
+    h.adRows = [{ ...DECIMAL_AD }];
+  });
+
+  it("financeSummary.expensesByCategory = o reduce de antes: mesmas chaves, mesma ordem, mesmos números (Object.is)", async () => {
+    const r = await computeFinance({ ...PERIOD, granularity: "month" });
+    const s = await caller("admin").invoices.financeSummary(PERIOD);
+    const before = oldExpensesByCategory(r);
+    expect(Object.keys(s.expensesByCategory)).toEqual(Object.keys(before)); // a ordem (a folha usa-a)
+    for (const [k, v] of Object.entries(before)) expect(Object.is(s.expensesByCategory[k], v), k).toBe(true);
+    expect(Object.entries(s.expensesByCategory)).toStrictEqual(Object.entries(before));
+  });
+
+  it("a folha 'Despesas por categoria': as colunas A:B são as de antes (mesmas linhas, mesma ordem, mesmo arredondamento); só se junta a C", async () => {
+    const s = await caller("admin").invoices.financeSummary(PERIOD);
+    const tabs = await SHEET_REPORTS.financeiro.load(async () => s, PERIOD, Date.now() + 60_000);
+    const now = tabs.find((t) => t.name === "Despesas por categoria")!.rows;
+    const before = oldSheetRows(s);
+    expect(now.map((r) => r.slice(0, 2))).toStrictEqual(before);
+    expect(now.map((r) => r.length)).toEqual(now.map(() => 3));
+    // a C é o c/ IVA da MESMA categoria, arredondado como a B
+    for (const [k, , c] of now.slice(1)) expect(c).toBe(oldR2(s.expensesByCategoryGross[k as string]));
+    // os outros separadores não mudam de forma
+    expect(tabs.map((t) => t.name)).toEqual(["Resumo", "Mensal", "Despesas por categoria"]);
+  });
+});
+
+describe("auditoria — paridade do C3 com cêntimos, notas de crédito e o que entra/sai", () => {
+  beforeEach(() => {
+    h.expenseRows = DECIMAL_EXPENSES.map((r) => ({ ...r }));
+    h.adRows = [{ ...DECIMAL_AD }];
+  });
+
+  it("Σ c/ IVA das categorias = costs.expenses do motor e Σ s/ IVA = costs.expensesNet (ao cêntimo)", async () => {
+    const r = await computeFinance({ ...PERIOD, granularity: "month" });
+    const s = await caller("admin").invoices.financeSummary(PERIOD);
+    expect(sum(s.expensesByCategoryGross)).toBeCloseTo(r.costs.expenses, 6);
+    expect(sum(s.expensesByCategory)).toBeCloseTo(r.costs.expensesNet, 6);
+    expect(s.costs.expensesNet).toBe(r.costs.expensesNet);
+    // o total do ecrã (categorySlices) = o bruto do motor, ao cêntimo — com a NC a descontar
+    expect(categorySlices(s.expensesByCategoryGross).total).toBe(Math.round(r.costs.expenses * 100) / 100);
+  });
+
+  it("o que entra e o que sai: entram as categorias da margem (com a TSU paga, a NC e os anúncios); saem salários, extras e o datado depois de hoje", async () => {
+    const s = await caller("admin").invoices.financeSummary(PERIOD);
+    expect(Object.keys(s.expensesByCategoryGross).sort()).toEqual(
+      ["Combustível", "Limpeza", "Peças", "Sem categoria", "TSU", adCostCategory(DECIMAL_AD)].sort(),
+    );
+    for (const out of ["Salários", "Extras", "Rendas"]) expect(s.expensesByCategoryGross).not.toHaveProperty(out);
+    expect(s.expensesByCategoryGross["Combustível"]).toBeCloseTo(123.45 + 0.1 + 0.2, 9);
+    expect(s.expensesByCategoryGross["Peças"]).toBe(-246);
+    expect(s.expensesByCategoryGross[adCostCategory(DECIMAL_AD)]).toBe(77.77); // anúncios: sem IVA (c/ = s/)
+    expect(s.expensesByCategory[adCostCategory(DECIMAL_AD)]).toBe(77.77);
+    // as que saem ficam onde sempre estiveram: "excluídas da margem" (salários + extras, c/ IVA)
+    expect(s.excludedExpenses).toBeCloseTo(5000 + 812.5, 9);
+  });
+
+  it("o gráfico: só fatias positivas; a NC fica fora e é dita; o total diz a verdade (fatias + fora = total)", async () => {
+    const s = await caller("admin").invoices.financeSummary(PERIOD);
+    const { total, slices, outside } = categorySlices(s.expensesByCategoryGross);
+    expect(outside).toEqual([{ name: "Peças", value: -246 }]);
+    expect(slices.every((c) => c.value > 0)).toBe(true);
+    expect(slices.map((c) => c.name)).toEqual(["TSU", "Combustível", "Limpeza", adCostCategory(DECIMAL_AD), "Sem categoria"]);
+    const cents = (v: number) => Math.round(v * 100);
+    expect(cents(slices.reduce((t, c) => t + c.value, 0)) + cents(outside.reduce((t, c) => t + c.value, 0))).toBe(cents(total));
+    expect(total).toBeLessThan(slices.reduce((t, c) => t + c.value, 0)); // a NC desconta no total
+  });
+
+  it("categorySlices: cêntimos, empates por nome, um saldo de 1e-10 não é fatia, vazio dá zero", () => {
+    // 10 + 10 + 0,0000000001 − 0,004 − 5,2 = 14,7960000001 → 14,80
+    expect(categorySlices({ B: 10, A: 10, Z: 1e-10, N: -0.004, M: -5.2 })).toEqual({
+      total: 14.8,
+      slices: [{ name: "A", value: 10 }, { name: "B", value: 10 }],
+      outside: [{ name: "M", value: -5.2 }],
+    });
+    expect(categorySlices(undefined)).toEqual({ total: 0, slices: [], outside: [] });
+    expect(categorySlices({})).toEqual({ total: 0, slices: [], outside: [] });
+  });
+
+  it("o ecrã usa o categorySlices e diz as categorias que ficam fora do gráfico", () => {
+    const page = src("client/src/pages/FinanceiroDashboard.tsx");
+    expect(page).toContain("categorySlices(fin?.expensesByCategoryGross)");
+    expect(page).toContain("fora do gráfico (saldo negativo, notas de crédito)");
+  });
+});
+
+describe("auditoria — a porta dos euros (financeSummary, opsBookingValues, expenses.stats/upcomingPayments, Sheets)", () => {
+  const PROCS: Array<[string, unknown]> = [
+    ["invoices.financeSummary", PERIOD],
+    ["multipark.opsBookingValues", PERIOD],
+    ["expenses.stats", {}],
+    ["expenses.upcomingPayments", {}],
+  ];
+  const run = async (role: string) => {
+    const c: any = caller(role);
+    const out: Record<string, string> = {};
+    for (const [p, input] of PROCS) {
+      const fn = p.split(".").reduce((o: any, k) => o[k], c);
+      try { await fn(input); out[p] = "ok"; } catch (e: any) { out[p] = e.code ?? String(e); }
+    }
+    return out;
+  };
+  const all = (v: string) => Object.fromEntries(PROCS.map(([p]) => [p, v]));
+  const MODULE = { financeiro: { access: "national", actions: ["view"] } };
+  const sees = (role: string) => can({ role, accessOverrides: h.modules as any }, "financeiro", "view");
+
+  it("admin vê; admin com o deny de finance.view_totals: FORBIDDEN nos 4 (o ecrã pede e mostra 'Sem acesso')", async () => {
+    expect(await run("admin")).toEqual(all("ok"));
+    h.overrides = { "finance.view_totals": "deny" };
+    expect(await run("admin")).toEqual(all("FORBIDDEN"));
+    expect(sees("admin")).toBe(true);
+    expect(queryFailure({ data: { code: "FORBIDDEN" } }, sees("admin"))).toBe("forbidden");
+  });
+
+  it("supervisor sem o Financeiro: FORBIDDEN nos 4, mesmo com o grant dos totais — e o ecrã nem pede ('Sem acesso')", async () => {
+    expect(await run("supervisor")).toEqual(all("FORBIDDEN"));
+    h.overrides = { "finance.view_totals": "grant" };
+    expect(await run("supervisor")).toEqual(all("FORBIDDEN"));
+    expect(sees("supervisor")).toBe(false);
+    expect(queryFailure(null, sees("supervisor"))).toBe("forbidden");
+  });
+
+  it("supervisor com o Financeiro dado por pessoa: vê (com ou sem o grant — o módulo traz os totais); com o deny: FORBIDDEN", async () => {
+    h.modules = MODULE;
+    expect(sees("supervisor")).toBe(true);
+    expect(await run("supervisor")).toEqual(all("ok"));
+    h.overrides = { "finance.view_totals": "grant" };
+    expect(await run("supervisor")).toEqual(all("ok"));
+    h.overrides = { "finance.view_totals": "deny" };
+    expect(await run("supervisor")).toEqual(all("FORBIDDEN"));
+  });
+
+  it("backoffice e frontoffice sem o módulo: FORBIDDEN nos 4", async () => {
+    for (const role of ["backoffice", "frontoffice"]) {
+      expect(await run(role), role).toEqual(all("FORBIDDEN"));
+      expect(sees(role), role).toBe(false);
+    }
+  });
+
+  it("Exportar para Sheets: lê pelo MESMO financeSummary, com o utilizador do pedido — o deny dá FORBIDDEN (sem folha); exportar pede a ação 'exportar'", async () => {
+    h.overrides = { "finance.view_totals": "deny" };
+    const c: any = caller("admin");
+    const call = (path: string, i?: unknown) => path.split(".").reduce((o: any, k) => o[k], c)(i);
+    await expect(SHEET_REPORTS.financeiro.load(call, PERIOD, Date.now() + 60_000)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // o botão e o servidor pedem "exportar" do Financeiro: o admin tem; quem só tem "ver" não exporta
+    expect(() => assertCanExportReport({ id: 1, role: "admin" }, "financeiro")).not.toThrow();
+    expect(() => assertCanExportReport({ id: 2, role: "supervisor", accessOverrides: MODULE as any }, "financeiro")).toThrow(/exportar/);
+    // o único caminho do Sheets para os euros é o financeSummary (que tem requireFinanceTotals)
+    const sheets = src("server/google/sheetsExport.ts");
+    const fin = sheets.slice(sheets.indexOf("financeiro: {"), sheets.indexOf("faturacao: {"));
+    expect(fin.match(/call\("/g)).toHaveLength(1);
+    expect(fin).toContain(`call("invoices.financeSummary"`);
+  });
+
+  it("retryTransient: um FORBIDDEN (ou UNAUTHORIZED/BAD_REQUEST) não se repete; um erro de BD repete até 2 vezes", () => {
+    for (const code of ["FORBIDDEN", "UNAUTHORIZED", "BAD_REQUEST"]) expect(retryTransient(0, { data: { code } }), code).toBe(false);
+    expect(retryTransient(0, { data: { code: "INTERNAL_SERVER_ERROR" } })).toBe(true);
+    expect(retryTransient(1, new Error("rede"))).toBe(true);
+    expect(retryTransient(2, { data: { code: "INTERNAL_SERVER_ERROR" } })).toBe(false);
   });
 });
