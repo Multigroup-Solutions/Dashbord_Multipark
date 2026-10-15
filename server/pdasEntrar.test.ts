@@ -158,6 +158,7 @@ vi.mock("./db", async (original) => ({
   getPdaById: async (id: number) => m.state.pdas.find((x) => x.id === id),
   setPdaDeviceToken: async (pdaId: number) => { const p = m.state.pdas.find((x) => x.id === pdaId); const t = `tok${++m.state.nextId}`.padEnd(32, "x"); p.deviceToken = t; return t; },
   getTimeRecords: async (employeeId: number) => m.state.timeRecords.get(employeeId) ?? [],
+  getLastTimeRecord: async (employeeId: number) => (m.state.timeRecords.get(employeeId) ?? [])[0],
   checkGeofenceNote: async () => null,
   resolveZelloUsernameForShift: async () => null,
   closePdaCheckinsForEmployee: async (employeeId: number) => { m.state.closedCheckins.push(employeeId); return 1; },

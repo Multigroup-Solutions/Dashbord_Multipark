@@ -961,20 +961,37 @@ export async function getEmployeeById(id: number) {
 export async function getEmployeeByUserId(userId: number) {
   const db = await getDb();
   if (!db) return undefined;
-  // 19c: numa readmissão a conta pode estar em duas fichas — a ATIVA primeiro
-  // (antes vinha uma qualquer: a foto, o ponto e "A minha ficha" iam para a antiga).
-  const result = await db.select({ employee: employees, project: projects }).from(employees)
+  // A ficha "minha" (ponto, foto, "A minha ficha") quando a conta está em várias:
+  // regra fixa em shared/pontoFichas.ts chooseOwnFicha — ativa primeiro; entre
+  // várias ativas, a do ponto mais recente (o ponto nunca muda de ficha sozinho
+  // a meio do mês, set 2026); principal antes de extra; a mais recente.
+  const principal = await db.select({ employee: employees, project: projects }).from(employees)
     .leftJoin(projects, eq(employees.projectId, projects.id))
-    .where(eq(employees.userId, userId)).orderBy(desc(employees.isActive), desc(employees.id)).limit(1);
-  if (result[0]) return result[0];
-  // Conta EXTRA (ex.: email pessoal além do profissional) → a mesma ficha
+    .where(eq(employees.userId, userId)).orderBy(desc(employees.isActive), desc(employees.id)).limit(10);
+  const isOn = (r: { employee: { isActive: unknown } }) => Number(r.employee.isActive) === 1;
+  const activePrincipal = principal.filter(isOn);
+  // o caso de sempre: uma ficha ativa (sem leituras a mais)
+  if (activePrincipal.length === 1) return activePrincipal[0];
+  const { chooseOwnFicha } = await import("../shared/pontoFichas");
+  if (activePrincipal.length > 1) {
+    const ids = activePrincipal.map((r) => r.employee.id);
+    const last = await db.select({ employeeId: timeRecords.employeeId, at: sql<string | null>`DATE_FORMAT(MAX(${timeRecords.recordedAt}), '%Y-%m-%d %H:%i:%s')` })
+      .from(timeRecords).where(inArray(timeRecords.employeeId, ids)).groupBy(timeRecords.employeeId);
+    const lastBy = new Map(last.map((l) => [Number(l.employeeId), l.at ? String(l.at) : null]));
+    const id = chooseOwnFicha(activePrincipal.map((r) => ({ id: r.employee.id, isActive: true, via: "principal" as const, lastPontoAt: lastBy.get(r.employee.id) ?? null })));
+    return activePrincipal.find((r) => r.employee.id === id) ?? activePrincipal[0];
+  }
+  // Conta EXTRA (ex.: email pessoal além do profissional) → a mesma ficha. Uma
+  // ficha ativa pela conta extra ganha a uma principal INATIVA (antes vinha a
+  // inativa e o ponto ficava bloqueado: "A ficha está inativa").
   const { employeeIdForAliasUser } = await import("./employeeAliases");
   const empId = await employeeIdForAliasUser(userId);
-  if (empId == null) return undefined;
-  const alias = await db.select({ employee: employees, project: projects }).from(employees)
+  const alias = empId == null ? [] : await db.select({ employee: employees, project: projects }).from(employees)
     .leftJoin(projects, eq(employees.projectId, projects.id))
     .where(eq(employees.id, empId)).limit(1);
-  return alias[0];
+  const all = [...principal.map((r) => ({ r, via: "principal" as const })), ...alias.map((r) => ({ r, via: "extra" as const }))];
+  const id = chooseOwnFicha(all.map(({ r, via }) => ({ id: r.employee.id, isActive: isOn(r), via })));
+  return all.find(({ r }) => r.employee.id === id)?.r;
 }
 
 export async function createEmployee(data: InsertEmployee) {
@@ -1613,16 +1630,48 @@ export async function createTimeRecord(data: InsertTimeRecord) {
   return db.insert(timeRecords).values(data);
 }
 
+/** A última picagem da ficha (a ordem da inserção atómica: hora e depois id). Só 1 linha. */
+export async function getLastTimeRecord(employeeId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [r] = await db.select().from(timeRecords).where(eq(timeRecords.employeeId, employeeId))
+    .orderBy(desc(timeRecords.recordedAt), desc(timeRecords.id)).limit(1);
+  return r;
+}
+
+/**
+ * Ponto de UM mês de uma ficha (ficha → Ponto): as horas pela regra da folha
+ * (payroll/shifts.ts pontoMonthSummary) e as picagens desses turnos — os que
+ * COMEÇAM no mês (dia de Lisboa), com a saída mesmo que caia no dia seguinte,
+ * mais as picagens soltas do mês. Assim a lista soma o mesmo que o total e
+ * que a folha. Mais recentes primeiro. Antes: soma das horas de todas as
+ * saídas do mês em hora do servidor, também as suspeitas e as rejeitadas.
+ */
 export async function getMonthlyHours(employeeId: number, year: number, month: number) {
   const db = await getDb();
-  if (!db) return { totalHours: 0, records: [] };
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 0, 23, 59, 59);
-  const records = await db.select().from(timeRecords)
-    .where(and(eq(timeRecords.employeeId, employeeId), gte(timeRecords.recordedAt, toMysqlDateTime(start)), lte(timeRecords.recordedAt, toMysqlDateTime(end))))
-    .orderBy(timeRecords.recordedAt);
-  const totalHours = records.reduce((sum, r) => sum + parseFloat(String(r.hoursWorked ?? 0)), 0);
-  return { totalHours, records };
+  const empty = { totalHours: 0, shifts: 0, suspiciousHours: 0, suspiciousShifts: 0, openShifts: 0, records: [] as (typeof timeRecords.$inferSelect)[] };
+  if (!db) return empty;
+  const { lisbonDayRangeUtc, addDays } = await import("../shared/lisbonDay");
+  const { pontoMonthRecordIds, pontoMonthSummary } = await import("./payroll/shifts");
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const firstDay = `${year}-${pad(month)}-01`;
+  const lastDay = `${year}-${pad(month)}-${pad(new Date(Date.UTC(year, month, 0)).getUTCDate())}`;
+  // folga de 1 dia de cada lado: o turno da véspera que acaba no dia 1 (é do
+  // mês anterior) e o do último dia que acaba no seguinte (é deste)
+  const from = lisbonDayRangeUtc(addDays(firstDay, -1)).start;
+  const until = lisbonDayRangeUtc(addDays(lastDay, 1)).end;
+  const rows = await db.select().from(timeRecords)
+    .where(and(eq(timeRecords.employeeId, employeeId), gte(timeRecords.recordedAt, from), lt(timeRecords.recordedAt, until)))
+    .orderBy(asc(timeRecords.recordedAt), asc(timeRecords.id));
+  const likes = rows.map((r) => ({
+    id: r.id, type: r.type, recordedAt: r.recordedAt, hoursWorked: r.hoursWorked, notes: r.notes,
+    reviewStatus: r.reviewStatus ?? null, terminalStatus: r.terminalStatus ?? null, terminalUntil: r.terminalUntil ?? null,
+  }));
+  const summary = pontoMonthSummary(likes, firstDay, lastDay);
+  const { start, end } = lisbonDayRangeUtc(firstDay, lastDay);
+  const ids = pontoMonthRecordIds(likes, firstDay, lastDay, start, end);
+  const records = rows.filter((r) => ids.has(r.id)).reverse();
+  return { ...summary, records };
 }
 
 // ─── RH: EXTRA RATES ──────────────────────────────────────────────────────────
