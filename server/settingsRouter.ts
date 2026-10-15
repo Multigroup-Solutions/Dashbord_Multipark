@@ -153,6 +153,20 @@ export const settingsRouter = router({
     }),
 
   /**
+   * Plano MPV (F8, §8.3): o cartão "Multis piloto" — por versão, nível e
+   * pessoa: perguntas, €/pergunta, p95, % erros, % MAX_TOKENS, % rondas
+   * finais forçadas, % 👎, % "não sei", % chamadas recusadas e caches vivas.
+   * Só leitura (registo de uso, respostas, 👎, chamadas das ferramentas), só admin/super admin.
+   */
+  aiPilotStats: adminOnly
+    .input(z.object({ days: z.number().int().min(1).max(31).default(7) }).optional())
+    .query(async ({ ctx, input }) => {
+      requireAdminRole(ctx.user.role);
+      const { getPilotStats } = await import("./assistant/pilotStats");
+      return getPilotStats(input?.days ?? 7);
+    }),
+
+  /**
    * "Serviços → tarefas": tipos de serviço do catálogo Multipark (ExtraService
    * dos parques nossos) e pessoas de cada cidade para o responsável. A regra
    * grava-se com values.set("services.taskRules").

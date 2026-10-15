@@ -49,6 +49,9 @@ import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnBudget, mpvTu
 import { makeSectionSearch } from "./helpSearch";
 import { kbViewerFrom, onceQueryEmbed, type QueryEmbedFn } from "../knowledge/retrieve";
 import type { CityAccess } from "../cityAccess";
+import type { AiFeature } from "../_core/ai/features";
+import type { AiTier } from "../_core/ai/models";
+import type { ChatTool } from "../_core/ai/chat/tools";
 
 /** Quantos trechos da ajuda a base devolve por pergunta (dão até 3 ficheiros). */
 export const HELP_KB_TOP_K = 6;
@@ -300,6 +303,14 @@ export async function askAssistant(
     mode?: AssistantMode;
     /** MPV (F5): o vetorizador da pergunta (omisso = o real, se os vetores estiverem ligados; null = sem vetores). */
     embedQuery?: QueryEmbedFn | null;
+    /**
+     * Avaliação (scripts/eval-multis.ts, plano MPV §8.2/F8): o turno corre como
+     * `feature` (assistant_eval) no `tier` da versão, sem conversa guardada nem
+     * limite de pedidos e sem descer para o lite, com as ferramentas embrulhadas
+     * (respostas gravadas). O resto — sistema, contexto, ajuda, perfis, voltas —
+     * é o da versão (`mode`). Nunca em produção.
+     */
+    evalRun?: { feature: AiFeature; tier: AiTier; wrapTools: (tools: ChatTool<StaffToolCtx>[]) => ChatTool<StaffToolCtx>[] };
   } = {},
 ): Promise<AssistantTurnResult> {
   const startedAt = Date.now();
@@ -319,7 +330,7 @@ export async function askAssistant(
   // Plano MPV (F3): quem está no piloto recebe o conteúdo do MPV (também no
   // modo económico — é o "MPV-lite"); os outros, o v1 tal e qual.
   const mpv = mode.pilot;
-  const tools = staffToolsFor(mode);
+  const tools = hooks.evalRun ? hooks.evalRun.wrapTools(staffToolsFor(mode)) : staffToolsFor(mode);
   const context = turnContext({
     today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn, tab: page.tab, entity: page.entity,
     ...(mpv ? { tools: mpvAllowedToolNames(toolCtx, tools) } : {}),
@@ -327,7 +338,8 @@ export async function askAssistant(
   // Plano MPV (F5): no piloto a ajuda e os manuais procuram-se também pelo significado. O vetor
   // da pergunta calcula-se UMA vez no pedido (partilhado pelo bloco da ajuda, pela base de
   // conhecimento e pela descida smart → lite); sem vetores, a lexical de sempre.
-  const rawEmbed = mpv ? (hooks.embedQuery !== undefined ? hooks.embedQuery : await mpvQueryEmbedderLazy()) : null;
+  // O eval (F8) é reprodutível: sem vetores (a ajuda vem pela lexical da árvore), salvo se o pedir.
+  const rawEmbed = mpv ? (hooks.embedQuery !== undefined ? hooks.embedQuery : hooks.evalRun ? null : await mpvQueryEmbedderLazy()) : null;
   const embedQuery = rawEmbed ? onceQueryEmbed(rawEmbed) : null;
   const sectionSearch = mpv && embedQuery ? makeSectionSearch({ viewer: kbViewerFrom(user.role, toolCtx.access), embedQuery }) : null;
   const turnCtx: StaffToolCtx = sectionSearch ? { ...toolCtx, sectionSearch } : toolCtx;
@@ -344,7 +356,8 @@ export async function askAssistant(
   let kbOnce: Promise<ChatKnowledge | null> | null = null;
   const knowledge = kbSource ? (q: string) => (kbOnce ??= kbSource(q)) : undefined;
   const turn = async (feature: AssistantFeature, conversationId: number | null, newConversation: boolean | undefined, deadlineMs?: number) => runChatTurn<StaffToolCtx>({
-    feature,
+    feature: hooks.evalRun?.feature ?? feature,
+    ...(hooks.evalRun ? { tier: hooks.evalRun.tier, ephemeral: true } : {}),
     channel: ASSISTANT_CHANNEL,
     ownerKey: ownerKeyFor(user.id),
     userId: user.id,
@@ -384,7 +397,7 @@ export async function askAssistant(
   let economyWhy: string | null = mode.economyReason;
   let r = await turn(feature, input.conversationId ?? null, input.newConversation);
   // Teto próprio atingido entre a escolha e a chamada (ou orçamento): desce para o lite, na mesma conversa.
-  if (!r.ok && r.reason === "budget" && feature === ASSISTANT_SMART_FEATURE) {
+  if (!r.ok && r.reason === "budget" && feature === ASSISTANT_SMART_FEATURE && !hooks.evalRun) {
     feature = ASSISTANT_FEATURE;
     economy = r.budgetScope === "own";
     economyWhy = r.budgetReason ?? null;
@@ -403,5 +416,8 @@ export async function askAssistant(
       });
     }
   }
-  return r.ok ? { ...r, feature, ...(economy ? { economy: true, economyNote: economyNote(economyWhy) } : {}) } : r;
+  if (!r.ok) return r;
+  // O `run` (custo, voltas) é só para o eval: o widget recebe o formato de sempre.
+  const { run, ...rest } = r;
+  return { ...rest, ...(hooks.evalRun && run ? { run } : {}), feature, ...(economy ? { economy: true, economyNote: economyNote(economyWhy) } : {}) };
 }

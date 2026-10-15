@@ -413,6 +413,12 @@ export const aiAssistantSmartBudgetSchema = z.object({
 export type AiAssistantSmartBudget = z.infer<typeof aiAssistantSmartBudgetSchema>;
 export const AI_ASSISTANT_SMART_DEFAULT_BUDGET: AiAssistantSmartBudget = { eurPerDay: 10, eurPerMonth: 150, eurPerUserPerDay: 3 };
 export const AI_ASSISTANT_SMART_DEFAULT_LIMITS = { perMinute: 10, perDay: 80, maxInputChars: 1000 } as const;
+/**
+ * Plano MPV §5.3/§8.2 (F8): teto do eval do Multis (`assistant_eval`). O script
+ * conta o gasto de cada corrida e pára aos 15 € (marca "incompleto"); este é o
+ * teto da funcionalidade no registo, se um dia correr com a BD (não é uma definição).
+ */
+export const AI_ASSISTANT_EVAL_BUDGET: AiAssistantSmartBudget = { eurPerDay: 15, eurPerMonth: 60, eurPerUserPerDay: 15 };
 
 export interface SettingDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   key: string;
