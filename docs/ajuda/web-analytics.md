@@ -1,5 +1,7 @@
 ---
 modulo: marketing
+grupo: Financeiro
+pagina: marketing.web
 titulo: Web & SEO (Google Analytics 4, Search Console, PageSpeed)
 rotas: /marketing/web
 palavras: web, seo, crux, chrome ux report, dados reais, visitantes reais, o que corrigir primeiro, oportunidades, lighthouse, google analytics, analytics, ga4, search console, pesquisa google, orgânico, cliques, impressões, posição, pesquisas, sessões, utilizadores, páginas de entrada, canais, pagespeed, velocidade, lcp, cls, inp, conta de serviço, service account, leitor, propriedade, conversão web
@@ -24,7 +26,7 @@ Em **Marketing → Web & SEO** vês o tráfego dos sites (Google Analytics 4), a
 
 ## Configurar (super admin)
 
-**1. Google Cloud** (projeto da conta de serviço que a app já usa — a do Gmail/Drive)
+### 1. Google Cloud (projeto da conta de serviço que a app já usa — a do Gmail/Drive)
 1. Abre console.cloud.google.com → **APIs e serviços → Biblioteca**.
 2. Ativa **Google Analytics Data API**, **Google Search Console API**, **PageSpeed Insights API** e **Chrome UX Report API**.
 3. Em **Credenciais → Criar credenciais → Chave de API**, restringe-a à **PageSpeed Insights API** e à **Chrome UX Report API** e põe-a no Vercel como `GOOGLE_PAGESPEED_API_KEY`. Sem chave a PageSpeed funciona com quota baixa, mas os **dados reais (CrUX) precisam da chave** (em alternativa, uma chave só para a CrUX em `GOOGLE_CRUX_API_KEY`).
@@ -32,20 +34,20 @@ Em **Marketing → Web & SEO** vês o tráfego dos sites (Google Analytics 4), a
 **2. Copiar o email da conta de serviço**
 Em **Definições → Integrações → Web & SEO** aparece o email da conta de serviço (termina em `.iam.gserviceaccount.com`) com um botão para copiar.
 
-**3. Dar acesso no Google Analytics 4** (em cada propriedade)
+### 3. Dar acesso no Google Analytics 4 (em cada propriedade)
 1. Abre analytics.google.com e escolhe a propriedade.
 2. **Administração** (roda dentada) → **Propriedade** → **Gestão de acesso à propriedade**.
 3. Carrega em **+** → **Adicionar utilizadores**.
 4. Cola o email da conta de serviço, escolhe a função **Leitor**, tira o visto de "Notificar por email" e carrega em **Adicionar**.
 5. Copia o **ID da propriedade** (Administração → Detalhes da propriedade; só números, ex.: 123456789).
 
-**4. Dar acesso na Search Console** (em cada propriedade)
+### 4. Dar acesso na Search Console (em cada propriedade)
 1. Abre search.google.com/search-console e escolhe a propriedade.
 2. **Definições** → **Utilizadores e autorizações** → **Adicionar utilizador**.
 3. Cola o email da conta de serviço, autorização **Restrito** (chega) e **Adicionar**. Tens de ser **proprietário** da propriedade para adicionar utilizadores.
 4. Anota o nome da propriedade tal como aparece: `sc-domain:multipark.pt` (domínio) ou `https://www.multipark.pt/` (prefixo de URL).
 
-**5. Preencher as Definições** (Definições → Integrações → Web & SEO)
+### 5. Preencher as Definições (Definições → Integrações → Web & SEO)
 1. Adiciona cada propriedade GA4 (ID, nome, marca) e cada propriedade da Search Console (nome exato, marca).
 2. Confere as páginas da PageSpeed (por omissão as páginas iniciais multipark.pt e multipark.app — junta as páginas de reserva de cada marca, até 40). Para juntar muitas de uma vez usa **Colar várias páginas** (uma por linha, `URL | nome` opcional; a marca é adivinhada pelo domínio). "Chave" = página-chave (entra nos alertas dos dados reais). O interruptor **Dados reais (Chrome UX Report)** consulta 1×/semana as mesmas páginas e os respetivos sites.
 3. Escolhe a **hora da atualização diária** (Lisboa; 09:00 por omissão), o histórico da 1.ª recolha (90 dias por omissão), os **eventos do funil** (ex.: `begin_checkout`, `purchase`) e os limiares dos alertas.

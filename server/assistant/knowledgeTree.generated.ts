@@ -1,0 +1,4637 @@
+// GERADO por scripts/gen-ajuda.ts a partir de docs/ajuda/*.md — não editar à mão.
+// Árvore da ajuda (Grupo do menu → Página → Secção), plano MPV §3.2.
+import type { HelpTree } from "../../shared/helpTree";
+
+/** Nível do índice que cabe no teto de 6000 tokens ("sections" = com os títulos das secções). */
+export const KNOWLEDGE_INDEX_LEVEL: "sections" | "pages" = "sections";
+/** Índice para o prompt estável (≈ 4079 tokens). */
+export const KNOWLEDGE_INDEX: string = "## Dashboards\n- dashboards: Dashboards, entrada e menu (\"Sem acesso\") [/dashboards, /dashboard, /financeiro, /operacoes-dashboard, /pessoas-dashboard, /suporte-dashboard, /, /modulos] — Os Dashboards (no topo do menu) juntam num só sítio os números de cada área: separadores Geral, Financeiro, Operações, Pessoas, Suporte e Marketing.\n  Quem vê os Dashboards · Geral · Financeiro · Operações · Pessoas · Suporte · Marketing · Entrar na app · Entrar com email e código · Entrar num PDA · Código por email · O que abre para quem\n## Financeiro\n- caixa: Caixa [/caixa] — Financeiro → Caixa (29c, 6 out 2026: \"uma coisa é faturação, outra coisa é caixa\").\n  Separadores · Correção de caixa — casos · Contagem da caixa · Confirmar pagamentos · Preços iniciais · Correção de caixa — comparar um dia · Despesas do turno · Confirmação da caixa\n- despesas: Despesas [/despesas, /despesas/dashboard] — Registo de faturas e despesas da empresa.\n  Registar uma despesa · Lançar já paga · Escolher categoria, centro de custos e quem comprou · Despesas do turno · Lista · Resumo · Gerir · Despesas fixas · Falta a fatura · Notas de crédito · Para a contabilista · Faturas do Google / Meta\n- faturacao: Faturação [/faturacao, /faturacao/diagnose, /anual] — Receita, custos e margem por período (só super admin; o dashboard Financeiro, com a mesma base, é para admin e acima — ver a ajuda dos Dashboards → Financeiro).\n  Ler a página · Anual · Diagnóstico de Faturação\n- marketing: Marketing [/marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web] — Só super admin (ou quem tiver uma exceção de acesso ao Marketing).\n  Separadores · Canais e clientes · Orçamentos · Conversões e reservas, lado a lado\n- marketing.google-business: Google Business Profile (perfis Google: desempenho, horários, publicações) [/marketing/web] — Em Marketing → Web & SEO → Google Business vês o desempenho dos perfis Google de cada parque (Lisboa, Porto, Faro; Multipark, Redpark, Skypark, Airpark…\n  O que há no separador · Horários · Publicações · Alertas · Ligar e pôr a funcionar · 1. Pedir acesso à API do Business Profile · 2. Ativar as APIs no mesmo projeto · 3. Ligar a conta Google certa · 4. Testar\n- marketing.web: Web & SEO (Google Analytics 4, Search Console, PageSpeed) [/marketing/web] — Em Marketing → Web & SEO vês o tráfego dos sites (Google Analytics 4), a pesquisa orgânica do Google (Search Console) e a velocidade das páginas principais…\n  O que há no separador · Configurar · 1. Google Cloud · 2. Copiar o email da conta de serviço · 3. Dar acesso no Google Analytics 4 · 4. Dar acesso na Search Console · 5. Preencher as Definições · Problemas comuns\n- parcerias: Parcerias (parceiros, parques, Pró e avenças) [/parcerias, /parcerias/tipo/:tipo, /parcerias/inferir] — Menu Financeiro → Parcerias.\n  Separadores · Parceiros · Parques · Pró e avenças · Faturação · Parques nossos vindos pelo Marketplace · Fecho do mês · Análise · Registos · Inativos · Juntar registos · Ligar à Multipark · Notas\n- projetos: Projetos e custos por projeto [/projetos, /projetos/custos] — Os Projetos são a árvore de centros de custos: Grupo → Cidade → Marca → Projeto.\n  Gerir a árvore · Custos por projeto\n## Pessoas\n- avaliacao: Avaliação (dia e mês) [/avaliacao, /avaliacao-operacional] — A avaliação dos condutores e extras está numa só página: menu Pessoas → Avaliação.\n  De onde vêm os números · Separador Dia · Separador Mês · Pesquisar e filtrar o ranking · Como se contam os movimentos · Fecho do mês · Quem vê o quê · Acidentes: −6000 pontos\n- condutores-agentes: Condutores e agentes [/pessoas/condutores-agentes] — Em Pessoas → Condutores e agentes.\n  Quem vê · Movimentos e mudanças de lugar · Condutores · Tempos de um condutor · Agentes · Desempenho · O detalhe de uma pessoa: de onde vem cada número · Excessos de velocidade · Quando a leitura falha\n- conhecimento: Pesquisa global (Ctrl+K) e Base de conhecimento [/formacao/conhecimento] — Uma só caixa para procurar em tudo o que podes ver: reservas, clientes e contactos, reclamações, emails, conversas de WhatsApp, tarefas, colaboradores…\n  Pesquisa global · Base de conhecimento · Onde estão os documentos · Gerir · Quem vê o quê · Perguntas de quiz a partir de um documento · Quiz e FAQs feitos a partir da base · Sem Drive nem IA\n- formacao: Formação [/formacao] — Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.\n  Fazer a tua formação · Quiz · Carreira · FAQs · Formação e escala · Gestão\n- leads-extras: Leads de Extras (leads, candidaturas do site e recrutamento) [/extras-leads] — Cartões ou Lista (botão no topo da lista de leads e das candidaturas): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.\n  Leads · Candidaturas do site · Recrutamento · Entradas pela app\n- rh: RH e ponto [/rh, /rh/dashboard, /perfil] — Cartões ou Lista (botão no topo da lista): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.\n  Picar o ponto · Ponto de um mês · Folha de ordenados: ninguém fica de fora · \"Ainda estás no terminal?\" · Terminal: confirmar, corrigir ou desmarcar · A tua ficha · Com que conta a pessoa entra · Candidatos, inativos e desativados · Documentos: validar ou recusar · Pedir documentos em falta aos extras · Carta de condução · Notas internas · O supervisor no RH da sua cidade · O back office no RH · Gestão · Dashboard RH: possíveis faltas e detalhe por colaborador · Possíveis faltas por validar · Detalhe por colaborador · Ligações · Agentes da Multipark × pessoas · Uma pessoa: contas e agentes · Agente da Multipark na ficha · Comparar a lista de agentes da Multipark · Juntar contas · Juntar fichas da mesma pessoa · Agentes que não são pessoas · Agentes de teste · Fichas sem cidade\n## Operações\n- disponibilidade: Disponibilidade [/disponibilidade] — Onde os extras dizem em que dias e turnos podem trabalhar.\n  Os teus dias livres habituais · Marcar a tua disponibilidade · Gestão · Métricas dos extras\n- extras-dia: Extras-Dia [/extras-dia] — Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores são precisos por hora, e a escala dos extras.\n  Ver a previsão · Separador \"Pressão\" · De onde vêm os tempos · Diagnóstico dos tempos · Recolha pelo meio de uma entrega · Escalar a equipa · Proposta automática · Quem vê o quê · Notas\n- operacional: Actividade Diária (quem fez o quê, GPS e PDAs) [/operacional] — Menu Operações → Actividade Diária: quem fez o quê nas reservas, o Resumo do dia, a Semana por hora, a Avaliação do mês, os km e as velocidades do GPS…\n  Que abas vês · Atividade do Dia · Resumo do dia · Semana · Avaliação do mês · Histórico Diário · Ao Vivo · PDAs · Telemóveis pessoais · Rádio · Quando a leitura falha\n- operacoes: Reservas do dia (entradas e saídas) [/operacoes] — Uma só lista com as entradas (check-in) e as saídas (check-out) de um dia.\n  Onde · O dia · Cada linha · Que parques aparecem · Por cidade, por hora e por marca · Grupos: um por parque · Contadores e filtros\n- operacoes.listas: Reservas, Recolhas, Entregas e Cancelados (listas por período) [/operacoes] — Quatro listas por período, nas Operações → Reservas & Operações, ao lado de \"Reservas do dia\".\n  As quatro listas · O período · Contadores e comparação · Porque é que o número é diferente do Dashboard? · Filtros e tabela · O Dashboard\n- passagem-turno: Passagem de turno [/passagem-turno] — Checklist de fim de turno dos team leaders e o histórico das passagens.\n  Preencher · Resumo IA para o turno seguinte · Pendentes que passam de turno · Resumo automático · Estado do parque · Alterações por gravar · Quando a leitura falha · Notas\n- radio: Rádio (gravações do Zello e transcrições) [/radio, /operacional] — Menu Operações → Actividade Diária, separador Rádio (o antigo endereço /radio vai lá ter).\n  Gravações do Zello · Guardar como prova · Provas · Transcrições · A lista · Nova transcrição · Quando a leitura falha\n- reserva: Ficha da reserva [/reserva] — Tudo sobre uma reserva num só sítio, lido em tempo real da base de dados da Multipark.\n  Abrir · O que mostra\n- servicos: Serviços [/servicos] — Menu Operações → Serviços: os serviços extra das reservas (lavagens, carregamentos elétricos, valet…) no período escolhido, com totais por tipo e por parque.\n  Limites e falhas · Tarefas automáticas dos serviços\n- tarefas: Tarefas [/tarefas] — As minhas tarefas\n  As minhas tarefas · Filtros · Criar e gerir · Checklists recorrentes · Avisos de atraso e conclusão · Aviso \"Nova tarefa para ti\" · Tarefas dos serviços das reservas · Tarefas de candidatura\n## Suporte\n- clientes: Clientes (CRM: fichas, filtros, juntar e separar) [/clientes, /clientes/rever] — Cada cliente tem uma ficha com o nosso n.º de cliente.\n  De onde vêm os clientes · Quando duas fichas são a mesma pessoa · Como uma reserva se liga a uma ficha · Lista · Ficha · O cliente nas outras páginas · Clientes Pro e conta corrente · Agregadores e agências · Parcerias · Rever fichas\n- contactos: Contactos (pesquisa, diretório e Google Contactos) [/contactos, /perfil] — Cartões ou Lista (botão no topo da lista): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.\n  Filtrar e ordenar por cima · Importar contactos · Pesquisa · Diretório · Os meus contactos Google · Grupo \"Multipark — Serviço\" no telemóvel · Configuração\n- criticas: Críticas Google [/criticas] — As avaliações do Google de todos os parques, juntas e separadas por parque, com a resposta preparada aqui.\n  De onde vêm · Parque, marca ou lixo · Dashboard · Reviews · Responder · Reclamações · Dispensar · Números · Quando a leitura falha · Quem pode\n- ocorrencias: Ocorrências [/ocorrencias] — As ocorrências registadas pelos agentes na app Multipark (vidro aberto, acidente, atraso…).\n  Ver e procurar · Fecham sozinhas ao fim de 3 dias · Resolver · Foi um acidente? · Quando a leitura falha · Avisos de ocorrência por email · Ocorrências antigas do dashboard\n- perdidos: Perdidos e Achados [/perdidos-achados] — Objetos esquecidos pelos clientes nos carros.\n  Registar · Por email · Tratar · Condutores do caso · Arquivar · Quando a leitura falha · Quem pode\n- reclamacoes: Reclamações [/reclamacoes] — Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).\n  Criar · Reclamações que a IA vê noutras caixas · Filtros · Tratar · Prazo · Condutores · Fotos · Arquivar · Quando a leitura falha · Quem pode\n## Comunicação\n- central: Central (as minhas chamadas) [/central] — Menu Comunicação → Central.\n  Quem vê o quê · O que mostra · Quando a central toca no dashboard\n- comunicacao: Comunicação (email e calendário) [/comunicacao, /comunicacao/meu-email, /calendario] — Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard.\n  Caixas de email · O resto da Comunicação · Caixas por tema · Ligar, WhatsApp e email a partir das fichas · Ligações · Emails que criam casos · Caixas · O meu email · Segurança · Quando a leitura falha · Calendário\n- comunicacao.aliases: Email por alias (encaminhamento, Por classificar e envio) [/definicoes, /comunicacao] — Todo o email passa pela API do Gmail — não há SMTP nem IMAP.\n  O Workspace real · Como o alias é lido · Preencher a tabela · Depois do alias: a triagem da IA · Por classificar · Envio · O que falta do lado do dono\n- drive: Google Drive, Docs e Sheets [/drive, /perfil] — Liga ficheiros do Google Drive aos registos, guarda anexos e documentos no teu Drive, gera documentos a partir de modelos Google Docs e exporta relatórios…\n  Abrir o Drive · Ativar o Drive · Anexar do Drive · Guardar no Drive · Gerar documento · Exportar para Sheets · Importar do Google Sheets · Configuração\n- whatsapp: WhatsApp [/whatsapp] — Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e clientes.\n  Quem vê o quê · Começar uma conversa · Quem é · Responder · Estado de cada mensagem enviada · Mensagem \"sem confirmação\" · Templates por cidade · Respostas automáticas · Caixas por tema · Organizar · A triagem propõe o caso · Ficheiros e localizações recebidos · Envios em massa · Respostas rápidas · Quando a leitura falha · Chamadas de voz\n- whatsapp.chamadas: WhatsApp — Chamadas de voz [/whatsapp] — Os clientes podem ligar para o número de WhatsApp da empresa e a chamada é atendida no dashboard, no browser (microfone e colunas/auscultadores do computador).\n  Atender · Aviso com o separador em segundo plano · Ligar / devolver uma chamada · Limites da Meta · Configuração · Quando a leitura falha · Problemas comuns\n## Sistema\n- api-keys: API Keys (chaves para o site, o MCP e os dispositivos) [/api-keys] — Página API Keys (menu Sistema, só super admin): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades)…\n  Criar e gerir as chaves · Documentação API\n- definicoes: Definições [/definicoes] — Quem entra: administradores e super admin (pela matriz de permissões, com as exceções por pessoa).\n  Estado · Automações · Integrações · Comunicação · Parâmetros · Notificações · Segurança · Gravar ao mesmo tempo e histórico\n- definicoes.agendador: Agendador (tarefas automáticas) [/definicoes] — Todas as tarefas automáticas da app (sincronizar o Gmail, reservas Multipark, extras, recolha GPS do Zello, relatórios, Google Ads…) correm a partir de um só…\n  Configurar o cron-job.org · O que corre e quando · Ler o cartão \"Agendador\" · Corridas manuais\n- definicoes.google-tempo-real: Google em tempo real (Calendário, Drive, Tarefas e Contactos) [/definicoes, /perfil] — Desde 26 set 2026 a app já não pergunta à Google de 15 em 15 minutos se mudou alguma coisa.\n  O que muda no dashboard vai logo para o Google · Calendário e Drive: em tempo real · Tarefas e Contactos: enquanto tens o dashboard aberto · Rede de segurança: de 4 em 4 horas · Ver o estado · Configuração\n- definicoes.ia: Onde é que a IA trabalha no dashboard [/definicoes] — A IA escreve textos e sugere.\n  Só quando carregas no botão · Sozinha · Começam desligadas · Dados pessoais · Quanto a IA usa\n- integracoes: Integrações (estado das ligações externas) [/integracoes] — Página Integrações (menu Sistema): um cartão por ligação externa — Google Ads, Meta, Google Business, WhatsApp, Gmail, Google…\n  O que cada cartão diz · Testar · Central Vodafone · Xsi da One Net\n- integracoes.google-ads: Integrações → Google Ads e Meta Ads [/integracoes/google-ads] — Aqui liga-se o Google Ads, escolhem-se as contas a recolher e vê-se o histórico das recolhas.\n  Quem faz o quê · Contas · Recolhas automáticas · Cliques · Estados\n- logs: Logs (registo de atividade) [/logs] — Página Logs (menu Sistema): o registo do que se faz na plataforma — quem, quando, o quê e em que registo.\n  Quem fez\n- multis: Multis (o assistente de IA da equipa) [/multis/falhas, /perfil] — O Multis é o assistente de IA da Multipark dentro da aplicação.\n  O que lhe podes pedir · Regras · Memória · Avaliar respostas · Perguntas que falharam\n- perfil: Perfil (foto, notificações, palavra-passe, sessões, contas Google) [/perfil] — O Perfil tem o teu cartão, atalhos e o que é só teu.\n  Atalhos · Este telemóvel · Foto · Notificações · Palavra-passe · Avisos no telemóvel · Contas Google · Terminar sessões noutros aparelhos\n- permissoes: Permissões [/permissoes, /utilizadores] — Utilizadores — Cartões ou Lista (botão no topo da lista de utilizadores): vês as contas em cartões com foto ou numa lista compacta — no telemóvel e no PC.\n  Utilizadores — agente e ligações · Página Permissões";
+
+export const KNOWLEDGE_TREE: HelpTree = {
+  "groups": [
+    {
+      "group": "Dashboards",
+      "pages": [
+        {
+          "id": "dashboards",
+          "file": "entrada.md",
+          "group": "Dashboards",
+          "module": "dashboards",
+          "title": "Dashboards, entrada e menu (\"Sem acesso\")",
+          "routes": [
+            "/dashboards",
+            "/dashboard",
+            "/financeiro",
+            "/operacoes-dashboard",
+            "/pessoas-dashboard",
+            "/suporte-dashboard",
+            "/",
+            "/modulos"
+          ],
+          "tabs": [
+            {
+              "tab": "geral",
+              "section": "Geral",
+              "sectionId": "entrada.md#geral-o-resumo-de-hoje"
+            },
+            {
+              "tab": "financeiro",
+              "section": "Financeiro",
+              "sectionId": "entrada.md#financeiro-financeiro"
+            },
+            {
+              "tab": "operacoes",
+              "section": "Operações",
+              "sectionId": "entrada.md#operacoes-operacoes-dashboard"
+            },
+            {
+              "tab": "pessoas",
+              "section": "Pessoas",
+              "sectionId": "entrada.md#pessoas-pessoas-dashboard"
+            },
+            {
+              "tab": "suporte",
+              "section": "Suporte",
+              "sectionId": "entrada.md#suporte-suporte-dashboard"
+            },
+            {
+              "tab": "marketing",
+              "section": "Marketing",
+              "sectionId": "entrada.md#marketing-dashboards-marketing"
+            }
+          ],
+          "summary": "Os Dashboards (no topo do menu) juntam num só sítio os números de cada área: separadores Geral, Financeiro, Operações, Pessoas, Suporte e Marketing.",
+          "sections": [
+            {
+              "id": "entrada.md#inicio",
+              "file": "entrada.md",
+              "slug": "inicio",
+              "title": "Dashboards, entrada e menu (\"Sem acesso\")",
+              "level": 1,
+              "summary": "Os Dashboards (no topo do menu) juntam num só sítio os números de cada área: separadores Geral, Financeiro, Operações, Pessoas, Suporte e Marketing.",
+              "text": "Os **Dashboards** (no topo do menu) juntam num só sítio os números de cada área: separadores **Geral**, **Financeiro**, **Operações**, **Pessoas**, **Suporte** e **Marketing**. Cada um abre também pelo seu endereço (/dashboard, /financeiro, /operacoes-dashboard, /pessoas-dashboard, /suporte-dashboard, /marketing). Mais abaixo: entrar na app, o menu e o \"Sem acesso\"."
+            },
+            {
+              "id": "entrada.md#quem-ve-os-dashboards",
+              "file": "entrada.md",
+              "slug": "quem-ve-os-dashboards",
+              "title": "Quem vê os Dashboards",
+              "level": 2,
+              "summary": "A página Dashboards (permissão Dashboards) é de admin e super admin (ou de quem tenha essa permissão dada por pessoa, em Permissões).",
+              "text": "- A página **Dashboards** (permissão **Dashboards**) é de **admin e super admin** (ou de quem tenha essa permissão dada por pessoa, em Permissões).\n- Os separadores aparecem todos a quem abre a página, mas os números de cada um pedem a permissão do módulo, verificada no servidor: o **Financeiro** pede o Financeiro, a permissão de ver **totais financeiros** e um papel de admin ou acima; o **Marketing** pede o Marketing (super admin). Sem permissão, o cartão diz **\"Sem acesso\"** — não é zero.\n- A **cidade** e a **marca** escolhidas no topo da app valem em todos os dashboards (só aparecem as cidades que podes ver); as **datas** são de cada página. Onde um cartão não segue o filtro, está dito abaixo.\n- Ao entrar, quem vê os Dashboards vai para o **Geral**; quem não os vê vai para as Tarefas (team leaders) ou para a ficha (extras e condutores)."
+            },
+            {
+              "id": "entrada.md#geral-o-resumo-de-hoje",
+              "file": "entrada.md",
+              "slug": "geral-o-resumo-de-hoje",
+              "title": "Geral (o resumo de hoje)",
+              "level": 2,
+              "summary": "Os números de hoje, de relance, e atalhos para os outros dashboards.",
+              "text": "Os números de **hoje**, de relance, e atalhos para os outros dashboards. Não tem barra de filtros: os cartões das reservas e das despesas seguem a cidade/marca do topo; reclamações, críticas e colaboradores são sempre de todas as cidades.\n- **Briefing do dia** (quem vê a Passagem de turno): um bloco por cidade, feito todos os dias por volta das 07:30 — **Entradas / saídas**, **Pico**, **Extras escalados / necessários** (a vermelho quando faltam) e **Prazos hoje (em atraso)**. A etiqueta \"texto IA\" quer dizer que o parágrafo foi escrito pela IA. **Ver detalhe** mostra as entradas/saídas por hora, os prazos, os pendentes da passagem de turno, o que se repete entre turnos, os alertas e o marketing.\n- **Reservas Hoje**: reservas **criadas** hoje (sem as canceladas e sem as compras online por acabar). **Check-ins Hoje** / **Check-outs Hoje**: reservas com a entrada / a saída marcada para hoje, não canceladas. **Cancelados Hoje**: canceladas hoje. Por baixo, \"X este mês\" (do dia 1 até hoje).\n- **Receita Hoje**: o valor das reservas que **entram** hoje, **com IVA**. Não é a receita da Faturação nem do Financeiro (essas contam as **saídas**, sem IVA) — por isso os números não batem, e está certo.\n- As reservas são lidas **ao vivo da BD da Multipark**, só dos nossos parques e das tuas cidades; os dias são de Lisboa. Estes cartões pedem a permissão do Financeiro e a de ver totais.\n- **Despesas Mês**: despesas com data neste mês (não canceladas), com o n.º de registos. **Pendente**: todas as despesas por pagar, de sempre (não só do mês). Só admin e super admin veem estes dois com números; os outros papéis veem 0 €.\n- **Reclamações**: todas as não arquivadas, em qualquer estado; \"N em atraso\" = passou o prazo e ainda está Nova ou Em análise.\n- **Média Google**: média das estrelas das críticas (as sem estrelas não contam; as sem parque nem marca também não), com uma casa decimal; \"N pendentes\" = sem resposta enviada (um rascunho da IA não conta) e não fechadas. Sem críticas aparece 0,0 ★.\n- **Colaboradores**: fichas ativas (de todas as cidades), com \"N efetivos · N extras\".\n- **Dashboards · N atalhos**: botões para os dashboards que podes abrir.\n- Cada cartão que não carrega diz **\"Não carregou · tentar de novo\"**; sem permissão diz **\"Sem acesso\"**; um 0 é mesmo 0."
+            },
+            {
+              "id": "entrada.md#financeiro-financeiro",
+              "file": "entrada.md",
+              "slug": "financeiro-financeiro",
+              "title": "Financeiro (/financeiro)",
+              "level": 2,
+              "summary": "Receita, custos e margem com a mesma base da Faturação: carros entregues (saída feita, CHECKED_OUT), sem IVA, no período escolhido.",
+              "text": "Receita, custos e margem com a **mesma base da Faturação**: carros **entregues** (saída feita, CHECKED_OUT), **sem IVA**, no período escolhido. Filtros: **Período** (por omissão do dia 1 do mês até hoje), **Cidade** e **Marca**. O segundo seletor \"Diário/Semanal/Mensal/Anual\" não muda nenhum número.\n- **Entregues s/ IVA**: as saídas do período, sem IVA (\"até hoje\" se o período chega a hoje), com o n.º de carros saídos.\n- **Custos s/ IVA**: despesas (com a TSU paga) + salários + equipa do dia + comissões, no mesmo período; num período em curso, só até hoje.\n- **Margem realizada** / **Margem s/ IVA**: entregues − custos (igual à Faturação). Num período que acaba hoje ou depois aparece também o fecho previsto (ver a ajuda da Faturação → Previsão).\n- **Pendente (dívida atual)** e **Em Atraso (dívida atual)**: as despesas por pagar e em atraso **de sempre** — não dependem do período.\n- **Dashboard de Despesas** (segue a cidade/marca, **não** o período): **Total Despesas** e **Pago** do ano civil; **Pendente** e **Em Atraso** de sempre; **Despesas Mensais** dos últimos 6 meses; **Por Categoria (Top 5)** e **Despesas por Categoria** só do mês atual.\n- **Reservas criadas por cidade / por marca**: o valor **com IVA** das reservas **criadas** no período (o n.º de reservas aparece ao passar o rato). É outra base — não é a receita da Faturação. \"Por marca\" agrupa pelo nome do parque na Multipark.\n- **Evolução mensal: entregues vs custos (s/ IVA)**: mês a mês, com o mesmo motor da Faturação; os meses que ainda não acabaram mostram a previsão a tracejado (**Receita esperada**, **Custos previstos**).\n- **Pagamentos nos próximos 7 dias**: despesas pendentes que vencem de hoje a daqui a 7 dias, por ordem de data (\"Hoje\", \"Amanhã\", \"N dias\" — a vermelho com 1 dia ou menos, a amarelo com 3 ou menos).\n- **Marketing** (só o super admin): gasto em anúncios Google/Meta, outras despesas de marketing, custo total, conversões, custo por conversão e ROAS (sem IVA), com **Ver marketing**.\n- **Exportar para Sheets** (admin e acima, com o Drive configurado): leva os números para uma folha Google.\n- Só admin e super admin veem os números principais e os das despesas; para os outros papéis aparecem a 0 sem erro."
+            },
+            {
+              "id": "entrada.md#operacoes-operacoes-dashboard",
+              "file": "entrada.md",
+              "slug": "operacoes-operacoes-dashboard",
+              "title": "Operações (/operacoes-dashboard)",
+              "level": 2,
+              "summary": "Visão geral operacional.",
+              "text": "Visão geral operacional. Filtros: **Período** (por omissão os **últimos 30 dias**, hoje incluído), **Cidade** e **Marca** — mexem nos gráficos das reservas; os cartões \"hoje\" são sempre de hoje.\n- **Reservas hoje** (criadas hoje, não canceladas), **Check-ins hoje**, **Check-outs hoje** e **Cancelados hoje**: só contagens, sem dinheiro, lidas ao vivo da BD da Multipark. Aqui as compras online ainda por acabar **contam** até a Multipark as dar como recolhidas ou canceladas (por isso o número pode ser diferente do Geral). Pedem só a permissão Dashboards.\n- **Km ontem (GPS · N condutores)** e **Vel. máxima ontem (GPS)**: do GPS do Zello de **ontem** (só contam condutores com mais de 0,5 km); pedem o Histórico diário e não seguem a cidade do topo.\n- **Reservas criadas por dia** (os dias a 0 não aparecem) e **Reservas por cidade**: as reservas criadas no período.\n- **Km por condutor — ontem (GPS)**: os 12 condutores com mais km. Sem dados: a recolha provisória corre às 23:15 e a final 2 dias depois.\n- Se a leitura das reservas falhar aparece **\"Não foi possível ler as reservas da Multipark.\"** com **Tentar de novo**, e os gráficos dizem \"Sem números (ver o aviso acima)\" — não é zero."
+            },
+            {
+              "id": "entrada.md#pessoas-pessoas-dashboard",
+              "file": "entrada.md",
+              "slug": "pessoas-pessoas-dashboard",
+              "title": "Pessoas (/pessoas-dashboard)",
+              "level": 2,
+              "summary": "RH, desempenho e formação.",
+              "text": "RH, desempenho e formação. A barra de filtros desta página **não muda nenhum número**: tudo segue só as cidades que podes ver.\n- **Funcionários Ativos**: fichas ativas, com \"N permanentes\".\n- **Contratos a Expirar**: contratos que acabam nos **próximos 30 dias** (conta também fichas inativas com o contrato a acabar).\n- **Documentos em Falta**: soma, por ficha, os que faltam dos 7 obrigatórios (foto, cartão de cidadão, carta de condução, comprovativo do NIB, comprovativo de morada, contrato e termo de responsabilidade), com o n.º de colaboradores; só entram fichas que já têm pelo menos um documento.\n- **Avaliados (7 dias)**: pessoas com dias avaliados nos últimos 7 dias operacionais (o dia começa às 03:00); \"—\" se a tua conta só vê a tua própria avaliação.\n- **Taxa Aprovação Exames**: tentativas aprovadas ÷ todas as tentativas dos exames de carreira; \"—\" sem tentativas.\n- **Distribuição por Posição** e **por Tipo de Contrato**: contagens das fichas (incluem as inativas).\n- **Top 5 — últimos 7 dias**: os 5 com mais pontos na Avaliação. **Top 5 Quiz Ranking**: os 5 melhores do quiz, com o n.º de jogos e a melhor pontuação.\n- Atenção: se a leitura das fichas ou dos documentos falhar, estes cartões mostram 0 em vez de um erro — confirma no RH antes de concluir."
+            },
+            {
+              "id": "entrada.md#suporte-suporte-dashboard",
+              "file": "entrada.md",
+              "slug": "suporte-suporte-dashboard",
+              "title": "Suporte (/suporte-dashboard)",
+              "level": 2,
+              "summary": "Reclamações, críticas Google, ocorrências e perdidos e achados.",
+              "text": "Reclamações, críticas Google, ocorrências e perdidos e achados. O **período não muda nenhum número**; a cidade/marca do topo vale para as Ocorrências, os Itens Perdidos e a lista das pendentes (reclamações e críticas são sempre de todas as cidades).\n- **Reclamações Abertas**: Novas + Em análise + Aguarda cliente; \"N total\" = todas as não arquivadas.\n- **Rating Médio Google** (de 0 a 5) e **Reviews Pendentes** (sem resposta enviada — a mesma regra do Geral).\n- **Ocorrências Abertas**: ao vivo da app Multipark, não resolvidas (as de prioridade média fecham sozinhas do nosso lado ao fim de 3 dias), sem os parques que a operação não faz. Se a leitura falhar diz \"Leitura falhou — não é 0\".\n- **Itens Perdidos**: abertos (novos ou em investigação), não arquivados.\n- Gráficos: **Reclamações por Estado** (\"Fechadas\" inclui as convertidas), **Distribuição de Ratings Google** (1★ a 5★) e **Ocorrências por Tipo** (pelo título da ocorrência).\n- **Últimas Reclamações Pendentes**: as 5 reclamações Novas mais recentes, com cliente, matrícula, data e prioridade.\n- Se a leitura das reclamações, das críticas ou dos perdidos falhar, esses cartões mostram 0 — confirma na página do módulo."
+            },
+            {
+              "id": "entrada.md#marketing-dashboards-marketing",
+              "file": "entrada.md",
+              "slug": "marketing-dashboards-marketing",
+              "title": "Marketing (Dashboards → Marketing)",
+              "level": 2,
+              "summary": "O mesmo dashboard da página Marketing (só o super admin): ver a ajuda do Marketing.",
+              "text": "O mesmo dashboard da página **Marketing** (só o super admin): ver a ajuda do Marketing. O antigo /marketing-dashboard abre /marketing."
+            },
+            {
+              "id": "entrada.md#entrar-na-app",
+              "file": "entrada.md",
+              "slug": "entrar-na-app",
+              "title": "Entrar na app",
+              "level": 2,
+              "summary": "Entrar: \"Entrar com Google\" na página inicial.",
+              "text": "**Entrar**: \"Entrar com Google\" na página inicial. Depois de entrar vais para o teu ecrã: o Dashboard (quem o vê), as Tarefas (team leaders) ou a tua ficha (extras e condutores)."
+            },
+            {
+              "id": "entrada.md#entrar-com-email-e-codigo-so-com-o-interruptor-entrar-com-em",
+              "file": "entrada.md",
+              "slug": "entrar-com-email-e-codigo-so-com-o-interruptor-entrar-com-em",
+              "title": "Entrar com email e código (só com o interruptor Entrar com email e código ligado em Definições → Automações; vem desligado — desligado, entra-se só com a Google, como sempre)",
+              "level": 2,
+              "summary": "A página de entrada passa a ter Email, Palavra-passe e Entrar.",
+              "text": "- A página de entrada passa a ter **Email**, **Palavra-passe** e **Entrar**. O botão **Entrar com Google** continua lá.\n- **Primeira vez ou esqueceste-te? Pedir código**: escreve o email e carrega aí. Aparece \"Pedimos o código ao TL e ao supervisor de serviço. Pede-lhes o código de 6 algarismos.\" Escreve o código **no mesmo aparelho onde o pediste** (noutro não funciona). Vale **10 minutos** e dá para errar **5 vezes**. Dá para colar. **Pedir outro código** só passado 1 minuto (os 3 últimos pedidos deste aparelho continuam a valer).\n- Depois do código aparece **Cria a tua palavra-passe** (pelo menos 8 caracteres; não pode ser fácil como 12345678, nem ter o teu nome, nem uma data como o dia de anos). **Agora não** salta este passo — da próxima vez pedes outro código.\n- O código vai para o **team leader de serviço** e os **supervisores** da cidade da tua ficha (os que têm o ponto aberto; se nenhum tiver, todos os da cidade). Sem cidade (conta nova, candidato) vai para o **RH e os admins**. Eles recebem no sino, no telemóvel (se ativaram os avisos) e em Atividade diária → Ao Vivo → **Códigos de entrada**, e dão-te o código.\n- No teu sino fica \"Entraste com um código enviado a TL X / supervisor Y às HH:MM\". Se não foste tu, avisa o RH.\n- É a **mesma conta** que com a Google (mesmo email = mesma pessoa): as mesmas permissões, a mesma ficha, o mesmo histórico. Serve qualquer email (Gmail, Hotmail, Sapo…) — o da conta ou, para extras e condutores, um dos emails da ficha. No Gmail, pontos e \"+\" contam como o mesmo email.\n- O ecrã diz sempre o mesmo, exista ou não a conta. Um email que não existe só cria uma conta (utilizador, com \"Liga a tua conta\") depois do código certo.\n- Depois do código valem as mesmas regras da Google: desativado não entra; inativo extra/condutor entra como utilizador (\"Voltei\"); ficha bloqueada mostra o ecrã de bloqueio.\n- **Só para utilizadores, extras e condutores.** Team leaders, supervisores, back/front office e admins entram com a Google — com a palavra-passe aparece \"Com o teu papel entra-se com Google\".\n- **Palavra-passe errada 5 vezes no mesmo dia** (em qualquer aparelho): até ao fim do dia só se entra com código, e o dono da conta é avisado no sino. A mensagem é sempre \"Email ou palavra-passe errados\".\n- **Repor acesso** (Utilizadores, quem gere a conta): tira a palavra-passe, termina as sessões em todos os aparelhos e avisa a pessoa (fica nos Logs). Ninguém define a palavra-passe de outra pessoa.\n- Tudo fica nos Logs: código pedido e a quem foi, entradas (Google, código, palavra-passe), palavra-passe criada/mudada/reposta, tentativas erradas.\n- Uma conta Google cujo email já está noutra conta ligada a **outra** Google não se junta sozinha: a entrada é recusada e os admins são avisados (juntam em Ligações)."
+            },
+            {
+              "id": "entrada.md#entrar-num-pda-so-com-entrar-com-email-e-codigo-ligado-desli",
+              "file": "entrada.md",
+              "slug": "entrar-num-pda-so-com-entrar-com-email-e-codigo-ligado-desli",
+              "title": "Entrar num PDA (só com Entrar com email e código ligado; desligado, os PDAs entram como sempre, com a Google)",
+              "level": 2,
+              "summary": "Num PDA registado (registado pelo QR) a sessão fica presa a esse PDA e acaba sozinha quando: dás saída do ponto (em qualquer aparelho, também no telemóvel)…",
+              "text": "- Num **PDA registado** (registado pelo QR) a sessão fica **presa a esse PDA** e acaba sozinha quando: dás **saída do ponto** (em qualquer aparelho, também no telemóvel), carregas em **Sair**, **outra pessoa entra** no PDA, o ponto esquecido é fechado sozinho, ou ao fim de **16 horas**. Funciona também para quem ainda não tem ficha (contas novas, candidatos).\n- Depois da saída do ponto aparece o **resumo da saída** (horas, km do Zello) e **\"A sessão termina em 10 s\"**; depois volta à página de entrada para a pessoa seguinte. **Terminar já** sai logo.\n- **Team leaders e supervisores** entram num PDA registado com **código** (sem palavra-passe). O código só vai a quem está **acima** da pessoa (o código de um TL vai aos supervisores; o de um supervisor ao backoffice e aos admins) — nunca a um colega do mesmo nível, que podia entrar como ele. Fora dos PDAs continuam com a Google.\n- **Google nos PDAs** (Definições → Automações, só o super admin; vem **ligado**, como hoje): desligado, o botão **Entrar com Google** desaparece nos PDAs registados (página de entrada, \"Iniciar sessão\" e registo do PDA). Telemóveis e PCs ficam sempre com o Google. Só dá para desligar com **Entrar com email e código** ligado.\n- Quem já tinha entrado no PDA com a Google **não é posto fora**: ao abrir a app, a sessão passa a sessão do PDA.\n- No PDA a página pede ao Chrome para **não sugerir** emails nem palavras-passe, e o email escrito não fica para a pessoa seguinte. Para o Chrome **não guardar** nada, faz a limpeza única de cada PDA (ver a ajuda do Ponto → PDAs) — sem ela o Chrome pode perguntar se quer guardar a palavra-passe.\n- Um separador antigo aberto no PDA não termina a sessão de quem entrou depois."
+            },
+            {
+              "id": "entrada.md#codigo-por-email-definicao-codigo-de-entrada-vai-para-defini",
+              "file": "entrada.md",
+              "slug": "codigo-por-email-definicao-codigo-de-entrada-vai-para-defini",
+              "title": "Código por email (definição Código de entrada vai para, Definições → Operação; vem em TL + supervisor de serviço)",
+              "level": 2,
+              "summary": "Com email, o código vai para o email da própria pessoa, enviado pela conta acesso@multipark.pt (uma conta só para isto, nunca uma caixa da Comunicação — se…",
+              "text": "- Com **email**, o código vai para o email da própria pessoa, enviado pela conta **acesso@multipark.pt** (uma conta só para isto, nunca uma caixa da Comunicação — se for, não envia). O email traz só o código e \"escreve-o no aparelho onde pediste\" (sem link) e nunca aparece na Comunicação.\n- Se o email não sair, aparece **\"Não conseguimos enviar o email agora — pede o código ao TL\"** e o código vai para o TL e o supervisor de serviço, como hoje.\n- No máximo **10 emails de código por dia** para o mesmo endereço (ninguém enche a caixa de outra pessoa). O código nunca vai no assunto do email, só no texto.\n- No teu sino fica \"Entraste com um código enviado para o teu email às HH:MM\".\n- **Acesso recusado** (conta desativada ou não registada): aparece a mensagem na página de entrada e **não** volta a mandar para a Google em ciclo. Fala com a administração.\n- **Conta nova**: qualquer conta Google entra como **utilizador**. Se ainda não está em nenhuma ficha, aparece **\"Liga a tua conta\"** com duas opções:\n  1. **Sou novo — quero candidatar-me**: escolhes a cidade (ou \"Ainda não sei\") e cria-se a tua ficha de **candidato** (com o nome e o email da Google, e a cidade escolhida — assim o supervisor dessa cidade vê-a) e a candidatura no Recrutamento, e abre **A minha ficha** para preencheres os dados e carregares os documentos. O supervisor revê e o RH aprova. Se já houver ficha ou candidatura com esse email, liga a essa (nunca cria outra).\n  2. **Já me candidatei / já trabalhei convosco com outro email**: escreve o **email ou o telefone** que usaste. A resposta é sempre a mesma (não diz se encontrou). Com o código por email ligado (Definições → interruptor \"Liga a tua conta: código por email\"), chega um código de 6 algarismos ao email que está na ficha/candidatura (vale 10 minutos, 5 tentativas) e a conta liga-se ao escrevê-lo; senão o pedido vai para o RH. No máximo 5 pedidos por dia. Nunca se liga só pelo nome.\n- **Inativo ≠ desativado**: quem ficou **inativo** (inatividade, fora do país, a pedido, fim de contrato, baixa, documentos, mudança de função) e é extra/condutor volta a entrar como **utilizador** — vê a ficha, atualiza os dados e os dias livres e carrega em **Voltei, quero trabalhar**. A ficha só volta a ativa quando o RH reativa. Quem foi **desativado** (roubou, despedido, trabalha mal, comportamento, faltas, segurança, outro, conta/ficha duplicada) fica bloqueado. A estrutura (team leaders, supervisores, back/front office, admins) inativa também fica bloqueada, como antes.\n- Os antigos **\"Suspenso: sem atividade\"** passam a inativos quando voltam a entrar: no ecrã de bloqueio aparece \"Sai e volta a entrar com a Google\".\n- **\"Não foi possível verificar a sessão\"**: o servidor não respondeu. A sessão pode continuar válida — carrega em **Tentar de novo** antes de voltar a entrar.\n- Se a entrada com a Google falhar, a página de erro diz o que fazer, sem detalhes técnicos; se pedir, dá à administração a **referência** que aparece.\n- Cada entrada e cada entrada recusada ficam nos Logs (só o super admin os vê)."
+            },
+            {
+              "id": "entrada.md#o-que-abre-para-quem",
+              "file": "entrada.md",
+              "slug": "o-que-abre-para-quem",
+              "title": "O que abre para quem",
+              "level": 4,
+              "summary": "O Perfil e o Menu abrem para todos, incluindo extras e condutores.",
+              "text": "- O **Perfil** e o **Menu** abrem para todos, incluindo extras e condutores.\n- Um ecrã do menu que não é para ti mostra **\"Sem acesso a esta página\"** com **Ir para o início** e **Sair** (antes saltava em silêncio para outra página).\n- **Sem centro de custos**: aparece o aviso, mas abrem o teu perfil, a tua ficha, a disponibilidade e a avaliação. Se a leitura do acesso falhar, aparece o erro com \"Tentar de novo\" (não é o mesmo que não ter centro de custos).\n- **Acesso bloqueado** (documentos/penalizações) e **Sem acesso** têm o botão **Sair** — num PDA partilhado, a pessoa seguinte consegue entrar.\n\n**Dashboard**: cada cartão que não carrega diz **\"Não carregou · tentar de novo\"** (antes mostrava 0); sem permissão diz **\"Sem acesso\"**. Os atalhos só mostram os dashboards que podes abrir.\n\n**Notificações** (sino): se não carregarem aparece o erro, não \"Sem notificações\". Carregar numa notificação para a página onde já estás abre mesmo o registo certo.\n\n**Links do calendário**: o turno de um extra leva à **Disponibilidade**; a escala do dia e a passagem de turno abrem o dia (e a cidade) certos.\n\n**Erros numa página**: aparece \"Esta página encontrou um erro\" com **Recarregar** — o menu continua a funcionar. Se a aplicação foi atualizada com a página aberta, recarrega sozinha uma vez (ou diz \"Há uma versão nova\").\n\n**Sair**: também apaga as pesquisas recentes guardadas neste aparelho.\n\n**Instalar no telemóvel**: o ícone e o arranque (\"/\") estão certos para qualquer papel."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Financeiro",
+      "pages": [
+        {
+          "id": "caixa",
+          "file": "caixa.md",
+          "group": "Financeiro",
+          "module": "caixa",
+          "title": "Caixa",
+          "routes": [
+            "/caixa"
+          ],
+          "tabs": [
+            {
+              "tab": "dia",
+              "section": "Separadores",
+              "sectionId": "caixa.md#separadores"
+            },
+            {
+              "tab": "confirmacao",
+              "section": "Confirmação da caixa",
+              "sectionId": "caixa.md#confirmacao-da-caixa"
+            },
+            {
+              "tab": "resumo",
+              "section": "Separadores",
+              "sectionId": "caixa.md#separadores"
+            },
+            {
+              "tab": "correcao",
+              "section": "Correção de caixa — casos",
+              "sectionId": "caixa.md#correcao-de-caixa-casos"
+            }
+          ],
+          "summary": "Financeiro → Caixa (29c, 6 out 2026: \"uma coisa é faturação, outra coisa é caixa\").",
+          "sections": [
+            {
+              "id": "caixa.md#inicio",
+              "file": "caixa.md",
+              "slug": "inicio",
+              "title": "Caixa",
+              "level": 1,
+              "summary": "Financeiro → Caixa (29c, 6 out 2026: \"uma coisa é faturação, outra coisa é caixa\").",
+              "text": "**Financeiro → Caixa** (29c, 6 out 2026: \"uma coisa é faturação, outra coisa é caixa\"). Tem permissão própria: dá-se a quem faz a correção de caixa sem abrir a Faturação (Permissões → módulo **Caixa**). Quem já tinha a Faturação continua a ver a Caixa.\n\nAs reservas e os pagamentos são lidos **ao vivo da base de dados da Multipark**, só dos parques que operamos."
+            },
+            {
+              "id": "caixa.md#separadores",
+              "file": "caixa.md",
+              "slug": "separadores",
+              "title": "Separadores",
+              "level": 4,
+              "summary": "Por dia (abre aqui; por omissão a última caixa já fechada): a caixa de cada dia por cidade, só nos parques que operamos.",
+              "text": "- **Por dia** (abre aqui; por omissão a última caixa já fechada): a caixa de cada dia **por cidade**, só nos parques que operamos.\n  - **O dia da caixa vai das 03:00 às 03:00 do dia seguinte** (hora de Lisboa): a caixa fecha no fim do turno da noite, em n+1. O que se recebe às 01:30 de dia 7 ainda conta na caixa de dia 6. Enquanto não passar das 03:00 do dia seguinte, o dia aparece **Em curso**.\n  - **Recebido** no dia por método (dinheiro, multibanco/TPA, online/Stripe, MB Way…), pelos pagamentos registados na Multipark nesse dia da caixa (03:00 → 03:00).\n  - **Despesas do turno**: as que o team leader lançou na **Passagem de turno** (ver abaixo). Abatem ao dinheiro.\n  - **Tem de estar em dinheiro** = recebido em dinheiro − despesas do turno − gastos escritos na contagem. **Contado** = soma das contagens dos parques; **Diferença** = contado − tem de estar (\"—\" enquanto nenhum parque estiver contado).\n  - **Por condutor** (quem fez a saída): saídas, valor, em dinheiro, se **entregou o dinheiro ao líder** e se a **caixa foi fechada** (e por quem). Quem tem dinheiro por entregar aparece primeiro.\n  - **Correção do dia**: **Dia certo** ou **Dia não certo**, com o motivo (o que mudou, se está correto ou não). \"Não certo\" pede sempre motivo; \"certo\" com diferença também. Só se faz depois de a caixa fechar (03:00 do dia seguinte). Cada gravação fica no **Histórico** (quem, quando, esperado e contado). Precisa de Caixa → editar.\n- **Confirmação** (13 out 2026): a confirmação da caixa **reserva a reserva**, por cidade e dia (03:00 → 03:00), só nos parques que operamos. Ver **Confirmação da caixa** abaixo.\n- **Resumo**: o dinheiro no período — recebido (por método de pagamento), por cobrar, no-shows pré-pagos e canceladas com pagamento (só informativo). As despesas a pagar estão na **Previsão** da Faturação.\n- **Correção de caixa**: casos da varredura automática, contagem da caixa por parque e dia, multibanco do dia (talões), confirmar pagamentos (Stripe, Viva, fim do mês), preços iniciais e o **Comparar** era / é."
+            },
+            {
+              "id": "caixa.md#correcao-de-caixa-casos",
+              "file": "caixa.md",
+              "slug": "correcao-de-caixa-casos",
+              "title": "Correção de caixa — casos",
+              "level": 4,
+              "summary": "No topo do separador Correção de caixa está a fila Casos da varredura automática (por explicar, por defeito), com as gravidades em cima.",
+              "text": "1. No topo do separador **Correção de caixa** está a fila **Casos da varredura automática** (por explicar, por defeito), com as gravidades em cima. Filtra por **Fechados / resolvidos** ou **Todos** e pela gravidade.\n2. Carrega num caso para ver: o motivo, a tabela **era / é** (retratos do webhook e da varredura contra a Multipark agora), **quem mexeu no dinheiro** (História da Multipark) e o histórico do caso. Avisos a vermelho: **Mesma pessoa** (quem mudou o preço ou o método também validou ou fechou a caixa) e **Sem rasto na Multipark** (o dinheiro mudou sem nenhuma alteração registada).\n3. Quem confere a caixa (Caixa → gerir, ou Faturação → gerir) pode: **Em análise** (vais corrigir na Multipark — quando a varredura confirmar, passa sozinho a **corrigido na Multipark**), **Fechar com explicação** (motivo + explicação de pelo menos 10 carateres; \"Perda aceite\" fica à parte), **Reabrir** e **Só juntar nota**. Tudo fica no histórico do caso, com quem e quando.\n4. Um caso fechado **reabre sozinho** se a divergência mudar; um resolvido reabre se voltar.\n5. Avisos: os casos graves (preço zerado, pago ≠ esperado, caixa fechada com divergência ou reaberta, reembolso por explicar, dinheiro do condutor por entregar, contagem ≠ esperado) mandam logo um aviso **Caixa: casos graves** (sino e email); todas as manhãs, depois do fecho do dia, chega o **Caixa: resumo diário** com o que falta explicar por cidade."
+            },
+            {
+              "id": "caixa.md#contagem-da-caixa",
+              "file": "caixa.md",
+              "slug": "contagem-da-caixa",
+              "title": "Contagem da caixa",
+              "level": 4,
+              "summary": "Em Contagem da caixa escolhe o parque e o dia.",
+              "text": "1. Em **Contagem da caixa** escolhe o parque e o dia. Aparece o **recebido em dinheiro** nesse dia da caixa, das 03:00 às 03:00 do dia seguinte (pagamentos em dinheiro registados na Multipark). Por omissão abre a caixa em curso (antes das 03:00 ainda é a do dia anterior).\n2. Acrescenta os **gastos pagos da caixa** (descrição, valor e n.º do recibo, se houver) e escreve o **valor contado**. O ecrã mostra o **esperado** (recebido − gastos) e a **diferença**.\n3. **Gravar contagem** (precisa de Caixa → editar). Se não bater (tolerância de 1 cêntimo), abre um caso **crítico** \"Contagem ≠ esperado\"; quando voltares a gravar e bater, resolve-se sozinho. Cada gravação fica registada (quem, quando, quanto)."
+            },
+            {
+              "id": "caixa.md#confirmar-pagamentos-online-multibanco-e-fim-do-mes",
+              "file": "caixa.md",
+              "slug": "confirmar-pagamentos-online-multibanco-e-fim-do-mes",
+              "title": "Confirmar pagamentos (online, multibanco e fim do mês)",
+              "level": 4,
+              "summary": "Online (Stripe): todos os dias (a partir das 07:00), as saídas de ontem e anteontem pagas online são confirmadas na própria Multipark: tem de lá estar o…",
+              "text": "1. **Online (Stripe)**: todos os dias (a partir das 07:00), as saídas de ontem e anteontem pagas online são confirmadas na própria Multipark: tem de lá estar o pagamento Stripe (id de pagamento na reserva ou numa fatura, ou um link de pagamento pago). Se não estiver, abre caso \"Pago online sem pagamento Stripe na Multipark\".\n2. **Multibanco (talão)**: em **Contagem da caixa**, escolhe o parque e o dia. Em **Multibanco do dia** aparecem os pagamentos por multibanco registados na Multipark nesse dia da caixa (03:00 → 03:00). Para cada talão: escreve o valor, tira a **foto do talão** (no telemóvel abre a câmara) e carrega em **Juntar talão**. O talão liga-se sozinho ao pagamento com o mesmo valor (ou à reserva que escolheres). No fim carrega em **Confirmar multibanco do dia**: fica registado quem confirmou; o que ficar sem talão, ou talões sem pagamento, abre um caso \"Multibanco sem talão\". Tirar um talão não apaga (fica registado quem e quando). Precisa de Caixa → editar.\n3. **Viva Wallet (CSV)**: em **Confirmar pagamentos**, importa o extrato exportado da Viva Wallet (colunas Date, Time, Amount, Channel). Cada pagamento por multibanco procura uma transação do terminal com o mesmo valor, no mesmo dia ou no seguinte; os que não aparecem abrem caso. Os links de pagamento (Smart Checkout) não contam para o multibanco. Precisa de Caixa → gerir.\n4. **Fim do mês (Pro, agentes, agregadores)**: escolhe o mês. Aparece por cliente Pro e por parceiro o **devido do mês** na Multipark, contando as reservas que **saíram** nesse mês (uma reserva que entrou no mês passado e saiu neste conta neste; uma que entra neste e sai no próximo conta no próximo). Parceiros: soma do devido pelo parceiro; Pro: preço das reservas. Ao lado aparece o que está **em atraso** dos 12 meses anteriores (ainda por pagar na Multipark): um pagamento pode trazer meses em atraso, e só é diferença se passar o devido do mês mais o que está em atraso, ou se não chegar ao devido do mês. Carrega em **Registar recebido**: valor, data, nota e o comprovativo (foto ou PDF). Se o recebido não bater com o devido, abre caso \"Recebimento mensal ≠ devido\". Precisa de Caixa → gerir.\n5. **Cruzamentos automáticos** (Stripe, Viva Wallet, InvoiceExpress): estão **desligados** por omissão e confirma-se à mão. Liga-se em **Definições → Automações** (só super admin), depois de pôr as chaves só de leitura na Vercel: `STRIPE_READ_KEY` (restrita, `rk_`), `VIVA_MERCHANT_ID` + `VIVA_API_KEY`, `INVOICEXPRESS_ACCOUNT` + `INVOICEXPRESS_API_KEY`. O cartão mostra se cada um está ligado e se tem chave."
+            },
+            {
+              "id": "caixa.md#precos-iniciais-historico-da-multipark",
+              "file": "caixa.md",
+              "slug": "precos-iniciais-historico-da-multipark",
+              "title": "Preços iniciais (histórico da Multipark)",
+              "level": 4,
+              "summary": "Em Correção de caixa, no cartão Preços iniciais, carrega o CSV exportado do histórico da Multipark (reservas.csv: o preço com que cada reserva foi criada).",
+              "text": "1. Em **Correção de caixa**, no cartão **Preços iniciais**, carrega o CSV exportado do histórico da Multipark (reservas.csv: o preço com que cada reserva foi criada).\n2. O cartão mostra quantas reservas entraram e como a nossa cópia antiga se compara: **igual** ao preço inicial, **reescrita** (tem o preço de agora, porque o sync escrevia por cima), **com outro valor**, **não está na cópia** ou **sem preço na criação**. As maiores diferenças ficam listadas.\n3. A partir daí, o **Comparar** e a conferência da ficha da reserva começam o \"era\" neste preço inicial (marcado \"preço inicial do histórico\"). Voltar a importar atualiza, nunca apaga. Precisa de Caixa → gerir."
+            },
+            {
+              "id": "caixa.md#correcao-de-caixa-comparar-um-dia",
+              "file": "caixa.md",
+              "slug": "correcao-de-caixa-comparar-um-dia",
+              "title": "Correção de caixa — comparar um dia",
+              "level": 4,
+              "summary": "Separador Correção de caixa.",
+              "text": "1. Separador **Correção de caixa**. Escolhe um ou mais parques (por defeito, os nossos; **Só os nossos** e **Limpar** ajudam) e o **dia** (hora de Lisboa).\n2. Carrega em **Comparar**. São comparadas as reservas com **saída** nesse dia. Só aparecem as que têm divergência, as mais graves primeiro:\n   - **Preço zerado**: o webhook disse um preço e agora é 0 € (ou as linhas somam 0 €).\n   - **Preço mudou depois do check-in** ou **depois da criação**: era X €, agora é Y €. Diz também se nenhum webhook avisou da última alteração.\n   - **Linhas de preço retiradas ou baixadas**: a soma das linhas já foi maior num retrato de um webhook (ou é menor do que o preço que o webhook disse), ou a reserva saiu sem linhas.\n   - **Método de pagamento mudou**: por exemplo, era Dinheiro e agora é Multibanco, ou ficou vazio.\n   - **Pago ≠ esperado**: depois da saída, o que foi pago não bate com a soma das linhas (as Pro faturam ao mês e não entram).\n   - **Cancelada depois de entrar**.\n   - **Caixa fechada com divergência**: a caixa desta reserva já foi fechada e há outra divergência. É a mais grave.\n   - **Só na Multipark**: nunca nos chegou nenhum webhook desta reserva, por isso não há \"era\" para comparar.\n   - **Só na memória do webhook** (lista à parte): o webhook deu-a com saída nesse dia, mas agora a Multipark diz outro dia, outro parque, ou já não a tem.\n3. Cada linha mostra era / é, o esperado e o pago, o método antes → depois e abre a **ficha da reserva**, onde está a **Conferência (era / é)** completa com quem mudou e quando.\n4. São comparadas até 200 saídas de cada vez. Se houver mais, carrega em **Comparar as seguintes**.\n\nO botão **Comparar** é só leitura. Além dele, desde 29 set 2026 há uma **varredura automática** (trabalho `cash-sweep`, de 3 em 3 horas, e `cash-close` todas as manhãs para as saídas de ontem e anteontem): vê as reservas dos nossos parques que mudaram, as que estão dentro e as que saíram nas últimas 48 h, guarda um retrato do dinheiro sempre que muda (assim há \"era\" mesmo quando não chega webhook) e abre **casos** com as mesmas regras e mais estas: desconto ou campanha depois do check-in, reembolso por explicar, mudou de dia ou de parque depois do fecho, reserva desaparecida, pro ou avença marcado tarde, valores do parceiro mudados, serviço feito sem cobrança, sem fatura (48 h depois de sair paga, para quem pediu fatura com NIF; as outras fazem-se no fim do mês e só contam passado o fecho do mês + 48 h), fatura ≠ pago, pagamento online com disputa ou link falhado, crédito usado, caixa ou validação reaberta, dinheiro do condutor por entregar (o condutor entrega ao líder no próprio dia — validação do condutor até às 6 h da manhã seguinte — e o líder entrega ao back office no dia seguinte — dinheiro conferido até ao fim desse dia; a tolerância é sempre 0,01 €), permissões de dinheiro de um agente mudadas e parque sem webhooks com movimento. Um caso resolve-se sozinho quando a Multipark deixa de ter a divergência e reabre se ela voltar. O \"era\" é a memória do webhook, que o dashboard guarda desde 28 set 2026 e **nunca reescreve nem apaga**: em cada webhook (criação, alteração, entrada, saída…) lê a reserva toda na base de dados da Multipark e guarda uma linha nova. Reservas sem webhooks guardados usam, no Comparar, a cópia antiga como \"era\" (marcada \"cópia antiga\"). Vê quem tem a Caixa (ou a Faturação) e pode ver os totais financeiros."
+            },
+            {
+              "id": "caixa.md#despesas-do-turno-passagem-de-turno",
+              "file": "caixa.md",
+              "slug": "despesas-do-turno-passagem-de-turno",
+              "title": "Despesas do turno (Passagem de turno)",
+              "level": 4,
+              "summary": "Na Passagem de turno, em Valores, o cartão Despesas do turno: tira a foto do talão (a IA lê-o e preenche descrição, valor, fornecedor, NIF, n.º, data, IVA e…",
+              "text": "1. Na **Passagem de turno**, em **Valores**, o cartão **Despesas do turno**: tira a **foto do talão** (a IA lê-o e preenche descrição, valor, fornecedor, NIF, n.º, data, IVA e categoria), confirma e carrega em **Lançar**. Sem IA, escreve a descrição e o valor.\n2. A despesa entra **logo nas Despesas** (paga, em dinheiro, no centro de custos da cidade, com o talão) e **abate à caixa do dia** (Caixa → Por dia). Cada uma tem **Abrir nas Despesas** para ver o detalhe lá.\n3. O total vai para \"Tickets/despesas pagos\" da passagem. **Anular** deixa a despesa cancelada (sai da caixa e dos totais, fica no histórico) — só quem a lançou ou quem gere a passagem de turno."
+            },
+            {
+              "id": "caixa.md#confirmacao-da-caixa",
+              "file": "caixa.md",
+              "slug": "confirmacao-da-caixa",
+              "title": "Confirmação da caixa",
+              "level": 4,
+              "summary": "Team leader (fim do turno): fecha a caixa na Multipark e depois, na Passagem de turno → Fecho da caixa do turno, escreve o dinheiro recebido dos condutores…",
+              "text": "1. **Team leader** (fim do turno): fecha a caixa na Multipark e depois, na **Passagem de turno → Fecho da caixa do turno**, escreve o **dinheiro recebido** dos condutores (antes das despesas), o **Multibanco recebido** e o **total que dava a caixa na Multipark**. O dinheiro vai em envelope selado para o cofre.\n2. **João** (dia seguinte), em **Caixa → Confirmação**: escolhe a cidade e o dia. Vê:\n   - as contas do dia: dinheiro e MB registados na Multipark, despesas do turno, o que tem de haver, o que o team leader declarou e a **diferença do dia**;\n   - **cada reserva lado a lado**: o preço **quando nasceu** (1.º webhook, a nossa memória — não se altera), o original da Multipark, o preço final, o devido (− crédito + taxa), o pago por método e as 3 validações da Multipark (conferida, condutor, caixa fechada, com quem e quando);\n   - por omissão só aparecem as reservas a **amarelo** ou **vermelho**; as certas ficam escondidas (\"Mostrar também as certas\").\n3. **Cores**: **verde** = está tudo bem; **amarelo** = a rever (ex.: caixa por fechar na Multipark, preço subiu sem causa visível, reserva anterior à memória); **vermelho** = tem de ser justificado: preço que **baixou**, pago a menos, crédito dado, pagamento negativo ou com método desconhecido, método fora do balcão numa reserva normal, Multibanco **sem talão**, online que **não bate com a Stripe** (ou que não se conseguiu verificar), transferência sem comprovativo, validações fora de ordem, cancelada depois do check-in. **Para cima pode** (mais dias, extra, taxa); **para baixo nunca sem justificação**.\n4. **Multibanco**: em cada pagamento MB sem talão, **Anexar talão** (foto + valor, tem de ser igual ao pagamento). O mesmo ficheiro nunca serve duas vezes.\n5. **Justificar**: motivo da lista, explicação (pelo menos 20 carateres) e, nas perdas, **comprovativo** (foto ou PDF). Um vermelho justificado passa a **amarelo à espera do Jorge**.\n6. **Valores do dia**: o João escreve o dinheiro do **envelope** e o **MB** dos talões (e uma nota, obrigatória se houver diferença) e **Fecha o dia**. Não fecha com vermelhos por justificar, com um turno por declarar, antes das 03:00 do dia seguinte ou sem os dados completos da Multipark.\n7. **Diferença do dia > 30 €** (ou justificações por aprovar) → o dia fica **amarelo no mês** (\"à espera do Jorge\") e o Jorge recebe um aviso na app; **> 70 €** também por email.\n8. **Jorge** (Caixa → gerir), em **Confirmação → Mês**: vê os dias a amarelo e **aprova** o dia (aprova as justificações por decidir) ou aprova/recusa cada justificação. **Recusar reabre o dia.** Quem fechou o dia ou justificou não o pode aprovar.\n9. **Depois de fechado**: **de hora a hora** (trabalho `cash-confirm-recheck`, ver a ajuda do Agendador) o sistema relê os dias fechados dos últimos 45 dias, primeiro os que há mais tempo não eram relidos (até 200 por corrida); se a Multipark mudou o dinheiro de uma reserva selada, ou se uma reserva entrou/saiu do dia, ou se uma validação voltou de \"sim\" a \"não\", o dia **reabre sozinho** e o Jorge é avisado.\n10. **Registo**: tudo o que se faz fica num registo que não se apaga, em cadeia (cada passo leva o carimbo do anterior); o ecrã mostra **Registo íntegro**. Justificações, decisões e ficheiros nunca se apagam (um ficheiro retirado continua guardado)."
+            }
+          ]
+        },
+        {
+          "id": "despesas",
+          "file": "despesas.md",
+          "group": "Financeiro",
+          "module": "despesas",
+          "title": "Despesas",
+          "routes": [
+            "/despesas",
+            "/despesas/dashboard"
+          ],
+          "tabs": [
+            {
+              "tab": "lista",
+              "section": "Lista",
+              "sectionId": "despesas.md#lista"
+            },
+            {
+              "tab": "resumo",
+              "section": "Resumo",
+              "sectionId": "despesas.md#resumo"
+            }
+          ],
+          "summary": "Registo de faturas e despesas da empresa.",
+          "sections": [
+            {
+              "id": "despesas.md#inicio",
+              "file": "despesas.md",
+              "slug": "inicio",
+              "title": "Despesas",
+              "level": 1,
+              "summary": "Registo de faturas e despesas da empresa.",
+              "text": "Registo de faturas e despesas da empresa."
+            },
+            {
+              "id": "despesas.md#registar-uma-despesa",
+              "file": "despesas.md",
+              "slug": "registar-uma-despesa",
+              "title": "Registar uma despesa",
+              "level": 4,
+              "summary": "Menu Financeiro → Despesas → Nova Despesa.",
+              "text": "1. Menu **Financeiro → Despesas** → **Nova Despesa**.\n2. Carrega a fatura (foto ou PDF) e carrega em **Extrair com IA**: fornecedor, valor, datas e NIF são preenchidos. Confirma sempre os valores.\n3. Escolhe o **Centro de custos**, a categoria e o método de pagamento. **Guardar Despesa**.\n4. Se a fatura parecer emitida pela Multipark a um cliente, a aplicação avisa — não é uma despesa. Se o nº de documento (ou o ficheiro) já existir noutra despesa, também avisa."
+            },
+            {
+              "id": "despesas.md#lancar-ja-paga-so-admin-e-super-admin",
+              "file": "despesas.md",
+              "slug": "lancar-ja-paga-so-admin-e-super-admin",
+              "title": "Lançar já paga (só admin e super admin)",
+              "level": 4,
+              "summary": "Para o admin e o super admin o Método de Pagamento começa em — sem método —.",
+              "text": "- Para o admin e o super admin o **Método de Pagamento** começa em **— sem método —**. Se escolheres um método, a despesa fica logo **paga**, com a data de pagamento = **Data de Vencimento** (se a preencheste) ou, sem ela, a **Data da Despesa**. Por baixo do campo aparece \"Fica já paga em …\".\n- Sem método fica como sempre: **pendente**.\n- Se a data de pagamento for **depois de hoje** (vencimento futuro), aparece um aviso âmbar \"Fica paga com data futura (…). É mesmo isso?\": tens de marcar **Sim, já está paga com data de …** para gravar (o servidor também o exige). Ou tira o método e fica pendente.\n- **Extrair com IA** não escolhe o método por ti (escolher o método = fica paga): mostra \"A fatura diz: Transferência\" com o botão **Usar (fica paga)**.\n- Para os outros papéis nada muda: o método começa em **Cartão** e a despesa fica pendente (o servidor nunca a marca paga por esta via).\n- No histórico da despesa fica o lançamento e o pagamento (\"Pago\"), com quem e em que dia."
+            },
+            {
+              "id": "despesas.md#escolher-categoria-centro-de-custos-e-quem-comprou",
+              "file": "despesas.md",
+              "slug": "escolher-categoria-centro-de-custos-e-quem-comprou",
+              "title": "Escolher categoria, centro de custos e quem comprou",
+              "level": 4,
+              "summary": "Categoria e Funcionário (quem comprou) têm uma barra de pesquisa no topo: escreve e salta para a certa (não contam acentos nem maiúsculas).",
+              "text": "- **Categoria** e **Funcionário (quem comprou)** têm uma barra de pesquisa no topo: escreve e salta para a certa (não contam acentos nem maiúsculas). As categorias mantêm a ordem alfabética; existe a categoria **Sinistros**.\n- **Funcionário (quem comprou)**: só aparecem **team leaders e acima** (pelo cargo da ficha ou pelo papel da conta), ativos, das tuas cidades, por ordem alfabética — sem extras nem condutores. Ao editar uma despesa antiga com outro comprador, ele continua lá (\"atual\").\n- **Centro de custos**: ao abrir aparecem primeiro os **Principais** — Multipark, Lisboa, Porto, Faro e Marketplace (um por cidade, ex.: \"Marketplace · Porto\"). Para algo mais específico, carrega na seta **Mais específico: parques, marcas e projetos** e abre a árvore (setas em cada nó, como nos Projetos; no teclado, → abre e ← fecha o nó escolhido). A pesquisa procura na árvore toda. A despesa entra nos custos desse centro e de todos os pais."
+            },
+            {
+              "id": "despesas.md#despesas-do-turno-team-leaders",
+              "file": "despesas.md",
+              "slug": "despesas-do-turno-team-leaders",
+              "title": "Despesas do turno (team leaders)",
+              "level": 4,
+              "summary": "As despesas pagas com o dinheiro da caixa lançam-se na Passagem de turno (cartão Despesas do turno), não aqui: foto do talão, a mesma leitura por IA, e entram…",
+              "text": "- As despesas pagas com o dinheiro da caixa lançam-se na **Passagem de turno** (cartão **Despesas do turno**), não aqui: foto do talão, a mesma leitura por IA, e entram logo nas Despesas pagas, em dinheiro, no centro de custos da cidade.\n- **Ligação direta**: `/despesas?id=N` abre o detalhe da despesa n.º N (é o que usa o **Abrir nas Despesas** da passagem de turno). Abre só a quem pode ver essa despesa."
+            },
+            {
+              "id": "despesas.md#lista",
+              "file": "despesas.md",
+              "slug": "lista",
+              "title": "Lista",
+              "level": 4,
+              "summary": "Abre na semana atual.",
+              "text": "- Abre na **semana atual**. Muda o período com as setas, ou liga **Todo o histórico** para procurar em tudo.\n- Filtra por estado, categoria e (admin) quem inseriu. O **centro de custos** é o filtro do topo da aplicação.\n- Os cartões **Total / Pendente / Pago / Em atraso** somam o que a lista mostra; as canceladas ficam fora do total.\n- Clica numa despesa para ver o comprovativo, os dados e o histórico de alterações."
+            },
+            {
+              "id": "despesas.md#resumo",
+              "file": "despesas.md",
+              "slug": "resumo",
+              "title": "Resumo",
+              "level": 4,
+              "summary": "Separador Resumo: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos…",
+              "text": "- Separador **Resumo**: total do ano, pendentes e em atraso (de sempre), pago no ano, despesas dos últimos 6 meses, por categoria (este mês) e os pagamentos dos próximos 7 dias. Despesas com data futura não entram nos totais do mês nem do ano."
+            },
+            {
+              "id": "despesas.md#gerir-admin",
+              "file": "despesas.md",
+              "slug": "gerir-admin",
+              "title": "Gerir (admin)",
+              "level": 4,
+              "summary": "Na linha: Marcar como paga (fica paga hoje), Editar (valores, datas, estado, data de pagamento) e, só o super admin, Eliminar.",
+              "text": "- Na linha: **Marcar como paga** (fica paga hoje), **Editar** (valores, datas, estado, data de pagamento) e, só o super admin, **Eliminar**.\n- **Eliminar** (só o super admin): a despesa desaparece das listas, dos totais, da Faturação e das exportações, mas **fica guardada** com a fatura. O super admin vê-as ligando **Eliminadas** nos filtros e pode **Repor**. Uma despesa recorrente eliminada não volta a ser lançada nesse mês.\n- Só o super admin pode tirar o \"pago\" a uma despesa já paga.\n- Em **Mais ações** (⋯): **Comparar períodos**, **Exportar Excel**, **Para a contabilista (ZIP do mês)**, **Despesas recorrentes** (modelos lançados todos os meses, no dia de cada um) e **Categorias, IVA e margem**.\n- **Remover** um modelo recorrente desativa-o e tira-o da lista: deixa de lançar despesas, e as que já lançou ficam como estão. Para só pausar, tira o visto em **ativo**."
+            },
+            {
+              "id": "despesas.md#despesas-fixas-recorrentes",
+              "file": "despesas.md",
+              "slug": "despesas-fixas-recorrentes",
+              "title": "Despesas fixas (recorrentes)",
+              "level": 4,
+              "summary": "Cada modelo lança uma despesa por mês, no dia indicado (o processo diário corre de madrugada).",
+              "text": "- Cada modelo lança **uma despesa por mês, no dia indicado** (o processo diário corre de madrugada). Se o processo falhar uns dias, apanha-as no dia seguinte; as do mês anterior que tenham ficado por lançar também.\n- Um modelo **novo** (ou reativado, ou com outro dia) lança logo a deste mês se o dia já passou — não espera pelo mês que vem.\n- Cada modelo diz o que aconteceu este mês: \"lança a 8/10\", \"lançada a 8/10 · falta a fatura\" (com **Anexar**) ou \"com fatura\". O lápis edita o modelo; as despesas já lançadas ficam como estão.\n- A despesa lançada aparece na lista com **\"Falta a fatura · fixa\"** até anexares a fatura."
+            },
+            {
+              "id": "despesas.md#falta-a-fatura",
+              "file": "despesas.md",
+              "slug": "falta-a-fatura",
+              "title": "Falta a fatura",
+              "level": 4,
+              "summary": "Qualquer despesa sem fatura (não cancelada) mostra \"Falta a fatura\" e o botão 📎 para a anexar (abre a edição).",
+              "text": "- Qualquer despesa sem fatura (não cancelada) mostra **\"Falta a fatura\"** e o botão 📎 para a anexar (abre a edição).\n- No topo aparece **\"Faltam N fatura(s) nas despesas deste mês\"** com **Ver as que faltam**; o filtro **Sem fatura** mostra só essas.\n- O **Exportar Excel** traz uma folha **\"Sem fatura\"** com as que ainda faltam — é a lista para fechar com a contabilista."
+            },
+            {
+              "id": "despesas.md#notas-de-credito",
+              "file": "despesas.md",
+              "slug": "notas-de-credito",
+              "title": "Notas de crédito",
+              "level": 4,
+              "summary": "Quando uma fatura (já paga ou não) tem uma nota de crédito do fornecedor (ex.: devolveram parte das peças): na linha da fatura, botão Nota de crédito (ícone…",
+              "text": "- Quando uma fatura (já paga ou não) tem uma **nota de crédito** do fornecedor (ex.: devolveram parte das peças): na linha da fatura, botão **Nota de crédito** (ícone da folha com o menos) — também no detalhe da fatura.\n- Pões o **valor** (positivo), a **data** e o **n.º da NC**, o **motivo**, o **estado** e juntas o **PDF/fotografia** da NC.\n  - **Por receber**: o fornecedor ainda devolve o dinheiro. **Recebida**: o dinheiro já voltou. **Abatida**: descontada noutra fatura do mesmo fornecedor.\n- A NC fica como **documento próprio**, ligado à fatura, com valor **negativo** (a verde) e o selo \"Nota de crédito · fatura …\". A fatura **não muda**: mostra por baixo do valor \"NC −X € · líquido Y €\".\n- Nunca passa do que falta creditar na fatura (somando todas as NC dela). Uma NC não leva outra NC; faturas canceladas ou eliminadas não levam NC.\n- Nos totais (lista, Financeiro, Anual, custos por projeto) a NC **desconta no mês da data da NC**. Não entra nos pagamentos pendentes nem em atraso.\n- Para mudar o valor, a data, o n.º, o estado ou o documento de uma NC: **Editar** na própria NC (quem gere as despesas, ou quem a lançou). Eliminar é como nas outras despesas (fica guardada).\n- Para a contabilista, a NC vai no ZIP com **NC_** no início do nome do ficheiro e \"Nota de crédito\" na coluna **Tipo** da folha."
+            },
+            {
+              "id": "despesas.md#para-a-contabilista-zip-do-mes",
+              "file": "despesas.md",
+              "slug": "para-a-contabilista-zip-do-mes",
+              "title": "Para a contabilista (ZIP do mês)",
+              "level": 4,
+              "summary": "Em Mais ações (⋯) → Para a contabilista (ZIP do mês), escolhe o mês (por omissão o mês passado) e carrega em Gerar ZIP.",
+              "text": "1. Em **Mais ações** (⋯) → **Para a contabilista (ZIP do mês)**, escolhe o **mês** (por omissão o mês passado) e carrega em **Gerar ZIP**.\n2. Sai o ficheiro **contabilidade-AAAA-MM.zip** com:\n   - a pasta **faturas/** com o ficheiro de cada fatura do mês (pela **data da fatura**, sem as canceladas), com nome que se lê: data, fornecedor, nº do documento, valor e o nº da despesa (ex.: `2026-09-03_Google-Ireland-Limited_FT-123_1100.00EUR_#7.pdf`);\n   - a folha **faturas-AAAA-MM.xlsx** só com as datas e o que identifica cada fatura: data da fatura, data de pagamento, fornecedor, NIF, nº do documento, valor e o nome do ficheiro. As despesas do mês **sem fatura** aparecem na folha **\"Sem fatura\"**.\n3. Nada é enviado sozinho: descarregas e mandas tu à contabilista. Respeita o filtro de centro de custos que tiveres escolhido.\n4. Uma fatura com mais de 3 MB, ou que não se consiga ler, fica de fora e aparece em **FALTAM-NO-ZIP.txt** (abre-se pela despesa na app).\n5. Precisa de Despesas → exportar e de ver os totais. Fica registado em Logs quem exportou que mês.\n\n**Exportar e comparar**: supervisores, frontoffice, backoffice e admin — com os mesmos filtros e o mesmo alcance da lista.\n\nQuem vê o quê: condutores só as próprias despesas; team leaders as suas e as da equipa (sem totais); supervisores as suas e as do seu centro de custos; frontoffice, backoffice e admin todas. Com a restrição de totais financeiros, cada pessoa só vê as que registou.\n\nSe aparecer **\"Não foi possível carregar\"**, é uma falha (base de dados ou permissão), não \"zero despesas\": usa **Tentar de novo**."
+            },
+            {
+              "id": "despesas.md#faturas-do-google-meta-anuncios",
+              "file": "despesas.md",
+              "slug": "faturas-do-google-meta-anuncios",
+              "title": "Faturas do Google / Meta (anúncios)",
+              "level": 4,
+              "summary": "Quando o fornecedor é o Google ou a Meta (pelo nome ou pelo NIF), o formulário pede o período de consumo (de / até) — a fatura costuma cobrir os 60 a 90 dias…",
+              "text": "- Quando o fornecedor é o Google ou a Meta (pelo nome ou pelo NIF), o formulário pede o **período de consumo** (de / até) — a fatura costuma cobrir os 60 a 90 dias anteriores.\n- Na **Faturação**, nesses dias, o gasto dos anúncios (Google Ads / Meta) é **trocado pelo valor da fatura**. Até a fatura chegar, conta o gasto das plataformas.\n- Sem período, a fatura **não conta** (fica o gasto) e aparece um aviso — abre-a e indica o período.\n- No topo da lista aparece **\"Anúncios no período\"**: o que entra como despesa de marketing por projeto (fatura ou gasto à espera da fatura)."
+            }
+          ]
+        },
+        {
+          "id": "faturacao",
+          "file": "faturacao.md",
+          "group": "Financeiro",
+          "module": "faturacao",
+          "title": "Faturação",
+          "routes": [
+            "/faturacao",
+            "/faturacao/diagnose",
+            "/anual"
+          ],
+          "tabs": [
+            {
+              "tab": "real",
+              "section": "Ler a página",
+              "sectionId": "faturacao.md#ler-a-pagina"
+            },
+            {
+              "tab": "costs",
+              "section": "Ler a página",
+              "sectionId": "faturacao.md#ler-a-pagina"
+            },
+            {
+              "tab": "forecast",
+              "section": "Ler a página",
+              "sectionId": "faturacao.md#ler-a-pagina"
+            }
+          ],
+          "summary": "Receita, custos e margem por período (só super admin; o dashboard Financeiro, com a mesma base, é para admin e acima — ver a ajuda dos Dashboards → Financeiro).",
+          "sections": [
+            {
+              "id": "faturacao.md#inicio",
+              "file": "faturacao.md",
+              "slug": "inicio",
+              "title": "Faturação",
+              "level": 1,
+              "summary": "Receita, custos e margem por período (só super admin; o dashboard Financeiro, com a mesma base, é para admin e acima — ver a ajuda dos Dashboards → Financeiro).",
+              "text": "Receita, custos e margem por período (só super admin; o dashboard Financeiro, com a mesma base, é para admin e acima — ver a ajuda dos Dashboards → Financeiro).\n\nAs reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro — a cidade do parque é a reconhecida: Prior Velho e Moscavide contam como Lisboa, Maia como Porto…). As reservas do **Marketplace** dos parques de terceiros não entram na receita; nos nossos parques, uma reserva vinda pelo Marketplace paga 20 % ao Marketplace e, se também tiver parceiro, conta só o Marketplace (nunca duas comissões). Já não dependem de importações nem da cópia antiga. Se a base da Multipark não responder (ou faltar a permissão de ver totais), a página diz o porquê, em vez de números a zero, e tem um botão **Tentar de novo**."
+            },
+            {
+              "id": "faturacao.md#ler-a-pagina",
+              "file": "faturacao.md",
+              "slug": "ler-a-pagina",
+              "title": "Ler a página",
+              "level": 4,
+              "summary": "Menu Financeiro → Faturação.",
+              "text": "1. Menu **Financeiro → Faturação**. Escolhe o período e, se quiseres, a marca/projeto.\n2. Separadores:\n   - **Realizado**: receita (com e sem IVA), entregues, comissões, custos e margem realizada até hoje.\n   - **Custos detalhados**: despesas, salários, **equipa do dia**, parceiros. O **marketing** (anúncios Google Ads / Meta) entra nas despesas **por projeto**: o **gasto das plataformas** até chegar a fatura; nos dias do **período de consumo** de uma fatura do Google/Meta, a **fatura** (repartida pelos dias e projetos na proporção do gasto). As faturas do Google/Meta não contam na data da fatura (senão o mesmo gasto contava duas vezes); uma fatura sem período de consumo não conta e aparece um aviso. A **TSU patronal** não é calculada nos custos: entra pelas **Despesas** quando é paga (categoria TSU / Segurança Social — essa categoria tem de contar na margem; se estiver \"fora da margem\" aparece um aviso). A estimativa da TSU aparece só como informação. A equipa do dia conta as horas do **ponto** × tarifa do nível (até hoje), por nível e com o total igual ao cartão \"Equipa do dia\"; a escala do Extras Dia do período aparece só como referência (não soma — num período em curso, a escala dos dias que faltam entra no Fecho previsto).\n   - **Previsão**: **Fecho previsto** = realizado + receita esperada − custos do período inteiro. Num período já terminado não há previsão.\n   - A **Caixa** e a **Correção de caixa** passaram para o seu item do menu: **Financeiro → Caixa** (ver a ajuda \"Caixa\"). Os links antigos (/faturacao?tab=cash-check) vão lá ter sozinhos.\n3. Os valores de margem são sem IVA. Despesas já contadas pelo RH/ponto não entram duas vezes."
+            },
+            {
+              "id": "faturacao.md#anual-anual",
+              "file": "faturacao.md",
+              "slug": "anual-anual",
+              "title": "Anual (/anual)",
+              "level": 2,
+              "summary": "Anual mostra o ano mês a mês, com o mesmo motor da Faturação: receita, despesas (com a TSU paga), comissões, ordenados e equipa do dia (os meses importados do…",
+              "text": "**Anual** mostra o ano mês a mês, com o mesmo motor da Faturação: receita, despesas (com a TSU paga), comissões, ordenados e equipa do dia (os meses importados do histórico trazem a TSU calculada), IVA a pagar e lucro.\n- O **mês em curso** conta o realizado até hoje, e os meses futuros só a previsão (\"prev.\"). O **Fecho previsto** do ano soma o realizado dos meses passados com a previsão dos outros.\n- Escolhe o **ano** (desde 2016), o intervalo **De / Até** (o \"De\" nunca fica depois do \"Até\") e o centro de custos. **Comparar com** mostra outro ano lado a lado.\n- O **IVA cobrado** usa a taxa em vigor em cada dia. O **IVA dedutível** usa a taxa de cada categoria de despesa (por exemplo, rendas e pessoal sem IVA, autoliquidação a 0%).\n- **Importar histórico** (Excel/CSV, anos antigos): os valores só entram nos meses sem dados na app e ficam marcados \"hist.\".\n- A exportação (Excel/CSV) leva o ano inteiro.\n- Se aparecer **\"Não foi possível calcular o ano\"**, é uma falha (por exemplo, a base de dados da Multipark em baixo), não um ano a zero: usa **Tentar de novo**.\n\nAs taxas de IVA e TSU mudam-se em **Definições → Parâmetros**."
+            },
+            {
+              "id": "faturacao.md#diagnostico-de-faturacao-faturacao-diagnose",
+              "file": "faturacao.md",
+              "slug": "diagnostico-de-faturacao-faturacao-diagnose",
+              "title": "Diagnóstico de Faturação (/faturacao/diagnose)",
+              "level": 2,
+              "summary": "Serve para perceber porque é que um total da receita não bate: soma a receita com filtros que se vão juntando, um a um, para se ver em que passo o número muda.",
+              "text": "Serve para perceber **porque é que um total da receita não bate**: soma a receita com filtros que se vão juntando, um a um, para se ver em que passo o número muda. Não está no menu (abre-se pelo endereço) e só funciona para quem **gere a Faturação** e vê totais financeiros (na prática o super admin); sem isso aparece \"Não foi possível fazer o diagnóstico.\" com **Tentar de novo**.\n- **De / Até** (por omissão o mês atual) e **Atualizar**. Usa a cidade/marca do topo; sem nenhuma escolhida aparece um aviso amarelo: o diagnóstico cobre todos os nossos parques.\n- Os valores são o **total da reserva com IVA** (as linhas de preço da reserva na Multipark, ou o preço da reserva), lidos ao vivo da BD da Multipark, só dos nossos parques, em dias de Lisboa — não são os valores sem IVA dos cartões da Faturação.\n- **Somas com filtros progressivos** (Filtro / Bookings / Receita):\n  1. saída no período, qualquer estado (todos os nossos parques, sem o filtro de cidade/marca);\n  2. e, além disso, só as entregues (**CHECKED_OUT**, a receita realizada);\n  3. e, além disso, o filtro do projeto (cidade/marca) — a linha marcada **USADO NA FATURAÇÃO**.\n  Por baixo: os projetos incluídos e as **canceladas no período** (n.º e valor).\n- **Receita por projeto**, **Receita por campaign** (campanha/parceiro), **Por estado da reserva** (todos os estados, saída no período) e **Top 20 bookings por valor** (as entregues mais caras).\n- Leitura: se o passo 1 → 2 cai muito, há reservas com saída no período que ainda não foram dadas como entregues; se o 2 → 3 cai, a diferença está no filtro de cidade/marca (parques de outro projeto)."
+            }
+          ]
+        },
+        {
+          "id": "marketing",
+          "file": "marketing.md",
+          "group": "Financeiro",
+          "module": "marketing",
+          "title": "Marketing",
+          "routes": [
+            "/marketing",
+            "/marketing/google-ads",
+            "/marketing/canais",
+            "/marketing/orcamentos",
+            "/marketing/web"
+          ],
+          "tabs": [],
+          "summary": "Só super admin (ou quem tiver uma exceção de acesso ao Marketing).",
+          "sections": [
+            {
+              "id": "marketing.md#inicio",
+              "file": "marketing.md",
+              "slug": "inicio",
+              "title": "Marketing",
+              "level": 1,
+              "summary": "Só super admin (ou quem tiver uma exceção de acesso ao Marketing).",
+              "text": "Só super admin (ou quem tiver uma exceção de acesso ao Marketing).\n\nAs reservas (quantas, valor, de onde vieram, cliente novo ou não e se vieram de um anúncio) são lidas **ao vivo da base de dados da Multipark**: as dos nossos parques e **todas as do Marketplace, de qualquer parque** (ver \"Marketplace\" mais abaixo). A atribuição Google/Meta sai do link de origem da reserva (gclid, fbclid, utm). Os gastos em anúncios vêm do Google Ads e da Meta."
+            },
+            {
+              "id": "marketing.md#separadores",
+              "file": "marketing.md",
+              "slug": "separadores",
+              "title": "Separadores",
+              "level": 4,
+              "summary": "Dashboard: visão geral do marketing no período.",
+              "text": "- **Dashboard**: visão geral do marketing no período.\n- **Anúncios**: gasto por marca e por campanha (Google Ads e Meta) e ROAS por campanha (sem IVA).\n- **Canais e clientes**: de onde vêm as reservas e os clientes.\n- **Orçamentos**: orçamento mensal por marca/cidade e o ritmo do gasto.\n- **Web & SEO**: tráfego dos sites (Google Analytics 4), pesquisa Google (Search Console) e velocidade (PageSpeed) — ver a ajuda \"Web & SEO\".\n\nNa **Faturação** os anúncios entram como despesa de marketing por projeto: o gasto das plataformas até chegar a fatura do Google/Meta; nos dias do período de consumo dela, a fatura.\n\n**Custo total de marketing** = gasto dos anúncios (Google + Meta, vindo das plataformas) + **outras despesas de marketing** (Despesas da categoria «Marketing»). As **faturas do Google e da Meta** lançadas nas Despesas **não se somam outra vez** — o gasto delas já está nos anúncios; o valor aparece à parte, só como informação.\n\n**Quando a base da Multipark não responde**: o gasto aparece na mesma (é nosso) e as reservas, o ROAS e o custo por reserva ficam \"—\" com o aviso \"Reservas da Multipark indisponíveis\" — nunca 0. Os alertas de atribuição e de campanhas sem resultados ficam suspensos até voltar; os das recolhas continuam."
+            },
+            {
+              "id": "marketing.md#canais-e-clientes",
+              "file": "marketing.md",
+              "slug": "canais-e-clientes",
+              "title": "Canais e clientes",
+              "level": 4,
+              "summary": "O grupo Anúncios (Google + Meta) — clientes novos junta as reservas de clientes novos nos canais próprios; o custo é o gasto do Google Ads e da Meta.",
+              "text": "- O grupo **Anúncios (Google + Meta) — clientes novos** junta as reservas de clientes novos nos canais próprios; o custo é o gasto do Google Ads **e** da Meta.\n- O canal **Marketplace (multipark)** tem **todas** as reservas do Marketplace (8 out 2026): todas as dos parques de terceiros, seja qual for a origem, e as dos nossos parques que vieram pelo multipark.pt. Os **clientes** também: quem fez a 1.ª reserva num parque de terceiros entra pelo Marketplace. Antes os parques de terceiros não entravam nos Canais e clientes.\n- **Comissões dos parceiros**: a mesma regra da Faturação — sobre o valor **sem IVA** (salvo parceiros configurados \"com IVA\"). Um parceiro sem taxa aparece com **\"taxa em falta\"** e a comissão não é contada (antes contava como 0 %).\n- \"Cliente novo\" é calculado só nos parques do filtro escolhido: por isso a soma das cidades pode dar mais do que o total nacional.\n- Período máximo: 400 dias. Se o histórico for maior do que o limite de leitura, aparece um erro em vez de números cortados."
+            },
+            {
+              "id": "marketing.md#orcamentos",
+              "file": "marketing.md",
+              "slug": "orcamentos",
+              "title": "Orçamentos",
+              "level": 4,
+              "summary": "Regra 20 % (Jorge, 6 out 2026): o orçamento do Google Ads de cada marca/cidade é 20 % da faturação do mês anterior dessa marca/cidade (reservas concluídas…",
+              "text": "- **Regra 20 %** (Jorge, 6 out 2026): o orçamento do **Google Ads** de cada marca/cidade é **20 % da faturação do mês anterior** dessa marca/cidade (reservas concluídas, **sem IVA**, **sem as do Marketplace**). Ex.: Airpark Lisboa em outubro = 20 % da faturação da Airpark Lisboa em setembro.\n- **Marketplace**: 20 % do que lhe **ficou** no mês anterior (comissões dos parques de terceiros + os 20 % das reservas dos nossos parques que vieram pelo Marketplace). Numa reserva de 100 € ficam ~20 € (sem IVA um pouco menos) e o orçamento é 20 % disso. A cidade de cada parque é a **reconhecida** (Prior Velho e Moscavide → Lisboa, Maia → Porto…); as comissões de parques **sem cidade reconhecida** não dão orçamento a nenhuma cidade e aparecem num aviso com os nomes, para se corrigir a cidade do parque na Multipark.\n- As linhas da regra aparecem com a etiqueta **Regra 20 %** e a base usada; não se arquivam (são calculadas). Um orçamento **posto à mão** para a mesma marca/cidade no Google Ads **manda** — e a linha diz quanto a regra dava. Se a base da Multipark não responder, aparecem só os postos à mão (com aviso).\n- Gasto do dia 1 até **ontem** (hoje está a meio) contra o esperado pelos dias completos. Acima de **110 %** ou abaixo de **80 %** do esperado (a partir do 4.º dia) aparece um alerta.\n- **Arquivar** (antes \"Apagar\") tira o orçamento da lista e dos alertas, mas fica no registo. Definir o mesmo orçamento outra vez repõe-no. Mudar um valor fica registado (antes → depois).\n- Quem só vê parte das cidades de um orçamento (ex.: \"Marca (todas as cidades)\" visto por quem só tem Lisboa) vê o gasto dessa parte, sem ritmo.\n\n**Anúncios → ligações utm/código**: ligar um utm_campaign ou código de desconto a uma campanha fica registado; se já estava noutra campanha, passa para esta e o registo diz de onde saiu. **Retirar** uma ligação arquiva-a (fica no registo).\n\n**Reservas ligadas a uma campanha** (ROAS por campanha, coluna **Ligadas** na linha de cada campanha e alerta \"campanha sem resultados\") — Jorge, 8 out 2026: as campanhas davam **0 ligadas** porque o link da reserva, com o auto-tagging da Google, só traz o **gclid** (sem o ID da campanha). Agora a reserva liga-se, por esta ordem (cada reserva conta uma vez):\n1. **ID da campanha no link** (campaignid / utm_campaign numérico) — ganha sempre;\n2. **gclid → campanha (Google Ads)**: sem ID no link mas com gclid, a campanha **do clique** — de hora a hora a app lê no Google Ads de que campanha é cada clique (estado em **Integrações → Google Ads → Recolha**, \"Cliques (gclid → campanha)\");\n3. **utm_campaign** ou **código de desconto** ligados à mão à campanha.\n- No ROAS por campanha, por baixo do número aparece quantas vieram **pelo clique (gclid)**; passa o rato por cima para ver de onde veio cada uma. Na linha da campanha (separador da marca), o mesmo no título da célula **Ligadas**.\n- Um gclid que o Google Ads não conhece (clique com mais de 90 dias, conta não recolhida, ou ainda por ler) **não liga** — a reserva fica como estava. gbraid/wbraid (iPhone) também não: a Google não os dá por clique.\n- Se a leitura dos cliques estiver desligada ou a falhar, as reservas com cliques ainda por ler ligam-se só pelo link, como antes.\n\n**Via net por campanha** (Jorge, 8 out 2026) — no ROAS por campanha e na linha de cada campanha (separador da marca), **ao lado** das ligadas:\n- As reservas via net de cada marca/cidade **repartem-se pelas campanhas dessa marca/cidade em proporção às conversões** que a plataforma conta (Google/Meta) no período. Se nenhuma campanha do grupo teve conversões, **pelos cliques**; se nem cliques, **pelo gasto**. Passa o rato por cima do número para ver a parte e a base usada.\n- As campanhas **nacionais** entram em cada cidade pela parte que já lhes cabe no gasto (a mesma repartição do nacional).\n- Fica com casas decimais (\"**≈ 2,5**\" = fração de reservas). Campanhas **por associar** não recebem via net (\"—\"); uma marca/cidade com reservas mas sem campanhas fica **por repartir** (aparece por baixo do ROAS por campanha).\n- As **ligadas** continuam a ser as diretas (link, gclid, utm ou código). O ROAS por campanha mostra os dois: o das ligadas e o **ROAS via net**.\n\n**Valor no Marketing** (valor via net, valor ligadas e todos os ROAS): reservas nos **parques nossos** = **preço inteiro** (também as que vieram pelo Marketplace — a comissão de 20 % é custo à parte); reservas nos **parques de terceiros** = só a **nossa comissão**: a gravada na reserva na Multipark; sem ela, a taxa desse parque no período (comissão ÷ valor das reservas dele com comissão gravada — a mesma conta das Parcerias); sem nenhuma, vale 0 e conta como \"comissão em falta\". O **Valor das reservas** do Painel continua a ser o preço de todas.\n\n**Alertas** (independentes do período): campanhas com ≥ 50 € em 14 dias **sem reservas via net (repartidas) nem ligadas** (campanha por associar: sem conversões nem ligadas), ritmo do mês, orçamentos e recolhas.\n- Ficam **de lado**, à direita do Painel (no telemóvel, por cima). Carrega no título para os encolher e voltar a abrir.\n- Aparecem os 4 primeiros. **Ver todos** mostra o resto.\n- O **X** tira um alerta da lista **para toda a gente** até ao fim do mês, como nas Reservas. Fica guardado quem tirou e quando; nada se apaga. Volta sozinho no mês seguinte, ou antes em **Tirados → Repor**. Com uma marca escolhida em cima, tirar vale só para essa marca.\n- Um alerta de orçamento tirado não volta só porque a percentagem mudou. Volta se passar de \"acima\" para \"abaixo\" do orçamento, ou o contrário.\n\n**Aviso vermelho no topo**: a recolha do Google Ads ou da Meta falhou, pede nova autorização ou está parada há mais de 26 h — abre **Integrações → Google Ads** (o link só aparece a quem pode abrir as Integrações; os outros avisam o administrador). Se o próprio aviso não se conseguir ler, aparece um erro com \"Tentar de novo\" (nunca fica tudo \"verde\" por engano)."
+            },
+            {
+              "id": "marketing.md#conversoes-e-reservas-lado-a-lado-dashboard-anuncios-por-mar",
+              "file": "marketing.md",
+              "slug": "conversoes-e-reservas-lado-a-lado-dashboard-anuncios-por-mar",
+              "title": "Conversões e reservas, lado a lado (Dashboard, Anúncios por marca e por marca/cidade)",
+              "level": 2,
+              "summary": "Conversões (Google + Meta): o que cada plataforma conta (Google à parte, Meta à parte).",
+              "text": "- **Conversões (Google + Meta)**: o que cada plataforma conta (Google à parte, Meta à parte). **Custo por conversão** = gasto ÷ essas conversões.\n- **Reservas via net**: reservas reais da Multipark que **não são de parceiros** (site, telefone, Marketplace) — é o que os anúncios podem trazer. **Não contam** (8 out 2026) as **pendentes** (compra online por acabar), as de **clientes Pro** e as de **avenças** — o Painel diz quantas ficaram de fora. Não contam as de parceiros (com parceiro na reserva, origem de parceiro ou cobradas por um agregador como Parkos/Parkvia). Ao lado: o valor e o custo por reserva via net.\n- **Marketplace** (marca das contas Multipark.pt/Multipark SA): **todas as reservas do Marketplace, de qualquer parque** (Jorge, 8 out 2026) contam em **Marketplace <cidade>**, onde estão as campanhas \"Multipark - <Cidade> - PT\":\n  - **todas** as reservas dos **parques de terceiros**, seja qual for a origem (antes só as com origem Marketplace ou com comissão nossa);\n  - as dos **nossos parques** que vieram pelo multipark.pt (origem Marketplace) — estas saem da linha Airpark/Redpark/Skypark da cidade.\n  - A cidade do parque é a **reconhecida**: a cidade gravada ou uma terra à volta (Prior Velho, Moscavide, Portela → Lisboa; Maia, Pedras Rubras → Porto; Gambelas → Faro), senão o nome, senão a morada.\n  - Um parque de terceiros **sem cidade reconhecida** (ou numa cidade sem o nó \"Marketplace\" em Projetos) **entra na mesma**, em **\"Marketplace (sem cidade)\"**: conta na marca Marketplace e no total, em nenhuma cidade, e o separador Anúncios mostra um **aviso** com o nome e a cidade gravada de cada um — corrige a cidade do parque na Multipark (ou cria o nó). Só quem vê todas as cidades, sem filtro de marca, vê essas reservas.\n  - Cada reserva do Marketplace leva a etiqueta **operado por nós** ou **não operado** (a comissão é diferente): os nossos parques e os de terceiros que operamos são \"operado por nós\"; os da lista do dono (\"estes não são operados por nós\") e os de Definições → **Parques que a operação não faz** são \"não operado\". Por baixo da tabela das marcas: quantas reservas do Marketplace houve no período e quantas de cada.\n  - Na Faturação, na Caixa e no CRM nada muda (lá o Marketplace dos terceiros continua a ser o que tem a nossa comissão).\n- **Com link**: das reservas via net, quantas trazem o **link de origem**. Sem link não há como saber de que anúncio veio a reserva.\n- **Ligadas**: as que trazem a prova do clique no link (gclid/gbraid/wbraid do Google, fbclid da Meta, utm pago). Se uma marca tem conversões mas **0 ligadas**, o mais provável é o site dessa marca não guardar o link (ou o gclid) na reserva — vê a coluna \"Com link\".\n- O **ROAS Google (reportado)** e as \"conversões contadas pela Google\" são só do Google Ads. Uma conta de anúncios que deixou de ser recolhida continua a contar com o gasto que já tinha.\n\n**Email semanal** (segunda a partir das 8h, para os endereços em MARKETING_REPORT_EMAILS): desliga-se em Definições → Automações → **Email semanal de marketing**. Se a base da Multipark falhar, o email diz que as reservas estão indisponíveis.\n\n**Configurações de Web & SEO e Google Business** (contas, recolhas): só quem vê todas as cidades."
+            }
+          ]
+        },
+        {
+          "id": "marketing.google-business",
+          "file": "google-business.md",
+          "group": "Financeiro",
+          "module": "marketing",
+          "title": "Google Business Profile (perfis Google: desempenho, horários, publicações)",
+          "routes": [
+            "/marketing/web"
+          ],
+          "tabs": [],
+          "summary": "Em Marketing → Web & SEO → Google Business vês o desempenho dos perfis Google de cada parque (Lisboa, Porto, Faro; Multipark, Redpark, Skypark, Airpark…",
+          "sections": [
+            {
+              "id": "google-business.md#inicio",
+              "file": "google-business.md",
+              "slug": "inicio",
+              "title": "Google Business Profile (perfis Google: desempenho, horários, publicações)",
+              "level": 1,
+              "summary": "Em Marketing → Web & SEO → Google Business vês o desempenho dos perfis Google de cada parque (Lisboa, Porto, Faro; Multipark, Redpark, Skypark, Airpark…",
+              "text": "Em **Marketing → Web & SEO → Google Business** vês o desempenho dos perfis Google de cada parque (Lisboa, Porto, Faro; Multipark, Redpark, Skypark, Airpark, Multibags, Multidriver) e, se geres o Marketing (super admin), mudas horários e publicas novidades. As críticas continuam em **Críticas** (ler, responder e publicar a resposta no Google)."
+            },
+            {
+              "id": "google-business.md#o-que-ha-no-separador",
+              "file": "google-business.md",
+              "slug": "o-que-ha-no-separador",
+              "title": "O que há no separador",
+              "level": 4,
+              "summary": "KPIs do período com a variação face ao período anterior ou ao ano passado: impressões (Pesquisa + Maps), chamadas, pedidos de direções, cliques no site (e…",
+              "text": "- **KPIs** do período com a variação face ao período anterior ou ao ano passado: impressões (Pesquisa + Maps), chamadas, pedidos de direções, cliques no site (e conversas/marcações, se houver), média das críticas, críticas novas, taxa de resposta e tempo de resposta (mediana).\n- **Gráficos** por dia: impressões (Pesquisa vs Maps) e chamadas/direções/site. Os últimos 2–3 dias ainda acertam (a Google atualiza com atraso).\n- **Perfis**: uma linha por perfil com os números, as críticas (média, n.º, taxa de resposta, sem resposta) e o **estado** — verificado, sem controlo (suspenso/por verificar), fechado, **alterado pela Google** ou com **edições pendentes**.\n- **Críticas por semana** (volume e média) e **pesquisas** que mostraram os perfis (por mês completo; a Google esconde as pequenas: \"< 15\").\n- Filtros por **cidade** e **perfil**. Em **Negócio** há o cartão \"chamadas e direções vs reservas por cidade\" (indicador, não atribuição)."
+            },
+            {
+              "id": "google-business.md#horarios-icone-do-calendario-na-linha-do-perfil",
+              "file": "google-business.md",
+              "slug": "horarios-icone-do-calendario-na-linha-do-perfil",
+              "title": "Horários (ícone do calendário na linha do perfil)",
+              "level": 2,
+              "summary": "O horário é lido na hora do Google.",
+              "text": "1. O horário é lido na hora do Google.\n2. Liga \"Alterar o horário normal\" para mudar os dias (Aberto com intervalos, 24 horas ou Fechado). Um intervalo como 22:00–02:00 fecha depois da meia-noite.\n3. **Horários especiais** (feriados, fechos): adiciona o dia, marca Fechado ou indica as horas. Só esses dias mudam — os outros horários especiais de cada perfil ficam.\n4. Em \"Aplicar a\" escolhe vários perfis (Todos, Lisboa, Porto, Faro ou um a um) para aplicar de uma vez.\n5. **Aplicar no Google…** pede confirmação. O resultado vem por perfil (✓/✗ com o motivo). Fica no registo de atividade."
+            },
+            {
+              "id": "google-business.md#publicacoes-icone-do-megafone",
+              "file": "google-business.md",
+              "slug": "publicacoes-icone-do-megafone",
+              "title": "Publicações (ícone do megafone)",
+              "level": 2,
+              "summary": "Vês as publicações do perfil e podes apagá-las (com confirmação).",
+              "text": "- Vês as publicações do perfil e podes apagá-las (com confirmação).\n- Nova publicação: **Novidade**, **Oferta** ou **Evento**, texto (até 1500 caracteres), botão opcional (**Reservar**, **Encomendar**, **Saber mais** com endereço https; **Ligar** usa o telefone do perfil), imagem opcional (endereço https de uma imagem). Ofertas e eventos precisam de título e datas.\n- **Rascunho IA**: escreve o tema e a IA (lite) propõe o texto — fica no editor, nada é publicado sem carregares em Publicar. Respeita o interruptor \"IA: rascunho de publicações Google Business\" e o orçamento.\n- Podes publicar em vários perfis de uma vez. A Google revê cada publicação antes de a mostrar.\n- Perguntas & Respostas não existem aqui: a Google descontinuou essa API."
+            },
+            {
+              "id": "google-business.md#alertas-1-dia-depois-da-recolha-limiares-em-configurar",
+              "file": "google-business.md",
+              "slug": "alertas-1-dia-depois-da-recolha-limiares-em-configurar",
+              "title": "Alertas (1×/dia depois da recolha; limiares em Configurar)",
+              "level": 2,
+              "summary": "\"Críticas Google: alertas\" (vai a quem gere as Críticas da cidade do perfil): média de estrelas dos últimos 7 dias 0,5★ abaixo da dos 90 dias anteriores (com…",
+              "text": "- \"Críticas Google: alertas\" (vai a quem gere as Críticas da cidade do perfil): média de estrelas dos últimos 7 dias 0,5★ abaixo da dos 90 dias anteriores (com pelo menos 3 críticas) e críticas sem resposta há mais de 48 h.\n- \"Alertas Google Business\" (Marketing): impressões ou chamadas da semana 30% abaixo da anterior (com base mínima), perfil sem controlo/suspenso, fechado, alterado pela Google ou com edições pendentes.\n\n**Configurar** (super admin): cidade e marca de cada perfil (por omissão vêm do parque associado nas Críticas, da morada ou do título — \"Automático\"), desligar perfis que não interessam, recolha diária, pesquisas mensais, histórico da 1.ª recolha (180 dias) e limiares dos alertas."
+            },
+            {
+              "id": "google-business.md#ligar-e-por-a-funcionar-dono-super-admin",
+              "file": "google-business.md",
+              "slug": "ligar-e-por-a-funcionar-dono-super-admin",
+              "title": "Ligar e pôr a funcionar (dono / super admin)",
+              "level": 2,
+              "summary": "A recolha usa a mesma ligação das Críticas (OAuth com a permissão business.manage).",
+              "text": "A recolha usa a mesma ligação das Críticas (OAuth com a permissão `business.manage`). Para tudo funcionar são precisos **quatro passos no Google** — e o mais importante é o 1."
+            },
+            {
+              "id": "google-business.md#1-pedir-acesso-a-api-do-business-profile-obrigatorio-sem-ist",
+              "file": "google-business.md",
+              "slug": "1-pedir-acesso-a-api-do-business-profile-obrigatorio-sem-ist",
+              "title": "1. Pedir acesso à API do Business Profile (obrigatório — sem isto a quota é 0)",
+              "level": 4,
+              "summary": "A Google começa todos os projetos com 0 pedidos por minuto nas APIs do Business Profile.",
+              "text": "A Google começa todos os projetos com **0 pedidos por minuto** nas APIs do Business Profile. Enquanto não aprovar, cada pedido falha com \"quota\" (429) e o Google Cloud mostra **100% de erros** na \"My Business Account Management API\" — é exatamente o sintoma de quando o \"Testar\" falha.\n1. Descobre o **n.º do projeto** Google Cloud das credenciais OAuth: o \"Testar\" mostra-o (\"projeto n.º …\"); também é o número antes do hífen do ID do cliente OAuth (`123456789012-….apps.googleusercontent.com`). Atenção: se o `GOOGLE_BUSINESS_CLIENT_ID` não estiver definido, a app usa o cliente do **Google Ads** — o pedido tem de ser para **esse** projeto.\n2. Abre o formulário **https://support.google.com/business/contact/api_default** e escolhe **\"Application for Basic API Access\"**.\n3. Indica o n.º do projeto, o email da conta que gere os perfis (Proprietária/Gestora em business.google.com), o site (multipark.pt) e a utilização: \"gestão interna dos perfis dos nossos parques (críticas, horários, publicações e estatísticas)\".\n4. A Google responde por email (normalmente em poucos dias). Depois da aprovação a quota passa a **300 pedidos por minuto** (vê em Google Cloud → APIs e serviços → \"My Business Account Management API\" → Quotas: deixa de estar a 0)."
+            },
+            {
+              "id": "google-business.md#2-ativar-as-apis-no-mesmo-projeto-google-cloud-apis-e-servic",
+              "file": "google-business.md",
+              "slug": "2-ativar-as-apis-no-mesmo-projeto-google-cloud-apis-e-servic",
+              "title": "2. Ativar as APIs no mesmo projeto (Google Cloud → APIs e serviços → Biblioteca)",
+              "level": 3,
+              "summary": "My Business Account Management API — lista as contas.",
+              "text": "- **My Business Account Management API** — lista as contas.\n- **My Business Business Information API** — lista os perfis, horários e estado.\n- **Business Profile Performance API** — impressões, chamadas, direções, cliques e pesquisas.\n- **Google My Business API** (v4) — críticas, resposta às críticas e publicações. Esta só aparece na Biblioteca **depois** da aprovação do passo 1."
+            },
+            {
+              "id": "google-business.md#3-ligar-a-conta-google-certa",
+              "file": "google-business.md",
+              "slug": "3-ligar-a-conta-google-certa",
+              "title": "3. Ligar a conta Google certa",
+              "level": 4,
+              "summary": "Só o super admin liga e desliga (o admin vê o estado e gere os perfis).",
+              "text": "Só o **super admin** liga e desliga (o admin vê o estado e gere os perfis). Em **Integrações → Google Business Profile** (cartão \"Ligação Google Business Profile\", ao fundo da página) entra com a conta que é **Proprietária ou Gestora** dos perfis dos parques (a mesma que vês em business.google.com → \"Perfis\"). Se os perfis estão num **grupo de empresas**, a conta tem de ter acesso ao grupo. Aceita todas as permissões."
+            },
+            {
+              "id": "google-business.md#4-testar",
+              "file": "google-business.md",
+              "slug": "4-testar",
+              "title": "4. Testar",
+              "level": 4,
+              "summary": "Em Integrações → Google Business Profile → Testar (ou \"Testar APIs\" no separador Google Business) cada API é testada por ordem e aparece ✓/✗ com a causa:",
+              "text": "Em **Integrações → Google Business Profile → Testar** (ou \"Testar APIs\" no separador Google Business) cada API é testada por ordem e aparece ✓/✗ com a causa:\n- \"quota 0 …\" → falta o passo 1 (ou ainda não foi aprovado).\n- \"… não está ativa no projeto …\" → falta ativar essa API (passo 2; o link leva direto à página certa).\n- \"não inclui business.manage\" / \"autorização inválida\" / \"invalid_grant\" → volta a ligar (passo 3).\n- \"não gere nenhum perfil\" / \"nenhum perfil nas contas\" → ligaste uma conta Google errada (passo 3).\n- \"acesso recusado … Proprietária ou Gestora\" → a conta ligada não tem permissão nesse perfil.\n\nDepois do Testar ficar todo com ✓, carrega em **Atualizar agora** (a recolha automática está **em pausa** até a Google aprovar o acesso à API; depois volta ao agendador): a 1.ª recolha traz ~6 meses de desempenho; depois relê só os últimos 5 dias, 1×/dia.\n\n**Variáveis no Vercel** (já existentes): `GOOGLE_BUSINESS_CLIENT_ID` e `GOOGLE_BUSINESS_CLIENT_SECRET` (se faltarem usa-se o cliente do Google Ads), `INTEGRATIONS_ENCRYPTION_KEY` (cifra do token). Nada de novo é preciso para o Google Business.\n\n**Push** (avisos da Google quando chega uma crítica): interruptor **Google Business: notificações push** em Definições → Automações (ligado por omissão). Desligado, os avisos da Google são ignorados e as críticas chegam na recolha agendada.\n\n**Desligar** (só super admin, pede confirmação): revoga a autorização na Google e pára a importação das críticas e o desempenho em todos os parques. A **escolha dos perfis fica guardada** — ao voltar a ligar com a mesma conta, volta tudo como estava (com outra conta Google, a escolha é limpa). Ligar, desligar e mudar a associação de um perfil ficam nos Logs."
+            }
+          ]
+        },
+        {
+          "id": "marketing.web",
+          "file": "web-analytics.md",
+          "group": "Financeiro",
+          "module": "marketing",
+          "title": "Web & SEO (Google Analytics 4, Search Console, PageSpeed)",
+          "routes": [
+            "/marketing/web"
+          ],
+          "tabs": [],
+          "summary": "Em Marketing → Web & SEO vês o tráfego dos sites (Google Analytics 4), a pesquisa orgânica do Google (Search Console) e a velocidade das páginas principais…",
+          "sections": [
+            {
+              "id": "web-analytics.md#inicio",
+              "file": "web-analytics.md",
+              "slug": "inicio",
+              "title": "Web & SEO (Google Analytics 4, Search Console, PageSpeed)",
+              "level": 1,
+              "summary": "Em Marketing → Web & SEO vês o tráfego dos sites (Google Analytics 4), a pesquisa orgânica do Google (Search Console) e a velocidade das páginas principais…",
+              "text": "Em **Marketing → Web & SEO** vês o tráfego dos sites (Google Analytics 4), a pesquisa orgânica do Google (Search Console) e a velocidade das páginas principais (PageSpeed), ao lado das reservas. Só super admin (quem vê o Marketing). São só totais por dia — nenhum dado de pessoas."
+            },
+            {
+              "id": "web-analytics.md#o-que-ha-no-separador",
+              "file": "web-analytics.md",
+              "slug": "o-que-ha-no-separador",
+              "title": "O que há no separador",
+              "level": 4,
+              "summary": "KPIs do período escolhido com a variação face ao período anterior ou ao mesmo período do ano passado (seta e percentagem; na posição média, descer é bom).",
+              "text": "- **KPIs** do período escolhido com a variação face ao **período anterior** ou ao **mesmo período do ano passado** (seta e percentagem; na posição média, descer é bom).\n- **Tráfego**: sessões por dia (com a linha da comparação), canais, dispositivos, funil de reserva (eventos GA4), páginas de entrada e países/cidades.\n- **Pesquisa Google**: cliques e posição por dia, pesquisas (com a variação de posição) e **páginas a perder cliques**. A Search Console chega com 2–3 dias de atraso.\n- **Velocidade**: última medição PageSpeed de cada página (móvel e computador, dados de **laboratório**), com verde (bom), âmbar (a melhorar) e vermelho (fraco), e o histórico da pontuação. Por baixo:\n  - **O que corrigir primeiro**: as oportunidades do Lighthouse da última medição da página escolhida, ordenadas pelo tempo que poupam (e KB); botão **Explicar** (IA lite, PT-PT, só com os títulos e poupanças — interruptor \"IA: explicar o que corrigir na PageSpeed\").\n  - **Visitantes reais (Chrome UX Report)**: p75 dos últimos 28 dias de LCP, INP, CLS, FCP e TTFB de quem visitou com o Chrome, por site (origem) e por página, telemóvel e computador, com a barra bom/a melhorar/fraco e a evolução semanal. Sites/páginas com poucas visitas não têm dados reais (é normal).\n- **Google Business**: desempenho dos perfis Google, horários e publicações (ver a ajuda \"Google Business Profile\").\n- **Negócio**: reservas feitas no site ÷ sessões (conversão web → reserva), receita por sessão e gasto em anúncios por sessão. É um indicador, não atribuição.\n- **O que mudou esta semana**: resumo curto (IA lite, se estiver ligada; senão texto automático) gerado à segunda-feira.\n- Filtro por **marca** no topo; tabelas grandes com páginas (Anterior/Seguinte) e pesquisa.\n\n**Alertas** (sino e email, notificação \"Alertas Web & SEO\", 1×/dia): sessões de ontem 30% abaixo da média dos 7 dias anteriores, cliques do Google da semana 30% abaixo da anterior, pesquisas do top 20 a perder mais de 3 posições, PageSpeed móvel abaixo de 50 e **dados reais** (CrUX) de uma página-chave acima de LCP 2,5 s, INP 200 ms ou CLS 0,1 (se a página não tiver dados próprios, conta o site todo). Os limiares mudam-se nas Definições."
+            },
+            {
+              "id": "web-analytics.md#configurar-super-admin",
+              "file": "web-analytics.md",
+              "slug": "configurar-super-admin",
+              "title": "Configurar (super admin)",
+              "level": 2,
+              "summary": "",
+              "text": ""
+            },
+            {
+              "id": "web-analytics.md#1-google-cloud-projeto-da-conta-de-servico-que-a-app-ja-usa",
+              "file": "web-analytics.md",
+              "slug": "1-google-cloud-projeto-da-conta-de-servico-que-a-app-ja-usa",
+              "title": "1. Google Cloud (projeto da conta de serviço que a app já usa — a do Gmail/Drive)",
+              "level": 3,
+              "summary": "Abre console.cloud.google.com → APIs e serviços → Biblioteca.",
+              "text": "1. Abre console.cloud.google.com → **APIs e serviços → Biblioteca**.\n2. Ativa **Google Analytics Data API**, **Google Search Console API**, **PageSpeed Insights API** e **Chrome UX Report API**.\n3. Em **Credenciais → Criar credenciais → Chave de API**, restringe-a à **PageSpeed Insights API** e à **Chrome UX Report API** e põe-a no Vercel como `GOOGLE_PAGESPEED_API_KEY`. Sem chave a PageSpeed funciona com quota baixa, mas os **dados reais (CrUX) precisam da chave** (em alternativa, uma chave só para a CrUX em `GOOGLE_CRUX_API_KEY`)."
+            },
+            {
+              "id": "web-analytics.md#2-copiar-o-email-da-conta-de-servico",
+              "file": "web-analytics.md",
+              "slug": "2-copiar-o-email-da-conta-de-servico",
+              "title": "2. Copiar o email da conta de serviço",
+              "level": 4,
+              "summary": "Em Definições → Integrações → Web & SEO aparece o email da conta de serviço (termina em .iam.gserviceaccount.com) com um botão para copiar.",
+              "text": "Em **Definições → Integrações → Web & SEO** aparece o email da conta de serviço (termina em `.iam.gserviceaccount.com`) com um botão para copiar."
+            },
+            {
+              "id": "web-analytics.md#3-dar-acesso-no-google-analytics-4-em-cada-propriedade",
+              "file": "web-analytics.md",
+              "slug": "3-dar-acesso-no-google-analytics-4-em-cada-propriedade",
+              "title": "3. Dar acesso no Google Analytics 4 (em cada propriedade)",
+              "level": 3,
+              "summary": "Abre analytics.google.com e escolhe a propriedade.",
+              "text": "1. Abre analytics.google.com e escolhe a propriedade.\n2. **Administração** (roda dentada) → **Propriedade** → **Gestão de acesso à propriedade**.\n3. Carrega em **+** → **Adicionar utilizadores**.\n4. Cola o email da conta de serviço, escolhe a função **Leitor**, tira o visto de \"Notificar por email\" e carrega em **Adicionar**.\n5. Copia o **ID da propriedade** (Administração → Detalhes da propriedade; só números, ex.: 123456789)."
+            },
+            {
+              "id": "web-analytics.md#4-dar-acesso-na-search-console-em-cada-propriedade",
+              "file": "web-analytics.md",
+              "slug": "4-dar-acesso-na-search-console-em-cada-propriedade",
+              "title": "4. Dar acesso na Search Console (em cada propriedade)",
+              "level": 3,
+              "summary": "Abre search.google.com/search-console e escolhe a propriedade.",
+              "text": "1. Abre search.google.com/search-console e escolhe a propriedade.\n2. **Definições** → **Utilizadores e autorizações** → **Adicionar utilizador**.\n3. Cola o email da conta de serviço, autorização **Restrito** (chega) e **Adicionar**. Tens de ser **proprietário** da propriedade para adicionar utilizadores.\n4. Anota o nome da propriedade tal como aparece: `sc-domain:multipark.pt` (domínio) ou `https://www.multipark.pt/` (prefixo de URL)."
+            },
+            {
+              "id": "web-analytics.md#5-preencher-as-definicoes-definicoes-integracoes-web-seo",
+              "file": "web-analytics.md",
+              "slug": "5-preencher-as-definicoes-definicoes-integracoes-web-seo",
+              "title": "5. Preencher as Definições (Definições → Integrações → Web & SEO)",
+              "level": 3,
+              "summary": "Adiciona cada propriedade GA4 (ID, nome, marca) e cada propriedade da Search Console (nome exato, marca).",
+              "text": "1. Adiciona cada propriedade GA4 (ID, nome, marca) e cada propriedade da Search Console (nome exato, marca).\n2. Confere as páginas da PageSpeed (por omissão as páginas iniciais multipark.pt e multipark.app — junta as páginas de reserva de cada marca, até 40). Para juntar muitas de uma vez usa **Colar várias páginas** (uma por linha, `URL | nome` opcional; a marca é adivinhada pelo domínio). \"Chave\" = página-chave (entra nos alertas dos dados reais). O interruptor **Dados reais (Chrome UX Report)** consulta 1×/semana as mesmas páginas e os respetivos sites.\n3. Escolhe a **hora da atualização diária** (Lisboa; 09:00 por omissão), o histórico da 1.ª recolha (90 dias por omissão), os **eventos do funil** (ex.: `begin_checkout`, `purchase`) e os limiares dos alertas.\n4. Liga **Recolha diária** e carrega em **Guardar**.\n5. Carrega em **Testar acesso**: diz, para cada propriedade, se a conta de serviço a consegue ler. As que falham mostram o email a adicionar.\n6. **Recolher agora** começa já (o histórico de 90 dias leva algumas corridas; o agendador continua sozinho 1×/dia, a partir das 09h ou da hora escolhida, se for mais tarde).\n\nTambém há **Testar** para \"Google Analytics 4\", \"Search Console\", \"PageSpeed Insights\" e \"Chrome UX Report\" no hub de **Integrações**."
+            },
+            {
+              "id": "web-analytics.md#problemas-comuns",
+              "file": "web-analytics.md",
+              "slug": "problemas-comuns",
+              "title": "Problemas comuns",
+              "level": 4,
+              "summary": "\"Sem acesso\" / 403: a conta de serviço não foi adicionada à propriedade (passo 3 ou 4), foi adicionada à propriedade errada, ou a API não está ativa no Google…",
+              "text": "- \"Sem acesso\" / 403: a conta de serviço não foi adicionada à propriedade (passo 3 ou 4), foi adicionada à propriedade errada, ou a API não está ativa no Google Cloud (passo 1).\n- Search Console \"não é utilizadora\": o nome da propriedade tem de ser igual ao da Search Console (com `sc-domain:` ou com `/` no fim).\n- PageSpeed sem resultados: sem chave a quota é baixa — volta a tentar no dia seguinte ou define `GOOGLE_PAGESPEED_API_KEY`.\n- Dados reais vazios: \"sem visitas Chrome suficientes\" é normal em páginas pouco visitadas (vê a linha do site todo). \"Chrome UX Report API não está ativa\" → ativa-a no projeto da chave; \"chave restrita\" → junta a Chrome UX Report API às restrições da chave.\n- Delegação (opcional): se preferires não adicionar a conta de serviço, indica uma conta do Workspace em \"Conta a impersonar\" e autoriza a conta de serviço no Admin Google com os âmbitos `https://www.googleapis.com/auth/analytics.readonly` e `https://www.googleapis.com/auth/webmasters.readonly`; essa conta tem de ter acesso às propriedades."
+            }
+          ]
+        },
+        {
+          "id": "parcerias",
+          "file": "parcerias.md",
+          "group": "Financeiro",
+          "module": "parcerias",
+          "title": "Parcerias (parceiros, parques, Pró e avenças)",
+          "routes": [
+            "/parcerias",
+            "/parcerias/tipo/:tipo",
+            "/parcerias/inferir"
+          ],
+          "tabs": [
+            {
+              "tab": "partners",
+              "section": "Parceiros",
+              "sectionId": "parcerias.md#parceiros"
+            },
+            {
+              "tab": "parks",
+              "section": "Parques",
+              "sectionId": "parcerias.md#parques"
+            },
+            {
+              "tab": "pro",
+              "section": "Pró e avenças",
+              "sectionId": "parcerias.md#pro-e-avencas"
+            },
+            {
+              "tab": "summary",
+              "section": "Faturação",
+              "sectionId": "parcerias.md#faturacao"
+            },
+            {
+              "tab": "fecho",
+              "section": "Fecho do mês",
+              "sectionId": "parcerias.md#fecho-do-mes"
+            },
+            {
+              "tab": "analytics",
+              "section": "Análise",
+              "sectionId": "parcerias.md#analise"
+            },
+            {
+              "tab": "management",
+              "section": "Registos",
+              "sectionId": "parcerias.md#registos"
+            }
+          ],
+          "summary": "Menu Financeiro → Parcerias.",
+          "sections": [
+            {
+              "id": "parcerias.md#inicio",
+              "file": "parcerias.md",
+              "slug": "inicio",
+              "title": "Parcerias (parceiros, parques, Pró e avenças)",
+              "level": 1,
+              "summary": "Menu Financeiro → Parcerias.",
+              "text": "Menu **Financeiro → Parcerias**. (O antigo endereço /parcerias/inferir — a inferência de parceiros — saiu: abre esta página, porque os parceiros vêm ao vivo da Multipark.) Os parceiros, os parques e as reservas vêm **ao vivo da BD da Multipark** (só leitura). Os **nossos registos** (contrato, notas, contactos) ficam na nossa BD."
+            },
+            {
+              "id": "parcerias.md#separadores",
+              "file": "parcerias.md",
+              "slug": "separadores",
+              "title": "Separadores",
+              "level": 2,
+              "summary": "",
+              "text": ""
+            },
+            {
+              "id": "parcerias.md#parceiros",
+              "file": "parcerias.md",
+              "slug": "parceiros",
+              "title": "Parceiros",
+              "level": 3,
+              "summary": "Agências de viagens e agregadores dos nossos parques.",
+              "text": "Agências de viagens e agregadores dos **nossos** parques. Por parceiro: tipo, **marcas** (Airpark, Redpark, Skypark — quem é parceiro de uma marca é-o nas três cidades) e a **taxa** (percentagem ou valor fixo, como está na Multipark; se as cidades tiverem taxas diferentes aparece o intervalo, com um *, e a taxa de cada cidade na dica), reservas, valor e **nosso** (o valor devido gravado na reserva — o parceiro fica com o resto), **este mês** e **últimos 12 meses**. O mês é o da **entrada do carro** (hora de Lisboa); canceladas e pendentes não contam. \"*n* sem devido\" = reservas sem o valor devido gravado na Multipark.\n- **Ficha no CRM** abre a página do parceiro em Clientes (detalhe mensal e últimas reservas).\n- **Registo**: liga o parceiro a um registo nosso (**Ligar a registo…**), cria um novo já preenchido (**Criar**), edita-o (lápis) ou desliga-o. A ligação é só pelo **ID do parceiro na Multipark** — nada de nomes nem \"aliases\"."
+            },
+            {
+              "id": "parcerias.md#parques",
+              "file": "parcerias.md",
+              "slug": "parques",
+              "title": "Parques",
+              "level": 3,
+              "summary": "Nossos (reservas do mês, quantas vieram de parceiros, quantas pelo Marketplace — origem Marketplace —, valor) e Terceiros (marketplace): parques de outros em…",
+              "text": "**Nossos** (reservas do mês, quantas vieram de parceiros, quantas **pelo Marketplace** — origem Marketplace —, valor) e **Terceiros (marketplace)**: parques de outros em que **nós somos o marketplace**. **Todas** = todas as reservas do parque no mês (todas são do Marketplace — 8 out 2026: \"têm que aparecer todas, seja de que parque for\"); **Com comissão** = as que nós lhes levámos, com a **comissão gravada em cada reserva na Multipark** (cada parque tem a sua taxa — 25 %, menos nos parques de rua…). O valor, a parte do parque, o **nosso** e a **Taxa** (efetiva no mês) são das com comissão — não mudaram. Por baixo do nome, a etiqueta **Operado por nós** / **Não operado** (os da lista do dono e os de Definições → Parques que a operação não faz são \"não operado\"; a comissão é diferente). **Ficha no CRM** abre a página do parque."
+            },
+            {
+              "id": "parcerias.md#pro-e-avencas",
+              "file": "parcerias.md",
+              "slug": "pro-e-avencas",
+              "title": "Pró e avenças",
+              "level": 3,
+              "summary": "Só informativo (não é contabilidade): por cliente Pro e por avença, reservas a entrar (mês da entrada) e a sair (mês da saída), este mês e últimos 12 meses.",
+              "text": "**Só informativo** (não é contabilidade): por cliente Pro e por avença, reservas a **entrar** (mês da entrada) e a **sair** (mês da saída), este mês e últimos 12 meses. Carrega numa linha para ver mês a mês. A conta corrente dos Pro está no CRM (**Conta no CRM**)."
+            },
+            {
+              "id": "parcerias.md#faturacao",
+              "file": "parcerias.md",
+              "slug": "faturacao",
+              "title": "Faturação",
+              "level": 3,
+              "summary": "O que há a faturar por registo nosso no período.",
+              "text": "O que há a faturar por registo nosso no período. Contam as reservas **concluídas com saída no período**. Registos com a etiqueta **Multipark** usam os números de lá: parceiros → o **nosso** gravado em cada reserva (o valor devido; \"*n* sem devido gravado\" = reservas sem esse valor, o a faturar pode estar incompleto); **Pro** → o preço das reservas Pro que saíram; **avenças** → o preço do plano na Multipark pelos meses do período. Os registos só nossos (operacionais, hotéis, campanhas…) seguem a nossa taxa ou avença. Por baixo, **Marketplace**: por parque de terceiros, o valor, a parte do parque, o **nosso** (comissão gravada) e a taxa — não entra no total de cima. Carrega numa linha para o detalhe do tipo."
+            },
+            {
+              "id": "parcerias.md#parques-nossos-vindos-pelo-marketplace-regra-do-dono-6-out",
+              "file": "parcerias.md",
+              "slug": "parques-nossos-vindos-pelo-marketplace-regra-do-dono-6-out",
+              "title": "Parques nossos vindos pelo Marketplace (regra do dono, 6 out)",
+              "level": 3,
+              "summary": "Uma reserva num parque nosso que a Multipark marca como vinda do Marketplace (origem Marketplace, ou a campanha \"Marketplace\") dá ao Marketplace 20 % do valor…",
+              "text": "Uma reserva num parque nosso que a Multipark marca como vinda do Marketplace (origem Marketplace, ou a campanha \"Marketplace\") dá ao Marketplace **20 %** do valor **sem IVA**, como os outros parceiros. Aparecem numa segunda tabela no cartão do Marketplace, com o **total do Marketplace** por baixo. Na **Faturação** (/faturacao) esses 20 % entram em \"Comissões a parceiros de venda\", no centro do parque; se a reserva também tiver um parceiro, conta só o Marketplace (nunca duas comissões). Desde 8 out 2026 o mesmo na **Faturação de parceiros** (este separador): uma reserva vinda pelo Marketplace com parceiro já **não** conta também no parceiro — só no Marketplace. A cidade de cada parque é a reconhecida (Prior Velho e Moscavide → Lisboa, Maia → Porto…), por isso um parque Airpark/Redpark/Skypark com uma terra à volta na cidade passa a contar como **nosso**."
+            },
+            {
+              "id": "parcerias.md#fecho-do-mes",
+              "file": "parcerias.md",
+              "slug": "fecho-do-mes",
+              "title": "Fecho do mês",
+              "level": 3,
+              "summary": "Como uma caixa, parceiro a parceiro: as reservas de parceiros concluídas com saída no mês na Multipark (agora) contra a nossa memória do webhook (o último…",
+              "text": "Como uma caixa, parceiro a parceiro: as reservas de parceiros **concluídas com saída no mês** na **Multipark** (agora) contra a **nossa memória do webhook** (o último retrato de cada reserva que nos chegou). Compara o número de reservas, o valor, o **nosso** (devido) e as **faturas** emitidas; carrega numa linha para ver as diferenças reserva a reserva: *Não chegou pelo webhook*, *Saída não chegou pelo webhook*, *Na nossa cópia saiu, na Multipark não* (cancelada, outro mês…), *Parceiro diferente*, *Valor diferente*, *Nosso (devido) diferente*, *Sem devido gravado*, *Preço mudou depois de criada*.\n- **Comparar agora** refaz a comparação do mês escolhido; corre também sozinha todas as manhãs (06:40), para o mês corrente e o anterior.\n- **Fechar** congela o parceiro nesse mês (a comparação automática já não lhe mexe). Com diferenças, é obrigatório escrever porquê. **Reabrir** só administradores.\n- O nosso lado é a **memória do webhook** (desde **28/09/2026 19:23**) e, para as reservas de antes, o **histórico carregado** (Correção de caixa → preços iniciais): aí compara-se o preço com que a reserva nasceu com o de agora (*Preço mudou depois de criada*); o devido nosso só existe na memória. As que não têm nem uma coisa nem outra aparecem como \"sem nada nosso\" (não contam como diferença).\n- **Faturas** = as emitidas das reservas + as **mensais** do parceiro (os agregadores e agências faturam-se uma vez por mês, por isso uma reserva sem fatura própria não é diferença).\n- Avisos (sino e email) de diferenças **novas**: liga em Definições → Automações \"Parceiros: avisar diferenças no fecho do mês\"."
+            },
+            {
+              "id": "parcerias.md#analise",
+              "file": "parcerias.md",
+              "slug": "analise",
+              "title": "Análise",
+              "level": 3,
+              "summary": "Reservas e receita por campanha no período.",
+              "text": "Reservas e receita por campanha no período."
+            },
+            {
+              "id": "parcerias.md#registos",
+              "file": "parcerias.md",
+              "slug": "registos",
+              "title": "Registos",
+              "level": 3,
+              "summary": "Os nossos registos: acordo de faturação (contrato), comissão, NIF, notas e contacto (nome, email, telefone — só para quem tem contacto).",
+              "text": "Os nossos registos: acordo de faturação (contrato), comissão, NIF, **notas** e **contacto** (nome, email, telefone — só para quem tem contacto). **Por configurar** = registos **só nossos** (hotéis, empresas, outros) sem dados gravados. Pros, avenças, agências e agregadores **não** se configuram à mão: ligam-se em **Ligar à Multipark** (o tipo, a taxa e a avença vêm de lá) — enquanto não estiverem ligados aparece um aviso com o número deles."
+            },
+            {
+              "id": "parcerias.md#inativos",
+              "file": "parcerias.md",
+              "slug": "inativos",
+              "title": "Inativos",
+              "level": 2,
+              "summary": "Inativos: parceiros inativos (ou só em parques inativos), parques inativos na Multipark, Pros e avenças inativos e registos inativos não aparecem nas listas.",
+              "text": "**Inativos**: parceiros inativos (ou só em parques inativos), parques inativos na Multipark, Pros e avenças inativos e registos inativos **não aparecem** nas listas. \"Mostrar inativos (*n*)\" volta a mostrá-los. Os números do mês e dos 12 meses não mudam (as reservas que houve contam na mesma)."
+            },
+            {
+              "id": "parcerias.md#juntar-registos-o-mesmo-parceiro-separado-em-varios-registos",
+              "file": "parcerias.md",
+              "slug": "juntar-registos-o-mesmo-parceiro-separado-em-varios-registos",
+              "title": "Juntar registos (o mesmo parceiro separado em vários registos)",
+              "level": 2,
+              "summary": "Em Registos (ou na fila Por configurar), marca a caixa dos registos que são o mesmo parceiro (ex.: \"Pro Cabopol\" e \"Blocotelha\", da mesma agência, com o mesmo…",
+              "text": "1. Em **Registos** (ou na fila **Por configurar**), marca a caixa dos registos que são o mesmo parceiro (ex.: \"Pro Cabopol\" e \"Blocotelha\", da mesma agência, com o mesmo email).\n2. Carrega em **Juntar** na barra azul, escolhe o registo que **fica** e confirma.\n3. Tudo o que liga as reservas aos outros passa para o que fica: o nome e a chave de campanha antigos, o id da Multipark, os aliases e os agentes — as reservas passam a aparecer no que fica (Faturação, Análise). Campos vazios do que fica (contacto, NIF, acordo) são preenchidos com os dos outros.\n4. Se mais do que um tinha id da Multipark, o que fica guarda o seu e os outros entram como ids extra: na **Faturação** e no **Fecho do mês** as reservas de todos somam no registo que fica. Se um desses ids já estiver noutro registo, a junção é recusada (separa-o de lá primeiro).\n5. A junção é tudo ou nada: se algo falhar a meio, nada muda.\n6. Os outros ficam **arquivados** \"Junto a…\" (nunca apagados). Enganaste-te? Em **Arquivados** carrega em **Separar**."
+            },
+            {
+              "id": "parcerias.md#ligar-a-multipark-cartao-no-topo-dos-registos-aplicar-so-adm",
+              "file": "parcerias.md",
+              "slug": "ligar-a-multipark-cartao-no-topo-dos-registos-aplicar-so-adm",
+              "title": "Ligar à Multipark (cartão no topo dos Registos; aplicar só administradores)",
+              "level": 2,
+              "summary": "A Multipark é a fonte: parceiros (agências e agregadores, com a taxa por parque), clientes Pro e avenças ficam cada um preso a um registo nosso pelo id de lá.",
+              "text": "- A Multipark é a fonte: **parceiros** (agências e agregadores, com a taxa por parque), **clientes Pro** e **avenças** ficam cada um preso a **um** registo nosso pelo id de lá.\n- **Ver o que muda** não grava nada. Mostra: **Ligar** (pelo id já gravado ou pelo nome, com a nossa taxa de hoje ao lado da da Multipark), **Criar** (existem lá e não temos registo), **À mão** (mais de um registo nosso com o mesmo nome — escolhe qual) e **Arquivar** (registos de agências, agregadores, Pros e avenças sem par na Multipark — desmarca os que são só nossos).\n- **Aplicar** liga, cria e arquiva. Arquivado **nunca é apagado**: fica em **Arquivados**, com **Repor**. O que desmarcaste (ou repuseste) fica marcado como \"só nosso\" e não volta a ser proposto.\n- Ligado à Multipark = etiqueta **Multipark**: o **tipo, a comissão e a avença deixam de se editar aqui** (mudam-se lá; o formulário mostra o que lá está). NIF, contactos, acordo de faturação e notas continuam nossos.\n- Os **agentes** de cada parceiro (o utilizador da empresa na Multipark) ficam ligados à parceria sozinhos — deixam de aparecer em RH → Ligações.\n- Depois da primeira vez, liga em **Definições → Automações** \"Parcerias: manter ligadas à Multipark todos os dias\" (05:40).\n- A **Faturação** usa os números da Multipark nos registos ligados (ver Faturação acima)."
+            },
+            {
+              "id": "parcerias.md#notas",
+              "file": "parcerias.md",
+              "slug": "notas",
+              "title": "Notas",
+              "level": 4,
+              "summary": "Os valores em euros e as taxas só aparecem a quem vê totais financeiros.",
+              "text": "- Os valores em euros e as taxas só aparecem a quem vê totais financeiros.\n- Quem tem acesso só a algumas cidades vê só os parques (e parceiros desses parques) dessas cidades.\n- Se a BD da Multipark não responder, aparece um aviso e a tab Parceiros mostra só os nossos registos de agências e agregadores.\n- Os parceiros já não se \"sincronizam\" nem se \"inferem\": saíram o botão **Sincronizar parceiros da API** e a página **Associar métodos de pagamento**."
+            }
+          ]
+        },
+        {
+          "id": "projetos",
+          "file": "projetos.md",
+          "group": "Financeiro",
+          "module": "projetos",
+          "title": "Projetos e custos por projeto",
+          "routes": [
+            "/projetos",
+            "/projetos/custos"
+          ],
+          "tabs": [],
+          "summary": "Os Projetos são a árvore de centros de custos: Grupo → Cidade → Marca → Projeto.",
+          "sections": [
+            {
+              "id": "projetos.md#inicio",
+              "file": "projetos.md",
+              "slug": "inicio",
+              "title": "Projetos e custos por projeto",
+              "level": 1,
+              "summary": "Os Projetos são a árvore de centros de custos: Grupo → Cidade → Marca → Projeto.",
+              "text": "Os **Projetos** são a árvore de centros de custos: **Grupo → Cidade → Marca → Projeto**. Cada despesa, pessoa e reserva pertence a um nó, e os totais sobem pela árvore."
+            },
+            {
+              "id": "projetos.md#gerir-a-arvore-admin",
+              "file": "projetos.md",
+              "slug": "gerir-a-arvore-admin",
+              "title": "Gerir a árvore (admin)",
+              "level": 2,
+              "summary": "Novo nó: nome, nível, pai, cor, gestor e Orçamento anual (€).",
+              "text": "- **Novo nó**: nome, nível, pai, cor, gestor e **Orçamento anual (€)**. O nível não muda depois de criado.\n- **Mover** um nó para outro pai (não pode ir para dentro de si próprio).\n- **Eliminar = desativar**: o nó sai das listas, mas o histórico continua a contar. Só o super admin apaga de vez, e só nós sem filhos e sem nada associado."
+            },
+            {
+              "id": "projetos.md#custos-por-projeto-botao-custos-admin",
+              "file": "projetos.md",
+              "slug": "custos-por-projeto-botao-custos-admin",
+              "title": "Custos por projeto (botão Custos, admin)",
+              "level": 2,
+              "summary": "Mostra o custo realizado de cada nó no ano ou no mês escolhido, com as mesmas regras da Faturação, sem IVA:",
+              "text": "- Mostra o **custo realizado** de cada nó no ano ou no mês escolhido, com as **mesmas regras da Faturação**, sem IVA:\n  - **Despesas**;\n  - **Pessoal**: salários com subsídios, variável do RH, TSU e extras pelo ponto aprovado;\n  - **Comissões** de parceiros.\n- Cada nó com os de baixo dá o mesmo que a **Faturação filtrada nesse nó**. O custo de quem está numa cidade divide-se pelas marcas/projetos dessa cidade, como na Faturação.\n- **Por atribuir**: despesas, pessoas e extras sem centro de custos. Entram no total, mas em nenhum nó. Para os pôr no sítio certo, corrige o centro de custos na despesa ou na ficha de RH.\n- O **orçamento é anual**. Com um mês escolhido, compara-se com 1/12. Um nó sem orçamento próprio usa a soma do orçamento dos filhos.\n- No período em curso, só conta o que já aconteceu (até hoje).\n- **Excedido** a partir de 100% do orçamento, **atenção** a partir de 80%.\n- **CSV**: cada nó com o custo próprio e o custo com os de baixo, e as parcelas (despesas com e sem IVA, salários, TSU, extras, comissões).\n\nSe aparecer **\"Não foi possível calcular os custos\"**, é uma falha (por exemplo, a base de dados da Multipark em baixo, porque as comissões dependem das reservas), não \"zero\". Usa **Tentar de novo**."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Pessoas",
+      "pages": [
+        {
+          "id": "avaliacao",
+          "file": "avaliacao.md",
+          "group": "Pessoas",
+          "module": "avaliacao",
+          "title": "Avaliação (dia e mês)",
+          "routes": [
+            "/avaliacao",
+            "/avaliacao-operacional"
+          ],
+          "tabs": [
+            {
+              "tab": "dia",
+              "section": "Separador Dia",
+              "sectionId": "avaliacao.md#separador-dia"
+            },
+            {
+              "tab": "mes",
+              "section": "Separador Mês",
+              "sectionId": "avaliacao.md#separador-mes"
+            },
+            {
+              "tab": "minha",
+              "section": "Quem vê o quê",
+              "sectionId": "avaliacao.md#quem-ve-o-que"
+            },
+            {
+              "tab": "contestacoes",
+              "section": "Quem vê o quê",
+              "sectionId": "avaliacao.md#quem-ve-o-que"
+            }
+          ],
+          "summary": "A avaliação dos condutores e extras está numa só página: menu Pessoas → Avaliação.",
+          "sections": [
+            {
+              "id": "avaliacao.md#inicio",
+              "file": "avaliacao.md",
+              "slug": "inicio",
+              "title": "Avaliação (dia e mês)",
+              "level": 1,
+              "summary": "A avaliação dos condutores e extras está numa só página: menu Pessoas → Avaliação.",
+              "text": "A avaliação dos condutores e extras está numa só página: menu **Pessoas → Avaliação**. Tem dois separadores principais, **Dia** e **Mês** (antes \"4 semanas\"). Tem também **A minha avaliação** e, para quem gere, **Contestações**."
+            },
+            {
+              "id": "avaliacao.md#de-onde-vem-os-numeros",
+              "file": "avaliacao.md",
+              "slug": "de-onde-vem-os-numeros",
+              "title": "De onde vêm os números",
+              "level": 4,
+              "summary": "Movimentos: quem mexeu em que reserva, quando e em que fase.",
+              "text": "- **Movimentos**: quem mexeu em que reserva, quando e em que fase. São lidos **em tempo real da base de dados da Multipark**: o histórico da app (recolha, movimento, pedido de entrega, entrega, cancelamento, alterações), o condutor que ficou registado no check-in e no check-out da reserva, as ocorrências que criou ou resolveu e as avaliações dos clientes nas reservas que fez. Não se copia nada.\n- **GPS** (onde deixaram os carros e por onde andaram): continua a vir do **Zello**, guardado no dashboard.\n- **Ponto, escala do Extras Dia, reclamações, alertas de velocidade e penalizações**: vêm do dashboard.\n- **Excessos de velocidade do GPS do Zello** (desde 14 out 2026): vêm da recolha diária do Zello (ver \"Excesso de velocidade\" em \"Como se contam os movimentos\").\n- A ligação entre o agente da app Multipark e a ficha do colaborador é a do RH (o agente ligado à ficha).\n- A **Atividade do Dia** (menu Operacional, `/operacional`) lê as ações da mesma forma, **ao vivo** da BD da Multipark (dia civil de Lisboa, 00h–24h). Só os dias antes de 2 de março de 2026 vêm da cópia antiga guardada no dashboard. Se a BD da Multipark não responder, a página mostra um aviso amarelo e usa essa cópia antiga, que já não é atualizada (os dias recentes aparecem sem ações).\n\n**Não há nada para ir buscar à mão.** Todas as noites o dashboard recalcula sozinho o último mês (31 dias).\n- **Abrir um dia só mostra o que está guardado.** Não recalcula nem grava nada. Por cima aparece quando foi calculado.\n- Para recalcular já, quem gere a avaliação usa **Recalcular este dia** (separador Dia) ou **Recalcular** (separador Mês).\n- Um dia que ainda não foi calculado diz isso mesmo, em vez de mostrar zeros."
+            },
+            {
+              "id": "avaliacao.md#separador-dia",
+              "file": "avaliacao.md",
+              "slug": "separador-dia",
+              "title": "Separador Dia",
+              "level": 4,
+              "summary": "Escolhe o dia.",
+              "text": "- Escolhe o dia. Conta o **dia operacional**, das 03h às 03h de Lisboa: manhã das 03h às 15h e noite das 15h às 03h.\n- **Equipa do dia** (em cima) é a avaliação do **supervisor**: pontos da equipa e média por pessoa, ações, custo e €/ação. Por baixo, um cartão por cidade com quem supervisiona (os supervisores com essa cidade), os team leaders, os condutores escalados e se havia **extras a menos, a mais ou certos** face à previsão do Extras Dia (horas·pessoa que faltaram ou sobraram e em que horas). \"A mais\" só aparece quando sobram pelo menos 4 h·pessoa.\n- Aparece a equipa escalada no Extras Dia, por turno, com o team leader em destaque.\n- O **team leader** é avaliado de duas maneiras: **como condutor** (os pontos dele, à direita) e **como team leader** (o cartão amarelo: pontos da equipa do turno, média por pessoa, ações, custo).\n- Clicar no **nome** abre a ficha da pessoa. Para cada pessoa vês as ações por tipo, os pontos, o custo e as ações por hora.\n- Por baixo de cada pessoa há um resumo: reservas em que mexeu, a hora da primeira e da última ação, check-ins e check-outs assinados, ocorrências criadas e resolvidas e, quando houver, as avaliações dos clientes.\n- A seta abre a **lista de movimentos** do dia, com a hora, a fase (check-in, movimento, check-out), a ação, a reserva (abre a ficha), a matrícula, o parque e o que mudou. Abre também o **GPS do Zello** desse dia: km, tempo em movimento, velocidade máxima, excessos e o link do trajeto.\n- Clicar nos pontos abre o detalhe das regras. Com ficha, é o mesmo detalhe do mês, com ajustes e contestações.\n- O lápis ao lado do agente muda o nome de agente associado à ficha. Só aparece a quem gere o RH.\n- **CSV** exporta o dia.\n- **Procurar pessoa** (por cima dos turnos): escreve o nome ou o agente e só ficam os cartões dessa pessoa. A pesquisa só esconde cartões: os totais e o CSV continuam a ser do dia todo."
+            },
+            {
+              "id": "avaliacao.md#separador-mes",
+              "file": "avaliacao.md",
+              "slug": "separador-mes",
+              "title": "Separador Mês",
+              "level": 4,
+              "summary": "O mesmo separador está também em Operações → Actividade Diária → Avaliação do mês (é uma cópia: o mesmo ecrã, os mesmos números e a mesma regra de acesso).",
+              "text": "- O mesmo separador está também em **Operações → Actividade Diária → Avaliação do mês** (é uma cópia: o mesmo ecrã, os mesmos números e a mesma regra de acesso). Aqui na Avaliação continua igual.\n- Abre no **mês atual** (botão **Este mês**). Podes andar mês a mês ou escolher outro período. O link antigo `?tab=semanas` abre este separador.\n- O **filtro de cidade e marca** do topo da app conta: a cidade é a do dia na escala (quem é de Lisboa e fez um dia no Porto entra no Porto; sem escala, vale a cidade da ficha). A marca filtra os movimentos lidos da Multipark pelos parques dela; os pontos guardados são por cidade (as pessoas trabalham para todas as marcas da cidade).\n- **Ranking** por pontos, com a vista **Por hora**. Todas as colunas ordenam. Clicar no nome abre a ficha e clicar nos pontos abre o detalhe.\n- Por cima do ranking estão a **pesquisa e os filtros** (ver a seguir).\n- **Equipas — team leaders e supervisão**: por cidade (o supervisor), pessoas·dia, ações, pontos e média; e por team leader, os dias como TL, os pontos dele como condutor e os pontos e a média da equipa nesses dias (mesmo dia, cidade e turno). Todas as colunas ordenam.\n- **Movimentos na BD da Multipark**: tabela por pessoa, lida no momento, com ações, check-ins, movimentos, check-outs, reservas, check-ins/check-outs assinados, ocorrências, avaliações dos clientes e a última ação. Mostra no máximo 62 dias de cada vez.\n- **Recalcular** (quem gere a avaliação) volta a calcular o período já. Um período grande pode ficar a meio e o resto fica para o recálculo automático da noite."
+            },
+            {
+              "id": "avaliacao.md#pesquisar-e-filtrar-o-ranking-como-no-odoo",
+              "file": "avaliacao.md",
+              "slug": "pesquisar-e-filtrar-o-ranking-como-no-odoo",
+              "title": "Pesquisar e filtrar o ranking (como no Odoo)",
+              "level": 4,
+              "summary": "Pesquisa: escreve o nome ou o n.º de agente e o ranking filtra-se logo.",
+              "text": "- **Pesquisa**: escreve o nome ou o n.º de agente e o ranking filtra-se logo. Não contam acentos nem maiúsculas (\"joao\" encontra \"João\"). Enquanto escreves aparece **Procurar «…» em**: Nome ou n.º de agente, Cidade, Marca, Posto ou Equipa (TL), com quantas pessoas encontra em cada. Escolhe uma e a pesquisa passa a **chip** (o Enter faz o mesmo, no nome). No mesmo campo, as pesquisas juntam com \"ou\"; em campos diferentes, com \"e\".\n- **Grupos**: **Cidade**, **Marca**, **Posto** (condutor, condutor sénior, extra, team leader), **Equipa** e **Só com…** (excessos de velocidade, reclamações, acidentes, atrasos ao trabalho, contestações abertas, com ajustes, pontos negativos). No mesmo grupo junta com \"ou\" (Porto ou Faro); entre grupos, com \"e\" (Porto e só com reclamações).\n- **+ Regra**: regras sobre as colunas e as métricas: pontos (total, ganhos e perdidos), horas, dias, ações, recolhas e entregas, movimentos, levar ao parque, atrasos ao trabalho, excessos de velocidade, reclamações, acidentes, custo, ações e pontos por hora, ocorrências, penalizações, contestações abertas e dias como TL.\n  - As horas são as do ponto (não as da escala) e o custo é em euros. Usa vírgula ou ponto nas casas decimais (7,5 = 7.5).\n  - Operadores: **≥**, **≤**, **=**, **entre** (inclui os dois valores), **tem** (diferente de 0) e **não tem**. Por hora, quem não tem horas só cumpre **não tem**.\n  - Escolhe se cumprem **todas as regras** ou **pelo menos uma**.\n  - Exemplos: \"Pontos ≥ 500 e Excessos de velocidade ≥ 1\"; \"Reclamações: tem\".\n- Cada filtro aparece como **chip**: o **×** tira esse e **Limpar tudo** tira todos.\n- **Agrupar** por cidade, marca, posto ou equipa (TL), com o total de cada grupo (pessoas, pontos, horas e ações).\n  - A cidade de cada pessoa é a da escala onde fez mais dias; sem escala, a da ficha.\n  - A marca é a da ficha. É a mesma marca em todas as cidades: o Airpark de Lisboa e o do Porto aparecem juntos como **Airpark**.\n  - A equipa é o TL com quem mais trabalhou (mesmo dia, cidade e turno). Quem só foi TL fica na própria equipa.\n- **Filtros guardados**: guarda o filtro com um nome. Leva também o agrupar, a vista (Totais ou Por hora) e a ordem.\n  - Podes **partilhá-lo com a equipa** (quem vê o ranking).\n  - **Abrir com este** marca um por omissão (um por pessoa). Aplica-se uma vez por sessão, se não tiveres já outro filtro.\n- Com filtro, os **cartões do topo** (Horas, Ações, Custo, Melhor), o **CSV** e o **Exportar para Sheets** levam só as pessoas filtradas, e dizem-no:\n  - o CSV tem o filtro na primeira linha (com \"12 de 48 colaboradores\") e \"_filtrado\" no nome;\n  - a folha tem \"filtrado\" no nome, o separador **Ranking (filtrado)** e um separador **Filtro**;\n  - a folha leva também o filtro de cidade e marca do topo.\n- A **posição (#)** é a do ranking do período, sem filtro.\n- O filtro fica enquanto o separador do browser estiver aberto, aqui e na Atividade diária → Avaliação do mês.\n- As **Equipas** e os **Movimentos na BD da Multipark**, por baixo, não seguem este filtro.\n\n**Se aparecer um aviso amarelo**, a base de dados da Multipark não respondeu.\n- O que está gravado **não é mexido**: nem o recálculo da noite nem o **Recalcular** gravam por cima. Antes podiam pôr zeros nos dias bons.\n- O **Recalcular** avisa que nada foi recalculado. Tenta de novo daqui a pouco.\n- Se uma leitura falhar, aparece **\"Não foi possível carregar…\"** com **Tentar de novo**, nunca \"sem dados\"."
+            },
+            {
+              "id": "avaliacao.md#como-se-contam-os-movimentos",
+              "file": "avaliacao.md",
+              "slug": "como-se-contam-os-movimentos",
+              "title": "Como se contam os movimentos",
+              "level": 4,
+              "summary": "Os dias calculados antes das regras de agora seguiam as regras antigas.",
+              "text": "- Os dias calculados antes das regras de agora seguiam as regras antigas. A avaliação do mês avisa quantos são (\"N dia(s) calculado(s) com as regras antigas\") e, a quem pode, mostra **Recalcular**. O recálculo da noite refaz sozinho os últimos 31 dias; para dias mais antigos (ex.: o início de setembro), carrega uma vez em **Recalcular** em Avaliação → Mês. Setembro e outubro não contam para prémios: os prémios começam em novembro.\n- Recolha = check-in feito. Entrega = check-out feito.\n- Cada vez que um carro muda de sítio, a app Multipark grava duas linhas: o **início** e o **fim**. Só o fim conta. \"Parque\" é a **garagem** (PD, PD FORA, COBERTO, Central…).\n  - **Levar ao parque**: o carro foi arrumado (ainda não tinha garagem), por exemplo logo a seguir à recolha. Vale +5.\n  - **Movimento entre parques**: o carro mudou de garagem (ex.: PD → COBERTO). Vale +2.\n  - **Mudança de lugar**: o carro ficou na mesma garagem, só mudou de lugar (ex.: PD 26/3 → PD 70/1). Não é movimento. Vale +1.\n- **Atraso ao trabalho** (−5): a entrada no ponto foi **5 minutos ou mais** depois da hora da escala. Contam minutos inteiros: numa escala das 03:00, entrar às 03:04:59 não é atraso; às 03:05:00 já é (−5), e às 03:10 também. Conta no máximo **1 por dia**. Vale para **todos os que têm horário**: nos dias em que a pessoa está na escala do Extras-Dia conta a hora da escala; nos outros, o **horário fixo** da ficha do RH (Horário; para os funcionários — os extras regem-se pela escala). Nos dias livres do horário, nas férias ou baixas registadas no RH, fora do contrato e nos **feriados** (os nacionais e o municipal da cidade da ficha) não há atraso pelo horário fixo; quem estiver escalado no Extras-Dia num feriado tem a hora da escala.\n- **Entrega atrasada: saiu**. Os tempos das entregas e das recolhas são da equipa, não de cada pessoa, e a hora marcada na ficha não conta para eles. Vale para todos os dias, também os de setembro e outubro (não são meses de prémios).\n  - Nos dias antigos a coluna das entregas atrasadas fica guardada, com o rótulo \"(regra antiga)\", mas já não tira pontos nem aparece nos ecrãs, no CSV nem nos filtros. Os **atrasos** que se veem são sempre só os atrasos ao trabalho.\n  - Os ajustes antigos de \"entregas atrasadas\" ficam no histórico do dia com \"Sem efeito: regra retirada\". Já não se pode ajustar nem contestar essa métrica.\n  - Um filtro guardado com \"Entregas atrasadas\" perde só essa parte, e o ecrã avisa (\"N partes do filtro deixaram de existir\").\n- **Excesso de velocidade** (−10): os alertas de velocidade e as penalizações do RH e, além disso, **1 por dia** em que a velocidade máxima do GPS do Zello passou o limite. Se nesse dia (de calendário, ou no dia da avaliação) já houver um alerta, o GPS não conta outra vez. Se não der para ler o limite, o GPS não conta e aparece um aviso.\n  - O limite está em **Definições → Parâmetros → \"Limite de velocidade (GPS do Zello)\"**: **120 km/h, sem tolerância** por omissão (conta acima de 120). Antes eram 10 % de tolerância (132 km/h); quem tinha o valor antigo gravado passou para 0 % sozinho, e fica no histórico das Definições. É um limite único, porque o Zello não diz em que estrada se vai.\n  - Desde 14 out 2026 a velocidade máxima do dia já não tem os **picos falsos** do GPS (pontos imprecisos, acima de 250 km/h ou um salto isolado) e, acima do limite, só conta um **excesso confirmado**: pontos seguidos acima dele (2 por omissão). Antes deitava-se fora tudo acima de 150 km/h.\n  - Os dias de GPS recolhidos antes contam pela velocidade máxima antiga, até se voltarem a dividir (**Atividade diária → Histórico Diário → Forçar re-divisão**) e recalcular.\n  - **Trava do dia recolhido**: cada dia de GPS guarda o limite com que foi recolhido. Um dia só conta excesso acima do **maior** entre o limite de hoje e esse. Os dias recolhidos com o limite antigo (132) contam a **132** até serem re-divididos. Porquê: nesses dias, uma máxima entre 120 e 132 pode ser um ponto solto que nunca foi confirmado como excesso; contá-la a 120 inventava excessos. Na Atividade diária esse dia pode aparecer a vermelho (passou 120) sem tirar pontos.\n- **Reclamação confirmada** (−20, uma vez por reclamação e condutor): uma reclamação não convertida com pontos aplicados (na reclamação ou ao condutor), positivos ou negativos. Conta no dia em que a reclamação foi criada.\n- Início da recolha, pedido de entrega, início da entrega, alterações e criações aparecem na lista e contam como ações, mas não dão pontos."
+            },
+            {
+              "id": "avaliacao.md#fecho-do-mes-antes-de-pagar-os-premios",
+              "file": "avaliacao.md",
+              "slug": "fecho-do-mes-antes-de-pagar-os-premios",
+              "title": "Fecho do mês (antes de pagar os prémios)",
+              "level": 4,
+              "summary": "Em Avaliação → Mês, por cima do ranking, aparece \"Fechado até DD/MM/AAAA\" quando há meses fechados.",
+              "text": "- Em **Avaliação → Mês**, por cima do ranking, aparece **\"Fechado até DD/MM/AAAA\"** quando há meses fechados. Os dias até essa data **já não mudam**: o recálculo da noite, o **Recalcular**, os ajustes, anular ajustes, as contestações (criar, e aceitar com ajuste) e a re-divisão do GPS dos últimos 31 dias (Atividade diária) não lhes tocam. Recusar uma contestação, ou aceitá-la sem mexer nos números, continua a dar.\n- **Quem fecha**: o super admin e as pessoas da lista **Definições → Parâmetros → Pessoas → \"Avaliação: quem fecha o mês\"** (o super admin escolhe as contas). Para fechar:\n  1. Avaliação → **Mês**.\n  2. Na barra \"Fecho do mês\", escolhe o último dia a fechar (vem preenchido com o fim do mês anterior).\n  3. **Fechar até esta data** e confirma.\n- **Reabrir**: **Reabrir** (nada fechado) ou fechar até uma data mais cedo. Cada mudança fica no histórico das Definições, com quem e quando.\n- Só se fecha até ontem. Setembro e outubro não são meses de prémios: o primeiro fecho é o de **novembro, no início de dezembro**.\n- O fecho congela os **números**, não as **regras**: a pontuação calcula-se ao ler. Depois do primeiro fecho, qualquer mudança nos pontos ou nas regras tem de dizer **a partir de que dia vale**, senão mudava meses já pagos.\n- No detalhe de uma pessoa, os dias fechados têm a etiqueta **fechado** e não mostram Ajustar nem Contestar.\n- Se a barra disser **\"Não deu para ler o fecho do mês: por agora nada se recalcula nem se ajusta.\"**, a leitura da data do fecho falhou (não quer dizer que nada esteja fechado): enquanto não se souber até onde está fechado, o ecrã não deixa recalcular nem ajustar, para não mexer em dias já pagos. Recarrega a página daqui a pouco."
+            },
+            {
+              "id": "avaliacao.md#quem-ve-o-que",
+              "file": "avaliacao.md",
+              "slug": "quem-ve-o-que",
+              "title": "Quem vê o quê",
+              "level": 4,
+              "summary": "São as permissões de Definições → Permissões, iguais no ecrã e no servidor, com as permissões por utilizador.",
+              "text": "São as permissões de Definições → Permissões, iguais no ecrã e no servidor, com as permissões por utilizador.\n- **Dia**: supervisores, da sua cidade, e para cima.\n- **Mês**: team leaders, só a **sua equipa** (condutores e extras abaixo deles, e eles próprios), supervisores, front e backoffice e a administração.\n- **Recalcular, ajustar e decidir contestações**: supervisores, front e backoffice e a administração. Ninguém ajusta nem decide a sua própria avaliação.\n- **A minha avaliação**: cada pessoa com ficha. Funciona mesmo sem centro de custos.\n- **Filtros guardados do ranking**: quem vê o Mês. Os partilhados aparecem a todos os que veem o Mês, e cada um aplica-o só aos dados que já vê. Só quem o criou o altera ou o apaga.\n- **Contestações** tem **Procurar pessoa**, que filtra pelo nome.\n- Todos veem só os dados das suas cidades.\n- O link antigo `/avaliacao-operacional` abre o separador Dia."
+            },
+            {
+              "id": "avaliacao.md#acidentes-6000-pontos",
+              "file": "avaliacao.md",
+              "slug": "acidentes-6000-pontos",
+              "title": "Acidentes: −6000 pontos",
+              "level": 4,
+              "summary": "Um acidente conta −6000 pontos a quem conduzia, no dia operacional da ocorrência.",
+              "text": "- Um acidente conta **−6000** pontos a quem conduzia, no dia operacional da ocorrência.\n- Só contam os acidentes **a partir de 3 de outubro de 2026**. Os antigos não contam: nem as ocorrências antigas do dashboard, nem ajustes de acidentes em dias anteriores.\n- Só conta depois de um **team leader** (ou acima) o confirmar na ocorrência, em **Operacional → Ocorrências**: abre a ocorrência, em **Foi um acidente?** escolhe quem conduzia e confirma.\n- A sugestão são as pessoas das últimas ações nessa reserva antes da ocorrência.\n- O team leader só confirma acidentes da sua equipa. Ninguém confirma um acidente seu.\n- **Desfazer** (com o motivo) tira os pontos. A confirmação fica no histórico, com quem a desfez e porquê.\n- Esse dia recalcula-se sozinho logo a seguir.\n\n**Pontos que não se repetem**: uma penalização ligada a uma reclamação ou a um alerta de velocidade não volta a contar se essa reclamação ou esse alerta já contam noutro dia.\n\n**Fichas juntas**: quando duas fichas da mesma pessoa são juntas, a que sai deixa de contar para ligar agentes pelo nome.\n\n**Avaliação semanal antiga**: já não se gera, nem pela app nem sozinha à segunda-feira. As semanas gravadas ficam como histórico. O **Painel de Pessoas** mostra o mesmo ranking desta página, dos últimos 7 dias."
+            }
+          ]
+        },
+        {
+          "id": "condutores-agentes",
+          "file": "condutores-agentes.md",
+          "group": "Pessoas",
+          "module": "condutores_agentes",
+          "title": "Condutores e agentes",
+          "routes": [
+            "/pessoas/condutores-agentes"
+          ],
+          "tabs": [
+            {
+              "tab": "drivers",
+              "section": "Condutores",
+              "sectionId": "condutores-agentes.md#condutores"
+            },
+            {
+              "tab": "agents",
+              "section": "Agentes",
+              "sectionId": "condutores-agentes.md#agentes"
+            },
+            {
+              "tab": "performance",
+              "section": "Desempenho",
+              "sectionId": "condutores-agentes.md#desempenho-so-o-super-admin-os-outros-nem-veem-a-aba"
+            }
+          ],
+          "summary": "Em Pessoas → Condutores e agentes.",
+          "sections": [
+            {
+              "id": "condutores-agentes.md#inicio",
+              "file": "condutores-agentes.md",
+              "slug": "inicio",
+              "title": "Condutores e agentes",
+              "level": 1,
+              "summary": "Em Pessoas → Condutores e agentes.",
+              "text": "Em **Pessoas → Condutores e agentes**. Antes estavam nas Críticas."
+            },
+            {
+              "id": "condutores-agentes.md#quem-ve-desde-14-out-2026",
+              "file": "condutores-agentes.md",
+              "slug": "quem-ve-desde-14-out-2026",
+              "title": "Quem vê (desde 14 out 2026)",
+              "level": 2,
+              "summary": "Condutores e Agentes: supervisor (as cidades dele), back office, admin e super admin.",
+              "text": "- **Condutores** e **Agentes**: supervisor (as cidades dele), back office, admin e super admin. Front office e team leader já não veem (nem no menu, nem pelo link direto, nem na pesquisa, nem pelo botão **Abrir agente** do RH, nem pelo MCP). Uma permissão por pessoa (**Definições → Permissões**, módulo \"Condutores e agentes\") dá ou tira o acesso.\n- **Desempenho**: só o super admin.\n\n**Procurar e filtrar** (nos três separadores): escreve um nome na caixa **Procurar pelo nome…** (sem acentos e por palavras: \"joao alv\" encontra \"João Alves\"). Em **Filtros** pões parâmetros, por exemplo **Por hora ≥ 8** ou **Entregas ≤ 5**: escolhe a coluna, ≥ ou ≤, o valor e **Pôr**. Podes juntar vários; ficam em chips por baixo, cada um com um × para tirar. Quem não tem valor numa coluna (ex.: \"—\" no Por hora) não passa nesse filtro."
+            },
+            {
+              "id": "condutores-agentes.md#movimentos-e-mudancas-de-lugar-contam-se-assim-em-todo-o-lad",
+              "file": "condutores-agentes.md",
+              "slug": "movimentos-e-mudancas-de-lugar-contam-se-assim-em-todo-o-lad",
+              "title": "Movimentos e mudanças de lugar (contam-se assim em todo o lado: aqui, na Avaliação, no Desempenho, na Atividade do dia e no Resumo do dia)",
+              "level": 2,
+              "summary": "Cada vez que um carro muda de sítio, a app Multipark grava duas linhas: o início e o fim.",
+              "text": "- Cada vez que um carro muda de sítio, a app Multipark grava duas linhas: o **início** e o **fim**. O início não conta (nem como ação). \"Parque\" é a **garagem** (PD, PD FORA, COBERTO, Central…).\n  - **Levar ao parque**: o carro foi arrumado (ainda não tinha garagem), por exemplo logo a seguir à recolha. É movimento (+5 na avaliação).\n  - **Movimento entre parques**: o carro mudou de garagem (ex.: PD → COBERTO). É movimento (+2).\n  - **Mudança de lugar**: o carro ficou na mesma garagem e só mudou de lugar (ex.: PD 26/3 → PD 70/1). **Conta como ação**, não como movimento (+1 na avaliação).\n- **Movimentos** = levar ao parque + entre parques. **Mudanças de lugar** têm coluna própria e abrem a lista delas.\n- Antes, as mudanças de lugar davam sempre 0 (procuravam outro tipo de registo, que a Multipark não usa) e cada deslocação contava como dois movimentos (o início e o fim)."
+            },
+            {
+              "id": "condutores-agentes.md#condutores",
+              "file": "condutores-agentes.md",
+              "slug": "condutores",
+              "title": "Condutores",
+              "level": 4,
+              "summary": "Uma linha por pessoa com as recolhas, entregas, movimentos, mudanças de lugar e os km do GPS (Zello) no período, lidos ao vivo da Multipark.",
+              "text": "- Uma linha por pessoa com as **recolhas**, **entregas**, **movimentos**, **mudanças de lugar** e os **km do GPS** (Zello) no período, lidos ao vivo da Multipark. **Movimentos** = levar ao parque + entre garagens; dentro da mesma garagem conta só como **mudança de lugar**. Só aparece quem mexeu em carros (mudanças de lugar incluídas). As várias contas de agente da mesma ficha somam.\n- **Cidade e marca**: o filtro do topo da app. A marca filtra pelos parques dela.\n- Escolhe o período (De/Até) e, se quiseres, **um condutor** (ou \"Todos\").\n- Clicar no **nome** abre a ficha. Clicar num **número** abre esses movimentos (ex.: as entregas ou as mudanças de lugar desse condutor), com a matrícula, o parque e a hora.\n- Todas as colunas ordenam; em baixo ficam os totais."
+            },
+            {
+              "id": "condutores-agentes.md#tempos-de-um-condutor-desde-15-out-2026",
+              "file": "condutores-agentes.md",
+              "slug": "tempos-de-um-condutor-desde-15-out-2026",
+              "title": "Tempos de um condutor (desde 15 out 2026)",
+              "level": 2,
+              "summary": "Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demora sempre 20 a 30, é importante saber.",
+              "text": "Se durante meses os colegas entregam todos entre 13 e 17 min e um condutor demora sempre 20 a 30, é importante saber. Por isso cada condutor tem os seus tempos, ao lado dos colegas.\n1. Em **Condutores**, carrega no **relógio** da linha do condutor (coluna **Tempos**). Também aparecem por baixo da tabela quando escolhes **um condutor** em cima, e no detalhe do **Desempenho** (condutores e team leaders).\n2. Escolhe o tempo nos botões: **Fila** (da chamada do cliente, ou do pendente, até o condutor pegar no carro), **Trânsito** (até chegar ao terminal, pelo GPS), **Cliente** (nas entregas em que fez o check-out: a espera pelo cliente no terminal), **No terminal** (nas recolhas que tirou do terminal) e **No P2** (nas recolhas que tirou do P2).\n3. A tabela mostra a **última semana**, o **último mês** e os **últimos 6 meses**, uma linha por cidade e tipo de serviço (T1, T2, VIP, Outro): quantas medições (n), a **média**, a **mediana** e o **p75**, a mediana dos **colegas** (os outros condutores da mesma cidade e do mesmo serviço, sem o próprio) e a **diferença** (a âmbar quando o condutor demora mais).\n4. O **gráfico** mostra a evolução, **por mês** ou **por semana**: a mediana do condutor a azul e a dos colegas a cinzento. Passa o rato (ou toca) num ponto para ver os números; **Ver em tabela** mostra-os todos.\n- Com menos de **10 medições** numa linha aparece **\"sem dados suficientes\"** (nunca 0); no gráfico, esse ponto fica em falta.\n- O Trânsito, o Cliente e o tempo no terminal dependem do GPS: até a calibração acabar só o super admin os vê, como provisórios; os outros veem **\"Em calibração\"**. Depois de o portão abrir (Definições → Parâmetros → **Tempos com GPS: portão**), aparecem por cidade e período quando há pelo menos 60 % de medições e 20 casos; abaixo disso, \"Sem dados suficientes\". A Fila e o P2 veem-se sempre.\n- Os números vêm da tabela dos tempos (o cálculo da noite), até ontem. Sem ela, aparece \"Sem tempos deste condutor\". Se a leitura for grande de mais e chegar ao limite, entram os dias mais recentes e o cartão diz \"Leitura cortada no limite\".\n- **Só informação: não dá pontos.** Não entra na Avaliação nem no ranking do Desempenho.\n- Quem vê: quem vê os Condutores (supervisor nas suas cidades, back office, admin e super admin), só para fichas das suas cidades."
+            },
+            {
+              "id": "condutores-agentes.md#agentes",
+              "file": "condutores-agentes.md",
+              "slug": "agentes",
+              "title": "Agentes",
+              "level": 4,
+              "summary": "A mesma lista, com todas as ações de cada agente no período: recolhas, entregas, movimentos, mudanças de lugar, reservas em que mexeu e a última ação.",
+              "text": "- A mesma lista, com **todas** as ações de cada agente no período: recolhas, entregas, movimentos, mudanças de lugar, reservas em que mexeu e a última ação. **Movimentos** = levar ao parque + movimentos entre garagens (o início de cada movimento não conta); **mudanças de lugar** = o carro ficou na mesma garagem, só mudou de lugar. Primeiro a lista, depois o detalhe.\n- Procura por **nome ou código do agente** (na caixa Procurar pelo nome…), ou escolhe a pessoa.\n- Quem não tem ficha aparece com \"sem ficha\"; os parceiros com \"parceiro\".\n- O botão **Abrir agente** da ficha do RH abre esta aba já com o detalhe dessa pessoa.\n- Se o período tiver ações a mais, o detalhe diz quantas mostra e pede um período mais curto.\n- **Quem gere o RH**: o ícone de corrente abre as **Ligações** da pessoa (unir/separar conta e agente); num agente sem ficha, o ícone do olho **tira-o da lista** (fica como \"não é funcionário\", desfaz-se no RH → Agentes; na Multipark não muda nada).\n- No máximo 62 dias de cada vez."
+            },
+            {
+              "id": "condutores-agentes.md#desempenho-so-o-super-admin-os-outros-nem-veem-a-aba",
+              "file": "condutores-agentes.md",
+              "slug": "desempenho-so-o-super-admin-os-outros-nem-veem-a-aba",
+              "title": "Desempenho (só o super admin; os outros nem veem a aba)",
+              "level": 2,
+              "summary": "Colunas: escolhe que colunas a tabela \"Toda a gente\" mostra, para caber no ecrã (fica guardado neste browser, por aba).",
+              "text": "- **Colunas**: escolhe que colunas a tabela \"Toda a gente\" mostra, para caber no ecrã (fica guardado neste browser, por aba). Sem escolha, aparecem só as colunas com algum valor no período. Em **Filtros** há também **Só fichas ativas**.\n- Tudo o que cada pessoa fez, por **dia, semana, mês ou ano** (setas para andar para trás e para a frente). Há uma aba por posto: **Back e front office**, **Supervisão**, **Team leaders** e **Condutores e extras**. A aba segue o papel da conta (front office, backoffice, supervisor, team leader); quem não tem um destes papéis fica pelo posto da ficha.\n- Junta três fontes:\n  - **Multipark**, pela avaliação diária: recolhas, entregas, movimentos, \"pôs em recolha/entrega\", reservas criadas e alteradas, ocorrências.\n  - **Zello**: km, dias com GPS, velocidade máxima, dias acima do limite e dias de trabalho sem GPS. O limite está em **Definições → Parâmetros → \"Limite de velocidade (GPS do Zello)\"** (acima de 120 km/h, sem tolerância, por omissão).\n  - **Dashboard**: horas (ponto ou escala), chamadas atendidas, feitas, perdidas e devolvidas e os minutos ao telefone, WhatsApp, emails enviados (pela dashboard e da caixa Gmail pessoal de cada um), respostas e fecho de reclamações, críticas Google respondidas, despesas lançadas e aprovadas, contagens e correções de caixa, tarefas, leads, passagens de turno, contas de parceiros, fechos de mês dos parceiros, extras do dia escalados, atualizações do CRM, perdidos e achados, dias como team leader e quantas pessoas tinha.\n  - Também da **Multipark**: voos de regresso registados (as alterações à reserva que mexem no voo de regresso) e as cobranças, em duas colunas:\n    - **Cobranças de parceiros**: os pagamentos de parceiros que um agente marcou e os créditos de parceiro lançados.\n    - **Cobranças de Pro e avenças**: os pagamentos de clientes Pro e de avenças que um agente marcou.\n    - A Multipark guarda sempre quem as registou, e é por aí que se sabe de quem são.\n- No topo, os números do grupo e a **evolução**: por dia na semana e no mês, por mês no ano. A seguir, o **ranking**, por **pontos** ou por **pontos por hora**. O \"por hora\" só aparece com 4 h ou mais no período.\n  - **Pontos**: a soma ponderada do que a aba mede, com os pesos da tabela \"Como se contam os pontos desta aba\". Nos condutores e team leaders o trabalho na rua conta pelos pontos da avaliação. Os dias acima do limite já descontam aí, como excesso de velocidade (−10), por isso não descontam outra vez no ranking. Colunas separadas para **Atrasos à entrada** (no máximo 1 por dia), **Entregas atrasadas** e **Mudanças de lugar**. **Ocorrências que registou** = as que a pessoa criou na app Multipark ou no dashboard (+1 cada).\n  - **Nota**: 100 para o melhor.\n- Na tabela, o **nome** abre a ficha no RH; o resto da linha abre o **detalhe** (a evolução dela e todos os números). Todos os cabeçalhos ordenam (um clique sobe, outro desce, o terceiro volta ao ranking).\n- **Cidade e marca**: o filtro do topo. Com uma cidade escolhida, cada dia conta na cidade onde a pessoa trabalhou (a escala ou a avaliação do dia). Quem tem a ficha noutra cidade entra só com os dias que fez nesta. A marca conta como a cidade dela.\n- **Condutores e extras**: quem não fez nada no período não aparece. **km sem movimentos** quer dizer que a pessoa tem km do Zello mas nenhum movimento na Multipark: o utilizador do Zello/PDA e o agente da Multipark não estão na mesma ficha. Carrega no aviso para abrir as **Ligações** e juntar.\n- **Team leaders pela escala**: quem tem posto de condutor ou extra mas foi team leader em pelo menos metade dos dias escalados do período aparece nos Team leaders, com a etiqueta \"TL pela escala\".\n- **A equipa**, nas abas Team leaders e Supervisão:\n  - **Team leader**: o turno dele na escala (mesmo dia, cidade e turno, sem ele).\n  - **Supervisor**: todos os escalados das cidades da conta dele, team leaders incluídos. Dois supervisores da mesma cidade partilham a equipa.\n  - Para cada um mostra: dias com equipa, pessoas·dia, movimentos da equipa (recolhas, entregas e movimentos), custo da equipa (como na Atividade do dia), quem mexeu carros sem o Zello ligado, horas paradas (GPS), movimentos por pessoa·dia e € por movimento.\n  - No supervisor mostra também as **extras a menos / a mais**: as horas·pessoa abaixo ou acima da previsão do Extras Dia. Só aparece com **Dia** ou **Semana**, porque a previsão é lida ao vivo, dia a dia.\n  - **Pontos da equipa**: contam-se por dia e por pessoa da equipa, para uma equipa maior não ganhar só por ser maior. Por omissão, cada movimento dá +1, cada pessoa que mexeu carros sem Zello −20 e cada hora parada −2, sempre a dividir pelo número de pessoas da equipa (mudam-se em **Editar pesos**). Somam-se aos pontos do TL (que é avaliado também como condutor) e do supervisor.\n- **Como se contam os pontos desta aba**: em cima, a régua e o que conta; a seguir, quanto vale cada coisa **agora** (com \"alterado\" ao lado do que já não é a omissão), em duas colunas a toda a largura (no telemóvel, uma só); por baixo, lado a lado, os pontos da avaliação (recolha +3, movimento +2…) e os da equipa.\n  - A régua: **1 ponto ≈ 5 minutos de trabalho**, a mesma escala da avaliação (recolha ou entrega 3, movimento entre parques 2, levar ao parque 5, mudança de lugar 1). Por exemplo: reserva criada 2, email 1, chamada atendida 0,5 mais 0,2 por minuto ao telefone, fecho de mês de um parceiro 6, contagem de caixa 2. Horas e km não dão pontos.\n  - **Mudar os pesos** (sem esperar por uma atualização da app; só o super admin):\n    1. Abre a aba (ex.: **Back e front office**) e, em \"Como se contam os pontos desta aba\", carrega em **Editar pesos**.\n    2. Cada linha passa a um número: escreve o novo peso (ex.: 0,5). **0 = não conta**; um número negativo desconta. Ao lado fica a omissão do código.\n    3. Para pôr a contar uma coluna da aba que hoje não conta, escolhe-a em \"Acrescentar uma coluna que não conta…\" e carrega em **Acrescentar**.\n    4. Nas abas **Team leaders** e **Supervisão** mudas também os 3 pontos da equipa (valem para as duas abas).\n    5. Carrega em **Guardar**. O ranking recalcula logo, também para trás (os pontos calculam-se sempre na hora, não ficam guardados).\n    - **Repor omissões da aba** volta a pôr no ecrã os pesos do código dessa aba (e os da equipa); fica gravado quando carregas em **Guardar**. **Cancelar** sai sem gravar.\n    - Pesos entre −10 000 e 10 000, com uma casa decimal no máximo.\n  - Fica registado quem mudou e quando: por baixo do botão e em **Definições → Parâmetros → Histórico de alterações**. Também se mudam em Definições → Parâmetros → **Pessoas (desempenho)** → \"Pesos do ranking do Desempenho\" (em JSON, para quem preferir).\n- **Telefonemas da central**: contam quando a consola da Vodafone os regista na dashboard (Integrações → Central Vodafone), para quem atendeu ou ligou. As chamadas internas (com colegas do RH ou de extensões) não contam, exceto as do supervisor a ligar aos extras (a chamar o pessoal). As chamadas do WhatsApp contam sempre.\n  - **Perdidas**: recebidas que a pessoa não atendeu. Aparecem a vermelho, mas não contam nos pontos (a chamada toca em várias consolas).\n  - **Devolvidas**: a 1.ª chamada feita para um número (ou contacto) que teve uma perdida nas 24 h anteriores, de quem quer que fosse a perdida. Ligar outra vez à mesma pessoa já não conta como devolvida.\n  - **Minutos ao telefone**: o tempo das atendidas e das feitas (a consola só manda minutos inteiros), mais o das chamadas do WhatsApp. Cada minuto vale 0,2 pontos (por omissão), além do que vale a chamada (0,5).\n  - Os telemóveis One Net (Xsi) ainda não entram.\n- **Emails**: contam os enviados pela dashboard e os enviados da **caixa Gmail pessoal** de cada um (O meu email, com o Gmail ligado), cada email uma vez — um email mandado pela dashboard da própria caixa não conta a dobrar. Os enviados diretamente das caixas partilhadas (info@, reservas@…) fora da dashboard não têm autor e não contam.\n- **Atividade por hora do dia**: a que horas cada um trabalha mesmo, na hora de Lisboa.\n  - Na aba, uma grelha com uma linha por pessoa (e \"Toda a aba\" em cima) e uma coluna por hora, das 0h às 23h: quanto mais escuro, mais ações nessa hora. **Cor por pessoa** = cada linha na sua escala (vê-se o padrão de cada um); **igual para todos** = a mesma escala (vê-se quem faz mais). Passa o rato (ou toca) numa célula para ver o número; **Ver em tabela** mostra todos os números. Aparecem as 25 pessoas com mais ações; **Mostrar todos** abre o resto.\n  - No detalhe de cada pessoa, um gráfico de barras das 0h às 23h, com \"das 7h às 19h · pico às 10h\" (quem faz a noite aparece \"das 15h às 2h\").\n  - Ações = **Multipark** (recolhas, entregas, movimentos, pôr em recolha/entrega, reservas criadas e alterações) + **dashboard** (chamadas atendidas e feitas, emails, WhatsApp, reclamações, críticas, caixa, despesas, tarefas, leads…). As perdidas e os minutos não entram.\n  - A Multipark por hora é guardada pela avaliação diária, a partir da mesma leitura de sempre. Só existe **desde que isto entrou** (o recálculo da noite enche os últimos 31 dias); antes disso o ecrã diz \"por hora desde…\" e só entra a dashboard."
+            },
+            {
+              "id": "condutores-agentes.md#o-detalhe-de-uma-pessoa-de-onde-vem-cada-numero-desempenho-c",
+              "file": "condutores-agentes.md",
+              "slug": "o-detalhe-de-uma-pessoa-de-onde-vem-cada-numero-desempenho-c",
+              "title": "O detalhe de uma pessoa: de onde vem cada número (Desempenho → clicar na linha)",
+              "level": 2,
+              "summary": "Horas trabalhadas: o ponto (sem os registos suspeitos); sem ponto, a escala.",
+              "text": "- **Horas trabalhadas**: o ponto (sem os registos suspeitos); sem ponto, a escala. **Dias com trabalho**: dias com horas ou com ações.\n- **Pontos da avaliação**: a soma dos pontos de cada dia da Avaliação (com os ajustes).\n- **Recolhas, entregas, movimentos, levar ao parque, mudanças de lugar, pôs em recolha/entrega, alterações de reserva**: a Multipark, pela avaliação diária.\n- **Atrasos ao trabalho** (−5 cada): a 1.ª picagem **5 minutos ou mais** depois da hora da escala ou, sem escala nesse dia, do horário fixo da ficha do RH (03:04:59 não conta; 03:05 já conta), no máximo 1 por dia. Nos dias antigos o número já vem sem as entregas atrasadas.\n- **Entregas atrasadas: saíram**. A coluna saiu das abas e já não tira pontos. Os tempos de cada condutor (Fila, Trânsito, Cliente, terminal, P2, ao lado dos colegas) aparecem mais abaixo neste detalhe, só como informação (ver **Tempos de um condutor**).\n- Por cima dos números, o detalhe explica em texto de onde vêm os atrasos ao trabalho, os excessos de velocidade e os dias sem GPS.\n- **Km (GPS)**, **velocidade máxima**: o GPS do Zello das partes de PDA da pessoa (e do Zello fixo da ficha). A máxima já não tem os picos falsos do GPS.\n- **Dias com GPS**: dias com pontos de GPS dela (dois PDAs no mesmo dia contam um dia). **Dias de trabalho sem GPS**: dias com trabalho e sem GPS, e porquê:\n  - **sem Zello ligado à pessoa**: a ficha não tem Zello fixo e nesse dia não leu nenhum PDA com o QR. Liga-o em **Atividade diária → Ao vivo → \"Utilizadores Zello ↔ Pessoas\"** (ou faz o check-in do PDA pelo QR).\n  - **com Zello mas sem GPS**: o Zello ou a localização estavam desligados, sem sinal, ou a recolha ainda não chegou a esse dia (o Zello só dá o dia completo 2 dias depois).\n- **Dias acima do limite**: dias em que a velocidade máxima do GPS passou o limite (a mesma regra dos excessos que descontam na Avaliação). Os dias recolhidos antes de 14 out 2026 contam pela máxima antiga (a nota por baixo da tabela diz quantos), até se voltarem a dividir."
+            },
+            {
+              "id": "condutores-agentes.md#excessos-de-velocidade-gps-do-zello",
+              "file": "condutores-agentes.md",
+              "slug": "excessos-de-velocidade-gps-do-zello",
+              "title": "Excessos de velocidade (GPS do Zello)",
+              "level": 4,
+              "summary": "Limite: em Definições → Parâmetros → \"Limite de velocidade (GPS do Zello)\": 120 km/h (o máximo em Portugal, nas autoestradas) sem tolerância por omissão…",
+              "text": "- **Limite**: em **Definições → Parâmetros → \"Limite de velocidade (GPS do Zello)\"**: **120 km/h** (o máximo em Portugal, nas autoestradas) **sem tolerância** por omissão: conta acima de 120. Antes eram 10 % (132 km/h). O Zello não diz em que estrada se vai, por isso é um limite único (não há por tipo de via nem por cidade). As velocidades do Zello já vêm em km/h.\n- **Dias recolhidos com outro limite**: cada dia de GPS guarda o limite com que foi recolhido. Nos **dias acima do limite** (aqui) e nos pontos da Avaliação, um dia só conta acima do **maior** entre o limite de hoje e esse. Os dias recolhidos com o limite antigo contam a **132** até se voltarem a dividir (Atividade diária → Histórico Diário → Forçar re-divisão): uma máxima entre 120 e 132 nesses dias pode ser um ponto solto que nunca foi confirmado. Quando há dias assim, aparece uma nota por baixo da tabela.\n- **Excesso** = pontos de GPS seguidos acima do limite (2 por omissão; um troço de autoestrada com uma descida curta é **um** excesso). Com o Zello a mandar pontos espaçados (de minutos em minutos), o mesmo troço sem nenhum ponto abaixo do limite pelo meio também é **um** excesso. Um ponto sozinho só conta se a distância percorrida até ao ponto ao lado (a pelo menos 30 s) o confirmar.\n- **Picos falsos** (nunca contam, nem para a máxima): pontos imprecisos (mais de 100 m), acima de 250 km/h, ou um salto isolado (sobe e desce mais de 15 km/h por segundo, ex.: 40 → 141 → 40 em 4 s). Antes deitava-se fora tudo acima de 150 km/h, e um 160 real desaparecia.\n- **Pontos**: na Avaliação, **1 excesso de velocidade (−10) por dia** em que a máxima do GPS passou o limite; se nesse dia já houver um alerta ou uma penalização de velocidade, o GPS não conta outra vez. Os dias acima do limite não descontam outra vez no Desempenho.\n- **Aviso**: com o interruptor **\"Avisos de excesso de velocidade (GPS do Zello)\"** ligado (Definições → Automações; desligado por omissão), cada excesso fica registado e o team leader e o supervisor da cidade recebem no sino \"Excesso de velocidade\", um por pessoa em cada recolha (a final, 2 dias depois, só volta a avisar se trouxer excessos que a das 23h ainda não tinha). Só avisa dias dos últimos 3; recolher à mão um dia antigo grava os excessos mas não avisa. O aviso não mexe nos pontos.\n- A recolha do Zello é às 23h (provisória) e a final 2 dias depois. Para refazer um dia recolhido antes de 14 out 2026 com a regra nova: **Atividade diária → Histórico Diário → Forçar re-divisão** desse dia e depois **Recalcular** a Avaliação."
+            },
+            {
+              "id": "condutores-agentes.md#quando-a-leitura-falha",
+              "file": "condutores-agentes.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Mostra \"Não foi possível carregar…\" com Tentar de novo, nunca \"sem dados\".",
+              "text": "- Mostra **\"Não foi possível carregar…\"** com **Tentar de novo**, nunca \"sem dados\"."
+            }
+          ]
+        },
+        {
+          "id": "conhecimento",
+          "file": "pesquisa-e-conhecimento.md",
+          "group": "Pessoas",
+          "module": "pesquisa_conhecimento",
+          "title": "Pesquisa global (Ctrl+K) e Base de conhecimento",
+          "routes": [
+            "/formacao/conhecimento"
+          ],
+          "tabs": [],
+          "summary": "Uma só caixa para procurar em tudo o que podes ver: reservas, clientes e contactos, reclamações, emails, conversas de WhatsApp, tarefas, colaboradores…",
+          "sections": [
+            {
+              "id": "pesquisa-e-conhecimento.md#pesquisa-global",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "pesquisa-global",
+              "title": "Pesquisa global",
+              "level": 2,
+              "summary": "Uma só caixa para procurar em tudo o que podes ver: reservas, clientes e contactos, reclamações, emails, conversas de WhatsApp, tarefas, colaboradores…",
+              "text": "Uma só caixa para procurar em tudo o que podes ver: reservas, clientes e contactos, reclamações, emails, conversas de WhatsApp, tarefas, colaboradores, utilizadores, parceiros, documentos da base de conhecimento, ajuda da app e atalhos para páginas e ações.\n\n1. Carrega em **Ctrl+K** (no Mac **⌘K**) ou no botão **Pesquisar** no topo. No telemóvel abre em ecrã inteiro.\n2. Escreve pelo menos 2 letras: nº de reserva, matrícula (com ou sem hífens), nome, email, telefone, assunto de um email ou o nome de uma página (\"nova reclamação\", \"escala de amanhã\").\n3. Usa **↑/↓** para escolher e **Enter** para abrir. **Esc** fecha.\n4. Cada grupo mostra até 5 resultados; **Ver todos** abre a página com a pesquisa já escrita (ex.: Reservas, Tarefas, Emails, WhatsApp, Contactos).\n5. **Perguntar ao Multis** (no fim da lista) abre o Multis (o assistente de IA da equipa) com o que escreveste.\n6. Sem nada escrito aparecem as tuas **pesquisas recentes** (ficam só neste browser; **Limpar pesquisas recentes** apaga-as).\n\nRegras:\n- Só aparece o que a página de cada módulo te mostra: os mesmos acessos e as mesmas cidades. Se não vês Reservas no menu, também não as encontras aqui.\n- Uma fonte lenta ou com erro não atrasa as outras: aparece \"sem resposta (lenta ou com erro)\" em vez de parecer que não há resultados — abre a página para pesquisar lá.\n- A pesquisa não fica registada."
+            },
+            {
+              "id": "pesquisa-e-conhecimento.md#base-de-conhecimento",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "base-de-conhecimento",
+              "title": "Base de conhecimento",
+              "level": 2,
+              "summary": "Manuais e procedimentos da empresa que o tutor da formação, o assistente, a pesquisa global, o Quiz (perguntas novas em cada jogo), as FAQs da IA e o Procurar…",
+              "text": "Manuais e procedimentos da empresa que o **tutor da formação**, o **assistente**, a **pesquisa global**, o **Quiz** (perguntas novas em cada jogo), as **FAQs da IA** e o **Procurar formação** usam. As respostas indicam as **Fontes** (título do documento). No tutor e na pesquisa global, carregar na fonte abre o documento (só se o puderes ver); nas Fontes do assistente só os do Drive têm ligação. Na pesquisa global os documentos aparecem pelo título ou pela pasta."
+            },
+            {
+              "id": "pesquisa-e-conhecimento.md#onde-estao-os-documentos",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "onde-estao-os-documentos",
+              "title": "Onde estão os documentos",
+              "level": 4,
+              "summary": "Pastas do Shared Drive \"Multipark\" (por omissão Formação e Procedimentos), sincronizadas sozinhas quando alguém muda um ficheiro nessas pastas (a Google avisa…",
+              "text": "- Pastas do Shared Drive \"Multipark\" (por omissão **Formação** e **Procedimentos**), sincronizadas sozinhas quando alguém muda um ficheiro nessas pastas (a Google avisa a app) e, mesmo sem avisos, de 4 em 4 horas; **Sincronizar agora** continua a funcionar: Google Docs, PDF, DOCX e ficheiros de texto. Um ficheiro alterado no Drive é lido outra vez; um ficheiro apagado sai do índice e, se for recuperado do lixo do Drive, volta a ser lido.\n- Ficheiros carregados na app (PDF, DOCX, TXT ou MD até 25 MB; o ficheiro vai direto para o armazenamento). Um ficheiro grande pode ficar uns minutos \"Por processar\" antes de aparecer como Sincronizado. Carregar o mesmo ficheiro outra vez não cria um duplicado: a app avisa e usa o documento que já existe.\n- A ajuda da própria app (atualiza-se sozinha)."
+            },
+            {
+              "id": "pesquisa-e-conhecimento.md#gerir-administradores-menu-pessoas-base-de-conhecimento-ou-f",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "gerir-administradores-menu-pessoas-base-de-conhecimento-ou-f",
+              "title": "Gerir (administradores: menu Pessoas → Base de conhecimento ou Formação → Base de conhecimento)",
+              "level": 3,
+              "summary": "Definições: liga Sincronizar pastas do Drive, indica as pastas (caminho a partir da raiz do Shared Drive, ex.: Procedimentos/Porto) e quem vê cada pasta…",
+              "text": "1. **Definições**: liga **Sincronizar pastas do Drive**, indica as pastas (caminho a partir da raiz do Shared Drive, ex.: `Procedimentos/Porto`) e quem vê cada pasta (papéis e cidades; nada marcado = todos). Ao gravar, a visibilidade passa logo para os documentos dessas pastas e a próxima sincronização volta a ler as pastas. Se uma pasta estiver dentro de outra (ex.: `Procedimentos` e `Procedimentos/Porto`), vale a regra da mais específica. Liga ou desliga o índice por IA e se o assistente/tutor usam a base.\n2. **Carregar documento**: escolhe o ficheiro, o título e quem o vê.\n3. Em cada documento: **pré-visualizar** o texto lido (em texto corrido, com os títulos a negrito), **visibilidade**, **voltar a sincronizar**, **perguntas de quiz** (rascunhos) e **excluir** (sai do índice e das respostas, mas nada se apaga: o ficheiro fica no Drive ou guardado na app e **Voltar a incluir** trá-lo de volta). As mudanças de visibilidade e as exclusões ficam no registo.\n4. **Sincronizar agora** lê já as pastas do Drive e processa o que falta, sem esperar pelos avisos da Google nem pela volta das 4 horas (os carregados na app são processados logo). **Voltar a sincronizar** um documento fica bloqueado enquanto ele está \"A processar\".\n\n**Estados**: Sincronizado · Por processar · A processar · Erro (vê a mensagem; tenta de novo sozinho até 3 vezes) · Ignorado (excluído por um administrador). Um documento que fica preso em \"A processar\" (o processamento foi interrompido) é retomado passados 10 minutos; à 3.ª interrupção passa a Erro, para não bloquear os outros."
+            },
+            {
+              "id": "pesquisa-e-conhecimento.md#quem-ve-o-que",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "quem-ve-o-que",
+              "title": "Quem vê o quê",
+              "level": 4,
+              "summary": "Um documento só com papéis marcados só serve a esses papéis; com cidades, só a quem tem acesso a uma dessas cidades.",
+              "text": "- Um documento só com papéis marcados só serve a esses papéis; com cidades, só a quem tem acesso a uma dessas cidades.\n- O tutor e o assistente nunca usam nas respostas um documento que a pessoa não pode ver.\n- O tutor responde em texto corrido (sem marcas de Markdown), bom para ler e ouvir.\n- Se a base não responder, o assistente e o tutor dizem que não conseguiram consultar os manuais (em vez de responderem como se não houvesse nada).\n- As respostas da IA não mostram imagens de fora da app nem HTML embutido; as ligações só abrem endereços https."
+            },
+            {
+              "id": "pesquisa-e-conhecimento.md#perguntas-de-quiz-a-partir-de-um-documento",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "perguntas-de-quiz-a-partir-de-um-documento",
+              "title": "Perguntas de quiz a partir de um documento",
+              "level": 4,
+              "summary": "O botão ✨ num documento sincronizado pede à IA perguntas de escolha múltipla só com o texto desse documento.",
+              "text": "- O botão ✨ num documento sincronizado pede à IA perguntas de escolha múltipla só com o texto desse documento.\n- Ficam como **rascunho**: revê-as, corrige e publica em **Formação → Quiz**."
+            },
+            {
+              "id": "pesquisa-e-conhecimento.md#quiz-e-faqs-feitos-a-partir-da-base",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "quiz-e-faqs-feitos-a-partir-da-base",
+              "title": "Quiz e FAQs feitos a partir da base",
+              "level": 4,
+              "summary": "Quiz: com a IA ligada, cada jogo tem perguntas novas feitas na hora a partir dos trechos que quem joga pode ver (papéis e cidades contam).",
+              "text": "- **Quiz**: com a IA ligada, cada jogo tem perguntas novas feitas na hora a partir dos trechos que **quem joga** pode ver (papéis e cidades contam). Ver **Formação → Quiz**.\n- **FAQs**: a IA só usa documentos que **todos** podem ver (sem papéis nem cidades marcados) e nunca a ajuda da app; prefere os atualizados há pouco e os que ainda não deram FAQ. Um documento que mudas no Drive volta a ser candidato. Ver **Formação → FAQs**.\n- Mudar a visibilidade de um documento para restrita tira-o das FAQs seguintes e esconde a ligação **Fonte** das FAQs que já saíram dele."
+            },
+            {
+              "id": "pesquisa-e-conhecimento.md#sem-drive-nem-ia",
+              "file": "pesquisa-e-conhecimento.md",
+              "slug": "sem-drive-nem-ia",
+              "title": "Sem Drive nem IA",
+              "level": 4,
+              "summary": "Sem o Shared Drive configurado, os ficheiros carregados funcionam na mesma (DOCX lido pela app; PDF lido pela IA).",
+              "text": "- Sem o Shared Drive configurado, os ficheiros carregados funcionam na mesma (DOCX lido pela app; PDF lido pela IA).\n- Com o índice por IA desligado (ou o orçamento do mês atingido), a procura usa só palavras-chave."
+            }
+          ]
+        },
+        {
+          "id": "formacao",
+          "file": "formacao.md",
+          "group": "Pessoas",
+          "module": "formacao",
+          "title": "Formação",
+          "routes": [
+            "/formacao"
+          ],
+          "tabs": [
+            {
+              "tab": "mine",
+              "section": "Fazer a tua formação",
+              "sectionId": "formacao.md#fazer-a-tua-formacao"
+            },
+            {
+              "tab": "quiz",
+              "section": "Quiz",
+              "sectionId": "formacao.md#quiz"
+            },
+            {
+              "tab": "career",
+              "section": "Carreira",
+              "sectionId": "formacao.md#carreira"
+            },
+            {
+              "tab": "faqs",
+              "section": "FAQs",
+              "sectionId": "formacao.md#faqs"
+            },
+            {
+              "tab": "paths",
+              "section": "Gestão",
+              "sectionId": "formacao.md#gestao"
+            },
+            {
+              "tab": "dashboard",
+              "section": "Gestão",
+              "sectionId": "formacao.md#gestao"
+            }
+          ],
+          "summary": "Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.",
+          "sections": [
+            {
+              "id": "formacao.md#inicio",
+              "file": "formacao.md",
+              "slug": "inicio",
+              "title": "Formação",
+              "level": 1,
+              "summary": "Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.",
+              "text": "Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira."
+            },
+            {
+              "id": "formacao.md#fazer-a-tua-formacao",
+              "file": "formacao.md",
+              "slug": "fazer-a-tua-formacao",
+              "title": "Fazer a tua formação",
+              "level": 4,
+              "summary": "Menu Pessoas → Formação → separador A minha formação.",
+              "text": "1. Menu **Pessoas → Formação** → separador **A minha formação**. O número a vermelho é o que tens por fazer.\n2. **Procurar formação**: escreve o que queres aprender (ex.: \"fechar a caixa\", \"entregar um carro\") e carrega em **Procurar**. Aparece **Faz esta formação** com a melhor e, por baixo, outras que podem ajudar e documentos da base de conhecimento. **Treinar com um quiz sobre isto** abre o Quiz com esse tema.\n   - Com a IA ligada, as sugestões são escolhidas pelo sentido (diz \"Sugestões escolhidas pela IA\"); sem IA, ou se ela falhar, procura pelas palavras (no título, na área, na categoria e no texto).\n   - Quem procura muitas vezes seguidas (mais de 6 por minuto ou 60 por dia) fica só com a pesquisa por palavras até passar o limite.\n3. **A tua formação obrigatória**: abre cada item do teu percurso (vídeo, manual) e marca como visto/lido. Um item marcado \"Já não conta\" foi retirado e não precisas dele. **Fazer** num quiz do percurso abre o Quiz já com o tema dessa formação.\n4. **Formação por área**: escolhe **Multipark** (a app: reservas, receber e entregar carros), **Dashboard** (este dashboard: caixa, passagem de turno, ponto, tarefas), **Operacional** (condução, chaves, danos, segurança) ou **Comunicação** (clientes, WhatsApp, email, rádio, reclamações) e depois a subsecção (ex.: Dashboard → Financeiro). O que ainda não tem área aparece em **Outros**. No telemóvel os botões passam para a linha de baixo.\n5. O percurso tem **prazo**: acaba às 23:59 (hora de Lisboa) do último dia. A partir de 2 dias antes do prazo recebes 1 lembrete por dia (entre as 9h e as 20h) até concluíres. Com 3 dias de atraso, o team leader e o supervisor da tua cidade são avisados."
+            },
+            {
+              "id": "formacao.md#quiz",
+              "file": "formacao.md",
+              "slug": "quiz",
+              "title": "Quiz",
+              "level": 4,
+              "summary": "Separador Quiz → escolhe um tema (opcional): uma área, ou escreve um tema.",
+              "text": "1. Separador **Quiz** → escolhe um tema (opcional): uma área, ou escreve um tema. Carrega em **Jogar**.\n2. Com a IA ligada, **cada jogo tem 10 perguntas novas**, feitas na hora a partir da base de conhecimento e dos manuais que podes ver. A IA evita as perguntas que já tiveste. Pode demorar até meio minuto a preparar.\n3. A resposta certa nunca vai para o teu telemóvel antes de responderes: a correção é feita no servidor. Até 5 jogos por dia: o jogo conta logo que carregas em **Jogar**, mesmo enquanto a IA prepara as perguntas (carregar várias vezes não dá jogos a mais). Com 70% ou mais o quiz conta para o teu percurso.\n4. Se a IA falhar ou estiver desligada, o jogo usa as **perguntas fixas** e aparece um aviso a dizer porquê.\n5. **As tuas últimas tentativas** → **Rever**: vês cada pergunta, a tua resposta, a certa e a explicação."
+            },
+            {
+              "id": "formacao.md#carreira",
+              "file": "formacao.md",
+              "slug": "carreira",
+              "title": "Carreira",
+              "level": 4,
+              "summary": "Em Carreira fazes os exames para subir de nível (Condutor N1 → N4).",
+              "text": "1. Em **Carreira** fazes os exames para subir de nível (Condutor N1 → N4). Cada exame tem nota mínima, um limite de tentativas por dia e às vezes tempo. Se passares, a promoção fica **por aprovar** pelo supervisor da cidade, pelo backoffice ou pelo admin; ao aprovar recebes o certificado. Os certificados têm validade e, perto do fim, é-te atribuída a recertificação.\n2. Os exames usam sempre as perguntas do exame (não as da IA): a nota mínima e a aprovação não mudam.\n3. Se a página não carregar aparece um aviso a vermelho com **Tentar de novo** (não quer dizer que não tens formação)."
+            },
+            {
+              "id": "formacao.md#faqs",
+              "file": "formacao.md",
+              "slug": "faqs",
+              "title": "FAQs",
+              "level": 4,
+              "summary": "No separador FAQs, as marcadas IA foram escritas pela IA a partir da base de conhecimento.",
+              "text": "- No separador **FAQs**, as marcadas **IA** foram escritas pela IA a partir da base de conhecimento. Ao abrir, **Fonte** leva ao documento de onde saiu (se o puderes ver)."
+            },
+            {
+              "id": "formacao.md#formacao-e-escala",
+              "file": "formacao.md",
+              "slug": "formacao-e-escala",
+              "title": "Formação e escala",
+              "level": 4,
+              "summary": "Por agora a formação não bloqueia a escala: o interruptor Definições → Automações → Formação bloqueia a escala vem desligado.",
+              "text": "- **Por agora a formação não bloqueia a escala**: o interruptor Definições → Automações → **Formação bloqueia a escala** vem desligado.\n- Se for ligado, um percurso marcado **Obrigatório para ser escalado** tem de ser concluído para entrares na escala: no Extras-Dia aparece \"Formação em falta\" e a proposta e o preenchimento automáticos não te escolhem. Um admin pode forçar (fica registado). Se a formação não se conseguir verificar, aparece \"Formação por verificar\".\n- Esses percursos deviam ter pelo menos um **quiz ou exame obrigatório** (o \"visto\" dos vídeos e manuais é a própria pessoa que o marca): sem isso aparece um aviso no percurso, mas grava-se na mesma."
+            },
+            {
+              "id": "formacao.md#gestao",
+              "file": "formacao.md",
+              "slug": "gestao",
+              "title": "Gestão",
+              "level": 4,
+              "summary": "Percursos (team leader e acima): define que itens cada função tem de fazer e atribui.",
+              "text": "- **Percursos** (team leader e acima): define que itens cada função tem de fazer e atribui. O team leader só atribui à equipa. Um percurso que bloqueia a escala sem quiz/exame obrigatório mostra um aviso.\n- **Acompanhamento** (team leader e acima): progresso da equipa. **Remover atribuição** (só quem gere a formação) tira o percurso a uma pessoa e fica no registo.\n- **Promoções**: decide o supervisor da cidade, o backoffice ou o admin. Ninguém decide a sua própria promoção.\n- O admin cria vídeos, manuais, FAQs e perguntas, e pode **Gerar rascunhos** de perguntas a partir dos manuais com IA.\n- **Área e subsecção** (quem gere a formação): no formulário de cada vídeo e manual escolhe a **Área** e escreve ou escolhe a **Subsecção** (aparecem as habituais e as que já existem).\n  - Os conteúdos antigos ficam logo arrumados por uma **área proposta** (pelo título, pela categoria e pelo texto), que só tu vês com \"(proposta)\". Ao guardar um conteúdo, a área que está no formulário fica gravada.\n  - Em **Manuais**, o botão **Arrumar por área (N)** mostra todas as propostas (manuais e vídeos) para corrigires e gravares de uma vez. **Sem área** põe o conteúdo em **Outros** de vez (a app deixa de propor).\n  - Em **Manuais**, o seletor principal passou a ser a área e a subsecção; o tipo (Manuais, Procedimentos, Atualizações, Notícias, Links interativos) ficou como filtro ao lado.\n- **Quiz** (quem gere a formação):\n  - **Perguntas fixas** (antes \"Gerir perguntas\") ficam de **reserva**, para quando a IA falha ou está desligada; continuas a criar, editar, publicar e arquivar.\n  - **Perguntas feitas pela IA** mostra as últimas 40 da tua cidade, só de jogos já acabados, com a certa, a fonte e se a pessoa acertou. As que saíram de documentos que tu não podes ver (papéis ou cidades marcados) ficam escondidas.\n  - **Guardar nas fixas** copia uma boa para as perguntas fixas como rascunho. Se a pergunta saiu de um **documento restrito** (aparece \"Documento restrito\"), a app avisa que as perguntas fixas, depois de publicadas, são vistas por toda a gente e pede confirmação. Uma pergunta que já está nas fixas não é copiada outra vez.\n  - Interruptor **IA: quiz novo em cada jogo** em Definições → Automações (ligado).\n- **FAQs da base de conhecimento** (quem gere a formação, separador **FAQs**):\n  - **Gerar agora** escolhe 2 ou 3 documentos da base de conhecimento (primeiro os atualizados há pouco e os que ainda não deram FAQ) e a IA escreve até 3 FAQs novas, com resposta curta e a ligação ao documento. Entram logo publicadas, marcadas **IA**.\n  - Só usa documentos que **todos** podem ver (sem papéis nem cidades marcados) e nunca a ajuda da app.\n  - Nunca repete uma FAQ que existe ou que arquivaste: **Arquivar** uma FAQ da IA é dizer \"esta não\".\n  - Para correr sozinho **uma vez por semana** (segunda a partir das 09:30), liga **Formação: FAQs novas da base de conhecimento (semanal)** em Definições → Automações (vem **desligado por omissão**; o estado de agora vê-se nesse interruptor). Vem **desligado**. Precisa também de **IA: FAQs a partir da base de conhecimento** (ligado).\n  - O cartão diz se o semanal está ligado e o que aconteceu da última vez.\n  - **Gerar agora** pode ser usado no máximo 3 vezes por hora e 8 por dia (para toda a gente junta). Corre uma geração de cada vez: se a semanal ou outra pessoa já estiver a gerar, aparece \"já há uma geração a correr\" — tenta daqui a um minuto.\n- **Arquivar** (antes \"Eliminar\") vídeos, manuais, FAQs, perguntas e percursos tira-os das listas, mas nada se apaga. Um vídeo ou manual arquivado deixa de contar nos percursos, por isso ninguém fica preso por ele.\n- O **tutor IA** responde a partir dos manuais e pode ser desligado em Definições → Automações. O mesmo interruptor liga as sugestões da IA em **Procurar formação**.\n- Os lembretes por email respeitam o **Não enviar email** da ficha."
+            }
+          ]
+        },
+        {
+          "id": "leads-extras",
+          "file": "leads-extras.md",
+          "group": "Pessoas",
+          "module": "leads_extras",
+          "title": "Leads de Extras (leads, candidaturas do site e recrutamento)",
+          "routes": [
+            "/extras-leads"
+          ],
+          "tabs": [],
+          "summary": "Cartões ou Lista (botão no topo da lista de leads e das candidaturas): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+          "sections": [
+            {
+              "id": "leads-extras.md#inicio",
+              "file": "leads-extras.md",
+              "slug": "inicio",
+              "title": "Leads de Extras (leads, candidaturas do site e recrutamento)",
+              "level": 1,
+              "summary": "Cartões ou Lista (botão no topo da lista de leads e das candidaturas): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+              "text": "**Cartões ou Lista** (botão no topo da lista de leads e das candidaturas): vês as pessoas em **cartões com foto** ou numa **lista** compacta — no telemóvel e no PC. A escolha fica guardada neste aparelho, para esta página.\n\nTudo o que é recrutar extras está junto, no menu **Leads de Extras**, em três separadores:"
+            },
+            {
+              "id": "leads-extras.md#leads",
+              "file": "leads-extras.md",
+              "slug": "leads",
+              "title": "Leads",
+              "level": 4,
+              "summary": "Contactos que ainda não são extras (do site, de email ou criados à mão).",
+              "text": "- Contactos que ainda não são extras (do site, de email ou criados à mão). Convida-os por WhatsApp com o template \"Seja motorista\" e acompanha quem responde.\n- **Novo lead**: nome, **Cidade \\*** (a cidade em que o extra vai trabalhar), telemóvel ou email e notas. A cidade é obrigatória: se só tens uma cidade já vem escolhida; só quem vê todas as cidades pode escolher **Sem cidade** (o lead fica visível a todas). Só podes escolher as tuas cidades.\n- Seleciona vários na tabela para mudar o estado ou a cidade de uma vez, ou para enviar o WhatsApp em lote.\n- **Tarefa da candidatura**: cada candidatura nova (do site ou do email de recrutamento) cria uma tarefa **Candidatura de condutor** nas Tarefas, para os supervisores da cidade, com prazo de 24 h. Fecha sozinha quando o lead é convertido, fica Sem interesse ou é arquivado. O link da tarefa abre aqui só esse lead (**Ver todos** volta à lista).\n- **Anexos do email lidos pela IA** (com o interruptor **\"IA: anexos dos emails do RH (CV)\"** ligado em Definições → Automações; desligado por omissão): os anexos dos emails de candidatura (CV em PDF, imagem ou Word .docx, documentos) são lidos uma vez. No candidato ficam **só os campos vazios**: NIF, n.º do BI/CC, n.º da carta, a cidade **só quando é certa**, telefone/email (outros contactos vão para as notas). Abre o candidato (**Editar**) para ver **\"Lido pela IA\"**: o **resumo do CV** para quem entrevista e cada anexo (lido, não lido e porquê, ou falhou).\n  - Como o CV vai inteiro, isto **só corre com a IA em Vertex AI na UE**. Sem isso não lê nada, mesmo com o interruptor ligado. As **Definições → Automações** dizem ao lado do interruptor onde está a IA hoje.\n- **Pontuação e \"Resumo IA\"**: carrega no número da pontuação. O **Resumo IA** (uma linha, com custo) só o pede quem **edita** as leads (os recrutadores); quem só lê vê o resumo se já tiver sido feito.\n- **NIF e números dos documentos só o RH vê** (front office, back office, administrador). Ao converter em extra passam para a ficha, só se lá estiverem vazios.\n- Enviar a dois leads ou mais pede primeiro **\"Confirmar envio a N\"**. Quem recebeu o mesmo template nas últimas 24 h (à mão ou no lembrete automático) fica de fora, com \"já recebeu (24 h)\".\n- O **Funil** mostra os leads das últimas 12 semanas, por origem e por cidade.\n- A faixa **Atenção** mostra os novos sem contacto há mais de 24 h e os contactados sem resposta há mais de 3 dias. Há também um resumo diário no sino, por cidade.\n- Com **Lembretes das leads de extras** ligado (Definições → Automações), os contactados sem resposta recebem 1 lembrete automático. Com **Resposta automática às leads** ligado (vem desligado), quem responde recebe o link da candidatura.\n- Quem responde **STOP** (ou \"parar\") deixa de receber mensagens.\n- **Converter** um lead cria (ou liga) a ficha de extra na cidade que escolheres (vem já escolhida a cidade do lead, se for uma das tuas; podes mudar):\n  - se a pessoa já tem ficha ativa, o lead liga-se a ela;\n  - se já teve ficha **desativada**, aparece o motivo da saída e só se reativa se confirmares;\n  - quem saiu por **roubo** ou **despedimento** não se reativa a partir de um lead (fala com o RH);\n  - uma ficha que foi **junta a outra** passa para a ficha que ficou;\n  - uma ficha de outra cidade não se mexe daqui.\n- **Arquivar** (o ícone da caixa) tira o lead da lista, do funil, dos envios e dos lembretes. Nada se apaga: no botão **Arquivados** vês os arquivados e podes **Repor**. Se a pessoa voltar a candidatar-se, o lead sai sozinho do arquivo.\n- A lista mostra os 500 leads mais recentes; quando chega a isso aparece um aviso."
+            },
+            {
+              "id": "leads-extras.md#candidaturas-do-site-formulario-be-a-driver",
+              "file": "leads-extras.md",
+              "slug": "candidaturas-do-site-formulario-be-a-driver",
+              "title": "Candidaturas do site (formulário \"Be a Driver\")",
+              "level": 2,
+              "summary": "O número ao lado do separador é o das candidaturas novas.",
+              "text": "- O número ao lado do separador é o das candidaturas novas.\n- **Aprovar** pede a cidade (centro de custo) e cria ou liga a ficha de extra. Se a pessoa já teve ficha desativada, aparece o motivo e só se reativa com confirmação (a mesma regra do Converter). Duas pessoas a aprovar a mesma candidatura ao mesmo tempo já não criam duas fichas.\n- **Rejeitar** fecha a candidatura e põe o lead da mesma pessoa em \"Sem interesse\". E ao contrário: marcar um lead como **Sem interesse** (um a um ou em lote) rejeita a candidatura do site da mesma pessoa, menos se já estiver aprovada.\n- Uma candidatura aprovada já não muda de estado. Para tirar a pessoa, desativa a ficha no RH.\n- A cidade escrita na candidatura também se reconhece pela terra (ex.: \"Corroios\" é Lisboa, \"Gaia\" é Porto, \"Albufeira\" é Faro). Só vês e mexes nas candidaturas das tuas cidades.\n- **Pronta** tira a candidatura das Novas sem a aprovar nem rejeitar (quando já a viste ou já falaste com a pessoa). **Repor** devolve-a às Novas.\n- Cada mudança (Pronta, Rejeitar, Repor) mostra **Desfazer** durante uns segundos. Depois disso usa **Repor**.\n- O filtro em cima mostra Novas, Prontas (vistas), Aprovadas, Rejeitadas ou Todas."
+            },
+            {
+              "id": "leads-extras.md#recrutamento-email",
+              "file": "leads-extras.md",
+              "slug": "recrutamento-email",
+              "title": "Recrutamento (email)",
+              "level": 4,
+              "summary": "Entraram pela IA (no topo, quando há): a IA separa sozinha os emails das caixas partilhadas e as conversas novas do WhatsApp pelas caixas (ver a ajuda da…",
+              "text": "- **Entraram pela IA** (no topo, quando há): a IA separa sozinha os emails das caixas partilhadas e as conversas novas do WhatsApp pelas caixas (ver a ajuda da Comunicação). Quando reconhece alguém a **candidatar-se a trabalhar pela 1.ª vez** (sem ficha, lead nem candidatura com o mesmo email ou telefone):\n  - cria a **lead** (origem Email ou WhatsApp) com o que leu — nome, telefone, email, cidade, carta, disponibilidade — e a nota **\"Entrou pela IA\"**;\n  - cria a **candidatura** nas Candidaturas do site quando há email (por WhatsApp sem email fica só a lead);\n  - com a candidatura nasce também a **ficha de candidato** (inativa, \"Candidato — por aprovar\", fora das listas e da escala). Quando a pessoa entra no dashboard com a conta Google do **mesmo email**, fica logo ligada a essa ficha e pode preencher os dados, os documentos e os dias livres; o supervisor vê e a aprovação passa-a a extra;\n  - um email de candidatura que chegou ao info@ vai para a caixa do RH e entra também na lista de emails do Recrutamento (e o CV é lido, com o interruptor dos anexos ligado).\n  - Se a pessoa **já é colaborador**, não cria nada; se **já era candidato**, não duplica — só acrescenta \"Voltou a escrever\" à lead.\n  - A lista mostra os últimos 30 dias: quem, o que se fez (**Candidato criado**, **Já existia — ligado**, **Já é colaborador**), o motivo, **Abrir conversa** e o link para a lead. Se a IA errou, muda a caixa na conversa e, se for preciso, arquiva a lead (nada se apaga).\n  - A IA nunca escreve ao candidato.\n- Os emails que chegam à **recursos-humanos@**: abre, lê os anexos, escreve notas (ficam registadas) e responde. A resposta sai sempre da recursos-humanos@.\n- Três separadores: **Por tratar**, **Prontas** e **Lixo**, cada um com o número.\n  - **Pronta** tira o email de Por tratar. **Responder** também o marca como pronto sozinho.\n  - **Lixo** é para o que não é candidatura.\n  - **Repor** devolve o email a Por tratar.\n  - Cada ação mostra **Desfazer** durante uns segundos. Nada se apaga e fica registado quem mudou e quando.\n- O que claramente **não é candidatura** vai sozinho para o Lixo, com a etiqueta \"não é candidatura\":\n  - avisos de entrega (*Delivery Status Notification*, *mailer-daemon*);\n  - respostas automáticas e remetentes \"no-reply\";\n  - respostas ao pedido de disponibilidade;\n  - newsletters, faturas e alertas de segurança.\n- Um email cujo assunto fala de candidatura, CV, vaga, motorista ou condutor nunca vai para o lixo sozinho. Na dúvida, fica em Por tratar.\n- O **link de registo** (cria a conta do candidato) só aparece a quem gere utilizadores.\n- **Sincronizar emails** vai buscar os novos já (só aparece a quem tem a permissão de sincronização). As candidaturas e os emails também entram nos Leads sozinhos, de hora a hora.\n\nSe uma lista não carregar aparece um aviso a vermelho com **Tentar de novo** (não quer dizer que esteja vazia).\n\nAntes as candidaturas estavam na **Disponibilidade** e o recrutamento no separador do **RH**; agora estão só aqui. Um link antigo para `/extras-leads?tab=candidaturas` ou `?tab=recrutamento` abre o separador certo."
+            },
+            {
+              "id": "leads-extras.md#entradas-pela-app-topo-de-candidaturas-quem-trata-do-recruta",
+              "file": "leads-extras.md",
+              "slug": "entradas-pela-app-topo-de-candidaturas-quem-trata-do-recruta",
+              "title": "Entradas pela app (topo de Candidaturas, quem trata do recrutamento — 49c)",
+              "level": 2,
+              "summary": "Pedidos de ligação: \"Pedido de ligação: email Google diz ser email/telefone\".",
+              "text": "- **Pedidos de ligação**: \"Pedido de ligação: *email Google* diz ser *email/telefone*\". Mostra a ficha ou a candidatura encontrada (só por email ou telefone, nunca pelo nome). **Ligar** liga a conta com as regras das Ligações (sem conta → principal; com a principal desativada → passa a principal; com a principal ativa → conta extra); se a ficha está inativa a conta fica como utilizador; se é uma ficha ativa de extra, a conta passa a extra. Uma ficha **desativada** (motivo que bloqueia) não se liga. Sem correspondência, escreve o n.º da ficha. **Recusar** fecha o pedido (fica registado). Avisa no sino os team leaders, supervisores e back office da cidade e a pessoa do recrutamento (Definições → \"Responsável pelo recrutamento…\").\n- **Possível duplicado**: o candidato gravou um telefone ou NIF que já está noutra ficha ou candidatura. Não bloqueia nada: abre as duas fichas; se for a mesma pessoa, junta-as em RH → Ligações → **Juntar fichas** e carrega em **Já tratei**; senão **Não é a mesma pessoa**.\n- **Quer voltar**: pessoas inativas que entraram e carregaram em \"Voltei, quero trabalhar\". **Reativar** põe a ficha ativa e a conta passa ao papel do posto (de utilizador a extra).\n- **Candidatos — por aprovar**: fichas criadas na app (\"Sou novo\"). A candidatura também aparece na lista abaixo (origem \"[App]\"); **Aprovar** (com a cidade) ativa a ficha sem perguntar readmissão e a conta passa a extra. Também se aprova na ficha (botão **Aprovar candidato**)."
+            }
+          ]
+        },
+        {
+          "id": "rh",
+          "file": "rh-ponto.md",
+          "group": "Pessoas",
+          "module": "rh",
+          "title": "RH e ponto",
+          "routes": [
+            "/rh",
+            "/rh/dashboard",
+            "/perfil"
+          ],
+          "tabs": [],
+          "summary": "Cartões ou Lista (botão no topo da lista): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+          "sections": [
+            {
+              "id": "rh-ponto.md#inicio",
+              "file": "rh-ponto.md",
+              "slug": "inicio",
+              "title": "RH e ponto",
+              "level": 1,
+              "summary": "Cartões ou Lista (botão no topo da lista): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+              "text": "**Cartões ou Lista** (botão no topo da lista): vês as pessoas em **cartões com foto** ou numa **lista** compacta — no telemóvel e no PC. A escolha fica guardada neste aparelho, para esta página."
+            },
+            {
+              "id": "rh-ponto.md#picar-o-ponto",
+              "file": "rh-ponto.md",
+              "slug": "picar-o-ponto",
+              "title": "Picar o ponto",
+              "level": 4,
+              "summary": "No topo da aplicação carrega em Dar entrada (check-in) quando começas e Dar saída (check-out) quando acabas.",
+              "text": "1. No topo da aplicação carrega em **Dar entrada (check-in)** quando começas e **Dar saída (check-out)** quando acabas.\n2. A aplicação pede uma **foto** e a **localização exata (GPS)**. Autoriza a localização no telemóvel; sem GPS não dá para picar.\n3. Se deres entrada fora do raio do local de trabalho, fica registado com um aviso.\n4. As tuas horas do mês aparecem na tua ficha (separador **Ponto**).\n5. Se aparecer **\"A tua conta está em 2 fichas ativas\"**, a entrada ficou feita, mas avisa o RH: as tuas horas podem ficar divididas por duas fichas.\n6. Na **saída**, a saída e as horas ficam gravadas primeiro; o resumo do **Zello** (km, velocidades, minutos com o Zello desligado) junta-se logo a seguir. Se o Zello estiver lento ou em baixo, a saída fica feita na mesma, só sem esse resumo."
+            },
+            {
+              "id": "rh-ponto.md#ponto-de-um-mes-ficha-separador-ponto",
+              "file": "rh-ponto.md",
+              "slug": "ponto-de-um-mes-ficha-separador-ponto",
+              "title": "Ponto de um mês (ficha → separador Ponto)",
+              "level": 2,
+              "summary": "As setas ‹ › mudam o mês.",
+              "text": "- As setas **‹ ›** mudam o mês. Aparecem as picagens de **todos os turnos** desse mês (antes só as 30 últimas) e as **horas que contam**, com a mesma regra da folha de ordenados: turnos fechados, pelo dia (Lisboa) em que começaram. A saída de um turno da noite do último dia aparece no mês em que entraste.\n- À parte: os turnos **por rever** (não contam até serem aprovados) e as **entradas sem saída** (não contam).\n- Quem vê as picagens (fotos e GPS): tu, o RH e quem gere a tua ficha (supervisor e team leader da tua cidade). O supervisor da cidade vê sempre as horas."
+            },
+            {
+              "id": "rh-ponto.md#folha-de-ordenados-ninguem-fica-de-fora",
+              "file": "rh-ponto.md",
+              "slug": "folha-de-ordenados-ninguem-fica-de-fora",
+              "title": "Folha de ordenados: ninguém fica de fora",
+              "level": 4,
+              "summary": "Entra na folha toda a ficha com entradas do ponto no mês, mesmo inativa ou fora do contrato, com aviso: \"ficha inativa com N entrada(s) no ponto neste mês\".",
+              "text": "- Entra na folha **toda a ficha com entradas do ponto no mês**, mesmo **inativa** ou fora do contrato, com aviso: \"ficha inativa com N entrada(s) no ponto neste mês\".\n- Ficha **inativa sem data de fim de contrato**:\n  - **extra** → paga as horas que picou;\n  - **com salário** → o salário conta só **até ao dia da desativação** (aviso \"o salário conta até…\"). Sem data de desativação, esta ficha **não recebe nada** e o aviso diz para pores a data de fim de contrato certa. Nunca conta o mês inteiro sozinha.\n- Se a **mesma conta** picou o ponto em **duas fichas** no mesmo mês, as duas linhas avisam \"a mesma conta picou o ponto também em #… — as horas desta pessoa estão divididas\". Junta as fichas em **RH → Ligações** (as picagens passam para a ficha que fica).\n- Se a mesma conta está em **duas fichas ativas** que entram na folha, as duas linhas avisam \"confirma que não pagas a mesma pessoa duas vezes\" (uma readmissão, com a ficha antiga inativa, não avisa).\n- Se o **mesmo tempo** foi picado nas duas fichas, as duas linhas avisam \"o mesmo tempo está picado também na ficha #… (N h sobrepostas)\": rejeita a picagem a mais antes de fechar o mês.\n- Uma conta que já está numa ficha ativa **não fica ligada sozinha a outra ficha** com o mesmo email (no login, no site ou na volta de hora a hora). Isso fica para decidires em **Ligações**.\n- Se a conta já está em **duas fichas ativas**, o ponto fica na ficha onde a pessoa picou por último: **não muda de ficha sozinho** a meio do mês.\n\n**Estou no terminal** (extras, condutores e team leaders) — só com o interruptor **\"Terminal no ponto (aeroporto)\"** ligado (Definições → Automações; desligado por omissão)\n1. Carrega na tua **fotografia** lá em cima → **Estou no terminal**. Se ainda não deste entrada, abre a entrada do ponto (foto + GPS) com **Estou no terminal** já marcado.\n2. O GPS tem de estar no **aeroporto** de uma cidade onde trabalhas (a da tua ficha ou uma cidade que te deram). Conta a imprecisão do GPS. Fora do aeroporto aparece, por exemplo, **\"Não estás no aeroporto de Lisboa (a 3,2 km)\"**.\n3. Ficas com a barra **\"Terminal Lisboa · desde 14:05 · Sair\"** por baixo do topo. **Sair** pede confirmação e diz **\"Saíste do terminal às 17:20 (3 h 15)\"**. O ponto continua aberto.\n4. **Só uma pessoa por cidade** e cada pessoa só num terminal. Se estiver ocupado aparece **\"O terminal de Lisboa está com João Silva desde 14:05\"** e o botão **Pedir a João para passar**. O João e o TL de serviço recebem o aviso no sino.\n5. O João vê o pedido na barra: **Passar** (ficas tu no terminal, na hora) ou **Ainda estou** (ele fica e tu recebes o aviso). O pedido vale 30 minutos.\n6. Se o João já não tiver o ponto aberto, entras logo e fica registado.\n7. Se deres entrada no ponto com **Estou no terminal** e o terminal estiver ocupado, a **entrada fica feita** na mesma e aparece o **Pedir a João para passar**.\n8. A **saída do ponto** liberta o lugar no terminal. O fecho automático do ponto esquecido também.\n9. O **nível seguinte** no pagamento (júnior → sénior, sénior → terminal, terminal → master) é **só para extras**. Condutores e TL podem estar no terminal, mas o valor não muda.\n10. **Horas que contam** (nunca se paga sem prova, não se corta a quem tem prova):\n    - sais com o GPS no aeroporto → contam até à saída;\n    - senão → até ao **último GPS no aeroporto** (o Zello do aparelho contigo) ou à tua **última recolha ou entrega** na Multipark, a mais tarde das duas. A recolha/entrega só conta até à hora a que o GPS te viu sair;\n    - sem nenhuma prova → ficam **por confirmar** (o RH decide).\n11. O TL de serviço também te pode **pôr**, **passar** ou **tirar** do terminal (Atividade diária → Ao Vivo → **Terminal agora**). Recebes o aviso no sino.\n- O método antigo (dar saída + entrada no aeroporto) deixou de contar. Os troços antigos ficam como estavam (histórico). Um troço antigo ainda aberto fecha na saída do ponto como **Terminal por confirmar**."
+            },
+            {
+              "id": "rh-ponto.md#ainda-estas-no-terminal-so-com-o-mesmo-interruptor-ligado",
+              "file": "rh-ponto.md",
+              "slug": "ainda-estas-no-terminal-so-com-o-mesmo-interruptor-ligado",
+              "title": "\"Ainda estás no terminal?\" (só com o mesmo interruptor ligado)",
+              "level": 2,
+              "summary": "De 5 em 5 minutos a app vê o GPS do Zello do aparelho que está contigo (o PDA onde fizeste check-in; senão o teu Zello).",
+              "text": "1. De 5 em 5 minutos a app vê o GPS do **Zello do aparelho que está contigo** (o PDA onde fizeste check-in; senão o teu Zello).\n2. GPS velho (mais de 10 min), pouco preciso ou sem Zello = **sem GPS**: nunca conta como \"fora\". Com o **Zello em baixo** a app não pergunta nem liberta o lugar: espera pela leitura seguinte.\n3. **Fora** = o GPS fora da zona do aeroporto, descontada a imprecisão, em **2 leituras seguidas**.\n4. Fora há mais de **20 min** → aparece na barra (e no telemóvel) **\"Ainda estás no terminal?\"** com **Sim, estou** e **Já saí**. O TL de serviço recebe o aviso no sino e no telemóvel.\n5. **Sim, estou** → não voltamos a perguntar durante **60 min**. Se o GPS do telemóvel te puser no aeroporto, também conta como prova.\n6. **Já saí** → sais do terminal à hora a que o GPS te viu sair.\n7. Sem resposta em **15 min** → o lugar fica livre. Fica escrito **\"saiu do aeroporto às 16:40 (GPS)\"** e o TL é avisado.\n8. A barra mostra então **\"Saíste do terminal de Lisboa às 16:40 (GPS)\"** com **Ainda estou**:\n    - até **30 min** depois, voltas ao terminal (o lugar fica teu sem buraco na linha do tempo), se estiver livre. **Conta a partir de agora**; o tempo em que o GPS te viu fora fica para o RH decidir;\n    - se já estiver com outra pessoa, o pedido vai ao TL de serviço;\n    - mais tarde, carrega outra vez em **Estou no terminal** (com GPS).\n9. Depois de um **Ainda estou** sem prova, as horas desse bocado ficam **por confirmar** até haver GPS no aeroporto (ou o RH decidir).\n- Não há fecho às 03:00. Fica sempre escrito como fechou, até que hora contou e porquê."
+            },
+            {
+              "id": "rh-ponto.md#terminal-confirmar-corrigir-ou-desmarcar-quem-reve-o-ponto-d",
+              "file": "rh-ponto.md",
+              "slug": "terminal-confirmar-corrigir-ou-desmarcar-quem-reve-o-ponto-d",
+              "title": "Terminal: confirmar, corrigir ou desmarcar (quem revê o ponto da ficha: supervisor da cidade, back office, administrador)",
+              "level": 2,
+              "summary": "Na ficha → Ponto, cada turno mostra os troços de terminal: \"Terminal Lisboa 14:05–17:20 · contou até 16:40 (último GPS no aeroporto)\".",
+              "text": "- Na ficha → **Ponto**, cada turno mostra os **troços de terminal**: \"Terminal Lisboa 14:05–17:20 · contou até 16:40 (último GPS no aeroporto)\". Também aparece como abriu, como fechou e o motivo.\n- Os **por confirmar** aparecem a amarelo: sem prova, ou um \"Ainda estou\" sem prova no fim.\n- **Confirmar**: conta o troço todo (do início ao fecho).\n- **Corrigir horas**: escreve **Das** e **Às** (hora de Lisboa); conta só esse bocado.\n- **Desmarcar**: nenhuma hora desse troço paga terminal.\n- Escreve sempre o **motivo**. Fica registado quem mudou, quando e porquê (também nos Logs). O que a app tinha calculado fica guardado (\"antes: até 16:40\"). Nada se apaga.\n- **Não deixa sobrepor** dois troços na mesma cidade (duas pessoas no terminal ao mesmo tempo), nem dois da mesma pessoa.\n- **Mês fechado** (fecho do ordenado aprovado ou pago): o terminal desse mês já não muda. Os números ficam como estavam no fecho.\n- Os botões antigos **Confirmar terminal** / **Desmarcar** numa saída do ponto atuam nos troços desse turno. Num troço do método antigo continuam a funcionar como antes.\n- Na **folha de ordenados**, a coluna Extra mostra \"incl. X h terminal\" e as horas **por confirmar** (pagas como normais até decidires). No **recibo** aparece a linha **Horas terminal**. Conta só a parte do troço dentro do turno do ponto. O custo dos extras (Faturação e Métricas dos extras) usa a mesma regra.\n- Os aeroportos e as **zonas por terminal** (T1/T2) mudam-se em **Definições → Parâmetros → Extras-dia → \"Aeroportos (terminal no ponto)\"**."
+            },
+            {
+              "id": "rh-ponto.md#a-tua-ficha",
+              "file": "rh-ponto.md",
+              "slug": "a-tua-ficha",
+              "title": "A tua ficha",
+              "level": 4,
+              "summary": "Em Perfil → A minha ficha (ou Pessoas → Recursos Humanos) abres a tua ficha: dados, Documentos, Ponto e Horário.",
+              "text": "- Em **Perfil → A minha ficha** (ou **Pessoas → Recursos Humanos**) abres a tua ficha: dados, **Documentos**, **Ponto** e **Horário**. O Perfil em si tem os atalhos, a foto, as notificações e as contas Google (ver a ajuda \"Perfil\").\n- O **NIF** e o **IBAN** aparecem escondidos (PT50 •••• 1234); carrega em **mostrar** para os ver por extenso.\n- **Mudar o IBAN**: o **back office**, o **supervisor**, o **administrador** e o **super admin** mudam na hora o IBAN da ficha de outra pessoa (validado e registado). O teu próprio IBAN, ou o de outra pessoa se fores do front office ou team leader, fica como **pedido** à espera de aprovação do RH — o IBAN atual mantém-se até ser aprovado. O IBAN é validado (número de controlo) e o pedido fica registado (mascarado). Carrega também o **Comprovativo NIB** nos Documentos. Sem centro de custos atribuído, consegues na mesma abrir a tua ficha, pôr a foto e carregar documentos.\n- Carrega documentos (CC, carta de condução, comprovativo de morada, NIB…) no separador **Documentos**. Documentos em falta podem bloquear o acesso.\n- **Os teus dados**: em **Editar os meus dados** mudas o nome, os telefones, o NIF, a morada, a data de nascimento, a nacionalidade, o **n.º do documento de identificação** e o **n.º da carta de condução**. O IBAN fica como pedido (ver abaixo).\n- **Os teus documentos**: carregas o CC/BI, o título de residência, a carta, o comprovativo do IBAN, o de morada, a fotografia e \"Outro\". O contrato, os anexos, o termo de responsabilidade e o seguro são carregados pelo RH. Até 10 ficheiros de 10 MB de cada vez.\n- **A IA a ler os documentos** (interruptor \"IA: preenchimento a partir de documentos do RH\", desligado por omissão): ao carregar o CC, o título de residência, a carta, o comprovativo do IBAN ou o de morada, preenche só os campos **vazios** da ficha. O IBAN lido fica como pedido ao RH, exceto para quem o pode mudar na hora. Como o documento vai inteiro, **só corre com a IA em Vertex AI na UE**: sem isso não corre, mesmo ligado.\n  - O que entregas fica **\"Pendente de validação\"** até o RH ver. Enquanto está pendente (ou se o RH o **recusar**, com o motivo) podes voltar a entregar ou retirar.\n  - Depois de **validado** já não o substituis nem retiras: se mudou (ex.: renovaste o CC), pede ao RH. \"Outro\" não fica trancado.\n  - Um documento pendente já conta como entregue para o aviso de documentos em falta; um recusado volta a faltar.\n- **Acesso bloqueado** (ex.: documentos em falta): no ecrã de bloqueio aparece **Carregar os teus documentos**, com o que falta, o que já enviaste (**Enviado — pendente de validação**) e o que foi recusado (com o motivo). Carregas daí sem precisares de entrar no resto da app; depois o RH revê e liberta o acesso.\n- Quem não vê a lista do RH (extra, condutor, utilizador…) tem no menu **A minha ficha** (em vez de \"Recursos Humanos\") e abre logo a sua ficha. Enquanto carrega diz \"A carregar a tua ficha…\"; se a leitura falhar aparece o erro com **Tentar de novo**.\n- **\"A tua conta não está ligada a nenhuma ficha\"**: entraste com a Google com um email que não está em nenhuma ficha. A mensagem diz qual é a conta. Sai e entra com o email que deste ao RH, ou pede ao RH para pôr esse email na tua ficha. Com o interruptor **Entrar com email e código** desligado (é o que vem) o login é só com a Google e tem de ser sempre o mesmo email; ligado, também entras com esse email e um código (pedido ao TL/supervisor de serviço) e depois a palavra-passe — ver a ajuda \"Entrada\".\n- **Sem cidade (centro de custos)** na ficha: abres na mesma a tua ficha (todos os cartões: conta, ponto, horas, documentos, disponibilidade) e marcas a disponibilidade. O resto pede a cidade: o aviso diz para pedires ao RH a tua cidade.\n- **Readmissão**: se a tua conta ficou na ficha antiga (inativa) e na nova, conta a ficha **ativa** (a cidade vem dela)."
+            },
+            {
+              "id": "rh-ponto.md#com-que-conta-a-pessoa-entra-ficha-cartao-utilizador-e-permi",
+              "file": "rh-ponto.md",
+              "slug": "com-que-conta-a-pessoa-entra-ficha-cartao-utilizador-e-permi",
+              "title": "Com que conta a pessoa entra (ficha → cartão Utilizador e permissões)",
+              "level": 2,
+              "summary": "Entra como: as contas ligadas à ficha (principal e extra) com o último login e como entrou (Google, código ou palavra-passe).",
+              "text": "- **Entra como**: as contas ligadas à ficha (principal e extra) com o último login e como entrou (Google, código ou palavra-passe). \"Ainda não entrou\" = a conta existe mas a pessoa nunca entrou com ela.\n- **Sem conta ligada**: diz com que email(s) da ficha a pessoa tem de entrar — a conta liga-se sozinha no primeiro login com esse email. Se entrou com outro email, põe esse email na ficha ou liga a conta em **Ligações (unir / separar)**.\n- **Entraram sem ficha e parecem ser esta pessoa** (só para quem gere o RH de todas as cidades): contas que entraram (com a Google, um código ou a palavra-passe), sem ficha, com o mesmo email ou dois nomes em comum. É só uma sugestão: ligar é sempre à mão, em Ligações.\n- **Pedidos de ligação** desta ficha (49c): \"Pedido de ligação: *email Google* diz ser *email/telefone*\", com **Ligar a esta ficha** e **Recusar**; e os **possíveis duplicados** (o candidato gravou um telefone/NIF igual ao desta ficha), com **Já tratei** / **Não é a mesma pessoa**.\n- Ficha não ativa (inativa ou candidato): a pessoa entra como **Utilizador** de propósito; ao reativar ou aprovar, a conta passa sozinha ao papel do posto."
+            },
+            {
+              "id": "rh-ponto.md#candidatos-inativos-e-desativados-lista-do-rh-filtro-de-esta",
+              "file": "rh-ponto.md",
+              "slug": "candidatos-inativos-e-desativados-lista-do-rh-filtro-de-esta",
+              "title": "Candidatos, inativos e desativados (lista do RH, filtro de estado — 49c)",
+              "level": 2,
+              "summary": "Ativos, Inativos e desativados e Candidatos (app).",
+              "text": "- **Ativos**, **Inativos e desativados** e **Candidatos (app)**. Os candidatos são as fichas criadas na app (\"Sou novo\"): extras inativos com o selo **Candidato**, fora das listas, da escala e dos avisos, mas a pessoa vê e preenche a ficha e carrega os documentos. **Aprovar candidato** (na ficha) ou aprovar a candidatura põe a ficha ativa sem perguntar readmissão e a conta de utilizador passa ao papel do posto.\n- Nos não ativos aparecem **Quer voltar** (carregou em \"Voltei, quero trabalhar\"), **Inativo — pode voltar** ou **Desativado** (estes dois só para quem vê o motivo). **Reativar** limpa o \"Quer voltar\" e repõe o papel do posto.\n- Quem está inativo ou é candidato **não pica o ponto** até ser reativado/aprovado.\n- Aviso **A conta está como \"Utilizador\"** numa ficha de extra: abre a ficha, a disponibilidade e a formação, mas não os PDAs nem as tarefas. Muda o papel para Extra em Utilizadores."
+            },
+            {
+              "id": "rh-ponto.md#documentos-validar-ou-recusar-o-rh-da-ficha-supervisor-da-ci",
+              "file": "rh-ponto.md",
+              "slug": "documentos-validar-ou-recusar-o-rh-da-ficha-supervisor-da-ci",
+              "title": "Documentos: validar ou recusar (o RH da ficha: supervisor da cidade, front office, back office, administrador)",
+              "level": 2,
+              "summary": "Cada documento tem o estado: Pendente de validação (âmbar), Validado (verde) ou Recusado (vermelho, com o motivo).",
+              "text": "- Cada documento tem o estado: **Pendente de validação** (âmbar), **Validado** (verde) ou **Recusado** (vermelho, com o motivo). O que o RH carrega (ou gera a partir dos modelos) já entra validado; o que a pessoa ou o team leader carregam fica pendente.\n- Na ficha → **Documentos**, abre a categoria e carrega em **Validar** ou **Recusar** (escolhe ou escreve o motivo). Na recusa a pessoa recebe um aviso no sino e por email, com o motivo.\n- Ninguém valida os seus próprios documentos. O team leader carrega, mas não valida.\n- **Retirar** um documento arquiva-o (não se apaga). O RH retira ou substitui sempre; quem carregou só enquanto não está validado.\n- Na lista: \"**N por validar**\" em cada pessoa e o filtro **Documentos por validar** (ou **Documentos em falta**)."
+            },
+            {
+              "id": "rh-ponto.md#pedir-documentos-em-falta-aos-extras-quem-valida-os-document",
+              "file": "rh-ponto.md",
+              "slug": "pedir-documentos-em-falta-aos-extras-quem-valida-os-document",
+              "title": "Pedir documentos em falta aos extras (quem valida os documentos: supervisor da cidade, front office, back office, administrador — nas suas cidades)",
+              "level": 2,
+              "summary": "O que se pede: os documentos obrigatórios em falta ou recusados que a pessoa entrega ela própria (fotografia, CC/BI, carta, comprovativo NIB, comprovativo de…",
+              "text": "- O que se pede: os documentos obrigatórios **em falta** ou **recusados** que a pessoa entrega ela própria (fotografia, CC/BI, carta, comprovativo NIB, comprovativo de morada). Um documento **pendente de validação** já conta como entregue e não se pede. Um recusado vai com o motivo (\"Carta de Condução (recusado: ilegível)\"). O contrato e o termo de responsabilidade são do RH: aparecem como \"a tratar pelo RH\" e não se pedem.\n- **Na ficha de um extra** → **Documentos** → **Pedir documentos em falta**. Escolhes os canais (WhatsApp e/ou email) e vês o texto exato antes de enviar: o template do WhatsApp com o nome e a lista, e o email (assunto, para onde vai e o corpo). Carrega em **Enviar pedido**. Por cima do botão fica o **Último pedido: dd/mm por X (WhatsApp, Email)** (ou \"automático\").\n- **Em grupo**: na lista do RH, separador **Extras** → **Pedir documentos em falta**. A janela mostra quem recebe (abre cada pessoa para ver o texto) e quem fica de fora e porquê: sem telemóvel, sem email, \"Não enviar WhatsApp/email\", pediu STOP, número sem WhatsApp, ficha sem cidade, template por configurar, ou **já pedido nos últimos 7 dias**. Respeita o filtro de cidade do topo. Se forem muitos e não houver tempo para todos, a janela diz quantos faltam: abre outra vez e envia (quem já recebeu não recebe outra vez).\n- **Cadência**: no máximo **1 pedido por pessoa a cada 7 dias** (contam os à mão e os automáticos). Na ficha podes marcar **Enviar mesmo assim** para passar por cima dos 7 dias (ex.: a pessoa diz que não recebeu). Carregar duas vezes no mesmo botão não envia duas vezes.\n- **WhatsApp**: usa o template da cidade da pessoa, em **Definições → Parâmetros**, secção Extras-dia: **Pedido de documentos em falta: template do WhatsApp** (nome|língua, ex.: `documentos_em_falta|pt_PT`). O template tem dois campos: {{1}} = primeiro nome e {{2}} = a lista dos documentos numa linha; o resto (onde carregar, responder com fotografia) fica escrito no template aprovado pela Meta. Sem template na cidade a pré-visualização diz **template por configurar** e segue só o email. A mensagem fica na conversa do WhatsApp da pessoa (a resposta, com as fotografias, chega à caixa do WhatsApp).\n- **Email**: vai para o email de trabalho ou, sem ele, o pessoal, com a lista e onde carregar (quem tem conta: o link da ficha; quem não tem: responder com uma fotografia de cada um). Fica nas **Comunicações automáticas** da ficha.\n- **Automático** (desligado por omissão): com **Definições → Automações → Pedir documentos em falta aos extras** ligado, à segunda a partir das 10:00 pede-se aos extras ativos com documentos em falta, com as mesmas regras e no máximo **4 pedidos automáticos por pessoa** — depois disso só à mão.\n- Cada pedido fica registado (quem, quando, canal, documentos, à mão ou automático, por quem e o resultado) e no registo de atividade. Nada se apaga."
+            },
+            {
+              "id": "rh-ponto.md#carta-de-conducao",
+              "file": "rh-ponto.md",
+              "slug": "carta-de-conducao",
+              "title": "Carta de condução",
+              "level": 4,
+              "summary": "Etiqueta em cada ficha (cabeçalho, cartões e lista): Carta validada (verde: o RH validou e a carta tem 3 anos ou mais), Carta pendente de validação (âmbar: há…",
+              "text": "- Etiqueta em cada ficha (cabeçalho, cartões e lista): **Carta validada** (verde: o RH validou e a carta tem 3 anos ou mais), **Carta pendente de validação** (âmbar: há carta — documento, número ou data — por validar), **Carta < 3 anos** (cinza) e **Sem carta** (cinza). Filtro **Carta** na lista.\n- O RH carrega em **Validar carta** (ficha → Documentos) e confirma a **data de emissão** (na carta europeia, campo 10 da categoria B). Os ficheiros da carta pendentes ficam validados.\n- Os 3 anos contam no dia do aniversário da emissão (calendário de Lisboa; uma carta de 29/02 faz anos a 28/02). Uma carta validada com menos de 3 anos passa sozinha a **Carta validada** quando fizer 3 anos.\n- **Carta < 3 anos não bloqueia**: no Extras-dia aparece um aviso ao escalar (ver a ajuda \"Extras dia\").\n- A data de emissão declarada na candidatura do site (\"Data de Emissão da Carta\", quando o site a enviar) passa para o lead e para a ficha, e fica **pendente** até o RH a confirmar. Os pontos \"Anos de carta\" dos leads usam só essa data."
+            },
+            {
+              "id": "rh-ponto.md#notas-internas-team-leader-e-acima-no-seu-ambito",
+              "file": "rh-ponto.md",
+              "slug": "notas-internas-team-leader-e-acima-no-seu-ambito",
+              "title": "Notas internas (team leader e acima, no seu âmbito)",
+              "level": 2,
+              "summary": "Na ficha, separador Notas internas: notas sobre o trabalho da pessoa (ex.: \"trabalhou mal no dia 03/10\"), com tipo (Geral, Desempenho, Comportamento, Elogio)…",
+              "text": "- Na ficha, separador **Notas internas**: notas sobre o trabalho da pessoa (ex.: \"trabalhou mal no dia 03/10\"), com tipo (Geral, Desempenho, Comportamento, Elogio) e, se quiseres, o dia de trabalho.\n- Quem lê e escreve: o team leader (quem está abaixo dele, no seu centro), o supervisor (a sua cidade), o front office, o back office e o administrador. **A própria pessoa nunca as vê**, nem na sua ficha.\n- Quem escreveu edita ou arquiva a nota nas primeiras **24 horas**; depois, só um administrador. Arquivar não apaga.\n- Só factos de trabalho — nada de saúde ou vida privada (a pessoa pode pedir acesso aos seus dados, RGPD). O texto não vai para o registo de atividade (só o tipo e o dia).\n- Também se escrevem a partir da linha da escala no **Extras-dia** (ícone do caderno), já com o dia."
+            },
+            {
+              "id": "rh-ponto.md#o-supervisor-no-rh-da-sua-cidade",
+              "file": "rh-ponto.md",
+              "slug": "o-supervisor-no-rh-da-sua-cidade",
+              "title": "O supervisor no RH da sua cidade",
+              "level": 4,
+              "summary": "Um supervisor com todas as cidades (ex.: quem trata do recrutamento, sem cidade na ficha) vê e gere também as fichas sem cidade.",
+              "text": "- Um supervisor **com todas as cidades** (ex.: quem trata do recrutamento, sem cidade na ficha) vê e gere também as **fichas sem cidade**. O supervisor de uma só cidade continua a ver só a dele.\n- O supervisor vê e gere as fichas de **toda a sua cidade** (antes era só o centro de custos da ficha dele), de quem está **abaixo dele** (team leader, condutores e extras):\n  - **Novo Colaborador** e **Importar Extras**, com postos até team leader;\n  - **Editar**: dados pessoais, posto (até team leader), centro de custos (da cidade), tipo e datas do contrato;\n  - **Desativar / Reativar** (com o motivo);\n  - **Horário**, **férias e baixas**, revisão das **picagens suspeitas**, **geofences** dos centros da cidade;\n  - pontos, faltas e desbloqueio, só das pessoas da sua cidade;\n  - ligar e separar o **agente da Multipark** e as contas, desde que o agente não esteja numa ficha de outra cidade.\n- Ficam com o administrador:\n  - o **salário**, o subsídio de alimentação e a folha de ordenados;\n  - o **email de trabalho** e a **conta associada** à mão;\n  - fichas de outros supervisores e de quem está acima;\n  - o que mexe em **todas as cidades** (varrimento das ligações, lista de todos os agentes, \"Não é funcionário\", processar faltas do país)."
+            },
+            {
+              "id": "rh-ponto.md#o-back-office-no-rh-todas-as-cidades",
+              "file": "rh-ponto.md",
+              "slug": "o-back-office-no-rh-todas-as-cidades",
+              "title": "O back office no RH (todas as cidades)",
+              "level": 4,
+              "summary": "O back office está na mesma posição do supervisor, mas em todas as cidades: faz o mesmo que o supervisor (criar fichas até team leader, editar…",
+              "text": "- O back office está na **mesma posição do supervisor**, mas em **todas as cidades**: faz o mesmo que o supervisor (criar fichas até team leader, editar, desativar/reativar, horário, ausências, picagens, agentes) em qualquer cidade, e também o que mexe em todas as cidades (varrimento das ligações, lista de todos os agentes, \"Não é funcionário\", processar faltas do país).\n- **Sem ordenados**: o salário, o subsídio de alimentação e a folha de ordenados continuam com o administrador, tal como o email de trabalho e a conta associada à mão. Fichas de supervisores, do back office e de quem está acima ficam com o administrador.\n- O front office continua a ver e a editar os dados das fichas, sem gerir."
+            },
+            {
+              "id": "rh-ponto.md#gestao-team-leader-e-acima-na-sua-cidade",
+              "file": "rh-ponto.md",
+              "slug": "gestao-team-leader-e-acima-na-sua-cidade",
+              "title": "Gestão (Team Leader e acima, na sua cidade)",
+              "level": 2,
+              "summary": "Pessoas → Recursos Humanos lista os colaboradores (separadores Colaboradores, Extras, Agentes).",
+              "text": "- **Pessoas → Recursos Humanos** lista os colaboradores (separadores Colaboradores, Extras, Agentes). Os emails de **recrutamento** (recursos-humanos@) passaram para os **Leads de Extras**.\n- O separador **Agentes** (\"Agentes por ligar\") lê os agentes **ao vivo** da BD da Multipark: os ativos e os que tiveram ações nos últimos 180 dias e ainda não estão ligados a uma ficha, a um parceiro nem marcados como \"não é funcionário\". A ligação automática de hora a hora (por email e por nome) usa a mesma leitura. Se a BD da Multipark não responder, aparece um aviso e a lista vem da cópia antiga (sem os agentes novos).\n- Num **PDA registado**, ao entrar na app o aparelho fica ligado a ti (e ao Zello do PDA) até saíres ou outra pessoa entrar. Se essa ligação falhar, aparece um aviso — fala com a chefia.\n- **PDAs só pelo QR**: cada PDA regista-se uma vez lendo, no próprio aparelho, o QR colado nele (Operacional → PDAs → botão QR). Já não há check-in manual nem registo pela lista. A seguir ao registo aparece **Instalar a app neste PDA**: o dashboard fica instalado e abre sempre direto, no mesmo browser.\n- **O teu telemóvel não é um PDA.** Os PDAs são os aparelhos partilhados (extras e condutores). O telemóvel de um team leader, de um supervisor ou de qualquer pessoa regista-se no **Perfil → Este telemóvel → Registar este telemóvel como meu**: aparece com o teu nome em Operacional → PDAs → Telemóveis pessoais e usa o teu Zello (o da ficha). A sessão nele não acaba na saída do ponto e não tira o PDA nem o Zello a ninguém. Num telemóvel pessoal o QR de um PDA não regista (diz para carregares primeiro em \"Deixar de ser pessoal\"). Se o teu telemóvel já foi registado como PDA, uma chefia carrega em **Pessoal?** nesse PDA (ver a ajuda \"Actividade Diária\" → PDAs).\n- Com **Entrar com email e código** ligado (Definições → Automações):\n  - **Só o team leader (ou acima) regista um PDA pelo QR** — um extra ou condutor que lê o QR noutro aparelho vê \"Só o team leader (ou acima) regista um PDA pelo QR\". Se ler o QR no PDA onde já está (o aparelho já é esse PDA), vê **\"Este PDA já está registado — estás no PDA 12\"**: está tudo certo, não precisa de fazer nada.\n  - Sem sessão, o QR abre a **página de entrada nova** (email e código); depois do registo, a sessão de quem registou fica presa a esse PDA.\n  - Ler o QR noutro aparelho passa o PDA para esse aparelho (o antigo deixa de ser o PDA) e os **supervisores da cidade** recebem no sino **\"O PDA 12 mudou de aparelho\"** (não quem registou). Ler outra vez no mesmo aparelho não muda nada nem avisa.\n  - A **saída do ponto** num PDA mostra o resumo e **\"A sessão termina em 10 s\"**; a sessão também acaba quando outra pessoa entra, no Sair, quando o ponto esquecido fecha sozinho (que também solta o PDA) e ao fim de 16 h.\n- **Limpeza única de cada PDA** (antes de ligar \"Entrar com email e código\"):\n  1. No Android (Definições → Contas) fica **uma só conta Google, da empresa**, por PDA (para a Play Store e o Zello). Sai qualquer conta pessoal.\n  2. No Chrome do PDA: **⋮ → Definições → Gestor de palavras-passe → Definições** → desliga **Oferecer para guardar palavras-passe** e **Início de sessão automático**. Se houver palavras-passe guardadas, apaga-as aí.\n  3. Abre a app do PDA e confirma que aparece a página de entrada (sem email nem palavra-passe sugeridos).\n- Cada PDA tem uma **etiqueta** (nome ou número) e uma **cidade** fixa (Operacional → PDAs → editar).\n- Com o interruptor **\"Zello: nome de quem tem o PDA no mapa\"** ligado (Definições → Automações), o nome da conta Zello do PDA passa a \"PDA 12 · Rui Santos\" quando alguém entra, e volta a \"PDA 12\" quando sai.\n- **A trabalhar sem PDA ou Zello ligado** (Operacional → PDAs, em cima): de 5 em 5 minutos aparecem aqui as pessoas do operacional com o ponto aberto sem PDA (passados 10 min), com o Zello do PDA desligado, ou com movimentos na Multipark sem ponto aberto ou com o Zello desligado. O back office e o front office ficam de fora. Cada alerta fecha sozinho quando o problema desaparece.\n  - Com o interruptor **\"Alertas: a trabalhar sem PDA ou Zello ligado\"** ligado, avisa no sino o team leader escalado nesse turno e cidade, os team leaders com ponto aberto na cidade e o supervisor.\n  - Quem recebe carrega em **Visto** (com uma nota, se quiser). Sem ligação nem Visto em 10 min (Definições → Operação), e com o interruptor do WhatsApp ligado, vai um WhatsApp (modelo aprovado pela Meta) aos administradores da cidade e à cópia (Definições → Operação → \"WhatsApp dos administradores\").\n- Na ficha, **Ligar**, **WhatsApp** e **Email** para o colaborador (o telefone e o email da empresa e os pessoais). O WhatsApp fica ligado à ficha e na caixa RH; o email abre na caixa **RH**.\n- **Não enviar WhatsApp / Não enviar email** (na ficha, por baixo dos contactos): desliga para essa pessoa tudo o que é **automático ou em massa** nesse canal: pedidos e lembretes de disponibilidade, avisos de escala, turno cancelado, difusões, lembretes de formação e o pedido da cidade. Responder uma a uma (no WhatsApp ou num email) continua a funcionar. **Só o RH** (front office, back office, administrador) liga ou desliga — o próprio já não; fica no registo.\n- **Pedidos de IBAN** (back office, supervisor da cidade, administrador e super admin): aparecem no topo de **Recursos Humanos** e na ficha, com o IBAN novo por extenso para conferires com o comprovativo → **Aprovar** (passa a ser o IBAN da ficha) ou **Recusar** (com motivo). Ninguém aprova o pedido da própria ficha. Aviso no sino ao back office e ao supervisor da cidade (e aos administradores): interruptor **\"Aviso dos pedidos de IBAN\"** (Definições → Automações, desligado por omissão).\n- **Foto da ficha**: só JPEG, PNG ou WebP (a app reduz a foto antes de enviar); a troca fica registada — é a foto que se compara com a selfie do ponto.\n- **Novo Colaborador** cria uma ficha; cada ficha precisa de centro de custos (cidade).\n- Correções de ponto: na ficha, separador Ponto, revê e corrige as horas.\n  - **Aprovar** com horas corrigidas paga essas horas — **0 horas quer dizer que não se paga** o turno (entra na folha com 0 h). Deixar vazio mantém as horas registadas.\n  - **Rejeitar** tira o turno da folha.\n- Ordenados, recibos e folha para o contabilista só para admin.\n- **Folha para o contabilista** gera o PDF da folha do mês, abre-o num separador novo e avisa o RH com o link. O envio ao contabilista faz-se à mão (descarrega o PDF e envia-o)."
+            },
+            {
+              "id": "rh-ponto.md#dashboard-rh-possiveis-faltas-e-detalhe-por-colaborador",
+              "file": "rh-ponto.md",
+              "slug": "dashboard-rh-possiveis-faltas-e-detalhe-por-colaborador",
+              "title": "Dashboard RH: possíveis faltas e detalhe por colaborador",
+              "level": 2,
+              "summary": "Em RH → Dashboard (super admin).",
+              "text": "Em **RH → Dashboard** (super admin)."
+            },
+            {
+              "id": "rh-ponto.md#possiveis-faltas-por-validar-no-fim-da-pagina-fechado-abre-s",
+              "file": "rh-ponto.md",
+              "slug": "possiveis-faltas-por-validar-no-fim-da-pagina-fechado-abre-s",
+              "title": "Possíveis faltas por validar (no fim da página, fechado; abre-se ao carregar)",
+              "level": 3,
+              "summary": "Todas as noites (e no botão Processar faltas (ontem)) cada extra escalado sem ponto no turno fica como possível falta, que não conta pontos enquanto não for…",
+              "text": "- Todas as noites (e no botão **Processar faltas (ontem)**) cada extra escalado sem ponto no turno fica como **possível falta**, que não conta pontos enquanto não for confirmada.\n- **Não** fica como possível falta: o turno só **proposto** (escala automática por confirmar), quem foi **mandado para casa** e quem **mexeu em carros na Multipark** nesse dia (trabalhou sem picar o ponto). Se a Multipark não responder, a nota diz \"movimentos da Multipark não lidos\".\n- **Funcionários com horário fixo** (RH → ficha → Horário; os extras regem-se pela escala): com o interruptor **\"RH: possíveis faltas de quem tem horário fixo\"** ligado (Definições → Automações; desligado por omissão), quem tinha horário num dia de trabalho e não picou a entrada também fica aqui, como **Falta (horário fixo)**. Fora: quem estava na escala do Extras-Dia nesse dia, férias e baixas, dias livres do horário, fora do contrato, os **feriados** (os nacionais e o municipal da cidade da ficha: 13 de junho em Lisboa, 24 de junho no Porto, 7 de setembro em Faro) e quem mexeu em carros na Multipark. Confirmada, fica marcada como falta **sem pontos** (não conta para o bloqueio das 3).\n- O número entre parênteses é o **total real** das tuas cidades; a lista mostra as 200 mais recentes.\n- **Falta** / **Libertar** em cada linha, ou em massa: **Marcar falta a todas** / **Libertar todas** (as da lista), ou escolhe algumas e os botões passam a \"as N escolhidas\". Cada falta confirmada vale 1 ponto e com 3 pontos o acesso fica bloqueado. As que não der para rever (ex.: foste tu a propor) ficam e vêm contadas."
+            },
+            {
+              "id": "rh-ponto.md#detalhe-por-colaborador",
+              "file": "rh-ponto.md",
+              "slug": "detalhe-por-colaborador",
+              "title": "Detalhe por colaborador",
+              "level": 4,
+              "summary": "Horas mês: as do ponto; sem ponto, aparecem as da escala dos Extras, a cinzento, com \"(escala)\".",
+              "text": "- **Horas mês**: as do ponto; sem ponto, aparecem as da escala dos Extras, a cinzento, com \"(escala)\".\n- **Movimentos (Multipark)**: ações na Multipark no mês, até ontem (vêm da avaliação diária, recalculada todas as noites). Passa o rato para ver recolhas, entregas, movimentos e dias com ações. Todas as colunas ordenam."
+            },
+            {
+              "id": "rh-ponto.md#ligacoes-fichas-contas-de-login-e-agentes-da-multipark",
+              "file": "rh-ponto.md",
+              "slug": "ligacoes-fichas-contas-de-login-e-agentes-da-multipark",
+              "title": "Ligações (fichas, contas de login e agentes da Multipark)",
+              "level": 2,
+              "summary": "Em RH → Ligações (quem gere o RH) vês o que falta ligar entre as fichas, as contas de login e os agentes da Multipark.",
+              "text": "Em **RH → Ligações** (quem gere o RH) vês o que falta ligar entre as fichas, as contas de login e os agentes da Multipark. A ligação automática corre de hora a hora; aqui ficam os casos para decidir à mão. Para ligar ou procurar, só contam letras e números: acentos, maiúsculas, apóstrofos e traços não contam (\"João d'Almeida-Sá\" = \"JOAO DALMEIDA SA\")."
+            },
+            {
+              "id": "rh-ponto.md#agentes-da-multipark-pessoas-todos-os-agentes-um-a-um",
+              "file": "rh-ponto.md",
+              "slug": "agentes-da-multipark-pessoas-todos-os-agentes-um-a-um",
+              "title": "Agentes da Multipark × pessoas (todos os agentes, um a um)",
+              "level": 4,
+              "summary": "A regra é que cada agente é um utilizador e cada utilizador tem um agente.",
+              "text": "A regra é que **cada agente é um utilizador e cada utilizador tem um agente**. Este cartão mostra todos os agentes da Multipark (lidos ao vivo) e onde está cada um:\n- **Ficha**: funcionário, extra ou condutor. Se a ficha não tiver utilizador aparece em **Agente sem utilizador**, com o botão **Criar utilizador**.\n- **Parceria**: agência, agregador ou parceiro. Pode estar ligado cá, ou ser pela empresa na Multipark (dono, membro ou agente gerido pelo parceiro). Em **Parceiros por ligar** ficam os que ainda não estão ligados à parceria, com **Ligar o agente à parceria**. Se o parceiro ainda nem tem parceria cá, usa Parcerias → Ligar à Multipark → Aplicar.\n- **Ignorado** ou **Fora** (sistema, script, teste).\n- **Em lado nenhum**: aparece com a pessoa provável e o porquê, em pontos:\n  - mesmo email;\n  - nome igual ou parecido (\"Bruno Meireles\" = \"Bruno Filipe Meireles Silva\");\n  - mesma cidade (ou cidade diferente, que tira pontos);\n  - **Zello**: estava no Zello nos mesmos dias em que mexeu na Multipark (últimos 60 dias). O telefone entra por aqui: uma conta do Zello sem ficha com o telefone de uma ficha conta como essa pessoa;\n  - **escala dos Extras**: estava na escala nesses dias, mesmo que ainda sem ficha.\n\n  Carrega em **Ligar** na sugestão certa, escolhe outra ficha, **Criar ficha** (com utilizador se o agente tiver email) ou **Ignorar**.\n- **Utilizadores sem agente**: os logins sem agente da Multipark, com o agente provável e **Ligar**. Se não houver nenhum provável, cria-se o agente na Multipark (convite com o email dele) e volta-se a cruzar.\n\n**Mesmo email liga sozinho**: de hora a hora, na reconciliação, um agente em lado nenhum com o email de **uma só** ficha ativa (email de trabalho, pessoal ou do utilizador) liga-se a essa ficha. Se a ficha já tinha agente, entra como agente extra. Ficam para decidires aqui os emails partilhados por mais de 2 agentes e as fichas ligadas só pelo nome a outro agente. Desliga-se em Definições → Automações → **Agentes: ligar sozinho pelo mesmo email**. O resto (nome, Zello, escala) nunca se liga sozinho: cada botão faz uma ligação e fica nos Logs. **Cruzar de novo** lê tudo outra vez (senão guarda 5 minutos). **CSV** descarrega tudo, com a sugestão e o porquê. Por omissão escondem-se os agentes inativos sem ações nos últimos 180 dias (**mostrar inativos sem ações**)."
+            },
+            {
+              "id": "rh-ponto.md#uma-pessoa-contas-e-agentes",
+              "file": "rh-ponto.md",
+              "slug": "uma-pessoa-contas-e-agentes",
+              "title": "Uma pessoa: contas e agentes",
+              "level": 4,
+              "summary": "Escolhe a ficha.",
+              "text": "1. Escolhe a ficha. Vês as **contas de login** (principal e extra) e os **agentes da Multipark** (principal e extra). Uma pessoa pode ter vários agentes (emails antigos e novos).\n2. **Anexar agente**: escreve o nome ou o email do agente e carrega em **Anexar**. Se o agente estava noutra ficha, passa para esta. Se a pessoa já tinha agente, este entra como agente extra.\n3. **Separar** (agente): tira o agente da ficha, depois de confirmares. Se era o principal e havia extras, o primeiro extra passa a principal. Na Multipark não muda nada.\n4. **Ligar conta**: procura uma conta de login (nome ou email) e liga-a a esta ficha — fica principal se a ficha não tiver conta, senão extra. **Separar** (conta): a conta deixa de estar ligada (não é apagada nem desativada); se era a principal e havia uma extra, a extra passa a principal.\n5. O mesmo cartão abre-se da **ficha do RH** (botão **Ligações** no cartão \"Utilizador e permissões\") e da lista de **Utilizadores** (ícone de corrente)."
+            },
+            {
+              "id": "rh-ponto.md#agente-da-multipark-na-ficha",
+              "file": "rh-ponto.md",
+              "slug": "agente-da-multipark-na-ficha",
+              "title": "Agente da Multipark na ficha",
+              "level": 4,
+              "summary": "No cartão Utilizador e permissões da ficha vês o agente (ou agentes) da Multipark da pessoa.",
+              "text": "- No cartão **Utilizador e permissões** da ficha vês o agente (ou agentes) da Multipark da pessoa.\n- **Abrir agente** vai a Pessoas → Condutores e agentes → Agentes com a pessoa já escolhida (quem tem acesso a essa página).\n- **Abrir na Multipark** abre o agente no backoffice da Multipark. Para isso, em Definições → \"Endereço de um agente na Multipark\", cola o endereço de um agente e troca o número dele por {id}. Sem isso aparece **Copiar ID**.\n- **Inativar não solta**: desativar a ficha ou a conta deixa o agente ligado; o cruzamento de agentes conta a conta desativada como utilizador (o agente não passa a \"sem utilizador\") e a ligação de hora a hora não dá o agente de uma ficha inativa a outra pessoa."
+            },
+            {
+              "id": "rh-ponto.md#comparar-a-lista-de-agentes-da-multipark-xlsx-ou-csv",
+              "file": "rh-ponto.md",
+              "slug": "comparar-a-lista-de-agentes-da-multipark-xlsx-ou-csv",
+              "title": "Comparar a lista de agentes da Multipark (xlsx ou CSV)",
+              "level": 4,
+              "summary": "Na Multipark exporta os agentes (xlsx) e carrega o ficheiro no cartão Comparar a lista de agentes da Multipark.",
+              "text": "1. Na Multipark exporta os agentes (xlsx) e carrega o ficheiro no cartão **Comparar a lista de agentes da Multipark**. É lida a folha **Agentes** (nome, email, telefone, cargo, estado e ID de utilizador). O CSV antigo (nome_agente;email;cidade) também serve.\n2. Com o xlsx, cada agente é identificado pelo **ID de utilizador** (sem adivinhas). A equipa (condutores, supervisores, chefes de turno…) é comparada com as fichas pelo **email**, depois pelo **telefone** e por fim pelo **nome**: **Ligado**, **Ligar (mesmo email)**, **Ligar (mesmo telefone)**, **Ligar? (mesmo nome)**, **Sem ficha** ou **Não está na Multipark**.\n3. Os agentes com cargo **Parceiro** (e as agências) vão para as **parcerias**, não para fichas: aparecem como **Parceiro por ligar**, com a parceria sugerida pelo domínio do email ou pelo nome, ou escolhes a parceria na lista.\n4. Contas de sistema (\"api\") e de teste ficam em **Sistema / teste**. Os inativos e os de convite expirado aparecem marcados **inativo** (há a opção **Esconder inativos**).\n5. Nada é ligado sozinho: carrega em **Ligar** em cada linha, ou em **Ligar os seguros** (os do mesmo email ou telefone e os parceiros encontrados pelo email). Os do mesmo nome vês um a um. Os \"Sem ficha\" anexam-se à mão no cartão **Uma pessoa**."
+            },
+            {
+              "id": "rh-ponto.md#juntar-contas-so-administradores",
+              "file": "rh-ponto.md",
+              "slug": "juntar-contas-so-administradores",
+              "title": "Juntar contas (só administradores)",
+              "level": 3,
+              "summary": "Caso típico: a ficha foi criada com um email (por exemplo do Outlook) e a pessoa entrou na app com outra conta Google, que ficou \"perdida\".",
+              "text": "- Caso típico: a ficha foi criada com um email (por exemplo do Outlook) e a pessoa entrou na app com outra conta Google, que ficou \"perdida\".\n- Na ficha, escolhe a **conta perdida (sem ficha)** e carrega em **Juntar**, ou numa conta extra carrega em **Ficar só com esta**.\n- Fica a conta que entra na app. Tudo o que era da pessoa passa para ela: a ficha, as permissões e cidades extra, as notificações, o Google, o email, o WhatsApp e os casos atribuídos. O papel fica o mais alto dos dois.\n- A outra conta fica **desativada** (\"conta duplicada\"), nunca apagada, e o email dela passa para a ficha como email pessoal. O registo de quem fez o quê fica como estava.\n\n**Passar a conta Google** (só administradores) — quando a Google Workspace renomeia a conta de quem saiu para uma pessoa nova (ex.: carlosjesus@multipark.pt passou a thiagocamargo@multipark.pt)\n- Para a Google é a mesma conta, por isso o dashboard continuava a reconhecê-la como a conta antiga (desativada) e a pessoa nova não entrava.\n- Na ficha de quem saiu, na conta **desativada**, carrega em **Passar a conta Google**, procura a conta da pessoa nova e confirma.\n- A conta antiga larga a Google e volta ao nome e email da ficha dela, desativada — **o histórico (ponto, tarefas, registos) fica todo com ela**. A conta nova passa a entrar com essa Google e, se deixares a caixa marcada, fica com esse email como principal. A Google que a pessoa nova já usava continua a entrar.\n- Fica no registo de atividade das duas contas."
+            },
+            {
+              "id": "rh-ponto.md#juntar-fichas-da-mesma-pessoa-so-administradores",
+              "file": "rh-ponto.md",
+              "slug": "juntar-fichas-da-mesma-pessoa-so-administradores",
+              "title": "Juntar fichas da mesma pessoa (só administradores)",
+              "level": 3,
+              "summary": "Caso típico: a ficha do RH e outra criada sozinha a partir de um login ou de um agente (ex.: \"ribeirohelio662\", \"Agent DRIVER\").",
+              "text": "- Caso típico: a ficha do RH e outra criada sozinha a partir de um login ou de um agente (ex.: \"ribeirohelio662\", \"Agent DRIVER\").\n- No cartão **Uma pessoa**, escolhe a ficha que fica e, em **Ficha duplicada da mesma pessoa**, a outra. Carrega em **Juntar nesta ficha**: vês antes o que passa (ponto, PDAs, escalas, documentos…).\n- Tudo o que era da outra passa para esta, com o utilizador e o agente da Multipark (principal se esta não tiver, senão extra). A outra fica **desativada** (\"ficha duplicada\"), nunca apagada."
+            },
+            {
+              "id": "rh-ponto.md#agentes-que-nao-sao-pessoas",
+              "file": "rh-ponto.md",
+              "slug": "agentes-que-nao-sao-pessoas",
+              "title": "Agentes que não são pessoas",
+              "level": 4,
+              "summary": "\"system\", \"api\" e \"API User\" são ações automáticas da Multipark: nunca se ligam a fichas e deixam de aparecer nos conflitos.",
+              "text": "- \"system\", \"api\" e \"API User\" são ações automáticas da Multipark: nunca se ligam a fichas e deixam de aparecer nos conflitos. Agentes de teste, agências e textos de formulário (\"NOME DO RESPONSÁVEL…\") também não. A ligação de hora a hora (e **Reconciliar agora**) tira-os das fichas onde tivessem ficado presos, e fica registado.\n- Login com o email da casa (@multipark.pt…) e ficha com o email pessoal é o normal: já não aparece como conflito.\n- **Agentes por ligar** mostra só quem mexeu em carros nos últimos 60 dias; os parados ficam num botão à parte (\"Mostrar também os parados\"). Há dois separadores: **Equipa** (liga à ficha da pessoa) e **Parceiros e agências** (liga à parceria, para sabermos quando mexem em carros ou fazem reservas — não precisam de utilizador aqui). Cada agente traz uma **sugestão** (mesmo email ou nome parecido) que aceitas com um clique, ou todas as do email de uma vez. Podes escolher vários e marcá-los como \"não é funcionário\".\n- O email dos agentes vem dos convites da Multipark e, quando não há convite, do registo de atividade (quem fez cada ação). A ligação automática de hora a hora também já ignora a cidade colada no nome (\"Bruno Meireles - PORTO\") e números no fim, e aceita \"primeiro nome + um apelido\"."
+            },
+            {
+              "id": "rh-ponto.md#agentes-de-teste",
+              "file": "rh-ponto.md",
+              "slug": "agentes-de-teste",
+              "title": "Agentes de teste",
+              "level": 4,
+              "summary": "Agentes cujo nome ou email diz \"teste\", \"test\", \"demo\" e parecidos não aparecem nos \"por ligar\".",
+              "text": "- Agentes cujo nome ou email diz \"teste\", \"test\", \"demo\" e parecidos não aparecem nos \"por ligar\". Continuam na Multipark."
+            },
+            {
+              "id": "rh-ponto.md#fichas-sem-cidade",
+              "file": "rh-ponto.md",
+              "slug": "fichas-sem-cidade",
+              "title": "Fichas sem cidade",
+              "level": 4,
+              "summary": "De hora a hora, uma ficha ativa sem cidade recebe a cidade onde o agente da Multipark da pessoa mais trabalhou nos últimos 180 dias.",
+              "text": "- De hora a hora, uma ficha ativa sem cidade recebe a cidade onde o agente da Multipark da pessoa mais trabalhou nos últimos 180 dias. Se não houver agente, usa-se a cidade da candidatura ou da morada.\n- Se nada der, a ficha fica em aberto e é criada uma **tarefa** com **prazo de uma semana**, com email, para a Márcia Nunes (Definições → \"Responsável pelas fichas sem cidade\"). Sem cidade a pessoa não consegue entrar na app **nem é chamada para a escala**.\n- **Extras sem cidade** (com **\"Pedir a cidade aos extras sem cidade\"** ligado em Definições → Automações; desligado por omissão): antes da tarefa, o dashboard pede-lhe a cidade **uma vez**, por email (sai da recursos-humanos@, e a resposta cai na caixa RH) e por WhatsApp se a conversa com ele estiver aberta (respondeu nas últimas 24 h). Respeita o \"Não enviar\" da ficha. A tarefa e o email à Márcia dizem se o pedido saiu e por onde."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Operações",
+      "pages": [
+        {
+          "id": "disponibilidade",
+          "file": "disponibilidade.md",
+          "group": "Operações",
+          "module": "disponibilidade",
+          "title": "Disponibilidade",
+          "routes": [
+            "/disponibilidade"
+          ],
+          "tabs": [],
+          "summary": "Onde os extras dizem em que dias e turnos podem trabalhar.",
+          "sections": [
+            {
+              "id": "disponibilidade.md#inicio",
+              "file": "disponibilidade.md",
+              "slug": "inicio",
+              "title": "Disponibilidade",
+              "level": 1,
+              "summary": "Onde os extras dizem em que dias e turnos podem trabalhar.",
+              "text": "Onde os extras dizem em que dias e turnos podem trabalhar. A gestão usa-a para escalar no Extras-Dia."
+            },
+            {
+              "id": "disponibilidade.md#os-teus-dias-livres-habituais-extras-candidatos-e-quem-volta",
+              "file": "disponibilidade.md",
+              "slug": "os-teus-dias-livres-habituais-extras-candidatos-e-quem-volta",
+              "title": "Os teus dias livres habituais (extras, candidatos e quem volta)",
+              "level": 2,
+              "summary": "Um esboço da tua escala: não são datas, são os dias e as alturas em que costumas estar livre (ex.: \"terças à tarde, quartas de manhã e todos os fins de…",
+              "text": "Um esboço da tua escala: não são datas, são os dias e as alturas em que **costumas** estar livre (ex.: \"terças à tarde, quartas de manhã e todos os fins de semana\").\n1. Abre **A minha disponibilidade**. O cartão **Os meus dias livres habituais** está no topo.\n2. Toca nas casas da grelha: um dia (Seg a Dom) × **Manhã** (até às 12h), **Tarde** (12h–19h) ou **Noite** (depois das 19h). Tocar outra vez desmarca.\n3. Atalhos: **Fins de semana**, **Dias úteis** e **Todos os dias** marcam esses dias o dia todo e **somam** ao que já tens (tocar outra vez desfaz). **Limpar** tira tudo.\n4. Se quiseres, escreve uma nota curta (ex.: \"não posso em agosto\").\n5. Carrega em **Guardar dias habituais**. Por baixo da grelha aparece o resumo (ex.: \"Ter tarde · Qua manhã · Sáb e Dom todo o dia\") e quando foi atualizado.\n- Funciona mesmo com a ficha **inativa** (candidatos e quem volta) e sem cidade na ficha.\n- É só uma **ajuda para a gestão**: não marca a disponibilidade de nenhuma semana nem te põe em nenhuma escala. A disponibilidade de cada semana continua a marcar-se por baixo, como sempre.\n- Fica registado quem mudou e o que estava antes."
+            },
+            {
+              "id": "disponibilidade.md#marcar-a-tua-disponibilidade-extras",
+              "file": "disponibilidade.md",
+              "slug": "marcar-a-tua-disponibilidade-extras",
+              "title": "Marcar a tua disponibilidade (extras)",
+              "level": 2,
+              "summary": "Menu Operações → A minha disponibilidade (ou Perfil → A minha disponibilidade, ou o link que recebes por WhatsApp/email).",
+              "text": "1. Menu **Operações → A minha disponibilidade** (ou **Perfil → A minha disponibilidade**, ou o link que recebes por WhatsApp/email). A disponibilidade **não** se marca no Extras Dia: essa página é a escala da gestão; se a abrires, aparece \"Sem acesso\" com o botão **Abrir a minha disponibilidade**.\n2. A página abre na **próxima semana** (segunda a domingo, dias de Lisboa). O link do email ou do WhatsApp abre a semana desse pedido.\n3. Para cada dia marca **Manhã (03h–15h)** e/ou **Noite (15h–03h)**. Podes também indicar horas e uma nota.\n   - As horas são as **desse dia do calendário**: \"das 18h às 03h\" na segunda = segunda à noite até às 03h de terça. \"Das 00h às 03h\" na terça é a madrugada de terça, ou seja, **a noite de segunda** para a escala.\n   - Com as duas horas (das/às), valem as horas e não os turnos. Só uma hora sem turno: \"das X\" vale até às 03h; \"até às Y\" vale a partir das 03h.\n4. Carrega em **Guardar disponibilidade**. Se não puderes nenhum dia, usa **Guardar (sem disponibilidade)**.\n5. Podes voltar e alterar enquanto a semana não começar.\n- Cada vez que guardas, a semana é substituída de uma vez (nunca fica a meio).\n- Fica registado quem mudou e o que estava antes.\n- Funciona mesmo que a tua ficha ainda não tenha centro de custos: aparece um aviso a dizer para pedires ao RH a tua cidade, mas a disponibilidade grava-se na mesma.\n- **\"Liga a tua conta\"**: entraste com um email que não está em nenhuma ficha. Escolhe **Sou novo — quero candidatar-me** ou **Já me candidatei / já trabalhei convosco com outro email** (escreves o email ou o telefone que usaste). Também podes sair e entrar com o email que deste ao RH.\n- **Bem-vindo de volta** (ficha inativa): marca os teus dias livres e carrega em **Voltei, quero trabalhar** — o RH vê \"Quer voltar\" e reativa-te. Até lá não entras na escala.\n- Na tua ficha (RH), no cartão **Disponibilidade**, o botão **Marcar a minha disponibilidade** abre esta página na semana que estás a ver.\n- Na ficha (RH), o cartão **Disponibilidade** mostra também os **dias livres habituais** (resumo, nota e quando foram atualizados). A própria pessoa e quem gere a disponibilidade dos extras (team leader e supervisor na sua cidade, front office, back office, administradores) carregam em **Mudar** / **Indicar** para os alterar; quem só vê a ficha não mexe.\n- Se a leitura falhar, aparece **\"Não foi possível carregar…\"** com **Tentar de novo**."
+            },
+            {
+              "id": "disponibilidade.md#gestao-backoffice-e-acima",
+              "file": "disponibilidade.md",
+              "slug": "gestao-backoffice-e-acima",
+              "title": "Gestão (backoffice e acima)",
+              "level": 2,
+              "summary": "A mesma página mostra a matriz das disponibilidades só dos extras (função \"extra\"), por cidade.",
+              "text": "- A mesma página mostra a matriz das disponibilidades **só dos extras** (função \"extra\"), por cidade. Os funcionários não aparecem aqui.\n- O ecrã tem quatro blocos, de cima para baixo:\n  1. **A semana** (setas ◀ ▶ ou **Próxima semana**) e quatro quadrados: **Todos**, **Disponíveis**, **Indisponíveis** e **Sem resposta**, cada um com o número. Carregar num quadrado mostra só esse estado; carregar outra vez volta a **Todos**. Por baixo, **Disponíveis por dia**: quantos podem de manhã (☀) e à noite (☾) em cada dia.\n  2. **A barra de filtros**: a pesquisa, a cidade e o botão **Filtros**. Em **Filtros** estão o **Disponível em** (um dia e/ou das X às Y) e o **Sem mensagem nas últimas 24h**; o número no botão diz quantos estão ligados. Os filtros ligados aparecem logo por baixo, em etiquetas com **×** para os tirar, e **Limpar filtros** tira tudo.\n  3. **A barra de envio**: diz sempre **Para:** quem vai — os **selecionados** ou, sem ninguém marcado, os **filtrados** — (sem filtro nenhum diz **todos os N extras**), quantos têm número válido e a divisão por estado (ex.: \"40 disponíveis · 237 sem resposta\"), avisando quando vai gente que **não está à vista** (secções fechadas ou ainda por mostrar). Com o estado em **Todos**, ninguém selecionado e o envio a ir a toda a gente ou a **mais de um estado**, os botões ficam desligados: escolhe primeiro um quadrado (ex.: Sem resposta) ou seleciona pessoas; para mandar assim mesmo, carrega no link (ex.: **Enviar a todos os 320 extras…** ou **Enviar aos 12 extras filtrados (2 estados)…**) e o diálogo pede esse mesmo botão antes de enviar. Os botões **Email** e **WhatsApp** abrem o diálogo do envio, que repete tudo isto. Mudar de semana limpa a seleção.\n  4. **A grelha**, uma caixa por cidade (com quantos disponíveis, sem resposta e indisponíveis). Dentro de cada cidade, **Disponíveis** está aberta; **Sem resposta** e **Indisponíveis** ficam fechadas com o número à vista — carrega no título para abrir. Se escolheres um estado nos quadrados, abre esse.\n- **Cidade**: com uma cidade escolhida em cima (o botão do pino), só aparece essa e não se muda aqui. Com \"todas\" (e no telemóvel), escolhes no seletor da barra: Lisboa / Porto / Faro / **Sem cidade**.\n- A lista vem por esta ordem: **disponíveis**, **sem resposta**, **indisponíveis** (e por nome). Carregar no título de uma coluna reordena dentro de cada secção.\n- **Pesquisar**: escreve parte do nome (ou do número). Quem **começa** pelo que escreveste vem primeiro (\"ana\" → Ana Sousa antes de Mariana Costa); a pesquisar, cada cidade mostra uma lista só, com o estado em cada pessoa.\n- **Selecionar**: a caixa ao lado de cada pessoa, de cada secção (ex.: todos os **Sem resposta** de Lisboa, para lembrar só esses), de cada cidade, ou **Selecionar os N** na barra de envio. Mudar um filtro (menos a pesquisa) limpa a seleção; quem ficou marcado fora da pesquisa continua no envio e a barra diz quantos.\n- **Enviar**: o diálogo do **Email** e o do **WhatsApp** dizem em cima a quem vai. No email escolhes o tipo de pedido (semana, dia + turno, que horas, das X às Y), uma nota e vês a pré-visualização; **Usar este texto no WhatsApp** passa-o para o diálogo do WhatsApp. Os dois têm **Testar primeiro** e, a mais de uma pessoa, pedem **Confirmar**. O pedido **nunca vai para funcionários** (nem o pedido, nem os avisos de escala).\n- Sem permissão para editar a disponibilidade dos extras, os botões de envio ficam desligados e a grelha é só de leitura (sem lápis); sem permissão de WhatsApp, o botão do WhatsApp fica desligado.\n- Daqui envias o pedido de disponibilidade por email/WhatsApp e vês as **Métricas dos extras**. As **Candidaturas do site** e o **Recrutamento** estão nos **Leads de Extras**.\n- O **pedido automático** (quinta) e o **lembrete** (sábado, só a quem não respondeu) vão só aos extras **com cidade**. Quem está em \"Sem cidade\" não recebe: primeiro o RH define a cidade na ficha (há uma tarefa para isso). Enviar à mão, escolhendo na tabela, continua possível.\n- Quem tem **\"Não enviar WhatsApp\"** ou **\"Não enviar email\"** na ficha aparece com a etiqueta **sem WA** / **sem email** / **nada** e não recebe o pedido nesse canal (o resultado do envio conta-os à parte).\n- O link do email é sempre o endereço da app.\n- A semana começa sempre à segunda-feira.\n- Marcar a disponibilidade por alguém também fica registado, com o que estava antes.\n- **Habitual**: na matriz, quem ainda **não respondeu** à semana mostra por baixo do nome os dias livres habituais (ex.: \"Habitual: Ter tarde · Fins de semana\"; passa o rato para ver a nota). É só uma dica para saberes a quem pedir: não conta como resposta, não entra nos filtros nem nos totais e não muda nenhuma escala.\n- No Extras-Dia, \"Preencher com disponíveis\" usa estas marcações.\n- Na matriz, um dia com horas mostra as **horas reais** (ex.: \"18h–01h\" de um slot do site) em vez do sol/lua. O filtro \"disponível das X às Y\", a proposta automática e o Extras-Dia leem as marcações da mesma forma (pelo calendário): quem marcou a madrugada de terça conta para a noite de segunda."
+            },
+            {
+              "id": "disponibilidade.md#metricas-dos-extras-por-baixo-na-gestao",
+              "file": "disponibilidade.md",
+              "slug": "metricas-dos-extras-por-baixo-na-gestao",
+              "title": "Métricas dos extras (por baixo, na gestão)",
+              "level": 2,
+              "summary": "O que quer dizer cada número também está no ecrã, em O que quer dizer cada número?",
+              "text": "- O que quer dizer cada número também está no ecrã, em **O que quer dizer cada número?** (e ao passar o rato num quadrado).\n- **Responderam (próxima semana):** dos extras ativos das tuas cidades, quantos já responderam ao pedido de disponibilidade da próxima semana.\n- **Custo previsto (escala):** horas escaladas no Extras Dia no período × tarifa do nível. Os team leaders não contam (o salário já os paga). Inclui o dia de hoje e as escalas por confirmar.\n- **Custo pago (ponto):** horas do ponto dos extras (check-outs aprovados, ou ok sem [SUSPEITO]) × tarifa. É a mesma conta da Faturação.\n  - Compara-se com a escala **até ontem**, porque o ponto de hoje ainda falta.\n  - Se as horas picadas forem menos de 60 % das escaladas, aparece um aviso a amarelo e não se mostra a percentagem. Um \"−98 %\" não era poupança: era ponto que os extras não picaram.\n- **Candidatura → 1.º turno:** dias, em mediana, entre a candidatura aprovada (últimos 180 dias) e o primeiro check-in no ponto.\n- **Cobertura dos próximos 7 dias:** por dia, as horas-condutor que a previsão diz serem precisas (pelas entregas e recolhas) contra as horas já escaladas.\n- **Faltas por extra:** faltas ao Extras Dia no período, confirmadas e por rever (as possíveis faltas que o RH ainda tem de validar).\n- **Parados há mais de 90 dias:** extras ativos sem trabalho (ponto, escala ou movimentos na Multipark) há mais de 90 dias. Quem nunca trabalhou conta desde que a ficha foi criada. O supervisor (na sua cidade), o back office e os admins podem **Desativar** daqui."
+            }
+          ]
+        },
+        {
+          "id": "extras-dia",
+          "file": "extras-dia.md",
+          "group": "Operações",
+          "module": "extras_dia",
+          "title": "Extras-Dia",
+          "routes": [
+            "/extras-dia"
+          ],
+          "tabs": [
+            {
+              "tab": "dia",
+              "section": "Ver a previsão",
+              "sectionId": "extras-dia.md#ver-a-previsao"
+            },
+            {
+              "tab": "pressao",
+              "section": "Separador \"Pressão\"",
+              "sectionId": "extras-dia.md#separador-pressao-quando-e-que-aperta"
+            }
+          ],
+          "summary": "Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores são precisos por hora, e a escala dos extras.",
+          "sections": [
+            {
+              "id": "extras-dia.md#inicio",
+              "file": "extras-dia.md",
+              "slug": "inicio",
+              "title": "Extras-Dia",
+              "level": 1,
+              "summary": "Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores são precisos por hora, e a escala dos extras.",
+              "text": "Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores são precisos por hora, e a escala dos extras."
+            },
+            {
+              "id": "extras-dia.md#ver-a-previsao",
+              "file": "extras-dia.md",
+              "slug": "ver-a-previsao",
+              "title": "Ver a previsão",
+              "level": 4,
+              "summary": "Menu Operações → Extras Dia.",
+              "text": "1. Menu **Operações → Extras Dia**.\n2. Em cima à direita escolhe a **Data base** (a previsão é para o dia seguinte) e a cidade (📍). Só vês as cidades a que tens acesso.\n3. Vês a hora de pico, as chegadas/saídas por hora, as lavagens (hoje, amanhã, depois de amanhã) e os \"Slots ainda por cobrir\".\n4. As reservas são lidas **ao vivo da BD da Multipark**: os parques nossos da cidade, sem as canceladas e sem os **Parques que a operação não faz** das Definições (por exemplo, um parque do Porto que a operação não faz não entra na previsão nem nos blocos).\n   - As compras online ainda por pagar **contam**, porque vão ser recolhidas na mesma.\n   - Se a BD da Multipark não responder, a página usa a cópia local das reservas e mostra um aviso amarelo; os números podem estar desatualizados.\n   - Se a leitura vier **cortada no limite**, aparece \"Previsão incompleta\". Com a previsão incompleta (cortada ou só da cópia), a proposta automática e os avisos de falta de gente ficam parados.\n5. **Quantos extras por hora** (regra do dono, 3 out): conta o **tempo que cada condutor leva por carro**, que depende de quantas pessoas estão no turno, **com o TL incluído** (2 pessoas = TL + 1 extra). Quem conduz são os extras; o TL vai buscá-los. Por omissão:\n   - **Lisboa**: 2 pessoas → 75 min por carro; 3–4 → 60 min; 5–6 → 45 min; 7 ou mais → 30 min.\n   - **Porto e Faro**: no mínimo 2 extras + o TL; com 3 pessoas → 30 min por carro (2 condutores × 2 carros = 4 carros por hora).\n   - Os números da previsão e da escala automática são **extras além do TL**. A regra muda-se em Definições → Parâmetros (\"Tempo por carro conforme as pessoas no turno\").\n   - **Onde é cada serviço** (regra do dono, 5 out): no aeroporto cada reserva pesa um bloco de 20 min, e o **T2** pesa 30 min nas recolhas. Só são **fora do aeroporto** (60 min por reserva, linha a vermelho):\n     - **Lisboa:** Oriente, Sete Rios, Rossio e Entrecampos. Tudo o resto é T1 ou T2, diga o tipo de entrega o que disser.\n     - **Porto:** nada; é tudo no aeroporto.\n     - **Faro:** só a estação de comboios.\n6. A tabela **Por hora** mostra sempre as **24 horas do dia operacional (das 03h às 03h)**, mesmo as que não têm chegadas nem saídas, separadas em **Manhã (03h–15h)** e **Noite (15h–03h)**.\n   - A barra ao lado do total mostra a carga dessa hora: verde = chegadas, laranja = saídas, à escala da hora mais cheia do dia.\n   - **Condutores** = extras precisos nessa hora, **além do team leader**. Passa o rato pelo cabeçalho para ver a regra das pessoas por turno.\n   - Carrega numa hora para ver os blocos de 20 min; num bloco, para ver as reservas.\n7. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, desde abril de 2026, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75 do Total). Passa o rato por cima para ver o motivo. Com **\"Hora apertada pela Fila\"** ligada na cidade (ver Pressão), a parte das entregas lentas usa a **Fila**."
+            },
+            {
+              "id": "extras-dia.md#separador-pressao-quando-e-que-aperta",
+              "file": "extras-dia.md",
+              "slug": "separador-pressao-quando-e-que-aperta",
+              "title": "Separador \"Pressão\" (quando é que aperta)",
+              "level": 2,
+              "summary": "Em cima, escolhe o separador Pressão (o separador Dia é a previsão de sempre).",
+              "text": "1. Em cima, escolhe o separador **Pressão** (o separador **Dia** é a previsão de sempre).\n2. Logo em cima escolhe o **grupo de parques** (a cidade toda, uma marca + cidade como Airpark Lisboa, ou o Marketplace) e **o que queres ver no mapa**, nos botões grandes:\n   - **Carros por hora**: chegadas + saídas concluídas nessa hora, média por dia.\n   - **Total (pedido → assinatura)** (antes \"Tempo de entrega\"): minutos desde o cliente pedir o carro (pendente) até assinar a entrega. Junta a fila, o caminho até ao terminal e a espera pelo cliente. Os números não mudaram, só o nome.\n   - Na cidade toda há mais três:\n     - **Tempo por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas. Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço.\n       - O valor do mapa é o **percentil da cidade** (Definições → Parâmetros → **Percentil do tempo por carro, por cidade**): por omissão **p75 em Lisboa** e **p60 no Porto e em Faro**. O botão diz qual está em uso (ex.: \"Tempo por carro (p60)\"). Os outros mapas (Total, Início da entrega → assinatura, Tempos) usam sempre o **p75**.\n       - Por cima do mapa escolhe **Entregas**, **Recolhas** ou **Juntas**. Entregas = os serviços que começam com o início de uma entrega (a recolha pelo meio fica dentro dela); Recolhas = os que começam com o início de uma recolha (inclui levar o carro ao parque). **Juntas** é o quadro de antes, as duas juntas, e é o que a escala usa. Mesmas regras, mesmas cores e mesma legenda.\n       - Logo a seguir à mudança (12 out 2026) só há **Juntas**: o cálculo da noite relê os dias desde abril com as entregas e as recolhas separadas, e os botões **Entregas** e **Recolhas** acendem quando acabar. Enquanto isso, a Pressão mostra o último cálculo completo.\n     - **Início da entrega → assinatura** (antes \"Na estrada\"): desde que o condutor pega no carro (em entrega) até o cliente assinar. Junta o caminho e a espera pelo cliente no terminal.\n     - **Tempos**: os tempos separados, da tabela dos tempos (o cálculo da noite). Escolhe ao lado qual:\n       - entregas: **Fila** (da chamada do cliente, ou do pendente, até pegar no carro — é a que serve para acertar os extras), **Trânsito** (até chegar ao terminal, pelo GPS), **Nosso tempo** (Fila + Trânsito), **% na meta**, **Cliente** (a espera pelo cliente no terminal) e **Total**;\n       - recolhas: **Cliente** (da chamada ao check-in), **No terminal**, **No P2**, **Até arrumado** e **% T2 atrasadas**.\n       - Mostra-se o p75 (ou a %) por dia da semana × hora, desde abril. Células com menos de 5 casos ficam em branco. Por cima diz em quanto % das entregas (ou recolhas) esse tempo está medido.\n       - Os tempos com GPS (Trânsito, Nosso, % na meta, Cliente das entregas, No terminal, T2) estão **em calibração**: só o super admin os vê, marcados como provisórios; os outros veem \"Em calibração\". Quando o super admin abrir o portão (Definições → Parâmetros → **Tempos com GPS: portão**), aparecem na cidade com pelo menos 60 % das entregas medidas e 20 medições (por omissão); abaixo disso, \"Sem dados suficientes\".\n       - Se a janela tiver tempos de mais e a leitura chegar ao limite, entram os dias mais recentes e por cima diz \"Leitura cortada no limite\". Mudar o portão ou a meta vale logo (não fica à espera da cache).\n       - O botão só aparece quando há tempos guardados (o cálculo da noite **Tempos de entrega e de recolha** está ligado, ou um dia foi reprocessado à mão).\n     - **Pessoas a trabalhar**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL** (se nessa hora não carregou em nenhum botão na app, junta-se 1). São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.\n3. **O mapa (dia da semana × hora)** ocupa quase o ecrã. Por cima diz em palavras o que a cor quer dizer; por baixo há a legenda (os 4 tons de azul com os valores, cinzento = sem dados, contorno laranja = hora apertada, horas a âmbar = horas de ponta). Nos tempos, mais escuro = mais minutos (pior); no **% na meta** é ao contrário: **mais escuro = mais entregas na meta (melhor)**.\n   - **Carrega numa célula** (ou passa o rato) para ver o detalhe dessa hora: volume, carros em simultâneo, entrega, recolha, por carro (juntas, só entregas e só recolhas), na estrada, recolhido → no parque e pessoas.\n   - **O que é o p75?** Ordenam-se os casos dessa hora do mais rápido ao mais lento: o p75 é o valor a 75 % do caminho. Em 3 de cada 4 vezes demorou isso ou menos; só 1 em 4 demorou mais. Usa-se em vez da média para os dias maus contarem sem que um caso raro estrague tudo.\n   - **E o p60?** É a mesma conta a 60 % do caminho: em 6 de cada 10 vezes demorou isso ou menos — um pouco acima do meio (a mediana é o p50), menos prudente do que o p75. É o que o **Tempo por carro** usa no Porto e em Faro por omissão. A caixa \"O que é o p75 (e o p…)?\" do ecrã explica só o p75.\n   - **Média por hora vs contagem real**: **Carros por hora** é a **média por dia** desse dia da semana e hora em toda a janela (ex.: 4,5 carros/h às sextas 17h), não a contagem de um dia concreto; para o dia real vê a Atividade diária → **Semana** (contagens desse dia). Os tempos são percentis dos casos de toda a janela.\n   - A **Semana** da Atividade diária mostra o tempo por carro sempre em **p75** (em todas as cidades): no Porto e em Faro não bate com a Pressão, que usa o p60 — é a mesma medição com outro percentil.\n   - Uma célula **cinzenta** não tem dados: sem movimento nessa hora, ou menos de 5 casos (pouco fiável).\n   - Se o último cálculo de um grupo falhou, aparece um aviso amarelo e o mapa mostra os dados do dia anterior que correu bem (em vez de ficar vazio).\n4. **Onde aperta**: frases curtas com os blocos mais apertados, por exemplo \"sextas 17–20h em Lisboa: 42 saídas/h, entrega p75 28 min\".\n   - **Hora apertada pela Fila** (Definições → Parâmetros → **Hora apertada pela Fila (por cidade)**, **desligada** por omissão): ligada numa cidade, a parte \"entregas lentas\" da hora apertada (no mapa, em \"Onde aperta\" e na escala do separador **Dia**) usa o p75 da **Fila** em vez do total — a Fila é o que mostra se falta gente; o total também tem o caminho e a espera pelo cliente. Só quando a Fila está medida em pelo menos **60 %** das entregas da cidade; abaixo disso fica o total e por baixo diz porquê. Desligada, as horas apertadas ficam exatamente como até aqui.\n5. **Tempo por carro, por condutor** (só na cidade toda): tabela por número de pessoas a trabalhar (os escalões da tabela de máximos das Definições).\n   - **Horas cheias**: cada pessoa teve pelo menos um serviço nessa hora. É aqui que se vê a capacidade.\n   - **Horas calmas**: o intervalo inclui esperar por trabalho.\n   - Ao lado aparece o **máximo** da tabela, para comparar.\n   - O valor é o p75 em Lisboa e o p60 no Porto e em Faro (por omissão): em 75 % (ou 60 %) das vezes foi isto ou menos. Muda-se em Definições → Parâmetros → **Percentil do tempo por carro, por cidade**.\n   - A cinzento: menos de 5 serviços, pouco fiável.\n6. **Carga × tempo de entrega**: tabela que compara o tempo de entrega consoante os carros tratados nessa hora, separando horas de ponta (07–10h e 17–20h, aproximação do trânsito) do resto do dia.\n7. **Notas do dia** (por cidade): o cartão **Notas do dia DD/MM** mostra as notas internas desse dia de trabalho (das 03h às 03h do dia seguinte).\n   - O dia começa no **dia da escala** da página; muda-se com as setas ou a data, e **Dia da escala** volta a ele.\n   - Cada dia pode ter **várias notas**, cada uma com quem a escreveu e quando, e (se quiseres) uma hora, das 03h às 02h da madrugada seguinte.\n   - Escreve quem pode editar o Extras-Dia (TL, supervisor e acima); quem só vê, lê. Só se vêem as notas das tuas cidades.\n   - **Arquivar** (o ícone da caixa) tira a nota do dia; só o pode fazer quem a escreveu ou um administrador. Fica no registo de atividade.\n   - Ao **carregar numa célula** do mapa, o detalhe mostra também as notas das **últimas 4 datas com esse dia da semana**: as do dia todo e as dessa hora. As células das 00h–02h são a noite do dia anterior (ex.: quinta 01h mostra as notas de quarta à noite).\n   - No separador **Dia**, ao lado dos parques, aparece **Notas do dia: N**; carrega para ir às notas.\n8. Os dados vêm da BD da Multipark **desde 3 de abril de 2026** e a janela **cresce todos os dias**: nunca se deita fora o que já foi medido, para no próximo ano haver o ano inteiro. O dia de início muda-se em Definições → Parâmetros → **Tempos medidos desde**.\n   - Todos os dias a partir das 04:45 (tarefa automática **Extras-Dia: pressão**) lê-se da BD da Multipark **só o dia de ontem**, de cada grupo de parques, e junta-se aos dias já guardados. Se uma noite falhar, na seguinte apanham-se os dias em falta. Os números são os mesmos de antes: os tempos de cada dia guardam-se ao milissegundo e os percentis calculam-se sobre todos os dias, como quando se lia a janela inteira.\n   - Um dia guardado **não se volta a ler**: uma correção feita depois na Multipark a um dia já guardado só entra se esse dia for reprocessado (super admin, à mão: `/api/cron/extras-pressure?reprocessar=AAAA-MM-DD` ou `?reprocessar=AAAA-MM-DD..AAAA-MM-DD`; se a resposta trouxer `done: false`, repete com o `cursor` que vem nela).\n   - A primeira corrida depois desta mudança preenche todos os dias desde 3 de abril, um dia de cada vez: leva várias horas de ticks e o agendador mostra **A meio (retoma)**. Até acabar, o separador mostra o último cálculo completo.\n   - Ficam de fora os **Parques que a operação não faz**; quando essa lista (ou os parques de um grupo) muda, os dias desse grupo voltam a ler-se sozinhos — também pode levar algumas horas.\n   - **Escala com os tempos medidos** (Definições → Parâmetros, por cidade; **desligado** por omissão): desligado, a escala e a previsão usam só a tabela de máximos, como até aqui.\n   - Ligado numa cidade, a previsão, a escala automática e a estimativa passam a usar o tempo por carro **medido nas horas cheias** (com o percentil da cidade), mas **nunca acima do máximo** da tabela.\n   - Um escalão com menos de 30 serviços medidos continua com o valor da tabela. Na previsão, a linha da capacidade diz em cada escalão se é **medido** (com o máximo ao lado) ou **tabela**."
+            },
+            {
+              "id": "extras-dia.md#de-onde-vem-os-tempos-so-o-super-admin",
+              "file": "extras-dia.md",
+              "slug": "de-onde-vem-os-tempos-so-o-super-admin",
+              "title": "De onde vêm os tempos (só o super admin)",
+              "level": 2,
+              "summary": "Em Extras-Dia → Pressão, perto do fim, o cartão De onde vêm os tempos mostra, por cidade e semana (as últimas 8):",
+              "text": "1. Em **Extras-Dia → Pressão**, perto do fim, o cartão **De onde vêm os tempos** mostra, por cidade e semana (as últimas 8):\n   - **Entregas**: quantas, com **chamada** do cliente no início da Fila, com a chegada pelo **GPS** e pelo **botão** \"Cheguei\";\n   - **Recolhas**: quantas, com a saída do terminal pelo **GPS** e pelo **início do movimento na app**;\n   - **Zello não bate** (sem Zello ou condutor por ligar à ficha), **Zonas em falta** (sem zona de destino, do terminal ou do T2) e os principais motivos sem medição.\n2. A verde, as coberturas de GPS a partir de **60 %**: é a partir daí (e com 20 medições) que, com o portão aberto, os tempos com GPS se mostram a toda a gente nessa cidade.\n3. Por baixo: as **garagens sem papel** (acrescenta-as em Definições → **Papéis das garagens**) e quantas linhas dos últimos 14 dias foram calculadas com outra versão ou outras zonas (refazem-se sozinhas nas noites seguintes).\n- Só contagens: nada de reservas, nomes nem telefones."
+            },
+            {
+              "id": "extras-dia.md#diagnostico-dos-tempos-calibracao-so-o-super-admin",
+              "file": "extras-dia.md",
+              "slug": "diagnostico-dos-tempos-calibracao-so-o-super-admin",
+              "title": "Diagnóstico dos tempos (calibração) (só o super admin)",
+              "level": 2,
+              "summary": "Em Extras-Dia → Pressão, no fim da página, está o cartão Diagnóstico dos tempos (calibração).",
+              "text": "1. Em **Extras-Dia → Pressão**, no fim da página, está o cartão **Diagnóstico dos tempos (calibração)**. Só o super admin o vê e só ele o pode correr.\n2. Escolhe o **Último dia** (por omissão, há 3 dias: o GPS desse dia já é o final), quantos **Dias** para trás (só esse dia, 7 ou 14) e a **Cidade** (ou **Todas**). Depois carrega em **Correr**.\n   - Lê um dia de cada vez e cada dia pode demorar até um minuto. Podes carregar em **Parar** e ver o que já veio.\n   - Com **Todas**, os botões **Juntas**, **Lisboa**, **Porto** e **Faro** mudam o que vês.\n3. Aparecem os números que acertam os tempos de entrega e de recolha, cada um com o parâmetro que fecha:\n   - intervalo entre os pontos do GPS;\n   - cobertura do GPS por entrega e por recolha (e porque falta);\n   - paragem no terminal antes do check-out (o carro parado ou o condutor a pé), com a regra do plano e o recurso ao lado;\n   - chamadas antes do pendente e do \"em recolha\";\n   - \"Cheguei\" e \"À espera das malas\";\n   - quem marca cada estado;\n   - estados e sequências das recolhas, e onde se marca o \"em recolha\";\n   - garagens de destino e se há **P2**;\n   - saída do terminal e chegada ao T2 (conta como **atrasada** quando o condutor chega mais de **15 min** depois de o cliente ligar);\n   - **coordenadas das garagens** na Multipark: de onde vêm, quantas garagens há na cidade, quantas têm coordenadas válidas e se a posição da app no fim dos movimentos bate com elas (distância mediana);\n   - ficheiros do GPS, relógio e definições.\n   - Em cima, a **Leitura rápida** diz o que cada critério dá com os números de agora.\n4. Carrega em **Copiar resumo** e cola na conversa com o Claude. Cada corrida também fica no registo do servidor (linhas `[sonda62]`), por isso também basta dizer \"corri\".\n- **Só lê**: não grava nada, não manda nada a ninguém e não tem interruptor. Mostra só totais e percentagens, nunca nomes, telefones, matrículas nem reservas.\n- Se uma leitura falhar (BD da Multipark, chamadas, GPS), aparece no quadro amarelo **O que falhou**, com o motivo, e o resto aparece na mesma. Um dia com ficheiros do GPS por ler (prazo ou mais de 60 ficheiros) fica como **leitura parcial**.\n- O que dependia de uma leitura que falhou **não entra nas contas desse dia** (não conta como zero). Em cima, a **Leitura rápida** diz quantos dias têm dados e que leituras falharam."
+            },
+            {
+              "id": "extras-dia.md#recolha-pelo-meio-de-uma-entrega",
+              "file": "extras-dia.md",
+              "slug": "recolha-pelo-meio-de-uma-entrega",
+              "title": "Recolha pelo meio de uma entrega",
+              "level": 4,
+              "summary": "Quem leva um carro ao aeroporto volta ao parque com o carro de uma recolha, se houver uma aí: essa recolha não lhe custa um carro a mais.",
+              "text": "1. Quem leva um carro ao aeroporto volta ao parque com o carro de uma recolha, se houver uma aí: essa recolha não lhe custa um carro a mais.\n2. Conta como \"pelo meio\" a recolha no **mesmo terminal**, entre **10 min antes e 30 min depois** da hora da entrega, e só uma recolha por entrega. As entregas fora do aeroporto (as estações) nunca contam.\n3. Por baixo da linha da capacidade aparece 🔁 com quantas recolhas são pelo meio e quanto muda o pico de extras.\n4. Liga-se por cidade em Definições → Parâmetros → **Recolha pelo meio de uma entrega** (desligado por omissão). Ligado, a previsão, a escala automática e a estimativa deixam de contar essas recolhas como carro (no T2 fica só a meia extra)."
+            },
+            {
+              "id": "extras-dia.md#escalar-a-equipa-team-leader-supervisor-e-acima",
+              "file": "extras-dia.md",
+              "slug": "escalar-a-equipa-team-leader-supervisor-e-acima",
+              "title": "Escalar a equipa (Team Leader, Supervisor e acima)",
+              "level": 2,
+              "summary": "Na secção Equipa Manhã / Noite, carrega em Adicionar, escreve o nome da pessoa e escolhe-a da lista do RH; depois as horas de início e de fim.",
+              "text": "1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar**, **escreve o nome** da pessoa e escolhe-a da lista do RH; depois as horas de início e de fim.\n   - **Só entra na escala quem está registado no RH.** Já não se escreve um nome à mão: se a pessoa não aparece, cria primeiro a ficha em Recursos Humanos.\n   - A lista põe primeiro quem começa pelo que escreveste. Está dividida: a cidade da escala, outras cidades, e no fim quem não tem cidade na ficha (não se pode escolher).\n   - O turno tem no mínimo 3 h e no máximo 12 h.\n   - O início é a partir das 03h; da 0h às 3h é a noite do dia anterior (24h–27h).\n   - A mesma pessoa não pode ficar a horas sobrepostas no mesmo dia, nem noutra cidade.\n   - **Habitual**: quem não respondeu à disponibilidade dessa semana mostra os **dias livres habituais** desse dia da semana (ex.: \"habitual: Qui tarde\"; a azul quando costuma estar livre no turno que estás a escalar — manhã ⇐ Manhã, noite ⇐ Tarde ou Noite; \"habitual: não neste dia\" quando não costuma). Passa o rato para ver o resumo todo. É só uma dica: a proposta automática e o **Preencher com disponíveis** não a usam.\n   - **Carta**: na lista aparece \"Carta < 3 anos\", \"Carta pendente de validação\" ou \"Sem carta\" quando a carta não está validada. Ao escolher essa pessoa aparece um **aviso** — podes escalar na mesma (não bloqueia). A carta valida-se no RH (ver a ajuda \"RH e ponto\").\n2. Ou usa **Preencher com disponíveis**: escala quem marcou disponibilidade, pelos turnos que a previsão sugere. Lê a disponibilidade da mesma forma que a proposta automática.\n   - A proposta automática e o **Preencher com disponíveis** só usam **extras da cidade da escala**. Quem não tem cidade na ficha, é de outra cidade ou é funcionário (condutor, TL, frontoffice…) nunca entra sozinho.\n   - **Quem não tem cidade não pode ser escalado**, nem à mão: define primeiro a cidade na ficha (Recursos Humanos).\n   - Um **funcionário** só entra na escala posto à mão e **não recebe avisos** (nem de trabalho, nem de turno cancelado, nem por email). Na lista para escolher, os extras aparecem antes dos funcionários.\n3. Define o **Team Leader** do turno (tem de vir do RH).\n   - Na lista só aparece quem tem **conta no dashboard com permissões de Team Leader**: papel Team Leader ou acima (supervisor, front office, back office, administração), ou a permissão **\"Pode ser Team Leader na escala\"** dada à conta. Os extras e condutores sem isso já não aparecem, e o posto na ficha do RH não chega.\n   - Para pôr um extra a fazer de TL: dá-lhe a permissão \"Pode ser Team Leader na escala\" em **Permissões** (ou muda o papel da conta para Team Leader em **Utilizadores**). A partir daí aparece na lista.\n   - Quem não tem conta não pode ser TL: cria-lhe primeiro a conta em Utilizadores.\n   - A regra vale também ao guardar: se alguém tentar pôr como TL uma pessoa sem estas permissões, o dashboard recusa e diz o que falta. Um TL que já estava escalado continua; só se verifica quando a pessoa entra como TL.\n4. Carrega em **Avisar este turno**: abre uma janela com o **aviso de trabalho de cada pessoa**, já com o dia e as horas **dela** nesse turno (início → fim, ou a hora de \"mandado p/ casa\"; uma noite aparece \"das 22h às 03h\"), a cidade e o ponto de encontro. Não é preciso ir à Disponibilidade escrever o dia à mão.\n   - **Canais**: WhatsApp (template \"aviso de trabalho\") e **email** (\"Aviso de trabalho — sexta 25/09, 18h–03h\"); os dois vêm ligados e podes desligar um. O email segue mesmo que o WhatsApp não esteja configurado.\n   - O email vai para o email de trabalho da ficha ou, se não houver, para o **pessoal**. Quem tem \"Não enviar email/WhatsApp\" na ficha ou pediu STOP não recebe por esse canal.\n   - **Só recebem as linhas confirmadas.** As propostas por confirmar aparecem assinaladas a roxo e não recebem: confirma a escala primeiro.\n   - A janela diz **quem fica de fora e porquê** (já avisado destas horas, sem email, sem telemóvel válido, funcionário…). Carrega em **Enviar**; no fim aparece o resultado por pessoa e canal.\n   - **Carregar duas vezes não reenvia**: cada linha recebe um aviso por versão e canal. Se mudares as horas ou a pessoa, a linha volta a receber.\n   - Ao lado de cada pessoa aparece o estado: avisado, ✓ confirmou, ✗ não pode e, à parte, o do **email** (email, email falhou, sem email).\n   - **Aviso desatualizado** quer dizer que as horas mudaram depois do aviso; avisa outra vez.\n   - Para um dia que já passou, não se avisa nem se confirma. Fica tudo no registo de atividade.\n5. Se não houver trabalho, usa \"Mandado p/ casa\" na linha da pessoa.\n6. **Falta de gente** (por turno e na escala automática): o aviso diz se há quem escalar ou não.\n   - **\"Faltam escalar 2 às 02h (há 2 disponíveis: Ana, Rui)\"**: há extras da cidade que podem a essa hora e ainda não estão na escala desse dia. Escala-os (ou usa a proposta automática).\n   - **\"Falta gente às 02h (faltam 2; ninguém disponível)\"**: ninguém disponível; pede disponibilidade a quem não respondeu.\n   - Em **Ver hora a hora**: \"precisas N (além do TL) · escalados M · disponíveis por escalar K\". As propostas contam como escaladas; o TL nunca conta; quem foi mandado para casa conta até essa hora.\n   - **A disponibilidade lê-se como o calendário**: o que o extra marca num dia é desse dia. Quem marcou **terça 00h–03h** pode na **noite de segunda** (02h de segunda = madrugada de terça); quem marcou \"segunda 18h–03h\" pode até às 03h. A grelha da Disponibilidade, a proposta automática, o \"Preencher com disponíveis\" e a lista para escolher pessoas leem tudo da mesma forma.\n   - Na lista para escolher a pessoa, ao lado do nome aparecem as horas em que pode nesse dia de trabalho (ex.: \"18h–01h\").\n7. **Tirar da escala** pergunta antes. Se a pessoa já tinha sido avisada, recebe um aviso de que saiu. A linha não se apaga: fica no arquivo da escala, com quem a tirou e quando. Quem tiras não volta a ser proposto para esse dia (ver \"Proposta automática\")."
+            },
+            {
+              "id": "extras-dia.md#proposta-automatica",
+              "file": "extras-dia.md",
+              "slug": "proposta-automatica",
+              "title": "Proposta automática",
+              "level": 4,
+              "summary": "A mão humana manda.",
+              "text": "- **A mão humana manda.** O sistema faz só a **primeira** proposta de um dia e cidade em que ainda ninguém mexeu. A partir do momento em que alguém mexe nos condutores desse dia — põe, tira, muda horas, manda para casa, usa o Preencher com disponíveis, refaz a proposta, confirma ou suspende — a proposta automática **já não muda esse dia**.\n  - No dia aparece o selo **\"Mexido à mão por Márcia às 15:42 — a proposta automática já não muda este dia\"**.\n  - Pôr ou mudar o **Team Leader** não conta: a proposta nunca mexe no TL.\n  - A confirmação e os avisos das 18h continuam: confirmam e avisam a escala **tal como a deixaste** (sem pôr nem tirar ninguém). Se não queres que confirme sozinho, usa **Suspender envio automático**.\n- **Quem tiras à mão não volta.** Quem foi tirado à mão de um dia nunca mais é proposto para esse dia — nem pela proposta automática, nem por **Proposta automática** carregada à mão, nem pelo **Preencher com disponíveis**. O resumo diz quantos ficaram de fora (ex.: \"2 tirados à mão ficam de fora\"). Podes sempre voltar a pôr essa pessoa à mão.\n- **Refazer a proposta** só substitui as linhas que a proposta tinha criado e que ainda estão por confirmar. Quem foi posto à mão, quem foi editado e quem já está confirmado ficam. As linhas substituídas vão para o arquivo.\n- Editar uma linha não apaga as notas e fica registado quem alterou.\n- **Suspender envio automático** trava a confirmação e os avisos do cron nesse dia (e, como é mexer no dia, a proposta automática também já não corre nele).\n- **Pedir disponibilidade a quem não respondeu**: o número do botão é o número de extras da cidade sem resposta, e é a eles que o pedido vai.\n- **Ordem dos candidatos**: a proposta escolhe primeiro quem cobre mais horas com falta de gente e, depois, pela avaliação (pontos médios por dia nas últimas 4 semanas), o custo, a equidade e a fiabilidade. A avaliação mudou (atraso ao trabalho só a partir de 5 min, sem \"entrega atrasada\", velocidade acima de 120 km/h), por isso a **ordem** de quem é proposto pode mudar. A procura e quantos extras são precisos não mudam. Fica certo depois do recálculo da noite (os 31 dias cobrem as 4 semanas)."
+            },
+            {
+              "id": "extras-dia.md#quem-ve-o-que",
+              "file": "extras-dia.md",
+              "slug": "quem-ve-o-que",
+              "title": "Quem vê o quê",
+              "level": 4,
+              "summary": "Quem só vê a escala (por exemplo, um condutor) vê as escalas e os turnos, sem euros e sem os botões de ação.",
+              "text": "- Quem só vê a escala (por exemplo, um condutor) vê as escalas e os turnos, **sem euros** e sem os botões de ação.\n- Custos e taxas dos extras: quem planeia a escala.\n- Custo do Team Leader: vem do salário, por isso só o vê quem vê salários ou os totais financeiros.\n- O custo da escala é uma **estimativa**: o extra recebe pelas horas de ponto.\n- Os **extras e utilizadores** não abrem o Extras Dia (é a escala de todos). A disponibilidade deles marca-se em **A minha disponibilidade**: se abrirem o Extras Dia, aparece \"Sem acesso\" com o botão **Abrir a minha disponibilidade**."
+            },
+            {
+              "id": "extras-dia.md#notas",
+              "file": "extras-dia.md",
+              "slug": "notas",
+              "title": "Notas",
+              "level": 4,
+              "summary": "\"Formação em falta\" = a pessoa ainda não concluiu a formação obrigatória.",
+              "text": "- \"Formação em falta\" = a pessoa ainda não concluiu a formação obrigatória.\n- **Notas internas** (team leader e acima): o ícone do caderno na linha da pessoa abre as notas internas dela e deixa escrever uma nova, já com o dia da escala (ex.: \"trabalhou mal neste dia\"). Ficam na ficha do RH; a pessoa nunca as vê.\n- O **Custo escalado (estimativa)** e as horas pagas atualizam-se à medida que escalas.\n- Se uma leitura falhar, aparece **\"Não foi possível carregar…\"** com **Tentar de novo**, nunca \"nenhum condutor escalado\".\n- No telemóvel, o nível, as horas pagas e o custo de cada pessoa aparecem por baixo do nome."
+            }
+          ]
+        },
+        {
+          "id": "operacional",
+          "file": "atividade-diaria.md",
+          "group": "Operações",
+          "module": "atividade_diaria",
+          "title": "Actividade Diária (quem fez o quê, GPS e PDAs)",
+          "routes": [
+            "/operacional"
+          ],
+          "tabs": [
+            {
+              "tab": "dia",
+              "section": "Atividade do Dia",
+              "sectionId": "atividade-diaria.md#atividade-do-dia"
+            },
+            {
+              "tab": "resumo",
+              "section": "Resumo do dia",
+              "sectionId": "atividade-diaria.md#resumo-do-dia-supervisao"
+            },
+            {
+              "tab": "semana",
+              "section": "Semana",
+              "sectionId": "atividade-diaria.md#semana"
+            },
+            {
+              "tab": "mes",
+              "section": "Avaliação do mês",
+              "sectionId": "atividade-diaria.md#avaliacao-do-mes"
+            },
+            {
+              "tab": "live",
+              "section": "Ao Vivo",
+              "sectionId": "atividade-diaria.md#ao-vivo"
+            },
+            {
+              "tab": "history",
+              "section": "Histórico Diário",
+              "sectionId": "atividade-diaria.md#historico-diario"
+            },
+            {
+              "tab": "pdas",
+              "section": "PDAs",
+              "sectionId": "atividade-diaria.md#pdas"
+            },
+            {
+              "tab": "radio",
+              "section": "Rádio",
+              "sectionId": "atividade-diaria.md#radio"
+            }
+          ],
+          "summary": "Menu Operações → Actividade Diária: quem fez o quê nas reservas, o Resumo do dia, a Semana por hora, a Avaliação do mês, os km e as velocidades do GPS…",
+          "sections": [
+            {
+              "id": "atividade-diaria.md#inicio",
+              "file": "atividade-diaria.md",
+              "slug": "inicio",
+              "title": "Actividade Diária (quem fez o quê, GPS e PDAs)",
+              "level": 1,
+              "summary": "Menu Operações → Actividade Diária: quem fez o quê nas reservas, o Resumo do dia, a Semana por hora, a Avaliação do mês, os km e as velocidades do GPS…",
+              "text": "Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **Resumo do dia**, a **Semana** por hora, a **Avaliação do mês**, os km e as velocidades do GPS (Zello), os PDAs e o **Rádio** (gravações do Zello, provas e transcrições), que passou a ser um separador daqui."
+            },
+            {
+              "id": "atividade-diaria.md#que-abas-ves",
+              "file": "atividade-diaria.md",
+              "slug": "que-abas-ves",
+              "title": "Que abas vês",
+              "level": 4,
+              "summary": "Só aparecem as abas a que a tua conta tem acesso.",
+              "text": "- Só aparecem as abas a que a tua conta tem acesso. **Atividade do Dia**, **Semana** e **Ao Vivo** pedem a Actividade Diária; **Histórico Diário**, o Histórico diário (GPS); **PDAs**, os PDAs; **Rádio**, o Rádio.\n- **Resumo do dia** pede a permissão **Passagem — Resumo do dia** (supervisor e acima), a mesma de quando estava na Passagem de turno.\n- **Avaliação do mês** pede a mesma permissão do separador **Mês** da Avaliação (team leader e acima).\n- **Condutores e extras** veem só **O meu histórico de velocidade**: os km e as velocidades deles, dia a dia, nos últimos 30 ou 90 dias."
+            },
+            {
+              "id": "atividade-diaria.md#atividade-do-dia",
+              "file": "atividade-diaria.md",
+              "slug": "atividade-do-dia",
+              "title": "Atividade do Dia",
+              "level": 4,
+              "summary": "Escolhe Hoje, Ontem, Últimos 7d, Últimos 30d, Este mês ou um Intervalo.",
+              "text": "- Escolhe **Hoje**, **Ontem**, **Últimos 7d**, **Últimos 30d**, **Este mês** ou um **Intervalo**. O intervalo pode ter até **93 dias**; acima disso aparece o aviso e não se pede nada.\n- Os cartões mostram recolhas, entregas, movimentações, cancelamentos, ações no horário e fora dele, km do GPS, pessoas ativas, as **reclamações dos carros que saíram** e, para quem vê os totais financeiros, o custo dos extras.\n- **Reclamações (carros que saíram)**: quantas reclamações estão ligadas às reservas que **saíram** (entrega feita) nesses dias operacionais (03:00 → 03:00), seja qual for o dia em que a reclamação chegou. A ligação é a da Ficha da reserva (o n.º ou o id da reserva na reclamação). Não contam as arquivadas nem as convertidas noutro caso. Por baixo diz de quantas saídas. Passa o rato para ver a regra. É só o número: a página de Reclamações não tem este filtro. Se não se conseguir ler, aparece **—** com o motivo, nunca 0.\n- A tabela **Quem fez o quê** tem uma linha por pessoa. O tipo vem escrito ao lado do nome:\n  - sem nada: colaborador com ficha ligada;\n  - **🤝 (parceiro)**: agência ou parceiro que marca pelo portal;\n  - **⚠ (agente por ligar)**: agente da Multipark sem ficha ligada (liga-o em **RH → Agentes**);\n  - **📡 (PDA sem login)**: km de um PDA sem ninguém com login.\n- As ações contam no dia do **turno**: a noite que passa a meia-noite fica no dia em que começou.\n- Clica no **nome** para abrir a **ficha** da pessoa no RH. Clica no resto da linha (ou carrega em Enter) para abrir **o dia dessa pessoa**: ações, GPS com o trajeto, PDAs e ponto.\n- **Todas as pessoas** (por cima da tabela) escolhe uma pessoa só; **Todas** volta à lista toda."
+            },
+            {
+              "id": "atividade-diaria.md#resumo-do-dia-supervisao",
+              "file": "atividade-diaria.md",
+              "slug": "resumo-do-dia-supervisao",
+              "title": "Resumo do dia (supervisão)",
+              "level": 2,
+              "summary": "Estava na Passagem de turno e passou para aqui (12 out 2026), com tudo o que tinha.",
+              "text": "- Estava na **Passagem de turno** e passou para aqui (12 out 2026), com tudo o que tinha. Na Passagem de turno ficou só uma ligação para cá.\n1. Separador **Resumo do dia**. Escolhe o dia e a cidade. O dia é o operacional (03:00 → 03:00).\n2. **Cartões do topo**: recolhas, entregas, **reclamações do dia** (as que chegaram nesse dia), **reclamações dos carros que saíram** (a mesma regra da Atividade do Dia) e ainda:\n   - **Km da equipa**: os km do GPS da Atividade diária.\n   - **Excesso de velocidade**: quantas pessoas tiveram excessos, a velocidade máxima do dia e o total de excessos.\n   - **Horas paradas**: o total do \"Parado\" da tabela e a média por pessoa.\n   - Num dia com movimentos a mais aparece o aviso de que as reclamações dos carros que saíram são só de uma parte do dia.\n   - Os cartões antigos \"Pendente→Entrega\", \"Entregas >15/>30 min\" e \"Recolhas atrasadas >15min\" saíram: passaram para os **tempos** (a seguir). A **hora marcada** na ficha já não entra em nenhum tempo (só serve para ver reclamações).\n3. **Passagens de turno**: um cartão por turno (Manhã/Noite) e cidade.\n   - Diz se houve passagem: **\"Passagem feita às 15:05 por X\"** (e quem a recebeu) ou **\"Sem passagem de turno\"** a vermelho.\n   - Por **chefe de turno** (o TL da escala): a equipa, as **entregas** **dentro da meta** e **fora da meta** (pelo nosso tempo) e as **recolhas** (quantas, quantas no T2 e, dessas, a tempo e atrasadas).\n   - Uma entrega é de **quem pegou no carro** (o condutor do Trânsito), não de quem fez o check-out; uma recolha é de **quem tirou o carro do terminal**. Só há recolhas atrasadas no T2 (no T1 há sempre gente de manhã).\n   - Equipa = o turno do TL na escala (mesmo dia, cidade e turno), sem os TL, como no Desempenho. O que o próprio TL fez aparece à parte. Com dois TL no mesmo turno há uma linha por TL. \"Sem medida\" = sem o nosso tempo medido (sem chegada pelo GPS) ou com o portão dos tempos com GPS fechado.\n4. **Terminal — linha do tempo** (só com o interruptor \"Terminal no ponto (aeroporto)\" ligado): quem esteve no terminal da cidade nesse dia, **de que horas a que horas**, como entrou e como saiu, e **até que hora contou** para o pagamento (ex.: \"contou até 16:40 (último GPS no aeroporto)\" ou \"por confirmar\").\n   - Entre duas pessoas aparecem os buracos a amarelo: **\"terminal vazio 12:10–12:40\"**.\n   - \"sem nível +1\" = condutor ou TL no terminal (o valor não muda).\n5. **Entregas (tarde)**: um cartão por tempo, com a **mediana** em grande, o p75 e a média por baixo e **medido em X %** (de quantas entregas há esse tempo).\n   - **Fila**: da chamada do cliente (central ou WhatsApp, pelo telefone da reserva) ou do pendente, o que vier primeiro, até o condutor pegar no carro (\"em entrega\"). Mostra como está o trabalho e serve para acertar os extras.\n   - **Trânsito**: de pegar no carro até chegar ao terminal (o carro parou na zona do terminal, ou o condutor saiu a pé, pelo GPS do Zello).\n   - **Nosso**: Fila + Trânsito. **Na meta**: a % de entregas com o nosso tempo dentro da meta (**Definições → Parâmetros → \"Tempos: meta da entrega\"**, 15 min por omissão).\n   - **Cliente**: do terminal até o cliente assinar. É a espera pelo cliente, não é tempo nosso.\n   - **Total**: da chamada (ou do pendente) à assinatura.\n   - Por baixo, **de onde vêm os tempos**: quantas começaram na chamada, no pendente ou sem pedido, e quantas chegadas foram pelo GPS, pelo botão \"Cheguei\" ou ficaram sem medição (com os motivos, ex.: \"Sem Zello\", \"GPS por recolher\").\n   - **Mais lentas**: as entregas com o nosso tempo maior, com uma barra das três partes (Fila, Trânsito, Cliente) e o **condutor do Trânsito** (quem pegou no carro). Toca numa para abrir o que se passava nesse horário (ver 7).\n6. **Recolhas (manhã)**: **No terminal ★** (do check-in até o carro sair do terminal: o tempo para tirar os carros de lá), **No P2 ★** (o tempo para os tirar do P2), **Cliente** (da chamada, ou do \"em recolha\", ao check-in: quanto o cliente demora a chegar), **Até arrumado**, **Até à 1.ª garagem** e **Atrasadas no T2** (só no T2: o condutor chegou ao T2 mais de 15 min depois de o cliente ligar; **Definições → Parâmetros → \"Tempos: recolha atrasada no T2\"**). Por baixo, as recolhas que ficaram mais tempo no terminal ou no P2.\n   - **Em calibração / Sem dados suficientes**: o Trânsito, o Cliente das entregas, o nosso tempo, a % na meta, o tempo no terminal, até à 1.ª garagem e as atrasadas no T2 dependem do GPS. Até a calibração acabar só o super admin os vê (com \"provisório · em calibração\"); os outros veem \"Em calibração\". Depois de o super admin abrir o portão (**Definições → Parâmetros → \"Tempos com GPS: portão\"**), aparecem por cidade e dia quando há pelo menos 60 % das entregas (ou recolhas) com esse tempo e 20 medições; abaixo disso, \"Sem dados suficientes (cobertura X %, n = Y)\". A Fila, o Total, o Cliente das recolhas, o P2 e até arrumado veem-se sempre.\n   - Cada cidade conta à parte: uma cidade com o portão fechado não entra nas contas — nem nas atrasadas no T2 das equipas — mesmo que outra cidade esteja aberta.\n   - Se os tempos não se conseguirem calcular a tempo (a BD da Multipark lenta), só os tempos aparecem como indisponíveis; o resto do resumo vem na mesma. Num dia que ainda não começou aparece \"Sem tempos deste dia: o dia ainda não começou\".\n   - **De onde vem**: da tabela dos tempos (o cálculo da noite). Enquanto ela não tem o dia (o cálculo da noite está desligado, ou é o dia de hoje), os números são **calculados agora** com as mesmas regras, sem o GPS (que só chega à noite): aparece \"provisório\" e os tempos com GPS ficam \"GPS por recolher\".\n     - Para não pesar na BD da Multipark, esse cálculo é **um por dia para toda a gente** e fica guardado uns minutos (5 min no dia de hoje, 15 min para ontem, 1 hora para dias mais antigos): a hora do cálculo aparece por cima. Se alguém estiver a calcular outro dia nesse momento, ou a Multipark não responder, aparece **\"Sem tempos deste dia\"** com o motivo: volta a abrir daqui a um minuto.\n7. **O que se passava nesse horário** (ao tocar numa das mais lentas):\n   - a reserva (com o link para a **Ficha da reserva**);\n   - a linha do tempo: pedido (pendente), quem pegou no carro, entregue, minutos;\n   - **o que se passava nesse horário**: os outros pedidos da mesma cidade à espera entre o pedido e a entrega, com a hora do pedido, quando foram entregues, por quem e quanto demoraram. Também quantos já estavam à espera quando este entrou, o pico de pedidos à espera e quem entregou entretanto. Serve para ver se a demora foi por excesso de pedidos.\n8. **Quem trabalhou**: por pessoa, as **horas** trabalhadas (as do ponto; com \"~\" quando não há picagens e é o tempo com o Zello ligado), os **km**, a **velocidade máxima**, os **excessos** e o tempo **parado**. Todas as colunas se ordenam.\n   - Clica no **nome** para abrir a ficha da pessoa no RH.\n   - Clica no resto da **linha** para ver o dia dessa pessoa: cada recolha, entrega e movimento com a hora, a reserva (link para a Ficha), o parque, o tempo pendente→entregue de cada entrega e a **velocidade máxima em cada entrega** (o GPS dessa pessoa entre o pedido e a entrega; a vermelho acima do limite dos excessos). Em cima: km do dia, velocidade máxima, excessos, horas trabalhadas e paradas.\n   - Por baixo, **Tempos**: cada entrega que **essa pessoa começou** (pegou no carro), com a Fila, o Trânsito, o Cliente e a **máxima no Trânsito** (coluna **Vel. máx.**: a velocidade máxima entre pegar no carro e chegar ao terminal), e cada recolha que **tirou do terminal**, com o tempo no terminal, o destino (a garagem) e o tempo no P2. \"—\" = sem medição (passa o rato para ver porquê). Quem só despachou (marcou o \"em entrega\" para outro) não fica com essas entregas. Os tempos com GPS seguem o portão (acima), cada tabela pelo seu: o cadeado das entregas (Trânsito, Cliente, Vel. máx.) e o das recolhas (No terminal) são independentes. Se não sobrar tempo para ler o GPS neste pedido, o GPS do turno fica \"parcial\" (tenta outra vez). As médias por condutor estão em **Pessoas → Condutores e agentes**.\n   - **Km, Vel. máx. e Excessos** são os mesmos da Atividade diária (o dia inteiro).\n   - **Parado** = com o Zello ligado mas sem andar, **dentro do turno**: entre as picagens do ponto; sem picagens, nas horas da escala. Sem nenhum dos dois fica o dia inteiro, com \"~\". Conta só o tempo entre reports do Zello a menos de 1 h (a mesma regra do Histórico Diário e do Desempenho): o tempo com o Zello desligado não é \"parado\".\n   - \"*\" no Parado = GPS incompleto (um ficheiro não se leu ou o dia seguinte ainda não foi recolhido). Se o GPS do turno não se conseguir ler, aparece o aviso com **Tentar de novo** e o Parado fica o do dia inteiro, com \"~\".\n   - O GPS do próprio dia só chega às 23h (provisório) e o final dois dias depois: antes disso a velocidade de cada entrega e o parado aparecem \"—\"."
+            },
+            {
+              "id": "atividade-diaria.md#semana",
+              "file": "atividade-diaria.md",
+              "slug": "semana",
+              "title": "Semana",
+              "level": 4,
+              "summary": "O quadro da Pressão do Extras Dia, mas para uma semana escolhida, de domingo a sábado.",
+              "text": "- O quadro da **Pressão** do Extras Dia, mas para **uma semana escolhida**, de **domingo a sábado**.\n1. Escolhe a **cidade** (as tuas) e a **semana**: ◀ ▶ andam uma semana; **Ir para o dia** abre a semana (a começar no domingo) desse dia; **Esta semana** volta à atual.\n2. Escolhe **Entregas** ou **Recolhas** e **Quantidade**, **Tempo por carro** ou **Tempos**.\n3. Cada **linha** é um dia **operacional** (03:00 → 03:00). As **colunas** são as horas, das 03h às 02h: as colunas 00, 01 e 02 são a madrugada a seguir, ainda desse dia.\n   - **Quantidade**: carros entregues (entrega feita) ou recolhidos (recolha feita) nessa hora.\n   - **Tempo por carro**: a métrica da Pressão, minutos entre o início de uma entrega (ou recolha) e o início do serviço seguinte do mesmo condutor, dos serviços começados nessa hora. Mostra-se o **p75**: em 3 de cada 4 vezes foi isto ou menos. É **sempre o p75**, em todas as cidades — no Porto e em Faro a Pressão do Extras-Dia usa o p60 (o percentil da cidade), por isso os números não batem: é a mesma medição com outro percentil. Em **itálico** com contorno tracejado: menos de 5 serviços (pouco fiável).\n   - **Tempos**: escolhe ao lado qual — nas entregas **Fila**, **Trânsito**, **Nosso tempo**, **% na meta**, **Cliente** ou **Total**; nas recolhas **Cliente**, **No terminal** ou **No P2** (o que cada um é está no Resumo do dia). Mostra-se o p75 (ou a %), pela hora em que o cliente ligou (ou ficou pendente / em recolha). Células com menos de 5 casos ficam em branco. Vêm da tabela dos tempos (o cálculo da noite): sem ela, aparece o aviso. Os tempos com GPS seguem o mesmo portão (Em calibração / Sem dados suficientes), aqui para a cidade e a semana.\n   - A coluna **Total** é o dia todo; a linha **Total** é a semana toda nessa hora. Nas quantidades são somas; no tempo é o p75 de todos os serviços (não a média das células).\n   - Mais escuro = mais carros (ou mais minutos); no **% na meta** mais escuro = mais entregas na meta (**melhor**). Cinzento = sem casos. Na semana atual, as horas que ainda não chegaram ficam em branco, tracejadas.\n4. **Carrega numa célula** (ou num total) para ver o detalhe: quantos foram entregues (ou recolhidos) e quantos pedidos houve, o tempo por carro (n.º, média, mediana e p75), o **pendente → entregue** dos pedidos dessa hora (ou, nas recolhas, o tempo da recolha, de começada a feita), quantas pessoas tiveram ações e os **tempos** dessa hora (os que se podem ver).\n- Uma semana já fechada vem dos dias que o cálculo da noite da Pressão guardou; a semana atual (ou uma que não esteja guardada) lê-se na hora da BD da Multipark, só dessa cidade e dessa semana. Por baixo do quadro diz de onde veio. Não entram os parques que a operação não faz.\n- Se a leitura falhar aparece o motivo, nunca um quadro a zeros."
+            },
+            {
+              "id": "atividade-diaria.md#avaliacao-do-mes",
+              "file": "atividade-diaria.md",
+              "slug": "avaliacao-do-mes",
+              "title": "Avaliação do mês",
+              "level": 4,
+              "summary": "É o mesmo separador Mês da Avaliação (Pessoas → Avaliação), aqui também: o período (Este mês ou outro), o ranking (Totais / Por hora, CSV, Google Sheets e…",
+              "text": "- É o mesmo separador **Mês** da **Avaliação** (Pessoas → Avaliação), aqui também: o período (**Este mês** ou outro), o **ranking** (Totais / Por hora, CSV, Google Sheets e **Recalcular** para quem gere a avaliação), as **equipas** do mês, os **movimentos** na BD da Multipark e o sistema de pontos. Os números são os mesmos dos dois lados."
+            },
+            {
+              "id": "atividade-diaria.md#historico-diario",
+              "file": "atividade-diaria.md",
+              "slug": "historico-diario",
+              "title": "Histórico Diário",
+              "level": 4,
+              "summary": "O GPS de um dia por pessoa: km, horas em movimento e paradas, velocidades, excessos, bateria e trajeto.",
+              "text": "- O GPS de um dia por pessoa: km, horas em movimento e paradas, velocidades, excessos, bateria e trajeto. **Export CSV** descarrega a tabela.\n- **Excessos** e **velocidade máxima** (desde 14 out 2026): o limite é o de **Definições → Parâmetros → \"Limite de velocidade (GPS do Zello)\"** (acima de 120 km/h, sem tolerância, por omissão; antes eram 132 km/h, 120 + 10 %). Um excesso é um troço com pontos seguidos acima do limite (não cada ponto), e os picos falsos do GPS (pontos imprecisos, acima de 250 km/h ou um salto isolado) não contam nem para a máxima. Os dias recolhidos antes ficam como estavam; **Forçar re-divisão** de um dia volta a calcular a máxima e os excessos desse dia com a regra nova. Num dia recolhido com o limite antigo (132), uma máxima entre 120 e 132 pode aparecer a vermelho aqui sem tirar pontos na Avaliação, até o dia ser re-dividido.\n- **Re-dividir os últimos 31 dias** (só o super admin, por cima do histórico de velocidade): pede **uma vez** a re-divisão dos últimos 31 dias com o limite de hoje (para setembro e outubro contarem acima de 120 km/h). Corre **em segundo plano** (de 5 em 5 minutos, continua de onde ficou), mostra quantos dias e linhas já fez e pode **Parar**. É o mesmo que o \"Forçar re-divisão\" de cada dia: não vai ao Zello, não muda os km e não avisa ninguém. Os dias de um mês **fechado** (fecho mensal da Avaliação) saltam-se e ficam como estavam. Os pontos da Avaliação acertam-se no recálculo da noite (os últimos 31 dias); os dias mais antigos, com Recalcular em Avaliação → Mês.\n- **Movimentações** (Atividade do dia): só os movimentos que tocam no parque (levar ao parque e entre garagens). A app grava cada deslocação em duas linhas (início e fim): o **início** não conta, nem como ação. As **mudanças de lugar** (o carro ficou na mesma garagem) contam nas ações e aparecem como \"Mudança de lugar\" na gaveta de cada pessoa e no Resumo do dia.\n- Abre no último dia que o Zello já entrega completo (há 2 dias). **Ontem** ainda não vem do Zello, por isso aparecia vazio.\n- Clica no **nome** para abrir a ficha. Clica no resto da linha para ver o **histórico de velocidade** dessa pessoa: a velocidade máxima e a média em movimento, dia a dia.\n- **Trajeto** abre o dia no **mapa**, pintado pela velocidade:\n  - azul claro é devagar e azul escuro é depressa;\n  - a **vermelho** está o que passou o limite dos excessos;\n  - estão marcados o início, o fim e o ponto da velocidade máxima;\n  - por baixo aparece um gráfico com a velocidade ao longo do dia e a linha do limite;\n  - um dia com muitos pontos é reduzido para o mapa, mas os excessos ficam sempre.\n- A recolha corre de madrugada. Quem gere o Histórico diário tem dois botões:\n  - **Recolher Dados** vai buscar agora ao Zello o GPS do dia escolhido (km, velocidades, trajeto) de todos os utilizadores. O Zello só dá um dia completo 2 dias depois; o de hoje fica provisório.\n  - **Forçar re-divisão** volta a repartir o GPS já recolhido pelas pessoas que tinham cada PDA (pelos check-ins de PDA). Usa-se depois de corrigir um check-in. Não volta ao Zello nem muda os km; desde 14 out 2026 refaz a velocidade máxima e os excessos desse dia com o limite em vigor (sem avisar ninguém)."
+            },
+            {
+              "id": "atividade-diaria.md#ao-vivo",
+              "file": "atividade-diaria.md",
+              "slug": "ao-vivo",
+              "title": "Ao Vivo",
+              "level": 4,
+              "summary": "Terminal agora (em cima; só com o interruptor \"Terminal no ponto (aeroporto)\" ligado): por cidade, quem está no terminal e desde quando, como entrou (pelo…",
+              "text": "- **Terminal agora** (em cima; só com o interruptor \"Terminal no ponto (aeroporto)\" ligado): por cidade, **quem está no terminal e desde quando**, como entrou (pelo GPS, na entrada do ponto, passado pelo colega, posto pelo TL) e quem pediu o lugar. \"Livre\" = ninguém.\n  - O **team leader e acima**, só nas suas cidades, têm **Pôr** (terminal livre), **Passar** e **Fechar** (terminal ocupado). Escolhe a pessoa (só aparecem as que têm o ponto aberto e trabalham nessa cidade) e escreve sempre o **motivo**. Não precisa de GPS.\n  - A pessoa recebe o aviso no sino. Fica registado quem fez, quando e porquê (Logs). Nada se apaga.\n  - \"sem ponto aberto\" ao lado do nome: a pessoa já deu saída — quem chegar ao terminal entra logo.\n  - O GPS de quem está no terminal (de 5 em 5 min, pelo Zello do aparelho com a pessoa): **no aeroporto ✓**, **fora (a 3,2 km)** ou **sem GPS**. \"Sem GPS\" nunca conta como fora.\n  - **perguntámos se ainda está**: o GPS viu-a fora há mais de 20 min e a pessoa ainda não respondeu ao \"Ainda estás no terminal?\". Sem resposta em 15 min o lugar fica livre e recebes o aviso (também no telemóvel quando perguntamos).\n- **Códigos de entrada** (só com **Entrar com email e código** ligado): os pedidos dos últimos 15 minutos cujo código veio para ti (TL de serviço e supervisores da cidade; sem cidade, RH e admins) — nome, foto da ficha, aparelho e o código. Dá-o só à própria pessoa, quando ta pedir. Os que já foram usados ou passaram do prazo ficam por baixo, sem o código.\n- Mapa com a posição de cada condutor. Atualiza sozinho a cada 30 segundos.\n- Em cima fica uma linha só: quantos estão no mapa, a hora da última leitura e os alertas contados (acima do limite de velocidade, bateria fraca, sem reportar há mais de 1 h). Carrega num alerta para ver os nomes.\n- **Atualizar** lê tudo de novo (posições, ligações Zello ↔ pessoas e PDAs) e volta a mostrar toda a gente no mapa.\n- **Utilizadores Zello ↔ Pessoas**:\n  - Nos **PDAs** manda o check-in do dia.\n  - Se o PDA é de uma pessoa, escolhe-a como **dono do PDA**. O dono fica com o GPS sempre que ninguém fez check-in no PDA, também nos km de antes e de depois do check-in de outra pessoa (antes esses km ficavam \"sem login\").\n  - Nos telemóveis pessoais, escolhe a pessoa.\n  - Um PDA de outra cidade já não aparece como telemóvel pessoal."
+            },
+            {
+              "id": "atividade-diaria.md#pdas",
+              "file": "atividade-diaria.md",
+              "slug": "pdas",
+              "title": "PDAs",
+              "level": 4,
+              "summary": "Os PDAs da cidade, quem está com cada um e desde quando.",
+              "text": "- Os PDAs da cidade, quem está com cada um e desde quando.\n- Cada PDA mostra o seu **Zello** e se bate certo com a lista do Zello: certo, com outras maiúsculas, escrito de outra maneira (por exemplo \"extra12\" contra \"Extra_12\"), não existe, sem Zello, ou repetido noutro PDA. Quando há um nome parecido, quem edita PDAs tem **Corrigir para …**. O GPS só se liga à pessoa quando o Zello do PDA é exatamente o do Zello.\n- Os nomes do Zello comparam-se sem ligar a maiúsculas.\n- Os alertas **Sem PDA ou Zello** (ponto aberto sem PDA, Zello desligado, movimentos sem ponto) ficam pequenos, ao lado (no telemóvel, por cima). Carrega no título para os encolher. **Visto** marca que trataste; **+ nota** abre a caixa para escreveres porquê.\n- **Novo PDA**, **editar** e **QR** para quem edita PDAs. O olho abre o **histórico** do PDA (os últimos 100 check-ins, com \"Em uso\" ou \"Devolvido\").\n- Com **Entrar com email e código** ligado, só o team leader (ou acima) lê o QR, os supervisores são avisados quando um PDA passa para outro aparelho e a sessão no PDA acaba na saída do ponto. A **limpeza única de cada PDA** (uma conta Google da empresa; Chrome sem guardar palavras-passe) está na ajuda do Ponto → PDAs.\n- **Retirar** (o caixote, só administração) passa o PDA a **Inativo**. Nunca se apaga: o histórico de quem o teve e o GPS partido por pessoa ficam."
+            },
+            {
+              "id": "atividade-diaria.md#telemoveis-pessoais-por-baixo-dos-pdas",
+              "file": "atividade-diaria.md",
+              "slug": "telemoveis-pessoais-por-baixo-dos-pdas",
+              "title": "Telemóveis pessoais (por baixo dos PDAs)",
+              "level": 2,
+              "summary": "São os telemóveis de uma pessoa (team leaders, supervisores, qualquer um), não PDAs partilhados.",
+              "text": "- São os telemóveis de uma pessoa (team leaders, supervisores, qualquer um), **não** PDAs partilhados. Cada pessoa regista o seu no **Perfil → Este telemóvel → Registar este telemóvel como meu**.\n- Cada um aparece com o nome de quem tem sessão nele agora (**\"Telemóvel de Márcia Costa\"**, \"Agora com…\"). Sem ninguém, mostra quem lá esteve por último. O **dono** é quem o registou.\n- O **Zello** é o da ficha do dono (a conta Zello instalada no telemóvel). Quem entra no telemóvel de outra pessoa não lhe muda nem lhe tira o Zello. Sem Zello na ficha não fica amarelo (há quem não use); só fica amarelo se o Zello da ficha não bater com a lista do Zello.\n- Um telemóvel pessoal não tem sessão presa, não acaba na saída do ponto, não tem check-ins de PDA, não avisa \"mudou de aparelho\" e não muda o nome no Zello.\n- Botão **Pessoal?** (\"É um telemóvel pessoal\", num PDA registado, para quem edita PDAs, do team leader para cima): para o telemóvel de alguém que foi registado por engano como PDA. Escolhes de quem é (a lista traz quem já o teve; ou **Ninguém por agora**, e quem carregar em **Registar este telemóvel como meu** nesse telemóvel fica dono). O PDA passa a **Inativo** (o histórico fica), a sessão de PDA que lá estiver acaba, o check-in aberto fecha e o telemóvel passa sozinho a pessoal na próxima entrada (os avisos no telemóvel passam a ser da pessoa).\n- O **Zello** do PDA: se a ficha do dono não tem nenhum (e mais ninguém o tem), passa para a ficha. Se a ficha já tem outro (ou outra ficha tem este), não se mexe e aparece um aviso a dizer qual era, para confirmares na ficha. Com **Zello: nome de quem tem o PDA** ligado, a conta Zello do telemóvel deixa de ter nome de PDA e fica com o nome do dono.\n- **Deixar de ser pessoal**: o dono no próprio telemóvel, ou quem edita PDAs na lista. Nunca se apaga."
+            },
+            {
+              "id": "atividade-diaria.md#radio",
+              "file": "atividade-diaria.md",
+              "slug": "radio",
+              "title": "Rádio",
+              "level": 4,
+              "summary": "O separador Rádio (quem tem o módulo Rádio) tem as gravações do Zello, as provas e as transcrições — ver a ajuda \"Rádio\".",
+              "text": "- O separador **Rádio** (quem tem o módulo Rádio) tem as gravações do Zello, as provas e as transcrições — ver a ajuda \"Rádio\"."
+            },
+            {
+              "id": "atividade-diaria.md#quando-a-leitura-falha",
+              "file": "atividade-diaria.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Aparece um aviso vermelho \"Não foi possível carregar…\" com Tentar de novo.",
+              "text": "- Aparece um aviso vermelho **\"Não foi possível carregar…\"** com **Tentar de novo**. Os cartões mostram **—** em vez de 0. Uma falha nunca aparece como \"sem atividade\", \"sem dados\" ou \"nada em aberto\".\n- Sem permissão aparece **\"Sem acesso\"**.\n\nCada pessoa só vê as pessoas, os PDAs e o GPS das suas cidades."
+            }
+          ]
+        },
+        {
+          "id": "operacoes",
+          "file": "reservas-do-dia.md",
+          "group": "Operações",
+          "module": "reservas_operacoes",
+          "title": "Reservas do dia (entradas e saídas)",
+          "routes": [
+            "/operacoes"
+          ],
+          "tabs": [
+            {
+              "tab": "dia",
+              "section": "Reservas do dia (entradas e saídas)",
+              "sectionId": "reservas-do-dia.md#inicio"
+            }
+          ],
+          "summary": "Uma só lista com as entradas (check-in) e as saídas (check-out) de um dia.",
+          "sections": [
+            {
+              "id": "reservas-do-dia.md#inicio",
+              "file": "reservas-do-dia.md",
+              "slug": "inicio",
+              "title": "Reservas do dia (entradas e saídas)",
+              "level": 1,
+              "summary": "Uma só lista com as entradas (check-in) e as saídas (check-out) de um dia.",
+              "text": "Uma só lista com as **entradas** (check-in) e as **saídas** (check-out) de **um dia**. Os dados vêm **em tempo real** da base de dados da Multipark: não se copia nada e não é preciso sincronizar."
+            },
+            {
+              "id": "reservas-do-dia.md#onde",
+              "file": "reservas-do-dia.md",
+              "slug": "onde",
+              "title": "Onde",
+              "level": 4,
+              "summary": "Menu Operações → Reservas & Operações, aba Reservas do dia.",
+              "text": "- Menu **Operações → Reservas & Operações**, aba **Reservas do dia**.\n- Ao lado ficam as listas por período **Reservas**, **Recolhas**, **Entregas** e **Cancelados** (ver a ajuda \"Reservas, Recolhas, Entregas e Cancelados\")."
+            },
+            {
+              "id": "reservas-do-dia.md#o-dia",
+              "file": "reservas-do-dia.md",
+              "slug": "o-dia",
+              "title": "O dia",
+              "level": 4,
+              "summary": "Abre sempre no dia de hoje (hora de Lisboa) e carrega só esse dia, por isso é rápida.",
+              "text": "- Abre **sempre no dia de hoje** (hora de Lisboa) e carrega só esse dia, por isso é rápida.\n- **◀ ▶** mudam de dia, o calendário escolhe outro dia e **Hoje** volta a hoje.\n- No dia de hoje a lista atualiza-se sozinha a cada minuto. **Atualizar** lê de novo na hora."
+            },
+            {
+              "id": "reservas-do-dia.md#cada-linha",
+              "file": "reservas-do-dia.md",
+              "slug": "cada-linha",
+              "title": "Cada linha",
+              "level": 4,
+              "summary": "É um movimento: Entrada (seta para baixo, a verde) ou Saída (seta para cima, a laranja), com a hora.",
+              "text": "- É um movimento: **Entrada** (seta para baixo, a verde) ou **Saída** (seta para cima, a laranja), com a hora. Uma reserva que entra e sai no mesmo dia aparece duas vezes.\n- Mostra o n.º da reserva, o cliente, a matrícula e o carro, o estado da Multipark (Pendente, Reservada, A dar entrada, Estacionada, Em movimento, A preparar saída, A entregar, Entregue, Cancelada) e, por baixo, a **fase ao vivo** das que estão em curso — a mesma regra do estado ao vivo da Passagem de turno: **Em recolha (cliente a caminho)** (o cliente ligou para entregar o carro), **Na fila** (o cliente pediu o carro e ainda ninguém pegou nele), **Em entrega** (o condutor já pegou no carro: a caminho do terminal ou lá à espera do cliente) e **No terminal** (só quando o condutor carregou em \"Cheguei\" nesta entrega), com a etiqueta **à espera das malas** quando é deste pedido; o voo com a hora prevista (**ETA**) quando existe, o tipo de entrega, os extras, a garagem e o lugar, e o valor (com o que falta pagar).\n- Clicar numa linha abre a ficha da reserva."
+            },
+            {
+              "id": "reservas-do-dia.md#que-parques-aparecem",
+              "file": "reservas-do-dia.md",
+              "slug": "que-parques-aparecem",
+              "title": "Que parques aparecem",
+              "level": 4,
+              "summary": "A lista é só da operação: estão as entradas e saídas de todos os parques da base de dados da Multipark (das tuas cidades), porque a operação recolhe e entrega…",
+              "text": "- A lista é só da **operação**: estão as entradas e saídas de **todos os parques** da base de dados da Multipark (das tuas cidades), porque a operação recolhe e entrega os carros de todos.\n- A exceção são os **Parques que a operação não faz**: um admin escolhe-os em **Definições → Parâmetros → Operação (GPS / Zello / parques)** (a lista de parques é lida da Multipark na hora). Esses parques não aparecem aqui (nem na previsão e nos blocos do Extras-Dia, nem no estado ao vivo da Passagem de turno). Quando há parques de fora, aparece uma nota por cima da lista.\n- Além desses, ficam **sempre de fora os parques que não operamos** (lista do dono, pelo nome exato): Top Parking (Lisboa e Porto), Elite Park and Detail, Easy Park Estacionamento, Prime Park, Check-in Park, Estacionamento Quinta do Lamberg, Top Park, Aeroporto Park, Airport Villa Parking, Boeing Park, Bruno Miguel Gomes Taboada, Deluxe Park, Easy Parking, Fast Park, Go Park, Green Parking, Guard Park, Jet Park, Jorge Taboada, K Meetings, Low Cost Parking, Orange Parking, Park and Fly, Parking Terminal 1, Ricardo Maria e Smart Park. Nas Definições aparecem marcados como **não operado** e não se desmarcam; se algum nome da lista não existir na BD da Multipark, aparece um aviso.\n- A divisão Direto / Parceiro é da **contabilidade** e não aparece nesta lista. O **Marketplace** aparece por cidade (ver abaixo)."
+            },
+            {
+              "id": "reservas-do-dia.md#por-cidade-por-hora-e-por-marca",
+              "file": "reservas-do-dia.md",
+              "slug": "por-cidade-por-hora-e-por-marca",
+              "title": "Por cidade, por hora e por marca",
+              "level": 4,
+              "summary": "Por cima da lista há um botão por cidade (Lisboa, Porto, Faro) com as entradas e saídas de cada uma.",
+              "text": "- Por cima da lista há um botão por **cidade** (Lisboa, Porto, Faro) com as entradas e saídas de cada uma. **Todas** mostra as três. Escolher uma cidade muda os contadores e a lista para essa cidade. O filtro de cidade e marca do topo da página também conta.\n- Cada cidade tem um cartão:\n  - **Por marca**: Airpark, Redpark, Skypark e **Marketplace**, cada um com o que entra (↓) e o que sai (↑).\n  - O **Marketplace** junta os **parques que não são nossos** (Travelparking, Boardingpark, Parkdirect…) e as **reservas das nossas marcas que vieram pelo Marketplace** (por exemplo \"Airpark (pelo Marketplace)\"). Por baixo aparece cada parque do Marketplace com os seus números.\n  - **As 24 horas**: uma linha com o que **entra** e outra com o que **sai** em cada hora (hora de Lisboa). Quanto mais escuro, mais carros. Carregar numa hora mostra só os movimentos dessa hora na lista; carregar outra vez (ou no ✕ ao lado das cidades) tira o filtro.\n- A cidade de cada parque é a que está gravada no parque na Multipark. Se estiver vazia, é a que vem no nome (por exemplo \"Boardingpark Porto\")."
+            },
+            {
+              "id": "reservas-do-dia.md#grupos-um-por-parque",
+              "file": "reservas-do-dia.md",
+              "slug": "grupos-um-por-parque",
+              "title": "Grupos: um por parque",
+              "level": 4,
+              "summary": "Cada parque tem o seu bloco, com o nome no cabeçalho e as contagens de entradas e saídas.",
+              "text": "- Cada parque tem o seu bloco, com o nome no cabeçalho e as contagens de entradas e saídas.\n- Primeiro as nossas marcas, por **marca + cidade**: Airpark, Redpark e Skypark em Lisboa, depois no Porto, depois em Faro (por exemplo \"Airpark Lisboa\"). Se uma marca tiver mais do que um parque na mesma cidade, ficam no mesmo bloco e aparece a coluna **Parque**.\n- A marca vem do campo *firebaseBrand* do parque na BD da Multipark (sem ligar a maiúsculas, acentos ou espaços); se estiver vazio, do nome do parque. A cidade vem do campo cidade do parque; se estiver vazio, do nome.\n- Depois todos os **outros parques**, cada um no seu bloco com o nome do parque, por ordem alfabética."
+            },
+            {
+              "id": "reservas-do-dia.md#contadores-e-filtros",
+              "file": "reservas-do-dia.md",
+              "slug": "contadores-e-filtros",
+              "title": "Contadores e filtros",
+              "level": 4,
+              "summary": "No topo: entradas, saídas (com as que ainda estão por fazer) e canceladas, da cidade escolhida.",
+              "text": "- No topo: **entradas**, **saídas** (com as que ainda estão por fazer) e **canceladas**, da cidade escolhida. Clicar num contador filtra.\n- As **compras online por pagar** (estado **Pendente**: o cliente começou a compra no site e ainda não pagou) **contam** nas entradas e nas saídas: o carro vem na mesma. Saem sozinhas quando a Multipark as passa a recolhidas ou canceladas. Quando há alguma, aparece por baixo dos contadores **\"Destas, N são compras online por pagar\"**: clicar mostra só essas (e clicar de novo volta à lista normal). Na Faturação e no Financeiro continuam de fora.\n- Filtros: **Entradas / Saídas / Todas**, **parque**, **estado** (por omissão **sem canceladas nem pendentes**; \"Todas\" mostra tudo) e **pesquisa** pelo n.º da reserva, matrícula ou nome do cliente.\n\n**Se aparecer \"Reservas indisponíveis\" ou \"Erro a carregar as reservas\"**, a base de dados da Multipark não respondeu. Carrega em **Atualizar** daqui a pouco.\n\nCada pessoa só vê os parques das suas cidades.\n\n**Sincronização**: deixou de haver a página Sincronização e o botão \"Reparar período\". O estado das reservas recebidas pelo webhook está em **Definições → Estado do sistema**."
+            }
+          ]
+        },
+        {
+          "id": "operacoes.listas",
+          "file": "operacoes-listas.md",
+          "group": "Operações",
+          "module": "reservas_operacoes",
+          "title": "Reservas, Recolhas, Entregas e Cancelados (listas por período)",
+          "routes": [
+            "/operacoes"
+          ],
+          "tabs": [
+            {
+              "tab": "dashboard",
+              "section": "O Dashboard (primeira aba)",
+              "sectionId": "operacoes-listas.md#o-dashboard-primeira-aba"
+            },
+            {
+              "tab": "reservas",
+              "section": "As quatro listas",
+              "sectionId": "operacoes-listas.md#as-quatro-listas"
+            },
+            {
+              "tab": "entradas",
+              "section": "As quatro listas",
+              "sectionId": "operacoes-listas.md#as-quatro-listas"
+            },
+            {
+              "tab": "saidas",
+              "section": "As quatro listas",
+              "sectionId": "operacoes-listas.md#as-quatro-listas"
+            },
+            {
+              "tab": "cancelados",
+              "section": "As quatro listas",
+              "sectionId": "operacoes-listas.md#as-quatro-listas"
+            }
+          ],
+          "summary": "Quatro listas por período, nas Operações → Reservas & Operações, ao lado de \"Reservas do dia\".",
+          "sections": [
+            {
+              "id": "operacoes-listas.md#inicio",
+              "file": "operacoes-listas.md",
+              "slug": "inicio",
+              "title": "Reservas, Recolhas, Entregas e Cancelados (listas por período)",
+              "level": 1,
+              "summary": "Quatro listas por período, nas Operações → Reservas & Operações, ao lado de \"Reservas do dia\".",
+              "text": "Quatro listas por **período**, nas **Operações → Reservas & Operações**, ao lado de \"Reservas do dia\". Os dados vêm **em tempo real** da base de dados da Multipark (não se copia nada)."
+            },
+            {
+              "id": "operacoes-listas.md#as-quatro-listas",
+              "file": "operacoes-listas.md",
+              "slug": "as-quatro-listas",
+              "title": "As quatro listas",
+              "level": 4,
+              "summary": "Reservas: reservas criadas no período (pela data de criação), incluindo as que entretanto foram canceladas.",
+              "text": "- **Reservas**: reservas **criadas** no período (pela data de criação), incluindo as que entretanto foram canceladas.\n- **Recolhas**: reservas com **recolha (check-in)** no período, sem as canceladas.\n- **Entregas**: reservas com **entrega (check-out)** no período, sem as canceladas.\n- **Cancelados**: reservas **canceladas** no período, pela **data do cancelamento**. Cada linha mostra também as datas de recolha e entrega da reserva, o **motivo** (e as observações), o **reembolso** (não, pedido ou reembolsado, com o valor) e **quem cancelou** (o último movimento de cancelamento da reserva). As canceladas sem registo de cancelamento na Multipark aparecem pela última alteração da reserva, com **≈** (data aproximada).\n- O tipo de lugar **Toldo** é o antigo \"coberto\" (o carro fica sob toldo); Descoberto, Interior e VIP ficam iguais. Na Multipark o produto continua a chamar-se COVERED.\n- As **compras online por pagar** (reserva \"Pendente\": o cliente começou a compra no site e ainda não pagou) **contam** nas listas e nos números, como nas Reservas do dia, na Passagem de turno e no Extras Dia: o carro vem na mesma. Saem sozinhas quando a Multipark as passa a recolhidas ou canceladas. Na Faturação e no Financeiro continuam de fora."
+            },
+            {
+              "id": "operacoes-listas.md#o-periodo",
+              "file": "operacoes-listas.md",
+              "slug": "o-periodo",
+              "title": "O período",
+              "level": 4,
+              "summary": "Abre em hoje (hora de Lisboa) — ou no período do Dashboard, quando se chega lá a partir de um cartão.",
+              "text": "- Abre **em hoje** (hora de Lisboa) — ou no período do Dashboard, quando se chega lá a partir de um cartão.\n- Atalhos: **Hoje**, **Ontem**, **Amanhã**, **7 dias** (os últimos sete, com hoje) e **Este mês**. Também se escolhe **De** / **Até** no calendário, e **◀ ▶** andam um período para trás ou para a frente.\n- Máximo **62 dias** de cada vez.\n- O período, o parque, o canal e a pesquisa ficam iguais ao mudar entre as quatro listas."
+            },
+            {
+              "id": "operacoes-listas.md#contadores-e-comparacao",
+              "file": "operacoes-listas.md",
+              "slug": "contadores-e-comparacao",
+              "title": "Contadores e comparação",
+              "level": 4,
+              "summary": "O total do período e a diferença para o período anterior com a mesma duração (por exemplo, hoje contra ontem, ou estes 7 dias contra os 7 anteriores).",
+              "text": "- O total do período e a diferença para o **período anterior com a mesma duração** (por exemplo, hoje contra ontem, ou estes 7 dias contra os 7 anteriores). Nos cancelados, subir aparece a vermelho.\n- Valores **com IVA**: valor, pago e falta pagar. Nas Reservas, os valores são só das **não canceladas**, e diz-se quantas já foram canceladas e o valor.\n- Recolhas e Entregas: quantas estão **feitas** e quantas **por fazer**.\n- Cancelados: valor cancelado, quantas com **reembolso** (e o valor reembolsado) e a contagem por **motivo**.\n- Por **canal** (Direto, Parceiro, Marketplace — clicar filtra), por grupo (Airpark/Redpark/Skypark × cidade e Marketplace) e **por parque**, sempre com o período anterior ao lado.\n- **Marketplace** = a regra única (a mesma do Marketing, das Reservas do dia e das Parcerias): **todas** as reservas dos parques que não são nossos e as dos nossos que vieram pelo Marketplace (origem Marketplace). Cada linha do Marketplace diz por baixo se o parque é **Operado por nós** ou **Não operado** (os da lista do dono e os de Definições → Parques que a operação não faz) — a comissão é diferente. É só uma etiqueta: a lista não muda."
+            },
+            {
+              "id": "operacoes-listas.md#porque-e-que-o-numero-e-diferente-do-dashboard",
+              "file": "operacoes-listas.md",
+              "slug": "porque-e-que-o-numero-e-diferente-do-dashboard",
+              "title": "Porque é que o número é diferente do Dashboard?",
+              "level": 4,
+              "summary": "O Dashboard (primeira aba) conta só os parques nossos; as listas mostram todos os parques das tuas cidades, também os Marketplace.",
+              "text": "- O **Dashboard** (primeira aba) conta só os **parques nossos**; as listas mostram **todos os parques das tuas cidades**, também os Marketplace. Nos Cancelados, o Dashboard também deixa de fora os de **data aproximada (≈)**.\n- Sem filtros, a lista diz por baixo dos contadores **\"No Dashboard das Operações: N\"** — é esse o número do cartão, para o mesmo período.\n- Clicar num cartão do Dashboard abre a lista **no mesmo período** do Dashboard (se tiver até 62 dias; senão a lista fica no período que tinha)."
+            },
+            {
+              "id": "operacoes-listas.md#filtros-e-tabela",
+              "file": "operacoes-listas.md",
+              "slug": "filtros-e-tabela",
+              "title": "Filtros e tabela",
+              "level": 4,
+              "summary": "Filtros: parque, estado (Reservas: não canceladas / canceladas; Recolhas: recolhidas / por recolher; Entregas: entregues / por entregar; Cancelados: com / sem…",
+              "text": "- Filtros: **parque**, **estado** (Reservas: não canceladas / canceladas; Recolhas: recolhidas / por recolher; Entregas: entregues / por entregar; Cancelados: com / sem reembolso) e **pesquisa** pelo n.º da reserva, matrícula (com ou sem traços), nome ou email do cliente.\n- A tabela mostra 200 linhas de cada vez (**Anterior** / **Seguinte**), das mais recentes para as mais antigas. Clicar numa linha abre a ficha da reserva.\n- **CSV** descarrega a lista com os filtros (até 2000 linhas).\n\n**Se aparecer \"indisponíveis\" ou \"Erro a carregar\"**, a base de dados da Multipark não respondeu: não há números (nunca aparecem zeros a fingir). Carrega em **Atualizar** daqui a pouco."
+            },
+            {
+              "id": "operacoes-listas.md#o-dashboard-primeira-aba",
+              "file": "operacoes-listas.md",
+              "slug": "o-dashboard-primeira-aba",
+              "title": "O Dashboard (primeira aba)",
+              "level": 4,
+              "summary": "Cartões Reservas criadas, Recolhas, Entregas e Cancelamentos no período, a percentagem de cancelamento e os gráficos por cidade ou parque.",
+              "text": "- Cartões **Reservas criadas**, **Recolhas**, **Entregas** e **Cancelamentos no período**, a percentagem de cancelamento e os gráficos por cidade ou parque. Conta só os **parques nossos**, com as compras online por pagar. Basta ter acesso aos painéis: não é preciso ver os totais financeiros (o painel só mostra contagens).\n- Se a Multipark não responder, aparece **\"Não foi possível ler as reservas da Multipark\"** com **Tentar de novo**, em vez de cartões a zero. Enquanto carrega, os cartões mostram **…**.\n\nCada pessoa só vê os parques das suas cidades."
+            }
+          ]
+        },
+        {
+          "id": "passagem-turno",
+          "file": "passagem-turno.md",
+          "group": "Operações",
+          "module": "passagem_turno",
+          "title": "Passagem de turno",
+          "routes": [
+            "/passagem-turno"
+          ],
+          "tabs": [],
+          "summary": "Checklist de fim de turno dos team leaders e o histórico das passagens.",
+          "sections": [
+            {
+              "id": "passagem-turno.md#inicio",
+              "file": "passagem-turno.md",
+              "slug": "inicio",
+              "title": "Passagem de turno",
+              "level": 1,
+              "summary": "Checklist de fim de turno dos team leaders e o histórico das passagens.",
+              "text": "Checklist de fim de turno dos team leaders e o histórico das passagens.\n\n**O Resumo do dia mudou de sítio** (12 out 2026): está agora em **Operações → Actividade Diária → Resumo do dia**, com tudo o que tinha (quem trabalhou, entregas lentas, passagens por chefe de turno). Quem o via aqui vê-o lá, com a mesma permissão. Na Passagem de turno fica uma ligação para lá."
+            },
+            {
+              "id": "passagem-turno.md#preencher-team-leader",
+              "file": "passagem-turno.md",
+              "slug": "preencher-team-leader",
+              "title": "Preencher (Team Leader)",
+              "level": 2,
+              "summary": "Menu Operações → Passagem de Turno.",
+              "text": "1. Menu **Operações → Passagem de Turno**. Escolhe a cidade e o turno (manhã/noite). O dia operacional vai das 03:00 às 03:00 do dia seguinte.\n2. Preenche a caixa (caixa de check-out, fecho de caixa no cofre, valores das bolsas front/terminal, tickets/despesas pagos), o material (canetas, rolos MB, bateria), o fardamento e os **Pendentes para o turno seguinte**.\n3. Escreve observações e carrega em **Guardar passagem de turno**. Grava logo. O resumo IA, o aviso e o email ao team leader do turno seguinte seguem dentro de momentos, e o histórico atualiza-se sozinho.\n4. Quem entra confirma com **Recebi**. Nem quem criou a passagem nem quem a editou por último a podem confirmar."
+            },
+            {
+              "id": "passagem-turno.md#resumo-ia-para-o-turno-seguinte",
+              "file": "passagem-turno.md",
+              "slug": "resumo-ia-para-o-turno-seguinte",
+              "title": "Resumo IA para o turno seguinte",
+              "level": 4,
+              "summary": "A IA faz o resumo quando entregas a passagem (a 1.ª vez que carregas em Guardar passagem de turno).",
+              "text": "- A IA faz o resumo **quando entregas** a passagem (a 1.ª vez que carregas em **Guardar passagem de turno**). Antes disso a caixa diz \"A IA faz o resumo quando guardares (entregares) a passagem.\"\n- **Atualizar** a passagem depois **não chama a IA** (cada resumo é uma chamada paga). O resumo fica como estava e aparece **Resumo desatualizado**; o email desse envio já não leva o resumo velho (leva as notas, os números e os pendentes).\n- **Resumir agora** (quem pode preencher passagens) refaz o resumo a partir da passagem **gravada**. Com alterações por gravar, grava primeiro.\n- No histórico, um resumo que ficou para trás aparece como \"✨ resumo IA (desatualizado)\"; na **Passagem recebida**, o turno seguinte vê as notas em vez do resumo velho."
+            },
+            {
+              "id": "passagem-turno.md#pendentes-que-passam-de-turno",
+              "file": "passagem-turno.md",
+              "slug": "pendentes-que-passam-de-turno",
+              "title": "Pendentes que passam de turno",
+              "level": 4,
+              "summary": "Só passam de turno os PDAs ainda com check-in e o que o team leader escreve (as notas).",
+              "text": "- Só passam de turno os **PDAs ainda com check-in** e o que o team leader escreve (as notas). Reclamações, perdidos e achados, ocorrências e entregas pendentes **já não entram** nos pendentes: tratam-se nas páginas deles. Os que já estavam gravados em passagens antigas não se apagam, só deixam de passar e de aparecer.\n- Os pendentes vêm da **última passagem** da cidade (até 3 dias para trás). Se o turno anterior não fez passagem, vêm da que houve antes, com o aviso de quantos turnos ficaram sem passagem.\n- Enquanto os pendentes do turno anterior não estiverem na lista, o botão de gravar espera (\"A juntar os pendentes do turno anterior…\").\n- Se não for possível lê-los, aparece um aviso a laranja com **Tentar de novo**. Só gravas sem eles se marcares **Gravar mesmo assim**; nesse caso continuam na passagem anterior.\n- Um pendente herdado **resolve-se** (visto), não se apaga. Só podes remover as notas que escreveste neste turno.\n- Linhas das observações começadas por \"- \" passam a pendentes. Se editares ou apagares a linha, o pendente acompanha.\n- Quem resolveu e quando ficam com o nome da conta que grava.\n- A lista leva até **60** pendentes; o contador mostra quantos tens. No limite ficam primeiro as notas e os herdados.\n- Num turno antigo (nem o atual nem o que acabou agora), a passagem nova herda só os pendentes da anterior: o \"ao vivo\" é de agora, não desse turno."
+            },
+            {
+              "id": "passagem-turno.md#resumo-automatico-no-topo-de-preencher",
+              "file": "passagem-turno.md",
+              "slug": "resumo-automatico-no-topo-de-preencher",
+              "title": "Resumo automático (no topo de Preencher)",
+              "level": 2,
+              "summary": "As recolhas e entregas do próximo turno (com voo e valor a pagar), as entregas pendentes e os carros p/ toldo vêm ao vivo da BD da Multipark.",
+              "text": "- As recolhas e entregas do próximo turno (com voo e valor a pagar), as entregas pendentes e os carros p/ toldo vêm **ao vivo da BD da Multipark**. Reclamações, perdidos e ocorrências já não aparecem aqui. As compras online ainda por pagar também contam: vão ser recolhidas na mesma.\n- A equipa mostra **(por confirmar)** em quem ainda está só proposto na escala.\n- Se a BD da Multipark não responder, aparece um aviso a laranja e o resumo usa as cópias do dashboard. O resto da passagem funciona igual.\n- Uma parte que não se consegue ler mostra **erro** em vez do número. Não é 0, e no email e no resumo IA aparece como \"sem dados (falhou a leitura)\"."
+            },
+            {
+              "id": "passagem-turno.md#estado-do-parque-ao-vivo",
+              "file": "passagem-turno.md",
+              "slug": "estado-do-parque-ao-vivo",
+              "title": "Estado do parque (ao vivo)",
+              "level": 4,
+              "summary": "Separador com o estado atual dos parques da cidade, lido diretamente da BD da Multipark (só leitura).",
+              "text": "Separador com o estado atual dos parques da cidade, lido diretamente da BD da Multipark (só leitura). Não entram os **Parques que a operação não faz** das Definições; o mesmo vale para o resumo da passagem.\n- **Carros no parque por tipo de lugar**: Descoberto, Toldo (o antigo \"coberto\"), Interior e VIP (a cidade já está escolhida em cima). O tipo é o do lugar atribuído (n.º de alocação); sem ele, o do produto reservado.\n  - Por baixo do número aparecem as **garagens** onde esses carros estão, em cada parque (ex.: \"Airpark: COBERTO 29 · PD 3\").\n  - Se a garagem não bate com o tipo, o carro está **mal arrumado** e a garagem aparece **a vermelho com ⚠**. As garagens são: **PD**, **PD FORA** e **CENTRAL** para descobertos; **COBERTO** e **CENTRAL COBERTO** para indoor e toldos.\n    - **Vermelho**: indoor (ou VIP) fora de uma garagem coberta, ou descoberto numa garagem coberta.\n    - **Amarelo**: toldo numa garagem descoberta. Passa para a coberta quando houver lugar (\"se der\").\n    - **Toldo no PD: amarelo aqui, mas \"parque certo\" nos tempos.** São duas perguntas diferentes: aqui é \"onde devia estar, se houver lugar\" (o toldo fica melhor na coberta); nos **tempos das recolhas** (Definições → Parâmetros → **Papéis das garagens**) o PD é **parque certo** para descobertos **e toldos**, por isso a recolha conta como arrumada quando o toldo chega ao PD. Mudá-lo depois para a coberta é arrumação, não atrasa a recolha.\n    - Garagem com outro nome, ou carro sem tipo: fica sem cor (não se adivinha).\n  - **Mal arrumados** (por baixo): em cima, quantos estão mal arrumados e quantos toldos estão numa descoberta. Por baixo, **uma linha por tipo**, com quantos carros: por exemplo \"Descoberto em COBERTO · 11 carros\", \"Interior em PD · 6 carros\", \"Toldo em PD (se der, coberta) · 8 carros\". Primeiro os mal arrumados (a vermelho, com ⚠), depois os \"se der\" (a amarelo).\n    - Carrega numa linha para ver os carros dela (matrícula, lugar e parque) e ires buscá-los; carrega outra vez para fechar. Ao entrar estão todas fechadas.\n  - **Ver por parque e garagem** abre a divisão antiga.\n- **Pendentes que se arrastam** e **Resumo da semana** contam só os pendentes da passagem: PDAs ainda com check-in e notas do team leader. Ocorrências, reclamações e perdidos não são da passagem e já não aparecem aqui. Os resumos de semanas anteriores, que ainda falavam deles, deixam de se mostrar; o próximo sai na segunda-feira.\n- Os que já passaram a hora de saída.\n- **Operações em curso**, cada uma com um **cronómetro** que anda sozinho (de 30 em 30 s) e a hora em que começou: **Em recolha há X** — o cliente ligou para a recolha; **Em movimento há X**; **Na fila há X** — o cliente ligou a pedir o carro (pendente); **Em entrega há X** — o condutor já pegou no carro e saiu do parque (a caminho do terminal ou lá à espera do cliente; sem GPS ao vivo não se sabe se já chegou); **No terminal** — só quando o condutor carregou em \"Cheguei\" nesta entrega (quase não se usa). **À espera das malas** aparece como etiqueta ao lado, quando é deste pedido.\n  - Só **Na fila** tem cor: fica **âmbar** a partir da meta da entrega (**Definições → Parâmetros → \"Tempos: meta da entrega\"**, 15 min por omissão) e **vermelho** a partir do dobro. **Em entrega** não tem cor: inclui a espera pelo cliente no terminal, que não é tempo nosso.\n- Na lista **Entregas pendentes (na fila)** do rascunho só entram os carros **na fila**: um carro em entrega já saiu do parque. Cada um diz **\"na fila há X min\"** (com a hora do pedido entre parênteses), com as mesmas cores.\n- **Próximas entregas e recolhas** (4, 8, 12 ou 24 h) com voo e ETA do voo.\n- **Caixa do turno por fechar/validar** (caixa fechada, caixa validada, condutor validado).\n- **Bloqueios e horário de amanhã** dos parques. Às 02:30 \"amanhã\" ainda conta a partir da noite de ontem."
+            },
+            {
+              "id": "passagem-turno.md#alteracoes-por-gravar",
+              "file": "passagem-turno.md",
+              "slug": "alteracoes-por-gravar",
+              "title": "Alterações por gravar",
+              "level": 4,
+              "summary": "O que escreveste não se perde ao mudar de separador.",
+              "text": "- O que escreveste não se perde ao mudar de separador.\n- Mudar de dia, turno ou cidade, ou recarregar, pergunta antes se há alterações **por gravar**."
+            },
+            {
+              "id": "passagem-turno.md#quando-a-leitura-falha",
+              "file": "passagem-turno.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Cada parte (as tuas cidades, o registo do turno, o resumo automático, o histórico) mostra \"Não foi possível carregar…\" com Tentar de novo.",
+              "text": "- Cada parte (as tuas cidades, o registo do turno, o resumo automático, o histórico) mostra **\"Não foi possível carregar…\"** com **Tentar de novo**.\n- Uma falha nunca aparece como \"sem passagens\" ou \"sem cidade atribuída\"."
+            },
+            {
+              "id": "passagem-turno.md#notas",
+              "file": "passagem-turno.md",
+              "slug": "notas",
+              "title": "Notas",
+              "level": 4,
+              "summary": "Depois de 24 h só um supervisor, ou quem tem acesso ao Resumo do dia, pode alterar a passagem.",
+              "text": "- Depois de 24 h só um supervisor, ou quem tem acesso ao **Resumo do dia**, pode alterar a passagem. A mesma regra vale para o **Resumir agora**.\n- Não dá para registar passagens para depois de amanhã.\n- Quem só consulta vê a passagem, mas não grava, não pede o resumo nem confirma.\n- No telemóvel, o **Histórico** mostra um cartão por passagem.\n- O **Resumo do dia** (supervisão) está em **Operações → Actividade Diária → Resumo do dia**.\n\n**Fecho da caixa do turno** (13 out 2026): depois de fechares a caixa na Multipark, escreve o **dinheiro recebido** dos condutores neste turno (antes das despesas), o **Multibanco recebido** e o **total que dava a caixa na Multipark**. O João usa estes valores no dia seguinte em **Caixa → Confirmação**; sem eles o dia não se fecha.\n\n**Despesas do turno** (em Valores): lança aqui cada despesa paga com o dinheiro da caixa — não é preciso ir ao Financeiro.\n1. Carrega em **Talão** e tira a foto (ou escolhe uma foto ou PDF). Enquanto aparece **A ler o talão…**, a IA (a mesma das Despesas) lê o talão e preenche a descrição, o valor e os dados do talão: fornecedor, NIF, n.º do documento, data, IVA e categoria.\n2. Abre **O que a IA leu do talão**, confirma e corrige o que for preciso e carrega em **Lançar**. A IA nunca escreve por cima do que já escreveste. Se a IA estiver desligada ou não conseguir ler, preenche à mão: descrição e valor chegam (os dados do talão são opcionais, em **Dados do talão**).\n3. A aplicação avisa quando o NIF não está certo, quando a data do talão está longe do turno (só aceita do dia seguinte até um mês antes), quando o talão parece já estar lançado nas Despesas e quando o documento parece uma fatura emitida pela Multipark.\n4. A despesa entra logo nas **Despesas** (paga, dinheiro, centro da cidade, com o talão e a data do talão) e abate à **caixa do dia** (Financeiro → Caixa → Por dia). O IVA lido fica nas notas da despesa.\n5. Cada despesa lançada tem **Abrir nas Despesas (n.º …)**: abre o detalhe dessa despesa num separador novo (a passagem que estás a preencher não se perde). Quem não pode ver essa despesa nas Despesas vê só \"Já está nas Despesas (n.º …)\".\n\n**Anular** deixa a despesa do turno cancelada (nunca se apaga)."
+            }
+          ]
+        },
+        {
+          "id": "radio",
+          "file": "radio.md",
+          "group": "Operações",
+          "module": "radio",
+          "title": "Rádio (gravações do Zello e transcrições)",
+          "routes": [
+            "/radio",
+            "/operacional"
+          ],
+          "tabs": [],
+          "summary": "Menu Operações → Actividade Diária, separador Rádio (o antigo endereço /radio vai lá ter).",
+          "sections": [
+            {
+              "id": "radio.md#inicio",
+              "file": "radio.md",
+              "slug": "inicio",
+              "title": "Rádio (gravações do Zello e transcrições)",
+              "level": 1,
+              "summary": "Menu Operações → Actividade Diária, separador Rádio (o antigo endereço /radio vai lá ter).",
+              "text": "Menu **Operações → Actividade Diária**, separador **Rádio** (o antigo endereço /radio vai lá ter). Tem três separadores: **Gravações do Zello** (abre aqui), **Provas** e **Transcrições**."
+            },
+            {
+              "id": "radio.md#gravacoes-do-zello",
+              "file": "radio.md",
+              "slug": "gravacoes-do-zello",
+              "title": "Gravações do Zello",
+              "level": 2,
+              "summary": "As mensagens de voz vêm diretamente do histórico do Zello, cruzadas com o GPS e com a Multipark.",
+              "text": "As mensagens de voz vêm **diretamente do histórico do Zello**, cruzadas com o GPS e com a Multipark.\n\n1. Escolhe o **dia** e o intervalo **de / até** (hora de Lisboa, no máximo 24 horas). Se o \"até\" for antes do \"de\", conta como o dia seguinte (ex.: 22:00 → 02:00, o turno da noite).\n2. Se quiseres, escolhe um **utilizador do Zello** (com **também as que recebeu**) e/ou um **canal**.\n3. Carrega em **Procurar**. Vêm 100 mensagens de cada vez, das mais antigas para as mais recentes. **Ver mais** traz as seguintes.\n\nCada mensagem mostra:\n- **Hora, quem falou e para onde** (canal ou pessoa) e a duração.\n- **Quem falou**: os PDAs são partilhados, por isso conta a pessoa com **check-in nesse PDA a essa hora**. Sem check-in, conta a ficha que tem esse Zello. Sem nenhum dos dois, fica **por identificar**.\n- **Ouvir**: o áudio vem do Zello, passando pela app (assim toca no telemóvel e no PC). Às vezes o Zello demora uns segundos a prepará-lo. Se não der, aparece o motivo em vermelho.\n- **Transcrição**: a do Zello, quando a rede a tem ligada (\"pode ter erros\" se o Zello o disser). Sem ela, **Transcrever (IA)** (team leaders, supervisores e administração). A transcrição fica guardada e não se paga duas vezes.\n- **Posição e velocidade** nessa hora, pelo ponto GPS do Zello mais perto (até 5 minutos), com **ver no mapa**.\n- **Multipark**: o que essa pessoa fez **10 minutos antes e depois** (entradas, saídas, movimentos), com matrícula, reserva e parque. Conta pelos agentes ligados à ficha (RH → Ligações).\n\nQuem só vê a sua cidade só vê as mensagens de pessoas dessa cidade. As de outras cidades, ou de quem não se sabe quem é, ficam de fora e aparece um aviso."
+            },
+            {
+              "id": "radio.md#guardar-como-prova-supervisores-backoffice-e-administracao",
+              "file": "radio.md",
+              "slug": "guardar-como-prova-supervisores-backoffice-e-administracao",
+              "title": "Guardar como prova (supervisores, backoffice e administração)",
+              "level": 3,
+              "summary": "Numa mensagem, Guardar como prova.",
+              "text": "- Numa mensagem, **Guardar como prova**. Para guardar várias juntas, marca o quadrado de cada uma (até 10) e carrega em **Guardar como prova** na barra de cima.\n- Diz a **situação** (obrigatória, ex.: \"dano no carro da reserva X\"). Podes juntar uma **referência** (reserva, matrícula, ocorrência) e **notas**.\n- Fica guardado como estava nesse momento: quem falou, a hora, a transcrição, a posição e a velocidade, e o que fez na Multipark à volta da hora. A app volta a ler a mensagem no Zello (não se guarda o que está no ecrã) e põe-lhe um **selo** para se ver que não mudou.\n- O **áudio** junta-se se o Zello o der. Se o Zello ainda o estiver a preparar, a prova fica sem áudio e, mais tarde, há o botão **Juntar o áudio**. A transcrição chega para servir de prova.\n- Uma mensagem guardada mostra **Prova #N** e já não se escolhe outra vez."
+            },
+            {
+              "id": "radio.md#provas",
+              "file": "radio.md",
+              "slug": "provas",
+              "title": "Provas",
+              "level": 2,
+              "summary": "As mensagens guardadas como prova, das mais recentes para as mais antigas.",
+              "text": "As mensagens guardadas como prova, das mais recentes para as mais antigas.\n- **Procurar** pela situação, referência, pessoa, utilizador do Zello, transcrição ou notas.\n- **Imprimir** uma prova, ou **Imprimir / PDF** para todas as que estão na lista (no browser, escolhe \"Guardar como PDF\").\n- **Ouvir** o áudio guardado ou **Juntar o áudio**, se ainda faltar (supervisores, backoffice e administração).\n- **Arquivar** (só administração) pede o motivo. A prova sai da lista, mas nunca se apaga (**mostrar arquivadas**).\n- Quem só vê a sua cidade só vê as provas de pessoas dessa cidade."
+            },
+            {
+              "id": "radio.md#transcricoes",
+              "file": "radio.md",
+              "slug": "transcricoes",
+              "title": "Transcrições",
+              "level": 2,
+              "summary": "As comunicações de rádio passadas a texto a partir de um ficheiro de áudio, com um resumo de 1 ou 2 frases.",
+              "text": "As comunicações de rádio passadas a texto a partir de um ficheiro de áudio, com um resumo de 1 ou 2 frases."
+            },
+            {
+              "id": "radio.md#a-lista",
+              "file": "radio.md",
+              "slug": "a-lista",
+              "title": "A lista",
+              "level": 4,
+              "summary": "Das mais recentes para as mais antigas, 50 de cada vez.",
+              "text": "- Das mais recentes para as mais antigas, **50 de cada vez**. **Ver mais** traz as anteriores.\n- Cada transcrição diz quando foi feita, o **condutor** (se foi indicado), a **viatura** (se foi indicada), a duração do áudio e **quem a fez**: o nome de quem a pediu ou **Transcrição automática (API)** quando veio de outro sistema.\n- **Áudio** abre a gravação."
+            },
+            {
+              "id": "radio.md#nova-transcricao-team-leaders-supervisores-e-administracao",
+              "file": "radio.md",
+              "slug": "nova-transcricao-team-leaders-supervisores-e-administracao",
+              "title": "Nova transcrição (team leaders, supervisores e administração)",
+              "level": 3,
+              "summary": "Escolhe o ficheiro de áudio (até 4 MB).",
+              "text": "1. Escolhe o ficheiro de áudio (até 4 MB).\n2. Indica o condutor, se quiseres (só aparecem colaboradores ativos). A viatura só aparece quando há viaturas registadas.\n3. Carrega em **Transcrever**. A transcrição usa IA, que tem custo, e a duração do áudio é lida do ficheiro.\n- O áudio tem de ser carregado aqui: não se aceitam endereços de fora."
+            },
+            {
+              "id": "radio.md#quando-a-leitura-falha",
+              "file": "radio.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Aparece \"Não foi possível carregar as transcrições\" com Tentar de novo, em vez de \"Sem transcrições\".",
+              "text": "- Aparece **\"Não foi possível carregar as transcrições\"** com **Tentar de novo**, em vez de \"Sem transcrições\".\n\nCada pessoa só vê as transcrições da sua cidade: a do condutor ou, sem condutor, a de quem transcreveu."
+            }
+          ]
+        },
+        {
+          "id": "reserva",
+          "file": "ficha-reserva.md",
+          "group": "Operações",
+          "module": "reservas_operacoes",
+          "title": "Ficha da reserva",
+          "routes": [
+            "/reserva"
+          ],
+          "tabs": [],
+          "summary": "Tudo sobre uma reserva num só sítio, lido em tempo real da base de dados da Multipark.",
+          "sections": [
+            {
+              "id": "ficha-reserva.md#inicio",
+              "file": "ficha-reserva.md",
+              "slug": "inicio",
+              "title": "Ficha da reserva",
+              "level": 1,
+              "summary": "Tudo sobre uma reserva num só sítio, lido em tempo real da base de dados da Multipark.",
+              "text": "Tudo sobre uma reserva num só sítio, lido **em tempo real** da base de dados da Multipark. Nada é copiado para o dashboard: o que muda na app Multipark aparece logo aqui."
+            },
+            {
+              "id": "ficha-reserva.md#abrir",
+              "file": "ficha-reserva.md",
+              "slug": "abrir",
+              "title": "Abrir",
+              "level": 4,
+              "summary": "Em Reclamações e Perdidos e Achados, no cartão \"Dados da Reserva\", carrega em Abrir ficha da reserva.",
+              "text": "- Em **Reclamações** e **Perdidos e Achados**, no cartão \"Dados da Reserva\", carrega em **Abrir ficha da reserva**.\n- Ou vai a **/reserva** e escreve o **n.º da reserva** (ex.: 29484), o id da Multipark ou a referência do parceiro.\n- O mesmo n.º pode existir em parques diferentes: nesse caso aparece a lista para escolheres a reserva certa.\n- O antigo \"Inspecionar reserva\" (/multipark/inspect) abre agora esta ficha."
+            },
+            {
+              "id": "ficha-reserva.md#o-que-mostra",
+              "file": "ficha-reserva.md",
+              "slug": "o-que-mostra",
+              "title": "O que mostra",
+              "level": 4,
+              "summary": "Cabeçalho: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, o canal para a contabilidade (Direto, Parceiro ·…",
+              "text": "- **Cabeçalho**: n.º, estado, parque, entrada e saída, voos com a hora prevista atualizada (ETA), tipo de entrega, o **canal** para a contabilidade (**Direto**, **Parceiro · nome do parceiro** com o tipo — agência, agregador ou parceiro — ou **Marketplace**) e a origem (com a comissão do parceiro), a classificação do parque (**Parque nosso · marca + cidade** ou **Parque Marketplace · operado por nós / não operado**, e o tipo de listagem), preço (e o preço na criação, se mudou), valor pago e método. Por baixo, a hora de cada fase: a entrar, em movimento, à espera de saída, à espera da bagagem, a sair.\n- **Cliente**: nome, email, telefone, NIF e língua, com **Ligar**, **WhatsApp** e **Email** (o email sai pela caixa **info**, se puderes escrever nela). Num cliente anonimizado não aparecem. Se o email existir nos nossos Clientes aparece **Ver ficha do cliente (CRM)**.\n- **Outra pessoa entrega/levanta** (quando a reserva tem): nome, telefone e email dessa pessoa, cada uma com os mesmos botões **Ligar**, **WhatsApp** e **Email**.\n- **Viatura**: matrícula, marca, modelo, cor, km, autonomia e quem fez a entrada e a saída.\n- **Provas**: vídeo do check-in, assinaturas de entrada e saída e anexos. Os vídeos e anexos com link abrem diretamente. Os que estão guardados dentro da app mostram **abrir na app Multipark**. As assinaturas só são carregadas quando carregas em **Mostrar assinaturas**.\n- **Linha do tempo** (abre ao clicar): cada ação sobre a reserva, com quem, quando, em que aparelho, o que mudou (**antes → depois**) e o estado nesse momento. Quando a ação tem GPS aparece o link **mapa**. O percurso real dos condutores está nos dados do Zello. O histórico da Multipark só existe desde 2 mar 2026.\n- **Tempos** (abre ao clicar): a **entrega** e a **recolha** desta reserva. Primeiro a linha do tempo (chamada, pendente ou \"em recolha\", pegou no carro, chegou ao terminal, assinatura, check-in, saiu do terminal, garagens); depois cada tempo (**Fila**, **Trânsito**, **Cliente**, **Nosso**, **Total**; nas recolhas **Cliente**, **No terminal**, **Até à 1.ª garagem**, **No P2**, **Até arrumado** e, no T2, **Atraso no T2**) com a **fonte** (chamada do cliente, pendente, GPS, botão \"Cheguei\", início do movimento na app) e, sem medição, o **motivo** (ex.: \"Sem Zello\", \"GPS por recolher\"). Por baixo, as notas do ciclo (ex.: \"o condutor esperou o cliente\", \"chamada perdida\").\n  - Vem da tabela dos tempos (o cálculo da noite); se ainda não tem esta reserva, é **calculado agora**, provisório: sem GPS e sem as chamadas (a Fila conta desde o pendente).\n  - Os tempos com GPS seguem o portão: até a calibração acabar só o super admin os vê; os outros veem \"Em calibração\". A hora marcada não entra em nenhum tempo.\n- **Onde está o carro**: n.º, alocação, garagem (com o mapa, se existir) e lugar.\n- **Contas**: as linhas da conta (estacionamento, valet, serviços, taxas, descontos), cada pagamento com a hora e o método, as faturas (InvoiceExpress, emitida ou não), o cancelamento com o motivo e o reembolso, e a caixa: condutor validou, dinheiro conferido e caixa fechada, com quem e quando.\n- **Conferência (era / é)** (abre ao clicar; só para quem tem a Faturação e vê os totais financeiros): lado a lado, o **1.º webhook**, o **último webhook** e a **Multipark agora** para o estado, entrada e saída, preço, preço original, soma das linhas, pago, pagamentos, métodos, origem do pagamento, desconto, campanha, parceiro (devido e pago), pro e caixa. O que mudou fica a vermelho. Por cima, as divergências com o motivo (as mesmas da **Faturação → Correção de caixa**). Por baixo, os webhooks recebidos e as alterações de dinheiro da História da Multipark (quem, quando, **antes → depois**). O webhook é só o aviso: quando chega, o dashboard vai logo à base de dados da Multipark buscar a reserva toda (preços, desconto, campanha, parceiro, pro, caixa, linhas de preço e pagamentos) e guarda esse retrato numa linha nova. Se a base da Multipark não responder na hora, fica o que o webhook trouxe e o dashboard volta a ler nas 48 h seguintes. O \"era\" só existe para reservas com webhooks desde 28 set 2026.\n- **Serviços extra**: nome, preço, se já foi feito e o preço da tabela do parque quando é diferente.\n- **Comunicação** (abre ao clicar): o chat da app com o cliente e os emails enviados pela app Multipark.\n- **Ocorrências e avaliação**: as ocorrências registadas na app para esta reserva (abrem em Ocorrências) e a avaliação do cliente. As ocorrências só aparecem a team leaders e acima.\n- **Os nossos casos**: as reclamações e os perdidos e achados do dashboard ligados a esta reserva, com link para cada um.\n\n**Se aparecer um aviso amarelo**, a base de dados da Multipark não respondeu ou falta uma parte (por exemplo, a lista de pagamentos). O resto da ficha continua visível. Tenta de novo daqui a pouco.\n\n**Se aparecer um aviso vermelho \"Não foi possível carregar\"** numa secção, o pedido falhou (por exemplo, sem rede). Essa secção não está vazia: carrega em **Tentar de novo** ali mesmo; o resto da ficha continua visível.\n\n**Preço e pagamento**: o cabeçalho e as **Contas** mostram o que a Multipark tem **agora**. Os números da Faturação continuam a vir do retrato guardado pelo webhook (ver **Conferência (era / é)**).\n\nTem acesso quem vê as reservas (Reservas & Operações), e cada um só vê as reservas dos parques das suas cidades. As reclamações e os perdidos só aparecem a quem tem acesso a esses módulos.\n\nOs parques nossos (marca + cidade) são reconhecidos com as mesmas regras que agrupam as **Reservas do dia**. A cidade do parque é a gravada ou uma terra à volta (Prior Velho, Moscavide → Lisboa; Maia → Porto…); só sem cidade gravada vale o nome do parque, e por fim a morada. O canal (Direto / Parceiro / Marketplace) é da contabilidade e não aparece na lista Reservas do dia."
+            }
+          ]
+        },
+        {
+          "id": "servicos",
+          "file": "servicos.md",
+          "group": "Operações",
+          "module": "servicos",
+          "title": "Serviços",
+          "routes": [
+            "/servicos"
+          ],
+          "tabs": [],
+          "summary": "Menu Operações → Serviços: os serviços extra das reservas (lavagens, carregamentos elétricos, valet…) no período escolhido, com totais por tipo e por parque.",
+          "sections": [
+            {
+              "id": "servicos.md#inicio",
+              "file": "servicos.md",
+              "slug": "inicio",
+              "title": "Serviços",
+              "level": 1,
+              "summary": "Menu Operações → Serviços: os serviços extra das reservas (lavagens, carregamentos elétricos, valet…) no período escolhido, com totais por tipo e por parque.",
+              "text": "Menu **Operações → Serviços**: os serviços extra das reservas (lavagens, carregamentos elétricos, valet…) no período escolhido, com totais por tipo e por parque. Lidos **ao vivo** da base da Multipark (reservas não canceladas com saída no período, só das tuas cidades).\n\n1. Filtra por **tipo** e **estado** (Feito / Pendente). As marcas operacionais a 0 € (ex.: \"No pay\") ficam escondidas por omissão.\n2. Clica numa linha (ou carrega em Enter) para abrir a **ficha da reserva**.\n3. **Dar baixa e reabrir** (team leaders, supervisores e quem edita Serviços): clica no estado.\n   - Fica guardado na app, por linha de serviço. Por baixo do estado aparece **quem** e **quando**: \"Feito por Ana · 02/10/2026 14:32\".\n   - O serviço está **feito** se estiver feito na app Multipark **ou** se lhe deres baixa aqui.\n   - Se foi feito na app Multipark, aparece **\"Feito na app Multipark\"** e só se reabre lá: aqui não dá para reabrir.\n   - Dar baixa **fecha logo a tarefa** desse serviço (também no Google Tarefas). Reabrir o serviço não reabre a tarefa: reabre-a à mão em **Tarefas**, se for preciso.\n   - Condutores e extras veem o estado, mas não o mudam.\n4. Quando o serviço gerou uma tarefa, aparece o botão **Tarefa** ao lado do nome (**Tarefa ✓** se já está concluída): abre-a em **Tarefas**.\n5. **CSV** descarrega a lista filtrada. A data de saída é o dia de Lisboa e há a coluna **Feito por**."
+            },
+            {
+              "id": "servicos.md#limites-e-falhas",
+              "file": "servicos.md",
+              "slug": "limites-e-falhas",
+              "title": "Limites e falhas",
+              "level": 4,
+              "summary": "A leitura traz até 5000 serviços por período.",
+              "text": "- A leitura traz até 5000 serviços por período. Se chegar a esse teto, aparece o aviso para encurtares o período.\n- Se a base da Multipark não responder, aparece **\"Não foi possível carregar os serviços\"** com **Tentar de novo**, em vez de \"Sem serviços extra neste período\"."
+            },
+            {
+              "id": "servicos.md#tarefas-automaticas-dos-servicos",
+              "file": "servicos.md",
+              "slug": "tarefas-automaticas-dos-servicos",
+              "title": "Tarefas automáticas dos serviços",
+              "level": 4,
+              "summary": "Em Definições → Parâmetros → Serviços → tarefas (admin) escolhe-se, por cidade e por tipo de serviço, se cada reserva com esse serviço gera uma tarefa e quem…",
+              "text": "- Em **Definições → Parâmetros → Serviços → tarefas** (admin) escolhe-se, por cidade e por tipo de serviço, se cada reserva com esse serviço gera uma tarefa e quem é o responsável (opcional).\n- A tarefa tem prazo na **saída do carro** e é atribuída a esse responsável e sempre aos **team leaders do turno da saída e do turno anterior**.\n- A tarefa nasce **quando a reserva chega** (webhook da Multipark) se a saída for nas próximas **72 horas**, e vai logo para o **Google Tarefas** dos responsáveis. Saídas mais longe: a tarefa nasce na volta das 18:00 quando a saída entra nas 48 h seguintes. Se a reserva mudar (hora de saída, serviço retirado, cancelada), a tarefa acompanha no próximo webhook. Compras online por acabar (reserva ainda \"pendente\") não geram tarefa.\n- Se o webhook falhar a criar ou mudar a tarefa (BD lenta, erro), a reserva fica para repetir **de hora a hora** (até 10 vezes) — já não se perde.\n- Todos os dias às **18:00** há uma volta de segurança (saídas das próximas 48 horas; junta os team leaders que entretanto ficaram na escala). Com o interruptor **\"Serviços: aviso das tarefas de amanhã\"** ligado (Definições → Automações; desligado por omissão), os **team leaders e supervisores da cidade** recebem a seguir o aviso (sino e email) com a lista das tarefas das saídas do dia seguinte — mesmo que a Multipark esteja em baixo.\n- Uma tarefa por serviço: duas chegadas da mesma reserva ao mesmo tempo já não criam a tarefa duas vezes.\n- A tarefa fecha sozinha quando o serviço é marcado como feito (na Multipark ou aqui, ao dar baixa), quando o serviço sai da reserva ou quando a reserva é cancelada."
+            }
+          ]
+        },
+        {
+          "id": "tarefas",
+          "file": "tarefas.md",
+          "group": "Operações",
+          "module": "tarefas",
+          "title": "Tarefas",
+          "routes": [
+            "/tarefas"
+          ],
+          "tabs": [],
+          "summary": "As minhas tarefas",
+          "sections": [
+            {
+              "id": "tarefas.md#as-minhas-tarefas",
+              "file": "tarefas.md",
+              "slug": "as-minhas-tarefas",
+              "title": "As minhas tarefas",
+              "level": 4,
+              "summary": "Menu Operações → Tarefas.",
+              "text": "1. Menu **Operações → Tarefas**. Em **As minhas tarefas** vês o que te foi atribuído.\n2. Carrega em **Começar** quando pegas na tarefa e em **Concluir** quando acabas. Enganaste-te? **Reabrir** volta a pô-la por fazer.\n3. Podes deixar **Comentários** na tarefa (avisa os responsáveis e quem a criou).\n4. Uma tarefa com **Data limite** fica em atraso no fim desse dia (hora de Lisboa); as que têm hora (checklists, serviços) ficam em atraso a essa hora.\n5. Se aparecer \"a tua conta não está ligada a uma ficha\", pede ao RH para ligar a tua conta à tua ficha: sem isso não há tarefas tuas.\n6. Se a lista não carregar aparece um aviso a vermelho com **Tentar de novo** (não quer dizer que não tens tarefas)."
+            },
+            {
+              "id": "tarefas.md#filtros-em-as-minhas-tarefas-no-quadro-e-na-lista",
+              "file": "tarefas.md",
+              "slug": "filtros-em-as-minhas-tarefas-no-quadro-e-na-lista",
+              "title": "Filtros (em As minhas tarefas, no Quadro e na Lista)",
+              "level": 2,
+              "summary": "Carrega em Filtros: abre um painel (de baixo, no telemóvel) com:",
+              "text": "1. Carrega em **Filtros**: abre um painel (de baixo, no telemóvel) com:\n   - **Origem**: Manual, Checklist, Serviço da reserva, **Candidatura de condutor**, Disponibilidade, Ficha (RH), Google Tarefas…;\n   - **Estado da tarefa**: Por planear, A fazer, Em curso, Revisão, Concluída;\n   - **Prazo**: Em atraso, Hoje, Amanhã, Esta semana (segunda a domingo) e Sem prazo (hora de Lisboa);\n   - **Prioridade**;\n   - **Estado da reserva**: os estados da Multipark (Pendente, Reservada, A dar entrada, Estacionada, Em movimento, A preparar saída, A entregar, Entregue, Cancelada) e **Sem estado** (reserva ainda não sincronizada). Só apanha tarefas ligadas a uma reserva (os serviços);\n   - **Responsável** (quem cria tarefas, fora de As minhas): uma pessoa ou **Sem responsável**.\n2. Os filtros juntam-se (origem **e** estado **e** prazo…); dentro de cada grupo basta uma opção. O número ao lado de cada opção diz quantas tarefas aparecem se a escolheres.\n3. A **pesquisa** procura no título, na descrição, no nº da tarefa (ex.: `#123`) e no nome dos responsáveis. O **centro de custos** (cidade) continua no seletor ao lado.\n4. Os filtros ativos aparecem por baixo, cada um com um **×** para o tirar; **Limpar filtros** tira todos.\n5. Os filtros ficam guardados **para ti, neste aparelho** (a pesquisa não): da próxima vez que abrires as Tarefas estão como os deixaste.\n6. Nas tarefas de uma reserva aparece, ao lado da origem, o **estado da reserva** com as cores da Multipark."
+            },
+            {
+              "id": "tarefas.md#criar-e-gerir-team-leader-e-acima",
+              "file": "tarefas.md",
+              "slug": "criar-e-gerir-team-leader-e-acima",
+              "title": "Criar e gerir (Team Leader e acima)",
+              "level": 2,
+              "summary": "Nova tarefa: título, descrição, centro de custos, prioridade, data limite e Responsáveis (só pessoas ativas das tuas cidades).",
+              "text": "1. **Nova tarefa**: título, descrição, centro de custos, prioridade, data limite e **Responsáveis** (só pessoas ativas das tuas cidades).\n2. Quem não vê todas as cidades tem de escolher o **centro de custos** (sem ele a tarefa ficava visível a todas as cidades).\n3. **Team leader**: vês, mudas o estado e editas só as tarefas da tua equipa (as tuas, as de quem está abaixo de ti e as que criaste). As que não têm responsáveis só as editas se foste tu a criar.\n4. O **Quadro de tarefas** mostra as colunas por estado; arrasta para mudar. Os contadores de cima contam o que está no ecrã (com a pesquisa e os filtros).\n5. **Mostrar antigas**: as concluídas há mais de 30 dias ficam escondidas até ligares isto.\n6. **Criar tarefas a partir de texto**: colas notas ou uma passagem de turno, a IA propõe tarefas e só se criam as que confirmares. É para **team leaders para cima**: extras e condutores não veem o botão (e o servidor recusa).\n7. **Arquivar** (o ícone da caixa): a tarefa sai das listas, dos avisos e do Google Tarefas, mas fica no histórico com quem arquivou. Nada se apaga. Uma tarefa automática arquivada (checklist, serviço) **não volta a ser criada**."
+            },
+            {
+              "id": "tarefas.md#checklists-recorrentes-supervisor-frontoffice-backoffice-e-a",
+              "file": "tarefas.md",
+              "slug": "checklists-recorrentes-supervisor-frontoffice-backoffice-e-a",
+              "title": "Checklists recorrentes (supervisor, frontoffice, backoffice e admin)",
+              "level": 2,
+              "summary": "Tarefas que se criam sozinhas por turno e cidade (ex.: abertura do turno), nos dias escolhidos.",
+              "text": "1. Tarefas que se criam sozinhas por turno e cidade (ex.: abertura do turno), nos dias escolhidos. Não duplicam.\n2. Responsáveis: as pessoas escolhidas e/ou a escala do turno (confirmada; se ainda não estiver confirmada, a proposta).\n3. Se a escala não se conseguir ler, a tarefa desse dia não nasce sem responsável: tenta de novo na hora seguinte.\n4. **Arquivar** uma checklist desliga-a; as tarefas já criadas ficam.\n5. **Gerar hoje** cria já as tarefas de hoje (o sistema fá-lo sozinho de hora a hora; carregar outra vez não duplica). Pode usá-lo quem gere as checklists: supervisor (as checklists da sua cidade), front office, back office e admin (e quem tiver essa permissão dada à parte). Quem só vê algumas cidades gera só as checklists dessas cidades; as checklists **sem cidade** só as gera quem vê todas. Team leaders não. Fica registado quem gerou e quantas."
+            },
+            {
+              "id": "tarefas.md#avisos-de-atraso-e-conclusao-de-hora-a-hora",
+              "file": "tarefas.md",
+              "slug": "avisos-de-atraso-e-conclusao-de-hora-a-hora",
+              "title": "Avisos de atraso e conclusão (de hora a hora)",
+              "level": 2,
+              "summary": "Tarefas criadas à mão: quando passam o prazo avisam no sino quem a criou, os gestores do centro de custos e os responsáveis; quem a criou recebe também email.",
+              "text": "1. **Tarefas criadas à mão**: quando passam o prazo avisam no sino quem a criou, os gestores do centro de custos e os responsáveis; quem a criou recebe também email. Quando alguém a conclui, quem a criou é avisado.\n2. **Tarefas automáticas** (checklists, serviços, candidaturas, disponibilidade, fichas sem cidade): com o interruptor **Avisos de atraso das tarefas automáticas** ligado (Definições → Automações; vem ligado). Só avisa as que passaram o prazo há menos de 48 h; as mais antigas ficam marcadas sem aviso. Avisa no sino os responsáveis e o **supervisor da cidade** (um resumo por cidade). Ninguém recebe email.\n3. Os avisos correm de hora a hora mesmo com a automação dos extras desligada; **Verificar agora** (só admin) corre-os já."
+            },
+            {
+              "id": "tarefas.md#aviso-nova-tarefa-para-ti",
+              "file": "tarefas.md",
+              "slug": "aviso-nova-tarefa-para-ti",
+              "title": "Aviso \"Nova tarefa para ti\"",
+              "level": 4,
+              "summary": "Quando alguém te põe como responsável numa tarefa (ao criar, ao criar a partir de texto ou ao editar), recebes no sino Nova tarefa para ti com o título, o…",
+              "text": "1. Quando alguém te põe como **responsável** numa tarefa (ao criar, ao criar a partir de texto ou ao editar), recebes no sino **Nova tarefa para ti** com o título, o prazo e quem a atribuiu.\n2. Só para tarefas feitas por pessoas: as automáticas (checklists, serviços, disponibilidade, fichas sem cidade) e as que vêm do Google Tarefas não avisam. Quem já era responsável não é avisado outra vez, e atribuir a ti próprio não te avisa.\n3. Vem **desligado**: liga-se em **Definições → Automações → Tarefas: aviso \"Nova tarefa para ti\"**. Cada pessoa pode desligá-lo para si no **Perfil → Notificações**."
+            },
+            {
+              "id": "tarefas.md#tarefas-dos-servicos-das-reservas-automaticas",
+              "file": "tarefas.md",
+              "slug": "tarefas-dos-servicos-das-reservas-automaticas",
+              "title": "Tarefas dos serviços das reservas (automáticas)",
+              "level": 2,
+              "summary": "Quando uma reserva tem um serviço extra (ex.: lavagem, carregamento elétrico) de um tipo ligado em Definições → Parâmetros → Serviços → tarefas, aparece…",
+              "text": "1. Quando uma reserva tem um serviço extra (ex.: **lavagem**, **carregamento elétrico**) de um tipo ligado em **Definições → Parâmetros → Serviços → tarefas**, aparece sozinha uma tarefa com a origem **Serviço da reserva**.\n2. O título tem o serviço, o código da reserva e a matrícula; a descrição tem o parque, a hora de saída e o link para a **ficha da reserva** (o chip da origem também abre a ficha).\n3. O **prazo** é a hora de saída do carro. Se a saída mudar na Multipark, o prazo acompanha.\n4. **Responsáveis**: a pessoa escolhida nas Definições para essa cidade e serviço (se houver) e sempre os **team leaders do turno em que o carro sai e do turno anterior** (escala do Extras-Dia; manhã 03h–15h, noite 15h–03h). Se a escala ainda não estiver feita, os team leaders são acrescentados quando for.\n5. A tarefa **fecha sozinha** quando o serviço é marcado como feito (na Multipark ou ao dar baixa na página **Serviços**), quando o serviço sai da reserva ou quando a reserva é cancelada (fica um comentário a explicar). Uma tarefa concluída à mão ou arquivada não volta a abrir."
+            },
+            {
+              "id": "tarefas.md#tarefas-de-candidatura-automaticas-origem-candidatura-de-con",
+              "file": "tarefas.md",
+              "slug": "tarefas-de-candidatura-automaticas-origem-candidatura-de-con",
+              "title": "Tarefas de candidatura (automáticas, origem Candidatura de condutor)",
+              "level": 2,
+              "summary": "Cada candidatura nova que entra nos Leads de Extras (formulário \"Be a Driver\" do site ou email para a recursos-humanos@) cria uma tarefa \"Candidatura de…",
+              "text": "1. Cada candidatura nova que entra nos **Leads de Extras** (formulário \"Be a Driver\" do site ou email para a recursos-humanos@) cria **uma** tarefa \"Candidatura de condutor: nome\", com o contacto, a cidade e as notas. Os leads criados à mão não criam tarefa.\n2. **Responsável**: quem criou o lead (se tiver ficha); nas candidaturas, a pessoa do **recrutamento** (Definições → Parâmetros → \"Responsável pelo recrutamento e pelas fichas sem cidade\") e os **supervisores da cidade** do lead. Um lead **sem cidade** fica com a pessoa do recrutamento. As tarefas de candidatura que tinham ficado sem ninguém passam também para ela.\n3. **Prazo**: 24 h depois de a candidatura entrar (o tempo para o 1.º contacto).\n4. O chip da origem abre o lead nos Leads de Extras.\n5. **Fecha sozinha** (com um comentário a dizer porquê) quando o lead é **convertido em extra**, fica **Sem interesse** (também ao rejeitar a candidatura do site) ou é **arquivado**. Nunca nasce outra para o mesmo lead, mesmo que arquives a tarefa.\n6. Ao ligar isto, só as candidaturas abertas dos **últimos 7 dias** ganharam tarefa (as mais antigas continuam no resumo diário dos Leads)."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Suporte",
+      "pages": [
+        {
+          "id": "clientes",
+          "file": "clientes.md",
+          "group": "Suporte",
+          "module": "clientes",
+          "title": "Clientes (CRM: fichas, filtros, juntar e separar)",
+          "routes": [
+            "/clientes",
+            "/clientes/rever"
+          ],
+          "tabs": [],
+          "summary": "Cada cliente tem uma ficha com o nosso n.º de cliente.",
+          "sections": [
+            {
+              "id": "clientes.md#inicio",
+              "file": "clientes.md",
+              "slug": "inicio",
+              "title": "Clientes (CRM: fichas, filtros, juntar e separar)",
+              "level": 1,
+              "summary": "Cada cliente tem uma ficha com o nosso n.º de cliente.",
+              "text": "Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são criadas e atualizadas sozinhas a partir das reservas: **quando a reserva chega** pelo webhook da Multipark, e numa volta de segurança todos os dias às 04:00. Um cliente pode ter vários emails, telefones e carros, e ter usado vários parques."
+            },
+            {
+              "id": "clientes.md#de-onde-vem-os-clientes",
+              "file": "clientes.md",
+              "slug": "de-onde-vem-os-clientes",
+              "title": "De onde vêm os clientes",
+              "level": 4,
+              "summary": "As reservas são lidas ao vivo da base de dados da Multipark.",
+              "text": "- As reservas são lidas **ao vivo da base de dados da Multipark**. Contam todos os nossos clientes: reservas nos nossos parques (Airpark, Redpark e Skypark) e as que vendemos noutros parques do marketplace.\n- Na nossa base fica só o CRM: a ficha, os contactos, os carros, que reservas são do cliente e um **resumo** (quantas reservas, quando veio a primeira e a última vez, próxima reserva, cidades, parques, canais e parceiros). As reservas em si não se copiam: na ficha, a lista de reservas é lida na hora e cada uma abre a ficha da reserva.\n- **Contactos**: email, WhatsApp e SMS vêm **ligados por defeito** para quem tem reservas (está nos termos e condições e é preciso para a recolha, a entrega e a fatura). Podem ser desligados na ficha; o que se muda à mão (também \"Por saber\") não volta a mudar sozinho.\n- O **nome** e o **NIF** mudados à mão também ficam: a carga das reservas já não volta a pôr um NIF que se limpou (por ser de outra pessoa)."
+            },
+            {
+              "id": "clientes.md#quando-duas-fichas-sao-a-mesma-pessoa-regras-do-dono",
+              "file": "clientes.md",
+              "slug": "quando-duas-fichas-sao-a-mesma-pessoa-regras-do-dono",
+              "title": "Quando duas fichas são a mesma pessoa (regras do dono)",
+              "level": 2,
+              "summary": "O mesmo nome: o 1.º e o último nome iguais, sem contar acentos, maiúsculas, pontos, traços, \"_\", asteriscos, apóstrofos ou números (\"António Gonçalves\"…",
+              "text": "- **O mesmo nome**: o 1.º e o último nome iguais, sem contar acentos, maiúsculas, pontos, traços, \"_\", asteriscos, apóstrofos ou números (\"António Gonçalves\", \"antonio_goncalves\", \"Antonio Gonçalves1\"). Os nomes do meio não contam; um nome de uma palavra só ou só com a inicial (\"A. Gonçalves\") **não** é o mesmo nome.\n- **O mesmo nome + um dado igual** (email, telefone ou matrícula, ou o mesmo NIF) → é a mesma pessoa.\n- **Nome diferente** → só com o **mesmo email e o mesmo telefone** (quem atende e lê o email é a mesma pessoa). Só um dos dois fica como sugestão.\n- **Nunca sozinho**: empresas, clientes Pro, emails genéricos de empresa (info@, admin@, geral@, reservas@…), um email, telefone ou matrícula que já está em **mais de 2 fichas** (família, empresa, balcão), e **NIF pessoais diferentes** (um NIF de empresa, da faturação, não impede).\n- Só o email, ou só o nome, **nunca** chega."
+            },
+            {
+              "id": "clientes.md#como-uma-reserva-se-liga-a-uma-ficha",
+              "file": "clientes.md",
+              "slug": "como-uma-reserva-se-liga-a-uma-ficha",
+              "title": "Como uma reserva se liga a uma ficha",
+              "level": 4,
+              "summary": "Com as regras de cima: a reserva liga-se sozinha à ficha com o mesmo nome e um dado igual, ou com o mesmo email e telefone.",
+              "text": "- Com as regras de cima: a reserva liga-se sozinha à ficha com o mesmo nome e um dado igual, ou com o mesmo email **e** telefone. Tudo o resto cria uma ficha nova e, se parecer a mesma pessoa, aparece em **Rever fichas**.\n- Uma reserva que já estava ligada a uma ficha e passou a ter o **nome de outra pessoa** fica onde está, mas os contactos e o carro dessa pessoa não vão para a ficha."
+            },
+            {
+              "id": "clientes.md#lista-menu-suporte-clientes",
+              "file": "clientes.md",
+              "slug": "lista-menu-suporte-clientes",
+              "title": "Lista (menu Suporte → Clientes)",
+              "level": 2,
+              "summary": "Na barra de pesquisa escreve e escolhe onde procurar (nome, email, telefone, matrícula, NIF, n.º de cliente, n.º de reserva, cor ou modelo do carro, notas).",
+              "text": "1. Na barra de pesquisa escreve e escolhe **onde procurar** (nome, email, telefone, matrícula, NIF, n.º de cliente, n.º de reserva, cor ou modelo do carro, notas). Cada opção mostra quantos clientes encontra. Em **Qualquer campo**, um número também procura o **n.º de reserva**.\n2. Filtra por **Segmento**, **Cidade**, **Região**, **País**, **Parque**, **País do cliente** (pelo telefone), **Canal de origem**, **Parceiro**, **Pro ou particular**, **Pessoa ou empresa** e **Avisos**. Vários valores no mesmo filtro = um **ou** outro; filtros diferentes = todos ao mesmo tempo.\n   - O número ao lado de cada cidade, parque, canal e parceiro são **reservas** (não clientes); o do país do cliente são clientes.\n   - Se a Multipark não responder, esses quatro filtros ficam vazios com um aviso; os outros funcionam.\n3. **+ Regra** para casos específicos, ex.: *Carro › Cor é vermelho* + *Reserva › Data de saída no dia 10/09/2026* + *Ligações › Tem familiar cliente: sim*. Escolhe se tem de cumprir **todas** ou **pelo menos uma**.\n   - **Nos últimos N dias** acaba hoje (não apanha datas futuras).\n   - Nas reservas, **não é** quer dizer *nenhuma reserva é* (como nos carros): \"Estado não é Cancelada\" = clientes sem nenhuma reserva cancelada.\n   - Uma regra das reservas que apanhe mais de 50 000 reservas mostra um aviso de **resultado incompleto**: junta outra regra (por exemplo, datas).\n4. **Filtros guardados**: guarda o filtro com um nome, partilha-o com a equipa ou escolhe **Abrir com este** para ser o teu filtro de arranque.\n   - Se uma parte de um filtro guardado deixou de existir (ou não se aplica à tua conta, como o gasto para quem não vê totais), aplica-se o resto e aparece um aviso.\n   - Apagar um filtro pede confirmação (um partilhado desaparece também para a equipa) e fica no registo.\n5. Escolhe a **ordem**, quantos mostrar por página e **Cartões** ou **Lista**. **Limpar tudo** volta à vista inicial (também a ordem).\n6. Separador **Pro**: clientes Pro e empresas.\n7. Se a lista não carregar, aparece o erro com **Tentar de novo** (nunca \"0 clientes\")."
+            },
+            {
+              "id": "clientes.md#ficha",
+              "file": "clientes.md",
+              "slug": "ficha",
+              "title": "Ficha",
+              "level": 4,
+              "summary": "No cabeçalho, Ligar, WhatsApp e Email (o telefone e o email principais primeiro; com vários, escolhes qual).",
+              "text": "- No cabeçalho, **Ligar**, **WhatsApp** e **Email** (o telefone e o email principais primeiro; com vários, escolhes qual). Os emails de balcão/agregador não aparecem no **Email** (escrevia-se ao agregador em vez do cliente). Ver \"Ligar, WhatsApp e email a partir das fichas\" na ajuda da Comunicação.\n- **Retirar** um email, telefone ou carro pede confirmação. Sai da ficha mas fica em **Retirados** (com quem retirou, quando e porquê) e tem **Repor**. A carga das reservas não o volta a pôr.\n- Passa o rato por cima de um email ou telefone para ver **de onde veio** (das reservas, à mão, conta Pro) e quando apareceu pela primeira vez.\n- Emails, telefones (com WhatsApp), NIF e faturação, ligações (**trabalha em** uma empresa, **familiar**), origem, zona, língua, sexo e faixa etária, etiquetas e o que aceita receber (email, WhatsApp, SMS).\n- Sem foto do cliente, aparece a **foto do carro**. Carrega na câmara para pôr uma foto.\n- Indicadores: reservas, gasto total, **gasto por mês** (média dos últimos 12 meses), por estadia, última vinda, **parques usados**, reclamações e mensagens. Os valores em euros só aparecem a quem vê totais financeiros.\n- **Linha do tempo** (reservas, cancelamentos, entregas, reclamações, críticas, perdidos e tudo o que foi alterado), **Reservas** com **Abrir na Multipark**, **Emails e WhatsApp** (de todos os emails próprios da ficha, não só do principal), **Notas** e **Registo** (quem mudou o quê e quando).\n- Se a Multipark não responder, a ficha abre na mesma: **Reservas** diz que não carregaram e os indicadores mostram o último resumo guardado (com a data).\n- **IBAN**: só o backoffice financeiro o vê e o altera; fica guardado cifrado e mostra só os últimos 4 dígitos."
+            },
+            {
+              "id": "clientes.md#o-cliente-nas-outras-paginas",
+              "file": "clientes.md",
+              "slug": "o-cliente-nas-outras-paginas",
+              "title": "O cliente nas outras páginas",
+              "level": 4,
+              "summary": "O Histórico do cliente (Reclamações, Perdidos & Achados, Críticas, WhatsApp) encontra a ficha pelo email, telefone ou matrícula e mostra as reservas dela…",
+              "text": "- O **Histórico do cliente** (Reclamações, Perdidos & Achados, Críticas, WhatsApp) encontra a ficha pelo email, telefone ou matrícula e mostra as reservas dela (lidas ao vivo), as reclamações, os perdidos e as críticas — também pelos outros emails, telefones e carros da ficha. **Abrir ficha de cliente** vai direto à ficha.\n- Os emails recebidos ligam-se sozinhos ao cliente quando o email (ou o telefone no texto) está numa ficha. O **Drive**, as **reuniões** e as **sugestões de destinatários** usam as fichas.\n- **Exportar para Google Sheets** (na lista, só a administração): **exatamente** o que a lista mostra — a pesquisa no campo escolhido, todos os filtros e regras, e a ordem —, com o telefone e o tipo (pessoa/empresa). Até 5 000 clientes por folha: acima disso a folha diz **\"Incompleta: N de M clientes\"**.\n- Se a base da Multipark não responder, o histórico diz que as reservas estão indisponíveis (em vez de mostrar zero).\n\n**Cartões ou lista em todos os separadores**: **Clientes**, **Pro**, **Agregadores e agências** e **Parcerias** têm o botão **Cartões / Lista**. A escolha fica guardada neste aparelho, separador a separador (por omissão, cartões)."
+            },
+            {
+              "id": "clientes.md#clientes-pro-e-conta-corrente-separador-pro",
+              "file": "clientes.md",
+              "slug": "clientes-pro-e-conta-corrente-separador-pro",
+              "title": "Clientes Pro e conta corrente (separador Pro)",
+              "level": 2,
+              "summary": "Os Pro pagam no fim do mês.",
+              "text": "- Os Pro pagam no fim do mês. As contas e os valores vêm da BD da Multipark e atualizam-se sozinhos de 30 em 30 minutos: reservas Pro a débito, pagamentos a crédito.\n- A lista mostra quem tem **saldo em dívida** (meses já acabados por pagar) primeiro, o que já gastou **este mês** e o **pago este ano**. Carrega numa conta para abrir a ficha.\n- Na ficha de um Pro aparece a **Conta corrente**: saldo em dívida, mês em curso, pago este ano, prazo médio de pagamento, os meses (pago / por pagar / em curso) e os movimentos, com **Exportar** para Excel.\n- Um mês fica **pago** quando a Multipark regista o pagamento. Os pagamentos registam-se **na Multipark** (botão **Registar pagamento na Multipark**); aqui não se paga nada.\n- Os valores em euros só aparecem a quem vê totais financeiros. Quem trabalha numa cidade vê só os parques dessa cidade."
+            },
+            {
+              "id": "clientes.md#agregadores-e-agencias-separador-na-lista-de-clientes",
+              "file": "clientes.md",
+              "slug": "agregadores-e-agencias-separador-na-lista-de-clientes",
+              "title": "Agregadores e agências (separador na lista de clientes)",
+              "level": 2,
+              "summary": "Os parceiros que trabalham nos nossos parques, lidos ao vivo da Multipark: tipo, percentagem que ficam em cada parque, reservas deste mês e dos últimos 12…",
+              "text": "- Os parceiros que trabalham nos nossos parques, lidos ao vivo da Multipark: tipo, percentagem que ficam em cada parque, reservas deste mês e dos últimos 12, valor e o que é **nosso** (o que fica depois da percentagem deles).\n- **Agregadores**: cobram o cliente e ficam com a percentagem deles; no fim do mês mandamos-lhes o extrato e faturamos o que é nosso. **Agências**: a percentagem é nossa e vão pagando. As reservas contam pelo **mês de entrada** do carro.\n- Na página do parceiro: mês a mês, últimas reservas (com **Abrir na Multipark**), clientes que vieram por eles, dados fiscais e o cartão **No CRM** (ligação ao registo nas Parcerias, contacto e notas).\n- Cartão **Agentes da Multipark** (quem vê as Parcerias): os agentes (as pessoas que marcam pelo portal da agência) ligados a este parceiro. **Ligar agente** (quem gere as Parcerias) procura o agente pelo nome ou email e liga-o; se já estava noutro parceiro, pergunta antes de o passar. O **X** tira-o deste parceiro. Não mexe nos clientes. Só dá depois de o parceiro estar ligado a um registo das Parcerias (cartão **No CRM**)."
+            },
+            {
+              "id": "clientes.md#parcerias-nos-agregamos-separador-na-lista-de-clientes",
+              "file": "clientes.md",
+              "slug": "parcerias-nos-agregamos-separador-na-lista-de-clientes",
+              "title": "Parcerias (nós agregamos) (separador na lista de clientes)",
+              "level": 2,
+              "summary": "Os parques que não são nossos, em que levamos clientes pelo marketplace e ficamos com uma comissão: dono, contactos, reservas e a nossa comissão, mês a mês.",
+              "text": "- Os parques que não são nossos, em que levamos clientes pelo marketplace e ficamos com uma comissão: dono, contactos, reservas e a nossa comissão, mês a mês. Aqui contam as reservas **com a nossa comissão** (as que lhes levámos) — são os nossos clientes; a contagem de **todas** as reservas do Marketplace de cada parque está em Parcerias → Parques e no Marketing. No topo, a etiqueta **operado por nós** / **não operado** (a comissão é diferente). A cidade do parque é a reconhecida (Prior Velho → Lisboa, Maia → Porto…), por isso quem vê Lisboa também vê um parque com \"Prior Velho\" na cidade."
+            },
+            {
+              "id": "clientes.md#rever-fichas-botao-rever-fichas-na-lista",
+              "file": "clientes.md",
+              "slug": "rever-fichas-botao-rever-fichas-na-lista",
+              "title": "Rever fichas (botão Rever fichas na lista)",
+              "level": 2,
+              "summary": "Junção automática: todas as madrugadas, depois das sugestões das 05:15 (se não acabar, continua), o CRM junta sozinho os pares que as regras do dono resolvem…",
+              "text": "- **Junção automática**: todas as madrugadas, depois das sugestões das 05:15 (se não acabar, continua), o CRM junta sozinho os pares que as **regras do dono** resolvem (ver \"Quando duas fichas são a mesma pessoa\"). Fica a ficha com mais reservas. Cada junção aparece em **Juntas recentemente** (por **regras**) e no registo das duas fichas, e pode ser separada. O botão **Juntar agora** (só o super admin, e só com o interruptor ligado) corre-a já. Interruptor em Definições → Automações (\"CRM: juntar sozinho as fichas óbvias\").\n- **IA nas dúvidas** (interruptor \"IA: fichas de clientes duvidosas\", **desligado por omissão**): os pares que as regras não resolvem (nome diferente, nome de uma palavra…) vão à IA, que dá um parecer — **a mesma pessoa**, **pessoas diferentes** ou **não sabe** — com a certeza e o porquê. Só junta sozinha com **85 % ou mais** (aparece em **Juntas recentemente** como **IA**); o resto fica nas sugestões com o parecer à vista. A IA recebe só o 1.º nome e comparações (\"telefone igual\", \"NIF diferente\"), nunca emails, telefones, matrículas ou NIF. Empresas, Pro e NIF diferentes nunca vão à IA. Um par a que a IA não responda fica **não sabe** (\"A IA não respondeu a este par.\") e não volta a ser perguntado, a não ser que as fichas mudem.\n- **Sugestões para juntar**: as duas fichas lado a lado, com o que coincide (telefone, matrícula, NIF, email), os **avisos** (vermelho = nunca se junta sozinho: empresa, cliente Pro, NIF diferente; amarelo = não conta: email genérico, telefone/email/matrícula em várias fichas, nome de uma palavra, nome diferente) e o **parecer da IA**. **Juntar** (backoffice e administração), **Trocar qual fica** ou **Não é a mesma pessoa** (quem edita clientes; pede confirmação). Se outra pessoa já juntou ou recusou o par, aparece o aviso e nada muda.\n- **Recusadas**: os pares marcados \"não é a mesma pessoa\" (e os que se separaram), com quem e quando. A recusa **acompanha as fichas**: se uma delas for junta a outra, o par continua recusado. **Desfazer** põe o par outra vez nas sugestões.\n- **Sem email próprio** (antes \"Emails estranhos\"; não é preciso fazer nada): fichas cujo email é de balcão, de agregador ou da casa (os domínios das nossas marcas — Multipark, Multivalet, Multibags, Multidriver, Airpark, Redpark, Skypark e Multigroup — nunca contam como cliente). **Procurar na nossa caixa** propõe o email verdadeiro, só de mensagens **recebidas** e de emails de pessoas (não as nossas respostas nem info@/reservas@ de agências): o super admin procura em todas as caixas de email; os outros só nas caixas que já veem na Comunicação e no próprio email. **Usar este email** troca tudo de uma vez (o de balcão vai para **Retirados**). Sem resultado, **Retirar o email** e a ficha fica com telefone e carro.\n- Quando se **separa** uma junção, as outras sugestões dessa ficha voltam a aparecer.\n- **Reservas sem email**: clientes sem email que chegam nos próximos 3 dias — pedir o email à chegada e acrescentá-lo na ficha. Se a Multipark não responder, o contador mostra \"—\" (não zero).\n- **Juntas recentemente**: filtra por quem juntou (**à mão**, **pelas regras**, **pela IA**), com páginas. **Separar** (pede confirmação) repõe as duas fichas como estavam: emails, telefones, carros, reservas, retirados, a **conta Pro**, o \"é Pro\", as notas e as etiquetas. O que entrou depois da junção fica na ficha que ficou; o que alguém mudou depois (ex.: notas reescritas) não é desfeito. O par separado fica em **Recusadas** (não se volta a juntar sozinho).\n- Ao **juntar**, as notas e as etiquetas das duas ficam (as da absorvida com \"— Da ficha N.º …\"), e o que se tinha retirado à mão da ficha que fica não volta por causa da junção.\n\nTudo o que se faz nas fichas fica no **registo de ações**."
+            }
+          ]
+        },
+        {
+          "id": "contactos",
+          "file": "contactos.md",
+          "group": "Suporte",
+          "module": "contactos",
+          "title": "Contactos (pesquisa, diretório e Google Contactos)",
+          "routes": [
+            "/contactos",
+            "/perfil"
+          ],
+          "tabs": [],
+          "summary": "Cartões ou Lista (botão no topo da lista): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+          "sections": [
+            {
+              "id": "contactos.md#inicio",
+              "file": "contactos.md",
+              "slug": "inicio",
+              "title": "Contactos (pesquisa, diretório e Google Contactos)",
+              "level": 1,
+              "summary": "Cartões ou Lista (botão no topo da lista): vês as pessoas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+              "text": "**Cartões ou Lista** (botão no topo da lista): vês as pessoas em **cartões com foto** ou numa **lista** compacta — no telemóvel e no PC. A escolha fica guardada neste aparelho, para esta página."
+            },
+            {
+              "id": "contactos.md#filtrar-e-ordenar-por-cima-em-todos-os-tipos-como-nos-client",
+              "file": "contactos.md",
+              "slug": "filtrar-e-ordenar-por-cima-em-todos-os-tipos-como-nos-client",
+              "title": "Filtrar e ordenar por cima (em todos os tipos, como nos Clientes)",
+              "level": 2,
+              "summary": "Ordenar: Mais recentes (a ordem normal de cada tipo), Nome A–Z ou Nome Z–A.",
+              "text": "- **Ordenar**: Mais recentes (a ordem normal de cada tipo), **Nome A–Z** ou **Nome Z–A**. Na **lista**, carregar no cabeçalho **Nome** faz o mesmo (A–Z → Z–A → ordem normal).\n- **Com email** / **Com telefone**: só os contactos que o têm.\n- Filtros e ordem valem para a lista **toda** (não só para o que já carregou).\n- Na lista, cada contacto mostra numa linha o nome, o tipo, o detalhe (empresa, cargo, reservas…), o email e o telefone."
+            },
+            {
+              "id": "contactos.md#importar-contactos-quem-pode-editar-os-clientes",
+              "file": "contactos.md",
+              "slug": "importar-contactos-quem-pode-editar-os-clientes",
+              "title": "Importar contactos (quem pode editar os Clientes)",
+              "level": 2,
+              "summary": "Pesquisa → Importar contactos e escolhe o ficheiro: CSV exportado do Google Contactos ou do Outlook, um CSV/Excel com as colunas nome, email, telefone…",
+              "text": "1. **Pesquisa → Importar contactos** e escolhe o ficheiro: CSV exportado do **Google Contactos** ou do **Outlook**, um CSV/Excel com as colunas **nome, email, telefone, empresa** (vírgula ou ponto e vírgula), ou um **vCard (.vcf)**. Até 2000 de cada vez.\n2. Vês quantos contactos tem e os primeiros. Escolhe se entram como **Cliente (CRM)** ou **Lead comercial** e carrega em **Importar**.\n3. Ficam nos **Contactos do CRM**, na tua cidade. Um contacto com o mesmo **email ou telefone** de outro que já existe **não entra e não mexe no que existe**. As linhas sem email e sem telefone ficam de fora. No fim dizes quantos entraram, quantos já existiam e quantos ficaram de fora. A importação fica nos Logs.\n\nUma só pesquisa para clientes, contactos do CRM, leads de extras, parceiros, fornecedores, colaboradores, o diretório da empresa e os teus contactos Google."
+            },
+            {
+              "id": "contactos.md#pesquisa-menu-suporte-contactos",
+              "file": "contactos.md",
+              "slug": "pesquisa-menu-suporte-contactos",
+              "title": "Pesquisa (menu Suporte → Contactos)",
+              "level": 2,
+              "summary": "Escreve pelo menos 2 letras (nome, email, telefone ou matrícula).",
+              "text": "1. Escreve pelo menos 2 letras (nome, email, telefone ou matrícula). Aparecem os primeiros resultados de cada tipo.\n   - As palavras procuram-se **soltas e por qualquer ordem**: \"joao silva\" encontra \"João Pedro Silva\" e \"Silva, João\".\n2. Carrega num tipo (ex.: **Cliente**, **Parceiro**) ou em **Ver todos** para percorrer só esse tipo — a lista vai carregando à medida que desces.\n3. Só aparecem os tipos dos módulos que vês (ex.: fornecedores só com as Despesas da cidade) e só na tua cidade. O telefone encontra-se escrito de qualquer forma (+351, 00351, com espaços).\n4. Abre um contacto para ver as **reservas**, **reclamações**, **WhatsApp** e **emails** ligados (pelo email ou pelo telefone) e as comunicações do cliente.\n5. **Quando um tipo vem vazio**, a página diz porquê:\n   - **\"Não foi possível ler esta lista agora\"** (a vermelho): a leitura falhou. Não quer dizer que não haja ninguém; tenta de novo daqui a pouco. Os outros tipos estão completos.\n   - **Contacto CRM** vazio: ainda não há contactos comerciais (leads B2B). Os clientes das reservas estão no tipo **Cliente**.\n   - **Diretório** vazio: o diretório da empresa não está ligado (Definições → Comunicação → Contactos Google) ou ainda não foi lido do Google (**Atualizar agora**).\n6. **Clientes** são as fichas do CRM (com o n.º de cliente): quem vê os Contactos vê o nome, o email e o telefone para poder ligar ao cliente. As reservas da ficha só aparecem a quem vê Clientes ou as Reservas, e só as das tuas cidades. Procura também pelo n.º de cliente ou pela matrícula."
+            },
+            {
+              "id": "contactos.md#diretorio",
+              "file": "contactos.md",
+              "slug": "diretorio",
+              "title": "Diretório",
+              "level": 4,
+              "summary": "Pessoas do Google Workspace da empresa: foto, cargo, departamento, telefone e email.",
+              "text": "- Pessoas do Google Workspace da empresa: foto, cargo, departamento, telefone e email. É atualizado uma vez por dia.\n- A foto e o cargo aparecem também nas listas de **Utilizadores** e de **RH**.\n- Admins: **Atualizar agora** lê o diretório sem esperar."
+            },
+            {
+              "id": "contactos.md#os-meus-contactos-google-separador-meus-google",
+              "file": "contactos.md",
+              "slug": "os-meus-contactos-google-separador-meus-google",
+              "title": "Os meus contactos Google (separador Meus Google)",
+              "level": 2,
+              "summary": "No Perfil → Google Contactos carrega em Ativar Contactos (autoriza só os Contactos; o resto que já autorizaste mantém-se).",
+              "text": "1. No **Perfil → Google Contactos** carrega em **Ativar Contactos** (autoriza só os Contactos; o resto que já autorizaste mantém-se).\n2. Com **Sugestões** ligado, os teus contactos Google (os teus e os \"Outros contactos\") são comparados com clientes, leads, parceiros e colaboradores. Só tu os vês.\n3. Um contacto sem correspondência pode virar **Cliente**, **Lead comercial** ou **Lead de extra** num clique (se tiveres permissão para editar esse módulo).\n4. Desligar as sugestões apaga o que a app tinha lido."
+            },
+            {
+              "id": "contactos.md#grupo-multipark-servico-no-telemovel-so-supervisor-ou-acima",
+              "file": "contactos.md",
+              "slug": "grupo-multipark-servico-no-telemovel-so-supervisor-ou-acima",
+              "title": "Grupo \"Multipark — Serviço\" no telemóvel (só supervisor ou acima: supervisor, admin e super admin por omissão)",
+              "level": 2,
+              "summary": "Com os Contactos ativos, a app mantém no teu Google Contactos um grupo com os clientes das recolhas e entregas de hoje e amanhã (nome e matrícula), para veres…",
+              "text": "- Com os Contactos ativos, a app mantém no teu Google Contactos um grupo com os clientes das recolhas e entregas de **hoje e amanhã** (nome e matrícula), para veres quem te liga.\n- Os serviços do teu turno confirmado (uma hora antes e depois) e os da(s) tua(s) cidade(s) de base, o dia inteiro.\n- **O condutor nunca recebe este grupo** (nem o team leader): os dados dos clientes só vão para o telemóvel de supervisor ou acima. O servidor bloqueia-o mesmo que alguém tente escolher esses papéis.\n- Os contactos são apagados automaticamente alguns dias depois do serviço (2 por omissão). A app só apaga contactos que ela própria criou — os teus nunca são tocados, mesmo com o mesmo número.\n- Podes desligar o grupo no Perfil; ao desligar, os contactos criados pela app são apagados.\n- Opcional (backoffice/admin): grupo **\"Multipark — Parceiros e fornecedores\"** com os parceiros ativos."
+            },
+            {
+              "id": "contactos.md#configuracao-super-admin-definicoes-comunicacao-contactos-go",
+              "file": "contactos.md",
+              "slug": "configuracao-super-admin-definicoes-comunicacao-contactos-go",
+              "title": "Configuração (super admin, Definições → Comunicação → Contactos Google)",
+              "level": 2,
+              "summary": "Diretório: ligar e indicar a conta do Workspace a usar (ex.: um administrador).",
+              "text": "- Diretório: ligar e indicar a conta do Workspace a usar (ex.: um administrador).\n- Grupo \"Serviço\": papéis (só supervisor ou acima — condutor e team leader aparecem desativados), dias de retenção e máximo de contactos por pessoa.\n- Grupo de parceiros: ligar e escolher os papéis."
+            }
+          ]
+        },
+        {
+          "id": "criticas",
+          "file": "criticas.md",
+          "group": "Suporte",
+          "module": "criticas",
+          "title": "Críticas Google",
+          "routes": [
+            "/criticas"
+          ],
+          "tabs": [],
+          "summary": "As avaliações do Google de todos os parques, juntas e separadas por parque, com a resposta preparada aqui.",
+          "sections": [
+            {
+              "id": "criticas.md#inicio",
+              "file": "criticas.md",
+              "slug": "inicio",
+              "title": "Críticas Google",
+              "level": 1,
+              "summary": "As avaliações do Google de todos os parques, juntas e separadas por parque, com a resposta preparada aqui.",
+              "text": "As avaliações do Google de todos os parques, juntas e separadas por parque, com a resposta preparada aqui."
+            },
+            {
+              "id": "criticas.md#de-onde-vem",
+              "file": "criticas.md",
+              "slug": "de-onde-vem",
+              "title": "De onde vêm",
+              "level": 4,
+              "summary": "Pela API do Google (perfis ligados em Integrações): ficam no parque escolhido para o perfil e a resposta publica-se daqui.",
+              "text": "- **Pela API do Google** (perfis ligados em Integrações): ficam no parque escolhido para o perfil e a resposta publica-se daqui.\n- **Pela Windsor** (quando a conta Google não está ligada diretamente): os mesmos perfis e avaliações chegam pela Windsor e entram aqui da mesma maneira (1–3★ → Reclamação). Interruptor **Críticas: importar do Google Business pela Windsor** (Definições → Automações; vem desligado). A 1.ª vez traz até 3 anos; depois os últimos 60 dias.\n- **Por email** (criticas@): o parque vem do título do perfil Google no email. Sem correspondência exata não se adivinha o parque (ver **Parque, marca ou lixo**).\n- Entram **sozinhas** por estes caminhos: no topo já não há \"Sincronizar Gmail\" nem \"Importar Review\" (não faziam nada).\n- Os **avisos de avaliação que chegam a outras caixas** (info@, reservas@…) e os elogios de clientes por email **não criam** críticas aqui (já entram pelos caminhos acima). Com o interruptor **\"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas\"** (desligado por omissão) vão para a caixa **Críticas** da Comunicação e ficam **lidos**. Uma opinião negativa de um cliente que quer resposta é tratada como **reclamação**."
+            },
+            {
+              "id": "criticas.md#parque-marca-ou-lixo-ja-nao-ha-sem-parque",
+              "file": "criticas.md",
+              "slug": "parque-marca-ou-lixo-ja-nao-ha-sem-parque",
+              "title": "Parque, marca ou lixo (já não há \"Sem parque\")",
+              "level": 2,
+              "summary": "Cada crítica fica no parque dela.",
+              "text": "- Cada crítica fica no **parque** dela.\n- Sem parque, procura-se a **marca** no nome do perfil Google e, se não estiver lá, no texto da crítica. Fica no grupo **\"<Marca> (marca)\"**.\n- Sem parque nem marca vai para o **Lixo**: um separador à parte, no fim. Não conta nas \"por responder\" nem na média. Não se apaga e continua a poder ser aberta.\n- Para corrigir, abre a crítica e escolhe o **Parque** certo (ou a marca). Fica registado quem mudou. Só para quem pode editar as Críticas, e só nas suas cidades."
+            },
+            {
+              "id": "criticas.md#dashboard",
+              "file": "criticas.md",
+              "slug": "dashboard",
+              "title": "Dashboard",
+              "level": 4,
+              "summary": "Um quadrado por parque com a média, as estrelas, o n.º de avaliações, as por responder e as reclamações.",
+              "text": "- Um **quadrado por parque** com a média, as estrelas, o n.º de avaliações, as por responder e as reclamações. O lixo aparece só numa nota por baixo."
+            },
+            {
+              "id": "criticas.md#reviews",
+              "file": "criticas.md",
+              "slug": "reviews",
+              "title": "Reviews",
+              "level": 4,
+              "summary": "Um separador por parque.",
+              "text": "- Um separador por parque. Abre no primeiro parque. **Todas** fica no fim e o **Lixo** à direita.\n- As por responder têm uma barra **azul** à esquerda (já não amarela)."
+            },
+            {
+              "id": "criticas.md#responder-respondida-publicada",
+              "file": "criticas.md",
+              "slug": "responder-respondida-publicada",
+              "title": "Responder (respondida = publicada)",
+              "level": 4,
+              "summary": "A IA só prepara rascunhos; publica sempre uma pessoa.",
+              "text": "- A IA só prepara rascunhos; **publica sempre uma pessoa**. Guardar um texto é rascunho, não conta como respondida.\n- O rascunho **automático** só é feito para críticas **escritas nos últimos 14 dias** (conta a data da crítica, não a do dia em que entrou no dashboard). Na **1.ª importação** de um perfil (o histórico todo de uma vez) as críticas antigas nunca têm rascunho automático; as dos últimos 14 dias têm. Nas críticas que chegam por email conta a data do email. Para uma crítica antiga, abre-a e carrega em **Gerar com IA** (ou **Regenerar**).\n- **Ligada ao Google**: **Aprovar e publicar** (pede confirmação; fica visível para todos). Sai pela Google quando a conta está ligada; senão pela Windsor, com o interruptor **Críticas: publicar respostas no Google pela Windsor** ligado (vem desligado). Sem nenhum dos dois, o aviso diz o que falta — publica no perfil Google e marca **Já publiquei no Google**.\n- **Veio por email**: **Aprovar** (o texto está bom) → publica-o no perfil Google → **Já publiquei no Google**. Se marcaste por engano, **Desfazer** (o texto fica).\n- Depois de marcada como publicada, o texto fica como foi enviado: para o mudar, primeiro **Desfazer**.\n- Se o cliente mudar o texto ou as estrelas no Google, o rascunho volta a \"por aprovar\" (não é apagado; **Regenerar** faz outro)."
+            },
+            {
+              "id": "criticas.md#reclamacoes",
+              "file": "criticas.md",
+              "slug": "reclamacoes",
+              "title": "Reclamações",
+              "level": 4,
+              "summary": "Criar Reclamação (até 3★): prazo de 24 h e responsável na Reclamação.",
+              "text": "- **Criar Reclamação** (até 3★): prazo de 24 h e responsável na Reclamação. Não volta atrás e nunca abre duas reclamações para a mesma crítica.\n- Uma crítica convertida trata-se na Reclamação (**Ver Reclamação**); a resposta pública continua a ser aqui."
+            },
+            {
+              "id": "criticas.md#dispensar",
+              "file": "criticas.md",
+              "slug": "dispensar",
+              "title": "Dispensar",
+              "level": 4,
+              "summary": "Dispensar tira-a de \"por responder\" (pede confirmação); Reabrir devolve-a.",
+              "text": "- **Dispensar** tira-a de \"por responder\" (pede confirmação); **Reabrir** devolve-a."
+            },
+            {
+              "id": "criticas.md#numeros",
+              "file": "criticas.md",
+              "slug": "numeros",
+              "title": "Números",
+              "level": 4,
+              "summary": "Respondidas = publicadas no Google.",
+              "text": "- **Respondidas** = publicadas no Google. **Por responder** inclui os rascunhos por publicar. Convertidas, dispensadas e as do lixo não contam como por responder.\n- A média e as percentagens de positivas/negativas contam só as críticas com estrelas.\n- \"tudo respondido\" só aparece sem filtro de estado.\n\n**Separadores**: **Dashboard** e **Reviews**. Os antigos **Condutores** e **Agentes** passaram para **Pessoas → Condutores e agentes**. A ligação à conta Google (Google Business Profile) passou para **Integrações**."
+            },
+            {
+              "id": "criticas.md#quando-a-leitura-falha",
+              "file": "criticas.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Lista, números, parques e crítica mostram \"Não foi possível carregar…\" com Tentar de novo, nunca \"sem avaliações\" ou \"sem dados\".",
+              "text": "- Lista, números, parques e crítica mostram **\"Não foi possível carregar…\"** com **Tentar de novo**, nunca \"sem avaliações\" ou \"sem dados\"."
+            },
+            {
+              "id": "criticas.md#quem-pode",
+              "file": "criticas.md",
+              "slug": "quem-pode",
+              "title": "Quem pode",
+              "level": 4,
+              "summary": "Condutores e extras não veem as Críticas — nem as em que estão envolvidos.",
+              "text": "- Condutores e extras **não veem** as Críticas — nem as em que estão envolvidos. Só a partir de team leader.\n- Responder, aprovar, dispensar, converter e importar: team leader e acima, nas suas cidades.\n- **CSV** (leva emails dos clientes): só quem pode exportar."
+            }
+          ]
+        },
+        {
+          "id": "ocorrencias",
+          "file": "ocorrencias.md",
+          "group": "Suporte",
+          "module": "ocorrencias",
+          "title": "Ocorrências",
+          "routes": [
+            "/ocorrencias"
+          ],
+          "tabs": [],
+          "summary": "As ocorrências registadas pelos agentes na app Multipark (vidro aberto, acidente, atraso…).",
+          "sections": [
+            {
+              "id": "ocorrencias.md#inicio",
+              "file": "ocorrencias.md",
+              "slug": "inicio",
+              "title": "Ocorrências",
+              "level": 1,
+              "summary": "As ocorrências registadas pelos agentes na app Multipark (vidro aberto, acidente, atraso…).",
+              "text": "As ocorrências registadas pelos agentes na **app Multipark** (vidro aberto, acidente, atraso…). O dashboard lê-as **em tempo real** da base de dados da Multipark: não se importa nem se copia nada."
+            },
+            {
+              "id": "ocorrencias.md#ver-e-procurar",
+              "file": "ocorrencias.md",
+              "slug": "ver-e-procurar",
+              "title": "Ver e procurar",
+              "level": 4,
+              "summary": "Menu Suporte → Ocorrências.",
+              "text": "- Menu **Suporte → Ocorrências**.\n- Filtra por estado (abertas / resolvidas / fechadas sozinhas), prioridade, parque, tipo e datas, ou pesquisa pelo **n.º da reserva** ou pela **matrícula**. Clicar num tipo do quadro \"Por tipo\" também filtra.\n- Cada ocorrência mostra o parque, a matrícula, a reserva, quem a registou, o mapa (quando tem GPS) e se tem anexo. Abre-a para ver as notas todas.\n- **Parques tratados:** por baixo do título aparece quantos parques as Ocorrências tratam e quantos ficam de fora. Carrega para ver a lista por cidade.\n  - Ficam de fora os **Parques que a operação não faz** (Definições). As ocorrências desses parques não aparecem na lista, nas contagens nem no painel de Suporte.\n  - As **Reclamações** e as **Críticas** continuam a vir de todos os parques.\n- As datas são **dias de calendário** (00h–24h de Lisboa).\n- Aparecem 50 de cada vez: **Carregar mais** traz as seguintes (até 200; depois, refina os filtros).\n- **CSV** exporta as que estão na lista e diz quantas leva (\"50 de 1240\"): para levar mais, carrega mais ou refina os filtros. As datas vêm na hora de Lisboa."
+            },
+            {
+              "id": "ocorrencias.md#fecham-sozinhas-ao-fim-de-3-dias",
+              "file": "ocorrencias.md",
+              "slug": "fecham-sozinhas-ao-fim-de-3-dias",
+              "title": "Fecham sozinhas ao fim de 3 dias",
+              "level": 4,
+              "summary": "Uma ocorrência de prioridade média, por resolver, que não tenha a ver com dinheiro, danos nem reclamações, fica Fechada (3 dias) no dashboard, 3 dias depois…",
+              "text": "- Uma ocorrência de prioridade **média**, por resolver, que **não tenha a ver com dinheiro, danos nem reclamações**, fica **Fechada (3 dias)** no dashboard, 3 dias depois de ter sido criada. Assim a lista de abertas não fica cheia de coisas antigas sem importância (vidro aberto, carro aberto, atraso…).\n- Nunca fecham sozinhas as de prioridade **alta** ou **baixa**, nem as que falam de dinheiro (valor, pagamento, reembolso, fatura, €…), de danos ou acidentes (dano, risco, amolgado, partido, acidente, furto…) ou de reclamações (reclamação, queixa, livro amarelo). Na dúvida, fica aberta.\n- É uma marca **só do dashboard**: na app Multipark continua por resolver (a BD da Multipark é só de leitura). Se a resolverem na app, passa a **Resolvida** como sempre.\n- Deixa de contar nas **Abertas** (aqui, no painel de Suporte e no assistente). Por baixo do número das abertas aparece \"+ N fechadas sozinhas\": carrega para as ver, ou escolhe **Fechadas sozinhas (3 dias)** no filtro de estado.\n- Nada se apaga nem se escreve: a regra é calculada sempre que a lista é lida."
+            },
+            {
+              "id": "ocorrencias.md#resolver",
+              "file": "ocorrencias.md",
+              "slug": "resolver",
+              "title": "Resolver",
+              "level": 4,
+              "summary": "As ocorrências resolvem-se na app Multipark.",
+              "text": "- As ocorrências resolvem-se na **app Multipark**. Quando são resolvidas lá, aparecem resolvidas aqui, com quem e quando.\n- O botão **Resolver** do dashboard está desligado até a Multipark disponibilizar a forma de o fazer a partir daqui.\n- **Ver na Multipark** abre a reserva na app."
+            },
+            {
+              "id": "ocorrencias.md#foi-um-acidente-6000-na-avaliacao",
+              "file": "ocorrencias.md",
+              "slug": "foi-um-acidente-6000-na-avaliacao",
+              "title": "Foi um acidente? (−6000 na avaliação)",
+              "level": 4,
+              "summary": "Ao abrir uma ocorrência, o team leader (ou acima) vê Foi um acidente?.",
+              "text": "- Ao abrir uma ocorrência, o team leader (ou acima) vê **Foi um acidente?**. Aparece a amarelo quando o tipo ou as notas parecem um acidente.\n- A lista sugere quem conduzia: as pessoas das últimas ações nessa reserva nos 3 dias antes da ocorrência, com a última em primeiro. Quem não tem ficha aparece, mas não se escolhe (liga-o à ficha no RH).\n- Escolhe a pessoa, junta uma nota se quiseres e carrega em **Confirmar acidente** e depois em **Sim**. A pessoa fica com **−6000 pontos** na avaliação do dia da ocorrência (dia operacional, 03h–03h).\n- Só conta depois de confirmado. O team leader só confirma acidentes da sua equipa e ninguém confirma um acidente seu.\n- Só contam as ocorrências **a partir de 3 de outubro de 2026**. Numa ocorrência anterior aparece só a explicação e não há botão.\n- Na lista, a ocorrência fica com **Acidente confirmado**.\n- **Desfazer** pede o motivo e tira os pontos. Nada se apaga: a confirmação fica no histórico da ocorrência, com quem a desfez e porquê.\n- Se ninguém mexeu na reserva antes da ocorrência, quem gere a avaliação faz um ajuste em **Avaliação** (Acidentes / danos)."
+            },
+            {
+              "id": "ocorrencias.md#quando-a-leitura-falha",
+              "file": "ocorrencias.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "\"Ocorrências indisponíveis\": a base de dados da Multipark não respondeu.",
+              "text": "- **\"Ocorrências indisponíveis\"**: a base de dados da Multipark não respondeu. Carrega em **Tentar de novo**.\n- Se só as contagens falharem, aparece um aviso a laranja e a lista continua certa. Uma falha nunca aparece como \"Sem ocorrências\" nem como 0.\n- O mesmo vale para o painel de Suporte, o resumo da passagem de turno e o assistente: todos leem as ocorrências da app Multipark e dizem \"sem dados\" quando a leitura falha."
+            },
+            {
+              "id": "ocorrencias.md#avisos-de-ocorrencia-por-email",
+              "file": "ocorrencias.md",
+              "slug": "avisos-de-ocorrencia-por-email",
+              "title": "Avisos de ocorrência por email",
+              "level": 4,
+              "summary": "A app Multipark manda um email por cada ocorrência registada (\"Tipo de ocorrência\", \"Matrícula\", \"Observações\", \"Link reserva\").",
+              "text": "- A app Multipark manda um email por cada ocorrência registada (\"Tipo de ocorrência\", \"Matrícula\", \"Observações\", \"Link reserva\"). Com o interruptor **\"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas\"** (Definições → Automações; desligado por omissão) esse email liga-se sozinho à ocorrência da app (pela matrícula e pela hora — só se lê a BD da Multipark, nunca se escreve), vai para a caixa **Ocorrências** da Comunicação e fica **lido**. Na conversa aparece a ligação **Ocorrência**, que a abre aqui.\n- Se a ocorrência ainda não estiver na app, o email vai para a caixa Ocorrências **por ler**. Se a BD da Multipark não responder, nada se mexe e volta a tentar.\n- Um colaborador que relata uma ocorrência por email (sem a registar na app) vai para a caixa **Ocorrências** **por ler**, com a linha da IA a dizer porquê: **regista-a na app Multipark** — o dashboard não cria ocorrências (a app é a fonte única)."
+            },
+            {
+              "id": "ocorrencias.md#ocorrencias-antigas-do-dashboard",
+              "file": "ocorrencias.md",
+              "slug": "ocorrencias-antigas-do-dashboard",
+              "title": "Ocorrências antigas do dashboard",
+              "level": 4,
+              "summary": "As ocorrências registadas no dashboard antes da ligação à app Multipark ficam guardadas, mas já não entram nos números nem nos lembretes.",
+              "text": "- As ocorrências registadas no dashboard antes da ligação à app Multipark ficam guardadas, mas já não entram nos números nem nos lembretes.\n- As ligações antigas (num email ou num perdido convertido) abrem-nas só para leitura.\n\nSó a partir de team leader se tem acesso a esta página: condutores e extras não a veem — nem as ocorrências em que estão envolvidos, nem na ficha da reserva. Cada um vê as ocorrências dos parques das suas cidades."
+            }
+          ]
+        },
+        {
+          "id": "perdidos",
+          "file": "perdidos.md",
+          "group": "Suporte",
+          "module": "perdidos",
+          "title": "Perdidos e Achados",
+          "routes": [
+            "/perdidos-achados"
+          ],
+          "tabs": [],
+          "summary": "Objetos esquecidos pelos clientes nos carros.",
+          "sections": [
+            {
+              "id": "perdidos.md#inicio",
+              "file": "perdidos.md",
+              "slug": "inicio",
+              "title": "Perdidos e Achados",
+              "level": 1,
+              "summary": "Objetos esquecidos pelos clientes nos carros.",
+              "text": "Objetos esquecidos pelos clientes nos carros."
+            },
+            {
+              "id": "perdidos.md#registar",
+              "file": "perdidos.md",
+              "slug": "registar",
+              "title": "Registar",
+              "level": 4,
+              "summary": "Menu Suporte → Perdidos e Achados → Novo Registo.",
+              "text": "1. Menu **Suporte → Perdidos e Achados** → **Novo Registo**.\n2. Procura a reserva (nº de reserva, matrícula, email ou nome): os dados do cliente e a matrícula são preenchidos sozinhos.\n3. Escolhe o tipo (documentos, eletrónica, acessórios…) e descreve o objeto. Guarda.\n- Ao gravar, a reserva liga-se sozinha **só** com a matrícula, o email ou o telefone iguais (o nome não chega: há homónimos). Uma ref. escrita à mão nunca é trocada por outra.\n- Quem só vê a sua cidade e não escolhe o projeto: o caso fica na cidade dessa pessoa. Os casos **Sem cidade** só os vê quem vê todas as cidades."
+            },
+            {
+              "id": "perdidos.md#por-email",
+              "file": "perdidos.md",
+              "slug": "por-email",
+              "title": "Por email",
+              "level": 4,
+              "summary": "Os emails para perdidos@ criam o caso sozinhos (como sempre).",
+              "text": "- Os emails para **perdidos@** criam o caso sozinhos (como sempre).\n- **Noutras caixas** (info@, reservas@, alterações…), com o interruptor **\"IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados\"** (Definições → Automações; **desligado por omissão**): a IA lê cada email pelo sentido e, quando alguém diz que deixou, perdeu ou esqueceu um objeto (mesmo no meio de um elogio ou de outro pedido), abre o caso aqui (origem IA) ou junta o email ao caso **aberto** do mesmo cliente. A conversa vai para a caixa **Perdidos** da Comunicação, **por ler**. As respostas do cliente nessa conversa juntam-se ao mesmo caso.\n- Com **certeza média** o caso nasce **\"Por confirmar (IA)\"** (selo no cartão, aviso roxo no caso): **É um perdido** confirma; **Não é um perdido** arquiva com o motivo (nada se apaga). Quando a IA diz que o objeto aparece em qualquer parte do email (mesmo de passagem), o caso abre pelo menos \"Por confirmar\".\n- No quadro, **Por confirmar (IA) (n)** (ao lado de \"Sem cidade\") mostra só esses. Os casos criados pela IA têm o selo **IA**.\n- Um **parceiro** (agência, hotel — contacto das Parcerias) que escreve em nome de um cliente só abre o caso com o interruptor **\"IA: reclamações e perdidos que um parceiro manda em nome de um cliente abrem o caso\"** (desligado por omissão); ligado, nasce sempre \"Por confirmar\" e o email do parceiro não fica como o do cliente.\n- Uma conversa já ligada a um perdido (à mão ou pelo próprio caso) junta as mensagens seguintes a esse perdido — nunca abre outro.\n- No caso fica uma nota interna \"Criado pela IA\" com a caixa, o motivo e a certeza. **Nunca se escreve ao cliente** — avisá-lo é sempre uma pessoa (**Avisar cliente**). Quem vê a caixa **Perdidos** recebe o aviso de email novo (como num email que chega diretamente).\n- A mesma matrícula de outro cliente nunca junta o email ao caso dele. Um email novo do mesmo cliente só se junta a um perdido aberto há **menos de 14 dias** (a mesma viagem) e sem outra reserva/matrícula; um perdido antigo ainda aberto não \"engole\" um objeto novo.\n- Um caso **\"Por confirmar (IA)\"** que alguém arquivou (\"Não é um perdido\") não volta com a resposta seguinte do cliente."
+            },
+            {
+              "id": "perdidos.md#tratar",
+              "file": "perdidos.md",
+              "slug": "tratar",
+              "title": "Tratar",
+              "level": 4,
+              "summary": "Quadro por estados: Novo → Investigação → Encontrado → Devolvido/Fechado.",
+              "text": "- Quadro por estados: Novo → Investigação → Encontrado → Devolvido/Fechado. Os convertidos ficam em Fechado e não se movem.\n- **Prazo**: os dias de **Definições → Prazo dos perdidos e achados** (7 por omissão) desde o registo, ou o prazo da **Atribuição** (conta até ao fim do dia escolhido). Fora do prazo, a cidade e o responsável recebem um lembrete (uma vez por dia) e conta em **Em atraso**.\n- **Parado há N dias**: âmbar a ~3/7 do prazo (3 dias com 7), vermelho quando passa o prazo.\n- **Mensagens** ficam no caso (nota interna ou não). Ao cliente só chega o que enviares com **Avisar cliente** (email de perdidos@).\n- **Possíveis correspondências** (perdido ↔ achado): confirmar deixa uma nota nos dois casos; uma confirmada continua visível depois de o caso fechar. Contactar o cliente é sempre uma pessoa.\n- **Devolvido** obriga a dizer **como foi devolvido** (em mãos, correio, entrega ao domicílio ou outro — com **Outro** escreve-se como foi) e **a data**: no quadro, no estado do caso e em **Marcar como Devolvido** abre-se uma janela para isso. Num caso Devolvido não dá para apagar o método nem a data.\n- **Devolução**: onde estava, quem encontrou, como foi devolvido, data e **foto da entrega** (uma foto nova não apaga a anterior).\n- No cartão \"Dados da Reserva\", **Abrir ficha da reserva** mostra tudo sobre a reserva, lido em tempo real da Multipark.\n- Se afinal é uma reclamação, **Converter em Reclamação** (admin)."
+            },
+            {
+              "id": "perdidos.md#condutores-do-caso-team-leader-e-acima",
+              "file": "perdidos.md",
+              "slug": "condutores-do-caso-team-leader-e-acima",
+              "title": "Condutores do caso (team leader e acima)",
+              "level": 2,
+              "summary": "Quem mexeu no carro: agentes da Multipark com ações na matrícula, ligados à ficha pela conta do agente (nunca pelo nome); ações de sistema/API não contam.",
+              "text": "- **Quem mexeu no carro**: agentes da Multipark com ações na matrícula, ligados à ficha pela conta do agente (nunca pelo nome); ações de sistema/API não contam.\n- **Anexar** leva a ficha da pessoa; **Tirar** pede confirmação, anula os pontos por confirmar e fica registado.\n- **Pontos a um condutor**: quem gere o caso propõe (só a uma ficha anexada); **só um supervisor (ou acima) confirma**, e nunca quem os propôs. Aos 3 pontos confirmados o login da pessoa fica bloqueado. Só dá para anexar e propor pontos a pessoas das tuas cidades.\n- **Cruzamento de condutores** mostra quem aparece em vários casos. Se o período tiver histórico a mais, diz que o resultado está incompleto."
+            },
+            {
+              "id": "perdidos.md#arquivar-em-vez-de-eliminar",
+              "file": "perdidos.md",
+              "slug": "arquivar-em-vez-de-eliminar",
+              "title": "Arquivar (em vez de eliminar)",
+              "level": 4,
+              "summary": "Arquivar (admin) pede o motivo.",
+              "text": "- **Arquivar** (admin) pede o motivo. O caso sai das listas, contadores, lembretes e cruzamento; os pontos por confirmar são anulados. Nada é apagado, nem os ficheiros.\n- **Arquivados** mostra-os; no caso, **Tirar do arquivo** devolve-o."
+            },
+            {
+              "id": "perdidos.md#quando-a-leitura-falha",
+              "file": "perdidos.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Lista, caso, fotos, mensagens, reserva, histórico, condutores, correspondências e cruzamento mostram \"Não foi possível carregar…\" com Tentar de novo.",
+              "text": "- Lista, caso, fotos, mensagens, reserva, histórico, condutores, correspondências e cruzamento mostram **\"Não foi possível carregar…\"** com **Tentar de novo**. Com a Multipark em baixo, aparece \"indisponível\", nunca \"não corresponde a nenhuma reserva\" ou \"sem histórico\"."
+            },
+            {
+              "id": "perdidos.md#quem-pode",
+              "file": "perdidos.md",
+              "slug": "quem-pode",
+              "title": "Quem pode",
+              "level": 4,
+              "summary": "CSV (leva contactos do cliente): só quem pode exportar.",
+              "text": "- **CSV** (leva contactos do cliente): só quem pode exportar.\n- Condutores e extras **não veem** os Perdidos e Achados — nem os casos em que estão envolvidos. Só a partir de team leader.\n- O **responsável** do caso só pode ser team leader ou acima. Um responsável antigo abaixo disso aparece marcado \"(abaixo de team leader — troca)\"."
+            }
+          ]
+        },
+        {
+          "id": "reclamacoes",
+          "file": "reclamacoes.md",
+          "group": "Suporte",
+          "module": "reclamacoes",
+          "title": "Reclamações",
+          "routes": [
+            "/reclamacoes"
+          ],
+          "tabs": [],
+          "summary": "Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).",
+          "sections": [
+            {
+              "id": "reclamacoes.md#inicio",
+              "file": "reclamacoes.md",
+              "slug": "inicio",
+              "title": "Reclamações",
+              "level": 1,
+              "summary": "Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…).",
+              "text": "Casos de clientes insatisfeitos (danos, sujidade, atraso, cobrança, staff…)."
+            },
+            {
+              "id": "reclamacoes.md#criar",
+              "file": "reclamacoes.md",
+              "slug": "criar",
+              "title": "Criar",
+              "level": 4,
+              "summary": "Menu Suporte → Reclamações → Nova Reclamação.",
+              "text": "1. Menu **Suporte → Reclamações** → **Nova Reclamação**.\n2. Indica pelo menos um dado do cliente: nº de reserva, matrícula, email, telefone ou nome. Ao gravar, a reserva liga-se sozinha (e completa os dados em falta). No caso, **Ligar reserva automaticamente** volta a tentar.\n3. Escolhe o tipo, a prioridade e o prazo (SLA) e escreve uma descrição breve. **Criar Reclamação**.\n- Quem só vê a sua cidade e não escolhe o projeto: a reclamação fica na cidade dessa pessoa.\n- Os emails para **reclamacoes@** criam reclamações sozinhos (já não há botão \"Sincronizar emails\": entram sem ninguém carregar). O cliente recebe um aviso de receção com o nº do processo **[REC-n]**, se esse aviso estiver ligado nas Definições.\n- Uma reclamação que chega a **outra caixa** (info@, reservas@, cancelamentos…) também vem para aqui — ver \"Reclamações que a IA vê noutras caixas\"."
+            },
+            {
+              "id": "reclamacoes.md#reclamacoes-que-a-ia-ve-noutras-caixas",
+              "file": "reclamacoes.md",
+              "slug": "reclamacoes-que-a-ia-ve-noutras-caixas",
+              "title": "Reclamações que a IA vê noutras caixas",
+              "level": 4,
+              "summary": "A IA lê cada email das caixas partilhadas (info@, reservas@, cancelamentos…) pelo sentido — não por palavras.",
+              "text": "- A IA lê cada email das caixas partilhadas (info@, reservas@, cancelamentos…) **pelo sentido** — não por palavras. Vê a reclamação mesmo **escondida noutro pedido** (\"quero mudar a data… e da última vez o carro veio sujo\"), num pedido de reembolso zangado, num \"nunca mais\", numa **resposta** curta (\"ainda estou à espera!\") ou num **reencaminhamento** do backoffice. Quando vê uma reclamação:\n  - **certeza alta** → a reclamação é criada sozinha, ou o email junta-se à reclamação **aberta** do mesmo cliente (mesma conversa, o nº **[REC-n]** no assunto, ou o mesmo email; a mesma matrícula ou a mesma reserva só quando essa reclamação é do mesmo email ou não tem email — nunca no caso de outro cliente, nunca só pelo nome ou pelo assunto). Se o email do mesmo cliente traz **outra reserva ou outra matrícula** (\"Reserva: …\", \"Matrícula: …\") do que a reclamação aberta, é **outra reclamação**;\n  - **certeza média** → a reclamação é criada na mesma, marcada **\"Por confirmar (IA)\"** (selo no cartão e aviso roxo no caso). Abre-a e carrega em **É reclamação** (confirma) ou **Não é reclamação** (arquiva com o motivo — nada se apaga; volta com \"Tirar do arquivo\");\n  - **pouca certeza** → nada.\n- A conversa vai para a caixa **Reclamações** da Comunicação, **por ler**.\n- Nunca para emails internos (salvo o backoffice a reencaminhar a queixa de um cliente), automáticos, envios em massa nem avisos de avaliações.\n- **Parceiros** (agência, hotel, comparador — contacto das Parcerias) que escrevem em nome de um cliente: só com o interruptor **\"IA: reclamações e perdidos que um parceiro manda em nome de um cliente abrem o caso\"** (Definições → Automações; **desligado** por omissão). Ligado, a reclamação nasce sempre **\"Por confirmar (IA)\"** e o email do parceiro **não fica** como o do cliente (nunca junta reclamações de clientes diferentes da mesma agência) — confirma quem é o cliente. Desligado, o email de um parceiro nunca abre reclamação.\n- Quando a IA diz que há uma queixa **em qualquer parte** do email (mesmo de passagem, dentro de outro pedido), a reclamação abre pelo menos **\"Por confirmar (IA)\"**, mesmo que a certeza seja baixa.\n- Um email só em HTML (sem texto simples) é lido pelo texto do HTML — não só pelas primeiras linhas.\n- **Nunca responde ao cliente**: sem aviso de receção, sem resposta. O aviso no sino vai à equipa como numa reclamação nova (\"Reclamação por confirmar (IA)\" quando é o caso).\n- Uma conversa nunca dá duas reclamações, mesmo que a sincronização corra outra vez. Se o cliente responder nessa conversa, a resposta entra na mesma reclamação (volta a **Em Análise**). Uma reclamação **\"Por confirmar (IA)\"** que alguém **arquivou** (\"Não é reclamação\") **não volta** com a resposta seguinte do cliente: a pessoa já decidiu.\n- O **Livro de Reclamações eletrónico** (aviso da plataforma oficial) abre sempre a reclamação.\n- Na reclamação fica uma nota **\"Criada pela IA\"** com a caixa por onde chegou, o motivo e a certeza, e a origem **IA (email noutra caixa)**. Nos cartões aparece o selo **IA**.\n- As sugestões antigas **Parecem reclamações** (de antes de 14 out 2026, ou quando não se conseguiu confirmar se o remetente é um parceiro) continuam no topo, com **Criar reclamação** e **Não é reclamação**.\n- Se a criação falhar (Gmail ou base de dados em baixo), fica em **Parecem reclamações** como **Falhou ao criar** com **Tentar de novo**; o sistema também volta a tentar sozinho.\n- **As que já estão nas caixas**: com o interruptor **\"IA: rever os emails que já estão nas caixas\"** (desligado por omissão) a IA passa também pelos emails dos últimos 30 dias ainda sem caso.\n- Interruptor: Definições → Automações → **\"IA: reclamações que chegam a outras caixas vão para as Reclamações\"** (ligado). Precisa de **\"IA: separar emails e WhatsApp pelas caixas\"** ligado (é a mesma leitura da IA). As certezas estão em Definições → Parâmetros → IA (**ai.mailComplaints**: 0,85 para confirmada, 0,5 para \"Por confirmar\"). Desligado: deixa de criar.\n- Para ver se a IA está a apanhar as reclamações: Definições → Comunicação → **Testar a triagem** (super admin). A meta é mais de 90 % em cada um dos três conjuntos de exemplo."
+            },
+            {
+              "id": "reclamacoes.md#filtros",
+              "file": "reclamacoes.md",
+              "slug": "filtros",
+              "title": "Filtros",
+              "level": 4,
+              "summary": "Pesquisar: nº, título, nome, email, telefone, reserva, matrícula e responsável (sem acentos nem traços: \"aa12bb\" encontra \"AA-12-BB\"). #12 abre só a…",
+              "text": "- **Pesquisar**: nº, título, nome, email, telefone, reserva, matrícula e responsável (sem acentos nem traços: \"aa12bb\" encontra \"AA-12-BB\"). **#12** abre só a reclamação nº 12.\n- **Estado** (também **Em aberto** e **Em atraso**), **Tipo**, **Cidade** (inclui **Sem cidade** para quem vê todas), **Responsável** (ou **Sem responsável**), **Origem** (email, IA, WhatsApp, crítica Google, ocorrência/perdido, à mão, API, ou **Por confirmar (IA)** — só as que a IA criou e ninguém confirmou) e **Criada de / até** (dia de Lisboa).\n- Quando há reclamações **\"Por confirmar (IA)\"**, aparece por cima do quadro quantas são, com **Ver só essas**.\n- Tudo filtra a **mesma** lista: o quadro, os contadores, o CSV e o total batem sempre certo. **Limpar filtros** volta ao início. Os filtros ficam guardados enquanto o separador estiver aberto (sair e voltar às Reclamações não os perde).\n- Escolher uma cidade no cabeçalho tira o **Sem cidade**.\n- Com datas escolhidas procura em todas (sem o limite dos 90 dias), como a pesquisa.\n- No telemóvel os filtros estão no botão **Filtros (n)** e o quadro mostra **um estado de cada vez** (os botões têm as contagens)."
+            },
+            {
+              "id": "reclamacoes.md#tratar",
+              "file": "reclamacoes.md",
+              "slug": "tratar",
+              "title": "Tratar",
+              "level": 4,
+              "summary": "O quadro mostra os estados: Novo → Em Análise → Aguarda Cliente → Resolvido/Fechado.",
+              "text": "- O quadro mostra os estados: Novo → Em Análise → Aguarda Cliente → Resolvido/Fechado. Arrasta ou muda o estado no caso. As convertidas ficam em Fechado e não se movem.\n- O quadro abre nas reclamações dos **últimos 90 dias** e em **todas as que ainda estão abertas** (Novo, Em Análise, Aguarda Cliente), sejam de quando forem. **Ver todas** tira o limite; **Só os últimos 90 dias** volta. Ao pesquisar procura em todas; as **Arquivadas** vêm sempre todas.\n- Os contadores contam o que está no quadro (tipo, pesquisa e limite de 90 dias incluídos). **Em atraso** = prazo passado em Novo ou Em Análise.\n- No caso: separadores **Detalhes**, **Mensagens**, **Fotos**, **Viatura** (quem mexeu no carro), **Em serviço**, **Histórico** e **Emails do cliente**.\n- **Emails do cliente**: TODAS as conversas com o cliente nas caixas partilhadas que vês (info@, reservas@, reclamações@, cancelamentos…), da mais recente para a mais antiga — não só as desta reclamação. Cada uma mostra a caixa, o assunto, a última mensagem e a data; carregar abre a conversa na Comunicação. A desta reclamação está marcada **Esta reclamação**.\n  - O cliente encontra-se pelo email da reclamação (e dos emails ligados ao caso), pelo email do cliente da reserva ligada e pelos emails da ficha do cliente no CRM. Em **Procurado por** vês quais.\n  - Nunca entram os emails de **parceiros/agências** (uma agência reserva para muitos clientes — as conversas dela são de outros). A ficha do CRM só conta pelo telefone (ou por um email de duas fichas) quando tem o **mesmo nome**; empresas nunca.\n  - O teu email pessoal (\"O meu email\") e as caixas a que não tens acesso nunca aparecem.\n  - Mostra 10 de cada vez; **Ver mais** traz mais (até 100).\n  - Em baixo, **Só desta reclamação** tem os emails ligados e as reuniões.\n- **Mensagens**: o que escreves fica no caso. Ao cliente só chega o que enviares com **Enviar email** (há modelos de resposta).\n- **Enviar email** passa o caso a **Aguarda Cliente** (só se estava em Novo ou Em Análise). Quando o cliente responde, volta a **Em Análise**, e um caso fechado reabre.\n- Com **\"Reclamações: avisar o responsável quando o cliente responde\"** ligado nas Definições (vem desligado), o responsável recebe no sino **\"O cliente respondeu à reclamação #n\"** — no máximo um aviso por reclamação a cada 30 min, só emails do próprio cliente (um reencaminhamento interno não conta). Sem responsável não avisa ninguém.\n- **Reabrir** (voltar a um estado aberto) limpa a data de fecho e o aviso de prazo; pode voltar a avisar.\n- **Sugestões da IA** (tipo, prioridade, reserva, rascunho de resposta): nada é enviado ao cliente sem uma pessoa.\n- **Anexar email da caixa** junta ao caso um email que não se ligou sozinho. Anexar outra vez não duplica.\n- Se afinal é um objeto perdido, usa **Converter em Perdido** (admin).\n- No cartão \"Dados da Reserva\", **Abrir ficha da reserva** mostra tudo sobre a reserva, lido em tempo real da Multipark."
+            },
+            {
+              "id": "reclamacoes.md#prazo-sla",
+              "file": "reclamacoes.md",
+              "slug": "prazo-sla",
+              "title": "Prazo (SLA)",
+              "level": 4,
+              "summary": "O prazo corre em Novo e Em Análise; em Aguarda Cliente para.",
+              "text": "- O prazo corre em **Novo** e **Em Análise**; em **Aguarda Cliente** para.\n- Fora do prazo, a cidade e o responsável recebem um aviso (uma vez por reclamação).\n- O prazo da **Atribuição** conta até ao fim do dia escolhido."
+            },
+            {
+              "id": "reclamacoes.md#condutores-em-servico",
+              "file": "reclamacoes.md",
+              "slug": "condutores-em-servico",
+              "title": "Condutores (Em serviço)",
+              "level": 4,
+              "summary": "Sugeridos: quem mexeu na reserva (ligado à ficha pela conta do agente na Multipark, nunca pelo nome) e quem estava escalado (confirmado) nos dias de entrada e…",
+              "text": "- **Sugeridos**: quem mexeu na reserva (ligado à ficha pela conta do agente na Multipark, nunca pelo nome) e quem estava escalado (confirmado) nos dias de entrada e saída, na cidade da reclamação.\n- **Associar** liga a pessoa ao caso; os pontos contam na avaliação dela.\n- **Tirar** pede confirmação: deixa de contar, mas a associação fica registada."
+            },
+            {
+              "id": "reclamacoes.md#fotos",
+              "file": "reclamacoes.md",
+              "slug": "fotos",
+              "title": "Fotos",
+              "level": 4,
+              "summary": "Só fotos (JPG, PNG, WebP, GIF, HEIC).",
+              "text": "- Só fotos (JPG, PNG, WebP, GIF, HEIC). As grandes são reduzidas antes de enviar.\n- **Tirar a foto do caso** pede confirmação; a foto fica guardada."
+            },
+            {
+              "id": "reclamacoes.md#arquivar-em-vez-de-eliminar",
+              "file": "reclamacoes.md",
+              "slug": "arquivar-em-vez-de-eliminar",
+              "title": "Arquivar (em vez de eliminar)",
+              "level": 4,
+              "summary": "Arquivar (admin) pede o motivo.",
+              "text": "- **Arquivar** (admin) pede o motivo. A reclamação sai das listas, contadores, lembretes e avaliação. Nada é apagado.\n- **Arquivadas** mostra-as; no caso, **Tirar do arquivo** devolve-a.\n- Se o cliente voltar a escrever, sai do arquivo sozinha."
+            },
+            {
+              "id": "reclamacoes.md#quando-a-leitura-falha",
+              "file": "reclamacoes.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Lista, caso, reserva, histórico, condutores, sugestões da IA, histórico do cliente e emails do cliente mostram \"Não foi possível carregar…\" com Tentar de novo.",
+              "text": "- Lista, caso, reserva, histórico, condutores, sugestões da IA, histórico do cliente e **emails do cliente** mostram **\"Não foi possível carregar…\"** com **Tentar de novo**. Uma falha nunca aparece como \"Sem tickets\", \"0\", \"sem emails\" ou \"não corresponde a nenhuma reserva\".\n- Nos emails do cliente, se só uma parte falhar (a reserva na Multipark ou a ficha do CRM), aparece o aviso **\"podem faltar conversas\"**."
+            },
+            {
+              "id": "reclamacoes.md#quem-pode",
+              "file": "reclamacoes.md",
+              "slug": "quem-pode",
+              "title": "Quem pode",
+              "level": 4,
+              "summary": "Ver, criar e tratar: conforme o acesso a Reclamações, sempre na tua cidade.",
+              "text": "- Ver, criar e tratar: conforme o acesso a Reclamações, sempre na tua cidade.\n- **CSV** (leva contactos do cliente): só quem pode exportar.\n- Condutores e extras **não veem** reclamações — nem as em que estão envolvidos (notas internas e contactos do cliente). Só a partir de team leader. O mesmo nas Críticas, Ocorrências e Perdidos.\n- O **responsável** só pode ser team leader ou acima (ao criar e em **Atribuição & prazo**). Um responsável antigo abaixo disso aparece marcado \"(abaixo de team leader — troca)\"."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Comunicação",
+      "pages": [
+        {
+          "id": "central",
+          "file": "central.md",
+          "group": "Comunicação",
+          "module": "central",
+          "title": "Central (as minhas chamadas)",
+          "routes": [
+            "/central"
+          ],
+          "tabs": [],
+          "summary": "Menu Comunicação → Central.",
+          "sections": [
+            {
+              "id": "central.md#inicio",
+              "file": "central.md",
+              "slug": "inicio",
+              "title": "Central (as minhas chamadas)",
+              "level": 1,
+              "summary": "Menu Comunicação → Central.",
+              "text": "Menu **Comunicação → Central**. Mostra as chamadas que a **consola da Vodafone** (One Net Attendant Console) registou na dashboard."
+            },
+            {
+              "id": "central.md#quem-ve-o-que",
+              "file": "central.md",
+              "slug": "quem-ve-o-que",
+              "title": "Quem vê o quê",
+              "level": 4,
+              "summary": "Cada pessoa vê só as suas chamadas (team leader, supervisor, front office e back office).",
+              "text": "- Cada pessoa vê **só as suas** chamadas (team leader, supervisor, front office e back office).\n- **Admin e super admin** veem **as de todos**, com o filtro **Pessoa**.\n- É preciso um acesso da consola (Integrações → Central Vodafone, criado pelo super admin) e o \"receber as chamadas da consola\" ligado. Sem acesso, a página diz isso."
+            },
+            {
+              "id": "central.md#o-que-mostra",
+              "file": "central.md",
+              "slug": "o-que-mostra",
+              "title": "O que mostra",
+              "level": 4,
+              "summary": "Período (Hoje e ontem, 7, 30 ou 90 dias) e Todas / Recebidas / Feitas.",
+              "text": "- Período (**Hoje e ontem**, **7**, **30** ou **90 dias**) e **Todas / Recebidas / Feitas**.\n- No topo: quantas **recebidas**, quantas **feitas** e o **tempo** total.\n- Cada chamada: quando, recebida ou feita, **com quem** (Cliente, Equipa, Contacto ou Interna, com ligação para a ficha — Equipa abre a ficha RH dessa pessoa), o **número** (carrega para ligar) e a **duração**. A consola só manda minutos: uma chamada curta aparece como \"menos de 1 min\".\n- As **não atendidas** não aparecem: a consola não as envia (ficam na lista dela).\n- Mostram-se no máximo as 500 mais recentes de cada vez.\n- Admin e super admin: na coluna **Quem**, carrega no nome de quem atendeu ou fez a chamada para abrires **a ficha RH dessa pessoa** (a ficha ativa; também com contas extra). Se a conta não tiver ficha ligada, abre a conta em RH → Utilizadores."
+            },
+            {
+              "id": "central.md#quando-a-central-toca-no-dashboard",
+              "file": "central.md",
+              "slug": "quando-a-central-toca-no-dashboard",
+              "title": "Quando a central toca no dashboard",
+              "level": 4,
+              "summary": "Com o \"tocar no dashboard\" ligado, a chamada aparece ao meio, em cima, e toca no máximo 12 segundos.",
+              "text": "- Com o \"tocar no dashboard\" ligado, a chamada aparece ao meio, em cima, e toca no máximo **12 segundos**.\n- Atendes **na consola da Vodafone**. No aviso, o telefone é um botão grande **Já atendi**: carrega e o som pára logo. Carregar em qualquer sítio do aviso também pára o som.\n- **Sem som neste browser** deixa só o aviso (fica guardado neste computador); **Ligar o som** volta atrás.\n- Quando a Vodafone nos disser que a chamada foi atendida, o som vai parar sozinho (ainda não chega essa informação)."
+            }
+          ]
+        },
+        {
+          "id": "comunicacao",
+          "file": "comunicacao.md",
+          "group": "Comunicação",
+          "module": "comunicacao",
+          "title": "Comunicação (email e calendário)",
+          "routes": [
+            "/comunicacao",
+            "/comunicacao/meu-email",
+            "/calendario"
+          ],
+          "tabs": [],
+          "summary": "Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard.",
+          "sections": [
+            {
+              "id": "comunicacao.md#inicio",
+              "file": "comunicacao.md",
+              "slug": "inicio",
+              "title": "Comunicação (email e calendário)",
+              "level": 1,
+              "summary": "Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard.",
+              "text": "Os emails das caixas partilhadas da empresa e o teu próprio email @multipark, dentro do dashboard. Todo o email entra e sai pela API do Gmail; cada email é separado pelo alias a que foi enviado (tabela em Definições → Comunicação — ver a ajuda \"Email por alias\")."
+            },
+            {
+              "id": "comunicacao.md#caixas-de-email-menu-comunicacao-caixas-de-email",
+              "file": "comunicacao.md",
+              "slug": "caixas-de-email-menu-comunicacao-caixas-de-email",
+              "title": "Caixas de email (menu Comunicação → Caixas de email)",
+              "level": 2,
+              "summary": "As caixas ficam à esquerda, umas por baixo das outras, como no Gmail: carregas numa e a lista muda logo ao lado, sem sair da página.",
+              "text": "1. As caixas ficam à esquerda, **umas por baixo das outras, como no Gmail**: carregas numa e a lista muda logo ao lado, sem sair da página. Cada caixa mostra quantos emails tem **por ler**. Só vês as caixas do teu módulo; algumas (ex.: admin@) são só para a administração.\n   - **O meu email** está na mesma lista (em **Pessoal**), por baixo das caixas da empresa.\n   - As caixas que são **tuas** (o endereço está em teu nome ou da tua função) têm o ícone de pessoa.\n   - **Caixa inicial**: carrega na **estrela ★** ao lado de uma caixa e é essa que abre quando entras. Sem estrela, abre a primeira que é tua (ou a primeira da lista). Cada pessoa tem a sua.\n   - Aqui só há email. O WhatsApp tem a entrada dele: **Comunicação → WhatsApp**.\n   - No PC, o **menu do lado recolhe** quando entras nas caixas, para os emails terem o ecrã todo; abre-o no botão do menu quando precisares e, ao sair, volta como estava.\n   - No telemóvel, a caixa escolhe-se na lista do topo.\n   - **Trabalha sempre daqui:** o que envias pelo dashboard fica registado na conversa e ligado ao cliente — também do **O meu email** (uma mensagem nova para um cliente fica no separador **Comunicações** da ficha dele).\n2. Por cima da lista escolhes o que queres ver: **Não lidas · Por responder · Todas** (cada uma com o número ao lado).\n   - As **caixas partilhadas abrem sempre em Não lidas**. O **O meu email** e a pesquisa da barra de cima (\"ver todos\") abrem em **Todas**.\n   - **Por responder**: o cliente escreveu e ainda ninguém respondeu (sem as resolvidas).\n   - O resto está no botão **Filtros**, ao lado da pesquisa (o número no botão diz quantos estão ligados): **estado da conversa**, **responsável**, **marca**, **Mostrar automáticos** e, para o super admin, **Arquivo (+5 anos)**. Os filtros ligados aparecem por baixo, cada um com um **×** para o tirar.\n   - O **estado** é o trabalho da equipa, não se o email foi lido: **Por tratar** (ainda há o que fazer — antes chamava-se \"Aberta\"), **Pendente** (à espera de alguém) e **Resolvida**.\n   - Lista vazia: carrega em **Ver todas** para tirar os filtros.\n   - Pesquisa por assunto, nome ou email na caixa de pesquisa.\n3. Abre a conversa: **Responder**, **Responder a todos** ou **Reencaminhar**. O email sai pelo endereço (alias) a que o cliente escreveu, com a assinatura da marca. Se o alias não estiver configurado como \"Enviar email como\" no Gmail, aparece um erro a explicar o que falta.\n   - Carregar duas vezes em **Enviar**, ou carregar outra vez depois de um erro, **nunca manda dois emails** ao cliente.\n   - Se o Gmail não responder (rede, prazo), o editor diz **\"O Gmail não confirmou o envio — pode ter chegado ao cliente\"**. Vê na pasta Enviados (ou espera uns minutos) antes de usar **Confirmei que não saiu — enviar outra vez**.\n   - Uma **mensagem nova** numa caixa por cidade fica na cidade do alias (ou na tua) e já ligada ao cliente.\n   - Os anexos têm de ser carregados por ti nesse editor.\n4. **Rascunho IA** põe uma sugestão no editor — revê sempre antes de enviar. Nada é enviado sozinho.\n5. Atribui um **Responsável** e muda o estado. A lista de responsáveis só mostra quem pode responder nessa caixa **e** vê a cidade da conversa. Um email novo do cliente reabre uma conversa resolvida.\n6. **Por classificar** (só admin e super admin): emails que chegaram por um endereço fora da tabela de aliases (ex.: em Bcc). Abre e carrega em **Atribuir à caixa** — ver a ajuda \"Email por alias\".\n7. **Notificações automáticas de reserva** (os emails \"Nova Reserva\" que o sistema Multipark manda para a caixa \"Reservas (geral)\", ~4000 por mês): ficam guardadas, mas **escondidas** nas listas. Carrega em **Filtros → Mostrar automáticos** para as ver (aparecem com a etiqueta \"Automático\"). A **pesquisa** encontra-as sempre. Não contam como por ler nem geram avisos.\n8. **Emails que a aplicação envia sozinha** (pedidos e lembretes de disponibilidade aos extras — \"Disponibilidade — semana de…\", \"Lembrete: ainda não indicaste a tua disponibilidade\" —, avisos de escala, turnos cancelados, lembretes de formação, notificações e relatórios): também ficam **escondidos** como automáticos, mesmo quando saem por recursos-humanos@. Não aparecem como conversas abertas, não contam como por ler, por responder nem abertas, e não ficam para atribuir. **Se a pessoa responder**, a conversa passa a normal e aparece na caixa (quem respondeu foi uma pessoa). Os envios a um extra ficam na ficha dele: **Recursos Humanos → abre o colaborador → Comunicações automáticas** (data, tipo, assunto e estado *Enviado*/*Respondido*; o assunto abre a conversa). Os que já estavam na caixa antes desta mudança foram limpos uma vez, automaticamente."
+            },
+            {
+              "id": "comunicacao.md#o-resto-da-comunicacao-menu-por-esta-ordem",
+              "file": "comunicacao.md",
+              "slug": "o-resto-da-comunicacao-menu-por-esta-ordem",
+              "title": "O resto da Comunicação (menu, por esta ordem)",
+              "level": 2,
+              "summary": "Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas.",
+              "text": "- **Caixas de email → O meu email → Drive → WhatsApp → Central → Calendário → Tarefas.**\n- **Drive** abre o **Drive da empresa** (o Shared Drive configurado em Definições → Comunicação → Google Drive; se ainda não estiver ligado, a lista dos Drives partilhados) num separador ao lado, **na tua conta Google** — a que ligaste no Perfil → Google ou, sem ela, o email com que entras no dashboard. Assim, num telemóvel ou browser com várias contas Google, já não abre a pessoal. Se a conta não estiver aberta nesse browser, o Google pede para entrar com ela. Os ficheiros ligados a uma ficha continuam no separador Drive dessa ficha.\n- **Central**: as chamadas da consola da Vodafone. Cada um vê as suas; admin e super admin veem as de todos (ver a ajuda \"Central\").\n- **Tarefas**: as mesmas Tarefas das Operações, também aqui."
+            },
+            {
+              "id": "comunicacao.md#caixas-por-tema",
+              "file": "comunicacao.md",
+              "slug": "caixas-por-tema",
+              "title": "Caixas por tema",
+              "level": 4,
+              "summary": "As caixas são as mesmas do WhatsApp: além das que já havia (Reclamações, Perdidos, Críticas, Ocorrências, RH, Info, Comercial…) há Alterações, Cancelamentos…",
+              "text": "- As caixas são as mesmas do WhatsApp: além das que já havia (Reclamações, Perdidos, Críticas, Ocorrências, RH, Info, Comercial…) há **Alterações**, **Cancelamentos**, **Serviços extra**, **Parcerias** e **Faturação** — caixas \"por tema\", sem endereço próprio. Os pedidos para **cancelar** uma reserva (ou o reembolso de uma cancelada) vão para **Cancelamentos**; mudar datas, horas, voo ou matrícula fica em **Alterações**.\n- **A IA lê e separa sozinha** (interruptor **\"IA: separar emails e WhatsApp pelas caixas\"**, Definições → Automações, **ligado por omissão**): cada email recebido numa caixa partilhada (info@, reservas@, recursos-humanos@…) é lido **uma vez** e a IA decide **pelo sentido** do que a pessoa escreve — nunca por uma palavra solta. Uma conversa nova vai para a caixa do tema — RH, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos, Parcerias, Faturação. **Fica por ler** e o aviso de email novo vai a quem vê essa caixa.\n  - **Reclamações e perdidos vão para os módulos** (interruptores **\"IA: reclamações que chegam a outras caixas vão para as Reclamações\"**, ligado, e **\"IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados\"**, desligado por omissão): a IA vê a queixa ou o objeto esquecido mesmo **dentro de outro pedido** (ex.: \"quero mudar a data… e da última vez o carro veio sujo\"), numa **resposta** ou num **reencaminhamento** do backoffice. Abre a reclamação / o perdido (ou junta o email ao que já está aberto do mesmo cliente, da mesma conversa ou da mesma reserva) e a conversa vai para a caixa **Reclamações** / **Perdidos**, **por ler**. Com certeza média o caso nasce **\"Por confirmar (IA)\"** — ver a ajuda das Reclamações. Uma conversa nunca dá dois casos e **nunca se responde ao cliente**.\n  - **Críticas e ocorrências** (interruptor **\"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas\"**, desligado por omissão): os avisos de avaliação (Google, Trustpilot, Tripadvisor) e os elogios vão para a caixa **Críticas** e ficam **lidos** — a crítica já entra sozinha nas Críticas, daqui não se cria nada. Os avisos de ocorrência da app Multipark ligam-se à ocorrência da app (ligação **Ocorrência**, abre a ocorrência), vão para a caixa **Ocorrências** e ficam **lidos**; um relato de ocorrência escrito por uma pessoa vai para as Ocorrências **por ler**.\n  - **Lixo** (publicidade, newsletters, spam, respostas automáticas) fica onde chegou. O que a IA **não percebe** (pouca certeza) vai para o **info**, para alguém dividir à mão.\n  - Se a IA **falhar**, nada se mexe: o email fica onde chegou, **por ler**, e é lido outra vez mais tarde (até 3 vezes). Nunca se perde.\n  - Uma **resposta** numa conversa que já está numa caixa fica onde está — salvo se trouxer uma reclamação ou um perdido (aí vai para a caixa do caso). O email **pessoal** (O meu email) nunca é mexido.\n  - O que chega a **reclamacoes@** e **perdidos@** abre sempre o caso (o pipeline dessas caixas); com o interruptor **\"IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@\"** (desligado), só não abre quando a IA tem a certeza (90 %) de que é lixo.\n  - Na conversa aparece **\"Movido pela IA → caixa (motivo · certeza)\"** (ou \"A IA deixou em…\" / \"A IA não conseguiu ler — ficou em…\"). Com várias leituras na mesma conversa, aparece a última que a mudou de caixa.\n  - A IA **nunca responde** a ninguém. Um candidato a trabalhar que escreve pela 1.ª vez entra também nos **Leads de Extras** (ver essa ajuda).\n  - **Os emails que já lá estão**: com o interruptor **\"IA: rever os emails que já estão nas caixas\"** (desligado por omissão), de 15 em 15 min a mesma triagem passa pelos emails dos últimos 30 dias ainda sem caso — as reclamações e os perdidos que lá estejam abrem o caso. Cada email é lido uma vez; não baralha as caixas de tema dos antigos; o que uma pessoa já mexeu fica como está.\n  - Limiar de certeza e máximo de emails lidos por vez: Definições → Parâmetros → IA → **\"IA a separar emails e WhatsApp: limiar e teto\"** (0,7 e 10 por omissão). Certezas dos casos: **\"IA: reclamações e perdidos vistos nas caixas — certezas\"**. Dias e lote do varrimento: **\"IA: rever os emails que já estão nas caixas — dias e lote\"**.\n  - **Testar a triagem** (super admin, Definições → Comunicação): corre uns 260 emails de exemplo, em três conjuntos, pelo modelo real e diz quantas reclamações e perdidos apanha (a meta é mais de 90 % em cada conjunto).\n  - Um email só em HTML (sem texto simples) é lido pelo texto do HTML. A IA vê a mensagem nova primeiro e o citado como contexto — também quando a resposta vem **por baixo** da citação.\n  - Os emails de **parceiros** (contactos das Parcerias) em nome de um cliente só abrem caso com o interruptor **\"IA: reclamações e perdidos que um parceiro manda em nome de um cliente abrem o caso\"** (desligado por omissão) — sempre \"Por confirmar (IA)\".\n- **Mover para…** (na conversa) muda a caixa à mão e **corrige a IA**: na conversa passa a ler-se \"corrigido à mão → caixa\" (fica registado quem e quando). Depois disso a IA não volta a mexer nessa conversa (nem para abrir casos). Quem não vê a caixa nova deixa de ver a conversa.\n- Responder numa caixa por tema sai pelo endereço por onde o cliente escreveu (ex.: info@). Mensagens novas escrevem-se nas caixas com endereço."
+            },
+            {
+              "id": "comunicacao.md#ligar-whatsapp-e-email-a-partir-das-fichas-ficha-do-cliente",
+              "file": "comunicacao.md",
+              "slug": "ligar-whatsapp-e-email-a-partir-das-fichas-ficha-do-cliente",
+              "title": "Ligar, WhatsApp e email a partir das fichas (ficha do cliente, da reserva e do colaborador)",
+              "level": 2,
+              "summary": "WhatsApp abre a conversa desse número.",
+              "text": "- **WhatsApp** abre a conversa desse número. Se ainda não houver, cria-a **sem enviar nada**: escreves no ecrã do WhatsApp (com um template, porque a janela de 24 h ainda não abriu). Criar uma conversa nova precisa de poder responder no WhatsApp; quem só vê abre as que já existem.\n- **Ligar**: pelo telemóvel (abre o marcador ou a consola da central — os números de Portugal vão sem o +351) e, com as chamadas pelo WhatsApp ligadas, também **pelo WhatsApp** (abre a conversa e a chamada).\n- **Email** abre **Nova mensagem** aqui na Comunicação já com o destinatário (cliente e reserva: a caixa **info**; colaborador: a caixa RH; se não puderes escrever nela, a primeira onde podes). Quem não tem a Comunicação usa o programa de email do aparelho.\n- Com vários telefones ou emails na ficha, o botão mostra a lista para escolheres."
+            },
+            {
+              "id": "comunicacao.md#ligacoes",
+              "file": "comunicacao.md",
+              "slug": "ligacoes",
+              "title": "Ligações",
+              "level": 4,
+              "summary": "Cada email fica ligado automaticamente ao cliente, à reserva, à reclamação, ao perdido ou à ocorrência da app (com a confiança da ligação).",
+              "text": "- Cada email fica ligado automaticamente ao cliente, à reserva, à reclamação, ao perdido ou à ocorrência da app (com a confiança da ligação). A ligação a uma reclamação aberta usa o email ou a matrícula — **o nome sozinho nunca liga**. Em **Ligações** podes ligar ou desligar à mão.\n- Na ficha do cliente, na reclamação, no perdido e na reserva há um separador **Comunicações** com os emails (e o WhatsApp) ligados. Emails de uma caixa ou cidade que não vês aparecem só como \"Sem acesso ao conteúdo\"."
+            },
+            {
+              "id": "comunicacao.md#emails-que-criam-casos-reclamacoes-perdidos-criticas",
+              "file": "comunicacao.md",
+              "slug": "emails-que-criam-casos-reclamacoes-perdidos-criticas",
+              "title": "Emails que criam casos (reclamacoes@, perdidos@, críticas…)",
+              "level": 2,
+              "summary": "Se a criação do caso falhar (base de dados, ficheiros), o email fica marcado e o sistema tenta de novo sozinho de 15 em 15 min (até 5 vezes).",
+              "text": "- Se a criação do caso falhar (base de dados, ficheiros), o email fica marcado e o sistema **tenta de novo** sozinho de 15 em 15 min (até 5 vezes). A equipa recebe o aviso de email novo na mesma.\n- O que continuar a falhar aparece em **Definições → Comunicação → Emails que não criaram o caso**, com **Tentar de novo** (admin)."
+            },
+            {
+              "id": "comunicacao.md#caixas-super-admin",
+              "file": "comunicacao.md",
+              "slug": "caixas-super-admin",
+              "title": "Caixas (super admin)",
+              "level": 4,
+              "summary": "Uma caixa já não se apaga: Desativar tira-a das listas e da sincronização, e as conversas ficam guardadas (o super admin continua a vê-las).",
+              "text": "- Uma caixa já não se apaga: **Desativar** tira-a das listas e da sincronização, e as conversas ficam guardadas (o super admin continua a vê-las). Para voltar: **Editar → Ativa**."
+            },
+            {
+              "id": "comunicacao.md#o-meu-email-menu-comunicacao-o-meu-email-ou-o-meu-email-na-l",
+              "file": "comunicacao.md",
+              "slug": "o-meu-email-menu-comunicacao-o-meu-email-ou-o-meu-email-na-l",
+              "title": "O meu email (menu Comunicação → O meu email, ou O meu email na lista das caixas)",
+              "level": 2,
+              "summary": "Carrega em Ligar a minha conta Google (também no Perfil).",
+              "text": "1. Carrega em **Ligar a minha conta Google** (também no Perfil). Só contas do Workspace da empresa.\n2. Os teus emails aparecem em poucos minutos. Na caixa, vês tu e o **super admin**, que consegue consultar o email pessoal de todos — só em **O meu email → escolher a pessoa**; nunca aparece na caixa geral nem nas pesquisas — mas não envia em nome de ninguém. Os emails trocados com um cliente ficam também no separador **Comunicações** da ficha desse cliente, visíveis a quem tem acesso aos Clientes.\n   - **Atualizar** diz se a leitura falhou (por exemplo \"a ligação ao Google expirou\"), em vez de \"Sem emails novos\".\n3. **Desligar** revoga o acesso na Google."
+            },
+            {
+              "id": "comunicacao.md#seguranca",
+              "file": "comunicacao.md",
+              "slug": "seguranca",
+              "title": "Segurança",
+              "level": 4,
+              "summary": "As imagens de fora ficam bloqueadas até carregares em Mostrar imagens (evita pixels de rastreio).",
+              "text": "- As imagens de fora ficam bloqueadas até carregares em **Mostrar imagens** (evita pixels de rastreio). As **fotos coladas no corpo** do email (ex.: danos enviados do iPhone) também aparecem com **Mostrar imagens** e ficam na lista de anexos.\n- Os anexos abrem a pedido; o conteúdo dos emails é limpo antes de ser mostrado.\n- **Guardar no meu Drive**: do email do RH (recursos-humanos@) só os **currículos** (ficheiros com CV/currículo no nome) podem ir para o Drive pessoal; os outros documentos do RH ficam na app.\n- As horas são sempre de Lisboa.\n- **Retenção (arquivo):** emails com mais de 5 anos sem ligação a nenhum registo **não se apagam**. Deixam de aparecer nas listas, contagens e pesquisas, e ficam guardados no **Arquivo (+5 anos)**, que só o super admin vê, a pedido. Numa conversa com mensagens antigas arquivadas, o super admin tem **Mostrar arquivadas**. Uma mensagem nova, ou ligar a conversa a um cliente/caso, tira-a do arquivo. O Gmail fica sempre intacto."
+            },
+            {
+              "id": "comunicacao.md#quando-a-leitura-falha",
+              "file": "comunicacao.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Caixas, lista, conversa, comunicações de um registo e a classificação mostram \"Não foi possível carregar…\" com Tentar de novo.",
+              "text": "- Caixas, lista, conversa, comunicações de um registo e a classificação mostram **\"Não foi possível carregar…\"** com **Tentar de novo**. Nunca \"Não tens acesso\", \"Sem conversas\" ou \"liga a tua conta\" por engano. No menu, o contador passa a **?**."
+            },
+            {
+              "id": "comunicacao.md#calendario-menu-comunicacao-calendario-em-calendario",
+              "file": "comunicacao.md",
+              "slug": "calendario-menu-comunicacao-calendario-em-calendario",
+              "title": "Calendário (menu Comunicação → Calendário, em /calendario)",
+              "level": 2,
+              "summary": "A tua agenda do Google Calendar dentro do dashboard, como no Google.",
+              "text": "A tua agenda do Google Calendar dentro do dashboard, como no Google. É lida **no momento** da tua conta Google @multipark: só tu vês a tua agenda e o dashboard não guarda os teus eventos.\n1. Na primeira vez, carrega em **Ligar a minha conta Google** (já pede o Calendário). Se a conta já estava ligada só para o email, carrega em **Ativar Calendário**. Se aparecer **Voltar a ligar**, a autorização expirou: liga outra vez.\n2. Escolhe a vista em cima à direita: **Dia**, **Semana** (a de omissão) ou **Mês**. No telemóvel: **Dia** ou **Lista** (os próximos 7 dias). **‹** e **›** andam para trás e para a frente; **Hoje** volta a hoje; o mês pequeno à esquerda leva a qualquer dia. Carrega num dia para o ver sozinho (no mês, **+N mais** também).\n3. Na semana e no dia, as horas vão das 00:00 às 24:00 e a página abre nas 07:00 (faz scroll para o resto). A linha vermelha é a hora atual. Os eventos de dia inteiro (e os de 24 horas ou mais) ficam na faixa de cima. Horas sempre de Lisboa.\n4. **Que calendários aparecem:** o teu principal, os que tens visíveis no Google (por exemplo os partilhados por colegas) e o **Multipark** que o dashboard cria com os teus turnos, formação e prazos (marcado \"dashboard\"). À esquerda (no telemóvel em **Calendários**) há uma caixa por calendário para o mostrar ou esconder; a escolha fica guardada neste computador/telemóvel. Um evento privado de um calendário partilhado aparece só como **Ocupado**.\n5. **Detalhes:** carrega no evento para veres a hora, o local (abre no mapa), a descrição e o calendário. Com videochamada, **Entrar** abre o Google Meet. **Abrir no Google Calendar** abre o evento no Google, para o editar ou apagar (aqui não se editam).\n6. **Novo evento:** carrega em **Novo evento** (no telemóvel **Novo**) ou num espaço vazio da grelha (já vem com essa hora). Título, início e fim (ou **Dia inteiro**; mudar o início leva o fim atrás, com a mesma duração). Opcional: **Convidados** (emails separados por vírgulas, no máximo 20 — recebem o convite por email do Google), **Adicionar videochamada Google Meet**, **Local**, **Descrição** e **Repete** (todos os dias, todas as semanas no mesmo dia, todos os meses no mesmo dia ou todos os anos; termina numa data, após N vezes ou nunca — nos meses sem esse dia, 29 a 31, não há evento). **Guardar** põe-no no teu calendário principal e aparece logo aqui; fica nos registos de atividade (sem os emails dos convidados).\n7. **Quando não dá:** \"**Não foi possível ler o calendário**\" quer dizer que a Google não respondeu — não que a agenda está vazia; carrega em **Tentar de novo**. Se só um calendário partilhado falhar, aparece um aviso amarelo com o nome dele e os outros continuam à vista."
+            }
+          ]
+        },
+        {
+          "id": "comunicacao.aliases",
+          "file": "email-aliases.md",
+          "group": "Comunicação",
+          "module": "comunicacao",
+          "title": "Email por alias (encaminhamento, Por classificar e envio)",
+          "routes": [
+            "/definicoes",
+            "/comunicacao"
+          ],
+          "tabs": [],
+          "summary": "Todo o email passa pela API do Gmail — não há SMTP nem IMAP.",
+          "sections": [
+            {
+              "id": "email-aliases.md#inicio",
+              "file": "email-aliases.md",
+              "slug": "inicio",
+              "title": "Email por alias (encaminhamento, Por classificar e envio)",
+              "level": 1,
+              "summary": "Todo o email passa pela API do Gmail — não há SMTP nem IMAP.",
+              "text": "Todo o email passa pela **API do Gmail** — não há SMTP nem IMAP. Há duas caixas reais (**reservas@multipark.pt** e **info@multipark.pt**) e cada uma recebe muitos endereços (aliases) de todas as marcas e domínios. O dashboard separa cada email pelo alias a que foi enviado."
+            },
+            {
+              "id": "email-aliases.md#o-workspace-real-multipark-pt-set-2026",
+              "file": "email-aliases.md",
+              "slug": "o-workspace-real-multipark-pt-set-2026",
+              "title": "O Workspace real (multipark.pt, set 2026)",
+              "level": 2,
+              "summary": "Duas contas partilhadas: reservas@multipark.pt (aliases reclamacoes@, perdidos@, criticas@, recursos-humanos@, escala@) e info@multipark.pt (aliases redpark@…",
+              "text": "- Duas contas partilhadas: **reservas@multipark.pt** (aliases reclamacoes@, perdidos@, criticas@, recursos-humanos@, escala@) e **info@multipark.pt** (aliases redpark@, airpark@, skypark@, airparkfaro@, driver@). admin@, odoo@ e bags@ não têm aliases e não entram no encaminhamento.\n- **Domínios alternativos**: skypark.pt, redpark.pt, multibags.pt, multivalet.pt, multibags.app e multipark.app. Neles, **todos** os endereços de multipark.pt funcionam sozinhos — um email para reclamacoes@skypark.pt chega à conta dona de reclamacoes@multipark.pt sem configurar nada. O dashboard faz o mesmo: se o endereço não está na tabela mas o mesmo nome existe noutro domínio do Workspace, conta como esse alias (caixa, destino, responsável, cidade e etiqueta do alias); a **marca** vem do domínio para onde o email foi enviado (reclamacoes@skypark.pt → Skypark; multivalet.pt conta como Multipark). Um endereço escrito na tabela ganha sempre, e um alias posto **inativo** não volta a encaminhar por outro domínio. A lista está em Definições → Parâmetros → **Domínios alternativos do Google Workspace** (vazia = desligado).\n- airpark.pt e multidriver.pt ainda **não** estão no Workspace — emails para esses domínios não chegam.\n\n| Endereço | Conta a ler | Caixa | Marca | Destino | Responsável | Etiqueta |\n|---|---|---|---|---|---|---|\n| reservas@ | reservas@ | Reservas (geral) | Multipark | Reservas | backoffice | — |\n| escala@ | reservas@ | Reservas (geral) | Multipark | Geral | supervisor | Escala |\n| reclamacoes@ | reservas@ | Reclamações | Multipark | como a caixa (Reclamações) | backoffice | — |\n| perdidos@ | reservas@ | Perdidos e Achados | Multipark | como a caixa (Perdidos) | backoffice | — |\n| criticas@ | reservas@ | Críticas | Multipark | como a caixa (Críticas) | backoffice | — |\n| recursos-humanos@ | reservas@ | Recursos Humanos | Multipark | como a caixa (RH) | admin | — |\n| info@ | info@ | Info (geral) | Multipark | como a caixa | admin | — |\n| redpark@ | info@ | Info (geral) | Redpark | Geral | — | Redpark |\n| skypark@ | info@ | Info (geral) | Skypark | Geral | — | Skypark |\n| airpark@ | info@ | Info (geral) | Airpark | Geral | — | Airpark |\n| airparkfaro@ | info@ | Info (geral) | Airpark (cidade Faro) | Geral | — | Airpark Faro |\n| driver@ | info@ | Info (geral) | Multidriver | Recursos Humanos | admin | Condutores |\n\nTodos @multipark.pt (e, pelos domínios alternativos, também @skypark.pt, @redpark.pt…). Esta configuração foi aplicada **uma vez** pela migração 0210, só onde ainda estava a omissão — nada do que um administrador já tinha mudado foi sobreposto. As caixas Ocorrências, Campanhas e Comercial ficaram como estavam (esses endereços não existem no Workspace)."
+            },
+            {
+              "id": "email-aliases.md#como-o-alias-e-lido",
+              "file": "email-aliases.md",
+              "slug": "como-o-alias-e-lido",
+              "title": "Como o alias é lido",
+              "level": 4,
+              "summary": "Por esta ordem: Delivered-To → X-Original-To → To → Cc (nos enviados, o From).",
+              "text": "- Por esta ordem: **Delivered-To → X-Original-To → To → Cc** (nos enviados, o From). Ganha o primeiro endereço que está na tabela.\n- O Delivered-To igual à própria caixa (reservas@ / info@) é ignorado — no Google Workspace é sempre o endereço principal; o alias vem no To/Cc."
+            },
+            {
+              "id": "email-aliases.md#preencher-a-tabela-definicoes-comunicacao-encaminhamento-por",
+              "file": "email-aliases.md",
+              "slug": "preencher-a-tabela-definicoes-comunicacao-encaminhamento-por",
+              "title": "Preencher a tabela (Definições → Comunicação → Encaminhamento por alias; admin e super admin)",
+              "level": 2,
+              "summary": "+ Alias e escreve o endereço completo (qualquer domínio: reservas@skypark.pt, info@multibacks.app…).",
+              "text": "1. **+ Alias** e escreve o endereço completo (qualquer domínio: reservas@skypark.pt, info@multibacks.app…).\n2. **Caixa**: onde a conversa aparece (quem a vê é a regra da caixa).\n3. **Marca** e **Cidade** (a conversa fica dessa cidade: quem só vê a sua cidade só a vê se for a dela; os avisos vão para essa cidade).\n4. **Destino**: *Como a caixa*, *Geral*/*Reservas* (só conversa) ou um pipeline (Reclamações, Perdidos, Críticas, RH, Campanhas, Ocorrências) — cria o registo no módulo.\n5. **Responsável**: uma pessoa (a conversa fica-lhe atribuída e recebe aviso) ou uma equipa (papel: quem o tem e vê a caixa é avisado).\n6. **Etiqueta** (aparece na conversa) e **Ativo**. **Guardar**.\nUm endereço só pode estar numa caixa. Um alias inativo deixa de encaminhar."
+            },
+            {
+              "id": "email-aliases.md#depois-do-alias-a-triagem-da-ia-14-out-2026",
+              "file": "email-aliases.md",
+              "slug": "depois-do-alias-a-triagem-da-ia-14-out-2026",
+              "title": "Depois do alias: a triagem da IA (14 out 2026)",
+              "level": 2,
+              "summary": "O alias decide a caixa onde o email entra.",
+              "text": "- O alias decide a caixa onde o email **entra**. Depois disso, nos emails recebidos de pessoas nas caixas partilhadas, a IA lê e decide pelo sentido (ver Ajuda → Comunicação): reclamações e perdidos vão para os módulos e para a caixa do caso; críticas e avisos de ocorrência para a caixa deles, lidos; o resto para a caixa do tema.\n- **reclamacoes@** e **perdidos@** criam sempre o caso (o destino deles). A IA só impede o caso quando tem a certeza de que é lixo e o interruptor **\"IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@\"** está ligado (desligado por omissão).\n- Envios em massa reconhecem-se pelos **cabeçalhos** (List-Unsubscribe, List-Id, Precedence, Auto-Submitted) — nunca pelas palavras. Um **Grupo Google da empresa** que distribui um alias (List-Id de um domínio nosso) não conta como envio em massa: é o cliente a escrever.\n- O assunto já **não** manda emails para o pipeline das Ocorrências (antes, \"ocorrência\" no assunto bastava). Os avisos da app Multipark reconhecem-se pelo formulário."
+            },
+            {
+              "id": "email-aliases.md#por-classificar-comunicacao-caixa-por-classificar-so-admin-e",
+              "file": "email-aliases.md",
+              "slug": "por-classificar-comunicacao-caixa-por-classificar-so-admin-e",
+              "title": "Por classificar (Comunicação → caixa Por classificar, só admin e super admin)",
+              "level": 2,
+              "summary": "Emails que chegaram por um endereço fora da tabela (ex.: em Bcc, ou um alias novo por configurar).",
+              "text": "- Emails que chegaram por um endereço fora da tabela (ex.: em **Bcc**, ou um alias novo por configurar). Automáticos (notificações de reserva, emails do próprio dashboard) nunca vão para aqui.\n- Abre a conversa → **Atribuir à caixa** (opcional: um alias da tabela, e **Acrescentar este endereço à tabela** para os próximos já chegarem classificados). Se o destino criar registos, são criados nesse momento."
+            },
+            {
+              "id": "email-aliases.md#envio",
+              "file": "email-aliases.md",
+              "slug": "envio",
+              "title": "Envio",
+              "level": 4,
+              "summary": "Emails de sistema (notificações, briefing, escala, tarefas, formação, relatórios) saem da conta em Envio de email (Gmail) (Definições → Comunicação; Testar…",
+              "text": "- Emails de sistema (notificações, briefing, escala, tarefas, formação, relatórios) saem da conta em **Envio de email (Gmail)** (Definições → Comunicação; **Testar** envia-te um email). Ficam marcados como automáticos — nunca aparecem como conversas de clientes.\n- Emails a clientes (reclamações, perdidos, recrutamento) saem pelo alias da caixa, se estiver em \"Enviar email como\" na conta de origem.\n\n**Avisos**: Integrações → Gmail e Definições → Comunicação mostram os destinos sem alias e as caixas cuja conta Gmail não está ligada — esses emails **não** criam registos."
+            },
+            {
+              "id": "email-aliases.md#o-que-falta-do-lado-do-dono",
+              "file": "email-aliases.md",
+              "slug": "o-que-falta-do-lado-do-dono",
+              "title": "O que falta do lado do dono",
+              "level": 4,
+              "summary": "Se quiser airpark.pt: Google Admin → Domínios → acrescentar airpark.pt como domínio alternativo (depois acrescenta-o também em Definições → Parâmetros →…",
+              "text": "1. Se quiser **airpark.pt**: Google Admin → Domínios → acrescentar airpark.pt como domínio alternativo (depois acrescenta-o também em Definições → Parâmetros → Domínios alternativos do Google Workspace).\n2. Decidir o **bags@** (Multibags): hoje não tem caixa no dashboard.\n3. Definições → Comunicação → caixa **Info (geral)**: confirmar que a **Conta a ler** é info@multipark.pt (a migração só a mudou se ainda estivesse em reservas@; se tinha sido mudada à mão, ficou como estava).\n4. Vercel → Settings → Environment Variables: apagar as variáveis antigas `SMTP_*` e `IMAP_*` (já não são usadas desde que o email passou todo para o Gmail).\n5. Definições → Automações: ligar **Gmail: notificações push (Pub/Sub)** (MAIL_PUSH), se ainda não estiver."
+            }
+          ]
+        },
+        {
+          "id": "drive",
+          "file": "drive.md",
+          "group": "Comunicação",
+          "module": "drive",
+          "title": "Google Drive, Docs e Sheets",
+          "routes": [
+            "/drive",
+            "/perfil"
+          ],
+          "tabs": [],
+          "summary": "Liga ficheiros do Google Drive aos registos, guarda anexos e documentos no teu Drive, gera documentos a partir de modelos Google Docs e exporta relatórios…",
+          "sections": [
+            {
+              "id": "drive.md#inicio",
+              "file": "drive.md",
+              "slug": "inicio",
+              "title": "Google Drive, Docs e Sheets",
+              "level": 1,
+              "summary": "Liga ficheiros do Google Drive aos registos, guarda anexos e documentos no teu Drive, gera documentos a partir de modelos Google Docs e exporta relatórios…",
+              "text": "Liga ficheiros do Google Drive aos registos, guarda anexos e documentos no teu Drive, gera documentos a partir de modelos Google Docs e exporta relatórios para o Google Sheets."
+            },
+            {
+              "id": "drive.md#abrir-o-drive-menu-comunicacao-drive",
+              "file": "drive.md",
+              "slug": "abrir-o-drive-menu-comunicacao-drive",
+              "title": "Abrir o Drive (menu Comunicação → Drive)",
+              "level": 2,
+              "summary": "Abre o Drive da empresa (o Shared Drive configurado) num separador novo, na tua conta Google: a que ligaste no Perfil → Google ou, sem ela, o email com que…",
+              "text": "- Abre o **Drive da empresa** (o Shared Drive configurado) num separador novo, **na tua conta Google**: a que ligaste no Perfil → Google ou, sem ela, o email com que entras no dashboard. Num telemóvel ou browser com várias contas Google já não cai na conta pessoal.\n- Se a conta não estiver aberta nesse browser, o Google pede para entrares com ela.\n- Se o Shared Drive ainda não estiver ligado, abre a lista dos **Drives partilhados**.\n- Em **/drive** há também os atalhos **O meu Drive**, **Partilhados comigo**, **Drives partilhados** e **Recentes**, todos na tua conta."
+            },
+            {
+              "id": "drive.md#ativar-o-drive-cada-pessoa-no-perfil-google-drive",
+              "file": "drive.md",
+              "slug": "ativar-o-drive-cada-pessoa-no-perfil-google-drive",
+              "title": "Ativar o Drive (cada pessoa, no Perfil → Google Drive)",
+              "level": 2,
+              "summary": "Liga primeiro a tua conta Google (Perfil → Google).",
+              "text": "1. Liga primeiro a tua conta Google (Perfil → Google).\n2. Carrega em **Ativar Drive**. A app pede o acesso aos ficheiros que ela própria cria (pasta **\"Multipark\"** no teu Drive) ou que escolhes com ela e a **leitura de folhas Google** (só leitura, para importar de qualquer folha que consegues abrir) — nunca vê o resto do teu Drive nem os teus documentos. O que já autorizaste (email, calendário…) mantém-se.\n3. Se ativaste o Drive antes de 26 set 2026, aparece **Autorizar leitura de folhas** no Perfil: carrega para poderes importar de qualquer link de folha."
+            },
+            {
+              "id": "drive.md#anexar-do-drive-clientes-reclamacoes-conversas-de-email-fich",
+              "file": "drive.md",
+              "slug": "anexar-do-drive-clientes-reclamacoes-conversas-de-email-fich",
+              "title": "Anexar do Drive (clientes, reclamações, conversas de email, fichas do RH, tarefas e parcerias)",
+              "level": 2,
+              "summary": "Abre o registo e, em Google Drive, carrega em Anexar do Drive.",
+              "text": "1. Abre o registo e, em **Google Drive**, carrega em **Anexar do Drive**.\n2. Carrega em **Escolher do Drive** (se estiver disponível) ou cola o link de partilha do ficheiro (Drive, Docs, Sheets ou Slides).\n3. Fica guardada só a referência (nome, tipo, link e dono). Quem abre o link precisa de ter acesso ao ficheiro no próprio Google Drive.\n4. Vês e ligas ficheiros só nos registos que já podes ver/editar na app (na tua cidade). No RH, só quem já vê os documentos da ficha.\n5. **Remover** tira a ligação; o ficheiro continua no Drive."
+            },
+            {
+              "id": "drive.md#guardar-no-drive",
+              "file": "drive.md",
+              "slug": "guardar-no-drive",
+              "title": "Guardar no Drive",
+              "level": 4,
+              "summary": "Nos anexos dos emails e nas fotos/provas das reclamações há o botão Guardar no meu Drive (ícone do Drive).",
+              "text": "- Nos anexos dos emails e nas fotos/provas das reclamações há o botão **Guardar no meu Drive** (ícone do Drive). O ficheiro vai para a tua pasta \"Multipark\" e fica ligado ao registo.\n- **Os documentos do RH nunca vão para o Google Drive** (nem o teu, nem o Shared Drive): ficam só nos documentos da ficha, na app."
+            },
+            {
+              "id": "drive.md#gerar-documento-contrato-de-trabalho-declaracao-resposta-a-r",
+              "file": "drive.md",
+              "slug": "gerar-documento-contrato-de-trabalho-declaracao-resposta-a-r",
+              "title": "Gerar documento (contrato de trabalho, declaração, resposta a reclamação, propostas)",
+              "level": 2,
+              "summary": "Na ficha do colaborador (RH → Documentos), na reclamação (separador Comunicações), no cliente ou na parceria (ícone do Drive), carrega em Gerar documento.",
+              "text": "1. Na ficha do colaborador (RH → Documentos), na reclamação (separador Comunicações), no cliente ou na parceria (ícone do Drive), carrega em **Gerar documento**.\n2. Reclamação, cliente e parceria: escolhe o modelo e onde guardar — **Shared Drive da empresa** (pasta do registo: Clientes/nome, Reclamações/ano/n.º, Parcerias/nome) ou **O meu Drive**. Com **Criar também o PDF**, o PDF fica ao lado do documento e ligado ao registo.\n3. **Colaborador (RH)**: escolhe só o modelo. A app cria o **PDF** e guarda-o nos **documentos da ficha** (contrato ou \"outro\"); a cópia de trabalho no Google é apagada logo a seguir — nada fica no Drive.\n4. Os marcadores {{…}} do modelo são substituídos pelos dados do registo. O ordenado só é preenchido para quem vê os ordenados."
+            },
+            {
+              "id": "drive.md#exportar-para-sheets-faturacao-financeiro-clientes-avaliacao",
+              "file": "drive.md",
+              "slug": "exportar-para-sheets-faturacao-financeiro-clientes-avaliacao",
+              "title": "Exportar para Sheets (Faturação, Financeiro, Clientes, Avaliação individual, Métricas dos extras)",
+              "level": 2,
+              "summary": "O botão Exportar para Sheets cria uma folha nova na tua pasta \"Multipark\" com os mesmos números da página (e as mesmas permissões e cidades).",
+              "text": "- O botão **Exportar para Sheets** cria uma folha nova na tua pasta \"Multipark\" com os mesmos números da página (e as mesmas permissões e cidades). Só aparece a quem pode exportar esse relatório.\n- Relatórios muito grandes podem ficar incompletos (aviso \"incompleta\")."
+            },
+            {
+              "id": "drive.md#importar-do-google-sheets-importar-extras-no-rh-historico-fi",
+              "file": "drive.md",
+              "slug": "importar-do-google-sheets-importar-extras-no-rh-historico-fi",
+              "title": "Importar do Google Sheets (Importar extras no RH; histórico financeiro no Anual)",
+              "level": 2,
+              "summary": "Carrega em Importar do Google Sheets e escolhe a folha ou cola o link de qualquer folha que consegues abrir no Google (precisa da leitura de folhas autorizada…",
+              "text": "1. Carrega em **Importar do Google Sheets** e escolhe a folha ou cola o link de **qualquer folha que consegues abrir** no Google (precisa da leitura de folhas autorizada — ver \"Ativar o Drive\"; sem ela, só folhas escolhidas com \"Escolher do Drive\").\n2. O primeiro separador é lido e aparece no quadro da importação, com as mesmas regras de sempre — confirma antes de importar."
+            },
+            {
+              "id": "drive.md#configuracao-definicoes-comunicacao-google-drive",
+              "file": "drive.md",
+              "slug": "configuracao-definicoes-comunicacao-google-drive",
+              "title": "Configuração (Definições → Comunicação → Google Drive)",
+              "level": 2,
+              "summary": "Super admin: Shared Drive da empresa (conta do Workspace membro do Shared Drive e nome) e cópia automática das provas das reclamações.",
+              "text": "- Super admin: Shared Drive da empresa (conta do Workspace membro do Shared Drive e nome) e cópia automática das provas das reclamações. Os documentos do RH nunca são copiados.\n- Só super admin: **Relatórios ao vivo** (folha atualizada 1×/dia com as permissões do super admin que gravou). Vão para um **Shared Drive restrito próprio** (ex.: **\"Multipark Direção\"**) — cria-o no Google, junta a conta do Workspace acima como Gestor de conteúdo e escolhe tu os membros. Sem esse Shared Drive (ou com o mesmo nome do geral) ficam desligados. Os admins não veem a configuração nem o link da folha.\n- Admin e super admin: **Modelos de documentos** — regista um Google Doc (guardado no Shared Drive) com o tipo; **Ler marcadores** mostra os {{marcadores}} encontrados (verde = a app preenche; laranja = fica como está).\n- Âmbitos pedidos: cada pessoa `drive.file` e `https://www.googleapis.com/auth/spreadsheets.readonly` (importar de qualquer folha); a conta de serviço (delegação) `drive` e `documents`.\n- **Ecrã de consentimento OAuth** (Google Cloud → APIs e serviços → Ecrã de consentimento → Âmbitos): acrescenta `https://www.googleapis.com/auth/spreadsheets.readonly` aos âmbitos da app (a par de `drive.file`), e ativa a **Google Sheets API** no projeto."
+            }
+          ]
+        },
+        {
+          "id": "whatsapp",
+          "file": "whatsapp.md",
+          "group": "Comunicação",
+          "module": "whatsapp",
+          "title": "WhatsApp",
+          "routes": [
+            "/whatsapp"
+          ],
+          "tabs": [],
+          "summary": "Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e clientes.",
+          "sections": [
+            {
+              "id": "whatsapp.md#inicio",
+              "file": "whatsapp.md",
+              "slug": "inicio",
+              "title": "WhatsApp",
+              "level": 1,
+              "summary": "Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e clientes.",
+              "text": "Caixa de entrada partilhada das conversas de WhatsApp com colaboradores e clientes."
+            },
+            {
+              "id": "whatsapp.md#quem-ve-o-que",
+              "file": "whatsapp.md",
+              "slug": "quem-ve-o-que",
+              "title": "Quem vê o quê",
+              "level": 4,
+              "summary": "Cada pessoa vê as conversas das suas cidades: um colaborador pela cidade da ficha, um lead pela cidade do lead, um número solto pela cidade da reserva com…",
+              "text": "- Cada pessoa vê as conversas das suas cidades: um colaborador pela cidade da ficha, um lead pela cidade do lead, um número solto pela cidade da reserva com esse telefone. Números **sem cidade** (sem ficha, lead nem reserva) são de **todos** os que têm o WhatsApp.\n- Responder, atribuir e mudar o estado: team leader e acima."
+            },
+            {
+              "id": "whatsapp.md#comecar-uma-conversa",
+              "file": "whatsapp.md",
+              "slug": "comecar-uma-conversa",
+              "title": "Começar uma conversa",
+              "level": 4,
+              "summary": "Nas fichas do cliente, da reserva e do colaborador há o botão WhatsApp: abre a conversa desse número ou cria-a (sem enviar nada).",
+              "text": "- Nas fichas do cliente, da reserva e do colaborador há o botão **WhatsApp**: abre a conversa desse número ou cria-a (sem enviar nada). A primeira mensagem é um **template** (ver **Janela de 24 h**)."
+            },
+            {
+              "id": "whatsapp.md#quem-e",
+              "file": "whatsapp.md",
+              "slug": "quem-e",
+              "title": "Quem é",
+              "level": 4,
+              "summary": "O nome da conversa vem da ficha do colaborador, do candidato a extra ou do cliente no CRM (pelo número); só depois o nome do perfil do WhatsApp.",
+              "text": "- O nome da conversa vem da ficha do colaborador, do candidato a extra ou do **cliente no CRM** (pelo número); só depois o nome do perfil do WhatsApp.\n- Por baixo do número aparece uma linha **quem é**: \"Colaborador · Condutor · Lisboa\", \"Candidato a extra · respondeu\" ou \"Cliente · 3 reservas (1 por vir) · última 12/09/2026\" (carrega para abrir a ficha do cliente). Número sem nada: \"Número sem ficha, candidatura nem cliente no CRM\"."
+            },
+            {
+              "id": "whatsapp.md#responder",
+              "file": "whatsapp.md",
+              "slug": "responder",
+              "title": "Responder",
+              "level": 4,
+              "summary": "Menu Comunicação → WhatsApp (o WhatsApp tem a página dele; as Caixas de email são só de email).",
+              "text": "1. Menu **Comunicação → WhatsApp** (o WhatsApp tem a página dele; as **Caixas de email** são só de email). Está organizada como as caixas de email: no computador o menu da esquerda recolhe ao entrar (abre-se à mão quando quiseres) e ficam três colunas — **caixas** | **conversas** | **a conversa aberta**.\n   - **Caixas** (à esquerda): **Todas as caixas**, **Geral (por separar)** e cada caixa por tema, com o número de conversas por ler. No telemóvel é um seletor no topo da lista.\n   - **Cidade**: segue a cidade escolhida **na barra de cima** do dashboard (não há outro seletor aqui). Com uma cidade escolhida vês as conversas dessa cidade **e as sem cidade** (números sem ficha, lead nem reserva) — assim ninguém as perde. O chip **Sem cidade** (com a contagem) mostra só essas.\n   - No topo da lista: pesquisa por nome, número ou texto (tecla `/`), o botão **Filtros** (estado, responsável, intenção da IA…) e os chips rápidos **Não lidas**, **Minhas**, **Urgentes**, alertas e **Sem cidade**.\n2. A lista mostra as **300 conversas mais recentes**; a pesquisa procura também nas mais antigas.\n3. Abre a conversa e escreve a resposta. No computador, **Enter** envia e **Shift+Enter** muda de linha; **no telemóvel, Enter muda de linha** e só o botão verde envia. Há **Respostas rápidas** para textos frequentes.\n4. **Janela de 24 h**: só podes escrever texto livre até 24 h depois da última mensagem do contacto. Com a janela fechada, usa **Enviar template**; o texto livre só volta quando o contacto responder.\n5. **Sugerir resposta com IA** põe uma sugestão na caixa de texto — revê sempre antes de enviar. A IA nunca envia."
+            },
+            {
+              "id": "whatsapp.md#estado-de-cada-mensagem-enviada-o-icone-ao-lado-da-hora-pass",
+              "file": "whatsapp.md",
+              "slug": "estado-de-cada-mensagem-enviada-o-icone-ao-lado-da-hora-pass",
+              "title": "Estado de cada mensagem enviada (o ícone ao lado da hora; passa o rato para ver o nome)",
+              "level": 2,
+              "summary": "🕓 A enviar → ✓ esbatido Aceite (a Meta aceitou o pedido, mas ainda não avisou que saiu) → ✓ Enviado → ✓✓ Entregue → ✓✓ azul Lido.",
+              "text": "- 🕓 **A enviar** → ✓ esbatido **Aceite** (a Meta aceitou o pedido, mas ainda não avisou que saiu) → ✓ **Enviado** → ✓✓ **Entregue** → ✓✓ azul **Lido**. Ou ✗ **Falhou**.\n- \"Aceite\" não é \"Enviado\": se ficar muito tempo em Aceite, a Meta ainda não confirmou que a mensagem saiu."
+            },
+            {
+              "id": "whatsapp.md#mensagem-sem-confirmacao",
+              "file": "whatsapp.md",
+              "slug": "mensagem-sem-confirmacao",
+              "title": "Mensagem \"sem confirmação\"",
+              "level": 4,
+              "summary": "Se a Meta não responder ao envio (rede, prazo), a mensagem fica com ⚠ \"Sem confirmação da Meta: pode ter chegado ao cliente\".",
+              "text": "- Se a Meta não responder ao envio (rede, prazo), a mensagem fica com ⚠ **\"Sem confirmação da Meta: pode ter chegado ao cliente\"**. Não aparece como falhada porque pode ter saído.\n- Confirma com o cliente (ou espera pela resposta dele) antes de escrever outra vez — assim não recebe a mesma mensagem duas vezes.\n- Carregar duas vezes em Enviar, ou a rede cair a meio, nunca manda a mesma mensagem duas vezes."
+            },
+            {
+              "id": "whatsapp.md#templates-por-cidade-motoristas-extra",
+              "file": "whatsapp.md",
+              "slug": "templates-por-cidade-motoristas-extra",
+              "title": "Templates por cidade (motoristas extra)",
+              "level": 4,
+              "summary": "Recrutamento, morada e regras, aviso de trabalho, turno confirmado e pedido de disponibilidade têm uma versão por cidade (Lisboa e Porto).",
+              "text": "- Recrutamento, morada e regras, aviso de trabalho, turno confirmado e pedido de disponibilidade têm uma versão por cidade (Lisboa e Porto). Ao enviar (aqui, em Disponibilidade ou em Leads de Extras) escolhes a **Cidade do template**.\n- Por defeito vem a cidade do motorista (ou do turno, ou do lead); sem ela, a tua. Se nenhuma existir tens de escolher: nunca se assume Lisboa.\n- Num envio a várias pessoas, **Cidade de cada motorista** separa por cidade e mostra quantos vão em cada uma. Quem não tem cidade só segue depois de lhe escolheres uma.\n- A pré-visualização mostra o texto final de cada cidade (morada, telefone, valor à hora). Uma cidade aparece **indisponível** enquanto o template dela não estiver aprovado na Meta.\n- Quando um extra confirma o aviso de trabalho, recebe sozinho o **turno confirmado** da cidade do turno. Se carregar em **Preciso de alterar**, o turno fica **alteração pedida** na Escala e a equipa é avisada."
+            },
+            {
+              "id": "whatsapp.md#respostas-automaticas-sem-uma-pessoa",
+              "file": "whatsapp.md",
+              "slug": "respostas-automaticas-sem-uma-pessoa",
+              "title": "Respostas automáticas (sem uma pessoa)",
+              "level": 4,
+              "summary": "Confirmação do STOP / INICIAR (sempre).",
+              "text": "- Confirmação do **STOP** / **INICIAR** (sempre).\n- Resposta a pedidos de disponibilidade dos extras (\"Obrigado, fica confirmado\") e o Sim/Não do aviso de turno — só com **\"Extras: resposta automática no WhatsApp\"** ligado (Definições → Automações). Sem valor próprio segue a **Automação dos extras**. Desligado: a resposta fica na caixa para uma pessoa.\n- **Aviso de conversas por responder** (sino, de hora a hora): interruptor **\"WhatsApp: aviso de conversas por responder\"** nas Definições → Automações. Desligado, a caixa continua a mostrar os atrasos; só não avisa.\n- Link da candidatura a um lead que responde — só com a **resposta automática aos leads** ligada (Definições → Automações; desligada por omissão)."
+            },
+            {
+              "id": "whatsapp.md#caixas-por-tema",
+              "file": "whatsapp.md",
+              "slug": "caixas-por-tema",
+              "title": "Caixas por tema",
+              "level": 4,
+              "summary": "Cada conversa fica numa caixa: Recursos Humanos, Reservas, Alterações, Cancelamentos, Serviços extra, Reclamações, Perdidos e Achados, Parcerias, Faturação……",
+              "text": "- Cada conversa fica numa caixa: **Recursos Humanos**, **Reservas**, **Alterações**, **Cancelamentos**, **Serviços extra**, **Reclamações**, **Perdidos e Achados**, **Parcerias**, **Faturação**… ou **Geral** (ainda por separar). São as mesmas caixas do email.\n- Colaboradores e candidatos vão sozinhos para **Recursos Humanos**.\n- **Conversa nova** (a 1.ª mensagem tem menos de 48 h e ainda não tem caixa): a **IA** usa a triagem (intenção) — sem uma segunda leitura — e põe-na na caixa do tema; o que não percebe fica na **Geral**. Interruptor **\"IA: separar emails e WhatsApp pelas caixas\"** (ligado por omissão; precisa também da triagem por IA).\n- **Conversa que já tem caixa** (ou antiga): fica onde está — a IA não a volta a mudar.\n- Na conversa aparece **\"Movido pela IA → caixa (motivo · certeza)\"**. Se estiver errado, muda a caixa no seletor: fica \"corrigido à mão\".\n- Alguém a pedir trabalho pela 1.ª vez entra também nos **Leads de Extras** (lead com o telefone e o nome do perfil). A IA nunca responde.\n- Escolhe **Todas as caixas** ou uma caixa na coluna da esquerda (no telemóvel, no topo da lista). Na conversa, o seletor da caixa **move-a** — e a IA deixa de a mudar.\n- Só vês as caixas do teu módulo (ex.: RH, Reclamações) e, como sempre, a tua cidade e as conversas sem cidade."
+            },
+            {
+              "id": "whatsapp.md#organizar",
+              "file": "whatsapp.md",
+              "slug": "organizar",
+              "title": "Organizar",
+              "level": 4,
+              "summary": "Estados: Aberta (precisa de atenção), Pendente (à espera de algo), Resolvida.",
+              "text": "- Estados: **Aberta** (precisa de atenção), **Pendente** (à espera de algo), **Resolvida**. Se o contacto voltar a escrever, reabre.\n- **Responsável**: uma pessoa ou um **grupo de cidade** (**Grupo Lisboa**, **Grupo Porto**, **Grupo Faro**). As pessoas da lista são só quem pode responder no WhatsApp **e** vê a cidade dessa conversa. Atribuída a um grupo, os avisos de atraso vão à equipa dessa cidade e quem responder primeiro fica com ela. Quem responde a uma conversa sem responsável também fica com ela.\n- **Marcar como não lida** para retomar mais tarde.\n- Liga a conversa a uma reserva ou cliente no painel lateral. Com a Multipark em baixo, o painel diz \"indisponível\" (não \"nenhuma reserva\").\n- Contactos que pediram STOP ficam marcados \"Não quer mensagens\". O aviso diz de onde veio: **pediu STOP**, **carregou em «Parar promoções»** (o botão das promoções da Multipark, ou escrito) ou **parou as promoções no WhatsApp** (na própria app). Os três valem o mesmo: nada de templates nem envios em massa. Volta com **INICIAR** (ou \"Retomar promoções\" na app).\n- **Partilhado com o site da Multipark** (be-multipark): quem carrega em «Parar promoções» numa mensagem da Multipark também fica bloqueado aqui. O STOP escrito aqui e o \"Parar promoções\" da app chegam também ao site da Multipark (o dashboard reencaminha-lhe os eventos), que trata do lado dele."
+            },
+            {
+              "id": "whatsapp.md#a-triagem-propoe-o-caso",
+              "file": "whatsapp.md",
+              "slug": "a-triagem-propoe-o-caso",
+              "title": "A triagem propõe o caso",
+              "level": 4,
+              "summary": "Quando a triagem por IA acha que a conversa de um cliente é uma reclamação ou um perdido/achado, aparece por cima das mensagens: \"A triagem acha que isto é…",
+              "text": "- Quando a triagem por IA acha que a conversa de um cliente é uma **reclamação** ou um **perdido/achado**, aparece por cima das mensagens: \"A triagem acha que isto é uma reclamação\" com **Criar reclamação** (ou **Criar perdido**) e **Não é**.\n- Nada é criado sozinho. **Criar** abre o caso com o nome, o telefone, o email e a reserva ligados à conversa e com as últimas mensagens do cliente; depois liga a reserva e avisa a equipa, como um caso criado à mão. Fica o link **Abrir** na conversa.\n- Um caso por conversa. **Não é** faz a proposta desaparecer desta conversa.\n- **Criar** precisa de poder editar Reclamações (ou Perdidos e Achados); **Não é**, de poder responder no WhatsApp."
+            },
+            {
+              "id": "whatsapp.md#ficheiros-e-localizacoes-recebidos",
+              "file": "whatsapp.md",
+              "slug": "ficheiros-e-localizacoes-recebidos",
+              "title": "Ficheiros e localizações recebidos",
+              "level": 4,
+              "summary": "Imagens, áudios, vídeos e documentos ficam guardados até 16 MB.",
+              "text": "- Imagens, áudios, vídeos e documentos ficam guardados até 16 MB. Se não for possível guardar, a mensagem diz porquê (\"demasiado grande\", \"a descarregar\") — pede ao contacto para reenviar ou mandar por email.\n- Uma localização partilhada aparece com o nome/morada e o link para o mapa; um contacto partilhado com o nome e o número.\n- Não há grupos do WhatsApp: cada conversa é com uma pessoa."
+            },
+            {
+              "id": "whatsapp.md#envios-em-massa-extras-dia-leads",
+              "file": "whatsapp.md",
+              "slug": "envios-em-massa-extras-dia-leads",
+              "title": "Envios em massa (Extras-Dia, leads)",
+              "level": 4,
+              "summary": "Só com templates aprovados.",
+              "text": "- Só com templates aprovados. Quem pediu STOP nunca recebe.\n- Se o envio for cortado a meio (rede, prazo) e carregares outra vez no **mesmo** diálogo, **retoma**: quem já recebeu não recebe outra vez. Depois de um envio completo, o botão fica \"Enviado\".\n- Uma tabela filtrada sem ninguém não envia a toda a gente — dá \"Nenhum destinatário\".\n- **Confirmar**: a duas pessoas ou mais, o botão pede primeiro **\"Confirmar envio a N\"**, com o template e quantas pessoas. **Voltar** cancela.\n- **O mesmo template não volta ao mesmo número antes de 24 h**: quem já o recebeu (de outra difusão ou de um envio automático) fica de fora, com \"já recebeu (24 h)\". Um envio que falhou de certeza não conta. O envio de teste não tem este limite. Os envios automáticos do Extras-Dia (aviso de escala, disponibilidade, morada e regras) têm as suas próprias regras e podem reenviar (ex.: a escala mudou); o lembrete automático aos leads respeita as 24 h.\n- Na contagem da difusão, \"enviados\" quer dizer **aceites pela Meta**. Se a Meta disser depois que falhou (ex.: número sem WhatsApp), a contagem da difusão corrige-se e o aviso de escala dessa pessoa passa a \"falhou\".\n- Templates com cabeçalho de imagem, vídeo, documento ou texto com variável são recusados antes de enviar (a Meta recusava cada destinatário)."
+            },
+            {
+              "id": "whatsapp.md#respostas-rapidas",
+              "file": "whatsapp.md",
+              "slug": "respostas-rapidas",
+              "title": "Respostas rápidas",
+              "level": 4,
+              "summary": "Por cidade: cada cidade vê as suas e as nacionais.",
+              "text": "- **Por cidade**: cada cidade vê as suas e as **nacionais**. Cada pessoa só cria e edita as da(s) sua(s) cidade(s). As nacionais só as muda quem vê todas as cidades.\n- Na gestão, cada resposta mostra a cidade (ou \"Nacional\"). **Arquivar** (sai do menu de toda a gente, não se apaga): admin."
+            },
+            {
+              "id": "whatsapp.md#quando-a-leitura-falha",
+              "file": "whatsapp.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 4,
+              "summary": "Lista, conversa, contexto e respostas rápidas mostram \"Não foi possível carregar…\" com Tentar de novo, nunca \"Ainda sem conversas\" ou \"janela fechada\".",
+              "text": "- Lista, conversa, contexto e respostas rápidas mostram **\"Não foi possível carregar…\"** com **Tentar de novo**, nunca \"Ainda sem conversas\" ou \"janela fechada\"."
+            },
+            {
+              "id": "whatsapp.md#chamadas-de-voz",
+              "file": "whatsapp.md",
+              "slug": "chamadas-de-voz",
+              "title": "Chamadas de voz",
+              "level": 4,
+              "summary": "Os clientes podem ligar para o WhatsApp da empresa e a chamada toca no dashboard (Atender / Recusar); na conversa há o botão Ligar para devolver chamadas.",
+              "text": "- Os clientes podem ligar para o WhatsApp da empresa e a chamada toca no dashboard (**Atender** / **Recusar**); na conversa há o botão **Ligar** para devolver chamadas. Ver a ajuda \"WhatsApp — Chamadas de voz\"."
+            }
+          ]
+        },
+        {
+          "id": "whatsapp.chamadas",
+          "file": "whatsapp-chamadas.md",
+          "group": "Comunicação",
+          "module": "whatsapp_chamadas",
+          "title": "WhatsApp — Chamadas de voz",
+          "routes": [
+            "/whatsapp"
+          ],
+          "tabs": [],
+          "summary": "Os clientes podem ligar para o número de WhatsApp da empresa e a chamada é atendida no dashboard, no browser (microfone e colunas/auscultadores do computador).",
+          "sections": [
+            {
+              "id": "whatsapp-chamadas.md#inicio",
+              "file": "whatsapp-chamadas.md",
+              "slug": "inicio",
+              "title": "WhatsApp — Chamadas de voz",
+              "level": 1,
+              "summary": "Os clientes podem ligar para o número de WhatsApp da empresa e a chamada é atendida no dashboard, no browser (microfone e colunas/auscultadores do computador).",
+              "text": "Os clientes podem **ligar para o número de WhatsApp da empresa** e a chamada é atendida **no dashboard, no browser** (microfone e colunas/auscultadores do computador). Também é possível **devolver a chamada** a partir da conversa."
+            },
+            {
+              "id": "whatsapp-chamadas.md#atender",
+              "file": "whatsapp-chamadas.md",
+              "slug": "atender",
+              "title": "Atender",
+              "level": 2,
+              "summary": "Quando um cliente liga, aparece um aviso \"Chamada WhatsApp\" com toque, em qualquer página, a quem tem o WhatsApp com permissão de editar na cidade da conversa…",
+              "text": "1. Quando um cliente liga, aparece um aviso **\"Chamada WhatsApp\"** com toque, em qualquer página, a quem tem o WhatsApp com permissão de **editar** na cidade da conversa (o super admin vê todas as cidades). Números **sem cidade** (sem ficha, lead nem reserva) tocam a **todos** os que podem atender, e o aviso de chamada perdida também chega a todos.\n2. **Atender** — o primeiro a carregar fica com a chamada; os outros veem \"atendida por …\". Na primeira vez o browser pede autorização para usar o **microfone**: aceita.\n3. Durante a chamada: nome do cliente, reserva ligada (se houver), cronómetro, **Silenciar** e **Desligar**. Podes mudar de página sem cair a chamada (não feches nem recarregues o separador).\n4. **Recusar** termina a chamada do lado do cliente. **✕** só deixa de tocar no teu computador.\n5. Uma chamada do cliente abre (ou renova) a janela de 24 h, como uma mensagem: depois podes escrever-lhe texto livre.\n6. Se ninguém atender em cerca de 1 minuto, a chamada fica **perdida**: aparece na conversa e em **Chamadas perdidas por devolver** (faixa vermelha no topo da lista de conversas), e a equipa da cidade recebe a notificação **\"Chamada WhatsApp perdida\"**.\n7. Se alguém carregou em **Atender** mas a chamada **não chegou a ligar** (o cliente desligou entretanto, o microfone demorou, a Meta recusou), também conta como perdida: entra em **por devolver** e a equipa é avisada. Se o browser falhar antes de atender, a chamada volta a tocar para os outros.\n8. **Desligar** enquanto a nossa chamada ainda se prepara cancela-a — o telemóvel do cliente não chega a tocar (ou deixa de tocar)."
+            },
+            {
+              "id": "whatsapp-chamadas.md#aviso-com-o-separador-em-segundo-plano",
+              "file": "whatsapp-chamadas.md",
+              "slug": "aviso-com-o-separador-em-segundo-plano",
+              "title": "Aviso com o separador em segundo plano",
+              "level": 2,
+              "summary": "O toque chega ao dashboard em cerca de 1 segundo, mesmo com o separador escondido, desde que o separador esteja aberto.",
+              "text": "- O toque chega ao dashboard em cerca de 1 segundo, mesmo com o separador escondido, desde que o separador esteja aberto.\n- Para receber também um **aviso do sistema** (\"Chamada WhatsApp de ...\"), abre o **Perfil** e carrega em **Ativar notificações de chamadas** (uma vez em cada browser). Carregar no aviso traz o dashboard para a frente para atender.\n- Se o browser disser que as notificações estão bloqueadas: definições do site (cadeado ao lado do endereço) e permitir notificações.\n- Ao sair da conta, esse browser deixa de receber os avisos.\n- O aviso do sistema fecha-se sozinho cerca de 1 minuto depois (quando a chamada já deixou de tocar ou foi atendida por outra pessoa).\n- As horas nas chamadas são sempre de Lisboa."
+            },
+            {
+              "id": "whatsapp-chamadas.md#ligar-devolver-uma-chamada",
+              "file": "whatsapp-chamadas.md",
+              "slug": "ligar-devolver-uma-chamada",
+              "title": "Ligar / devolver uma chamada",
+              "level": 2,
+              "summary": "Abre a conversa e carrega em Ligar.",
+              "text": "1. Abre a conversa e carrega em **Ligar**.\n2. A Meta só deixa a empresa ligar a quem **autorizou chamadas**. Se o cliente ainda não autorizou: **Pedir autorização para ligar** — o cliente recebe no WhatsApp um pedido com botão para aceitar. A janela mostra **\"À espera de autorização\"** e atualiza sozinha quando ele responder.\n   - Com a janela de 24 h fechada, o pedido só pode ir num **template aprovado** (ver configuração abaixo).\n   - A autorização vale **7 dias** (ou fica permanente, se o cliente escolher).\n3. Com autorização: **Ligar agora**. O painel mostra \"A chamar…\", \"A tocar no cliente…\" e depois o cronómetro.\n4. Uma chamada devolvida com sucesso tira o cliente da lista **por devolver**. Também podes marcar à mão (**Devolvida**)."
+            },
+            {
+              "id": "whatsapp-chamadas.md#limites-da-meta-o-dashboard-avisa",
+              "file": "whatsapp-chamadas.md",
+              "slug": "limites-da-meta-o-dashboard-avisa",
+              "title": "Limites da Meta (o dashboard avisa)",
+              "level": 3,
+              "summary": "pedidos de autorização: 1 por 24 h e 2 por 7 dias, por cliente;",
+              "text": "- pedidos de autorização: 1 por 24 h e 2 por 7 dias, por cliente;\n- até 100 chamadas ligadas por cliente em 24 h;\n- 2 chamadas seguidas sem resposta → o cliente recebe um aviso; à 4.ª a Meta **retira a autorização**.\n\nNa conversa, cada chamada aparece como uma linha: \"Chamada recebida 14:32 · 3 min · atendida por Ana\", \"Chamada perdida 14:32\", \"Chamada efetuada 15:00 · não atendida\"."
+            },
+            {
+              "id": "whatsapp-chamadas.md#configuracao-dono-super-admin",
+              "file": "whatsapp-chamadas.md",
+              "slug": "configuracao-dono-super-admin",
+              "title": "Configuração (dono / super admin)",
+              "level": 2,
+              "summary": "Interruptor geral: Definições → Automações → Chamadas de voz do WhatsApp vem desligado.",
+              "text": "0. **Interruptor geral:** Definições → Automações → **Chamadas de voz do WhatsApp** vem **desligado**. Enquanto estiver desligado não toca nada, não aparece \"Ligar\" e os eventos de chamada da Meta são ignorados. Liga-o só depois de fazer os passos abaixo na Meta.\n\nPré-requisitos da Meta:\n- número na **WhatsApp Cloud API** (não na app WhatsApp Business) e app com a permissão `whatsapp_business_messaging`;\n- **limite de mensagens de pelo menos 2000** destinatários únicos por dia (tier da conta);\n- chamadas feitas pela empresa não existem para números de cliente dos EUA, Canadá, Egito, Vietname e Nigéria (Portugal é suportado).\n\nPassos:\n1. **Meta for Developers → a tua app → WhatsApp → Configuração → Webhooks**: no campo `whatsapp_business_account` subscrever **`calls`** (além de `messages`). O URL do webhook é o mesmo (`/api/whatsapp/webhook`).\n2. **Ativar as chamadas no número**: no dashboard, WhatsApp → faixa **Chamadas perdidas por devolver** (ou `/whatsapp?chamadas=1`) → **Configuração das chamadas (Meta)** → ligar **Chamadas ativas**, **Pedir autorização ao cliente quando ele liga** e, se quiseres, o **horário** (fuso Europe/Lisbon). Em alternativa: WhatsApp Manager → Números de telefone → o número → **Chamadas**.\n3. **Integrações** (menu Sistema, só administradores) **→ WhatsApp — Chamadas → Testar**: confirma se as chamadas estão ativas, o horário e se o campo `calls` está subscrito.\n4. (Opcional) Para pedir autorização com a janela de 24 h fechada: criar no WhatsApp Manager um **template** com o botão \"pedido de autorização de chamada\" (componente `call_permission_request`), sem variáveis, e pôr o nome em `WHATSAPP_CALL_PERMISSION_TEMPLATE` (língua em `WHATSAPP_CALL_PERMISSION_TEMPLATE_LANG`, por omissão `pt_PT`).\n\n**Preços (Meta)**: chamadas **recebidas são grátis**. Chamadas **feitas pela empresa** pagam por minuto (blocos de 6 s, só quando o cliente atende), com tarifa do país de destino e escalões de volume mensais. O pedido de autorização é uma mensagem cobrada como as outras."
+            },
+            {
+              "id": "whatsapp-chamadas.md#quando-a-leitura-falha",
+              "file": "whatsapp-chamadas.md",
+              "slug": "quando-a-leitura-falha",
+              "title": "Quando a leitura falha",
+              "level": 2,
+              "summary": "A lista por devolver, as chamadas da conversa e a configuração das chamadas mostram \"Não foi possível carregar…\" com Tentar de novo — nunca \"Nada por…",
+              "text": "- A lista **por devolver**, as chamadas da conversa e a configuração das chamadas mostram **\"Não foi possível carregar…\"** com **Tentar de novo** — nunca \"Nada por devolver\" nem o formulário com tudo desligado. No topo da lista, o contador passa a \"por devolver: ?\"."
+            },
+            {
+              "id": "whatsapp-chamadas.md#problemas-comuns",
+              "file": "whatsapp-chamadas.md",
+              "slug": "problemas-comuns",
+              "title": "Problemas comuns",
+              "level": 2,
+              "summary": "Não toca: o separador tem de estar aberto (pode estar em segundo plano, com o som ligado).",
+              "text": "- **Não toca**: o separador tem de estar aberto (pode estar em segundo plano, com o som ligado). Confirma o Testar e que tens WhatsApp \"editar\" na cidade. Para o aviso do sistema, ativa as notificações de chamadas no Perfil.\n- **Atendo mas não há som**: autoriza o microfone no browser; redes muito fechadas (firewall que bloqueia UDP) podem impedir o áudio — o dashboard usa só STUN público (sem servidor TURN).\n- **\"O cliente não deu autorização\"**: pede autorização primeiro; a temporária acaba ao fim de 7 dias."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Sistema",
+      "pages": [
+        {
+          "id": "api-keys",
+          "file": "api-keys.md",
+          "group": "Sistema",
+          "module": "api_keys",
+          "title": "API Keys (chaves para o site, o MCP e os dispositivos)",
+          "routes": [
+            "/api-keys"
+          ],
+          "tabs": [
+            {
+              "tab": "keys",
+              "section": "Criar e gerir as chaves",
+              "sectionId": "api-keys.md#criar-e-gerir-as-chaves"
+            },
+            {
+              "tab": "docs",
+              "section": "Documentação API",
+              "sectionId": "api-keys.md#documentacao-api"
+            }
+          ],
+          "summary": "Página API Keys (menu Sistema, só super admin): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades)…",
+          "sections": [
+            {
+              "id": "api-keys.md#inicio",
+              "file": "api-keys.md",
+              "slug": "inicio",
+              "title": "API Keys (chaves para o site, o MCP e os dispositivos)",
+              "level": 1,
+              "summary": "Página API Keys (menu Sistema, só super admin): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades)…",
+              "text": "Página **API Keys** (menu Sistema, **só super admin**): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades), o MCP do Claude (relatórios) e os dispositivos (GPS, rádios). A antiga importação do Gmail foi desligada: as críticas chegam pela sincronização do Gmail."
+            },
+            {
+              "id": "api-keys.md#criar-e-gerir-as-chaves",
+              "file": "api-keys.md",
+              "slug": "criar-e-gerir-as-chaves",
+              "title": "Criar e gerir as chaves",
+              "level": 2,
+              "summary": "Cada chave diz o que pode fazer (desde out 2026).",
+              "text": "**Cada chave diz o que pode fazer** (desde out 2026). Ao criar, marca só o necessário:\n- **Formulários do site** — candidaturas \"Be a Driver\", disponibilidades dos extras, formulário de disponibilidades.\n- **Relatórios de operação** — parques, projetos, viaturas, condutores, estatísticas de reservas e de reclamações.\n- **Caixa e parceiros** — contagens e correções de caixa, passagens de turno, faturação e fecho de parceiros.\n- **Marketing** — campanhas, gasto em anúncios, ROAS, Google Analytics, Search Console.\n- **Dados pessoais** — reservas com os dados do cliente, reclamações, críticas, lista de colaboradores. À parte de propósito: um relatório raramente precisa disto.\n- **Reclamações e críticas (escrever)** — criar e atualizar reclamações, mensagens e críticas.\n- **Dispositivo (GPS / rádio)** — só a `/api/external`: alertas de velocidade, movimentos de viaturas, rádio.\n- **Administração (tudo)** — tudo o resto, mais arquivar reclamações, criar projetos e as rotas `/admin`. Só para manutenção; nunca num MCP.\n\nSem a capacidade, o pedido recebe **403** e não faz nada.\n\n**Chaves antigas** (criadas antes, como \"Só leitura\", \"Leitura + escrita\", \"Admin\" ou \"Dispositivos\"): continuam a fazer **exatamente o que faziam** — aparecem com as capacidades equivalentes e o aviso \"Chave antiga\". Em **Capacidades** podes reduzi-las ao que precisam; muda logo para quem as usa.\n\n**A chave só aparece uma vez**, ao criar. Na base de dados fica só uma impressão digital (hash) e o início (`mp_ab12cd…`) para a reconhecer.\n\n**Revogar em vez de apagar**: \"Revogar\" pede o motivo, desliga a chave para sempre (não se reativa) e fica o registo de quem, quando e porquê. Para ver as revogadas, liga **Mostrar revogadas**. Uma chave comprometida revoga-se e cria-se outra.\n\n**Ativa / Inativa**: o interruptor pausa uma chave (volta a ligar-se quando quiseres). Revogada é diferente: é definitivo.\n\n**Quem a criou ficou inativo**: a chave **deixa de funcionar** (403, a mesma resposta) enquanto a conta de quem a criou estiver desativada, e na lista aparece **Criador inativo**. Se a conta foi **junta a outra** (conta duplicada), conta a conta que ficou — a chave continua. Para continuar a usar o serviço, cria uma chave nova com uma conta ativa e revoga a antiga. As chaves muito antigas sem autor registado continuam como estavam.\n\n**Validade**: opcional, ao criar (30 dias, 90 dias, 1 ano) ou em **Definições → Segurança**. A chave funciona até ao **fim desse dia em Lisboa**. Chave errada, inativa, revogada ou expirada recebem todas a **mesma** resposta (403), para não dar pistas a quem tenta adivinhar.\n\n**Limite**: 240 pedidos por minuto por chave; acima disso a resposta é **429** (com \"tenta daqui a N s\").\n\n**Nos Logs**, o que uma chave faz aparece como **Sistema** com a etiqueta da chave (ex.: `[API key #3 «Site» mp_ab12cd…]`) — nunca em nome de quem a criou. Criar, mudar capacidades, ativar/desativar, validade e revogar ficam registados com o antes → depois.\n\n**Erros**: quando algo corre mal do nosso lado, quem chama recebe \"Erro interno (ref …)\" — o detalhe fica nos registos do servidor com essa referência (nunca SQL nem nomes de tabelas para fora).\n\n**Áudio de rádio** (`/api/external/radio-upload`): o endereço do áudio tem de ser `http(s)` e público; endereços internos são recusados."
+            },
+            {
+              "id": "api-keys.md#documentacao-api",
+              "file": "api-keys.md",
+              "slug": "documentacao-api",
+              "title": "Documentação API",
+              "level": 2,
+              "summary": "Documentação API (segundo separador): exemplos de cada rota e a capacidade que pede.",
+              "text": "**Documentação API** (segundo separador): exemplos de cada rota e a capacidade que pede. Para o MCP do Claude: `mcp-server/README.md` (sem instalar nada; só o Node 18+)."
+            }
+          ]
+        },
+        {
+          "id": "definicoes",
+          "file": "definicoes.md",
+          "group": "Sistema",
+          "module": "definicoes",
+          "title": "Definições",
+          "routes": [
+            "/definicoes"
+          ],
+          "tabs": [
+            {
+              "tab": "estado",
+              "section": "Estado",
+              "sectionId": "definicoes.md#estado"
+            },
+            {
+              "tab": "automacoes",
+              "section": "Automações",
+              "sectionId": "definicoes.md#automacoes"
+            },
+            {
+              "tab": "integracoes",
+              "section": "Integrações",
+              "sectionId": "definicoes.md#integracoes"
+            },
+            {
+              "tab": "comunicacao",
+              "section": "Comunicação",
+              "sectionId": "definicoes.md#comunicacao"
+            },
+            {
+              "tab": "parametros",
+              "section": "Parâmetros",
+              "sectionId": "definicoes.md#parametros"
+            },
+            {
+              "tab": "notificacoes",
+              "section": "Notificações",
+              "sectionId": "definicoes.md#notificacoes"
+            },
+            {
+              "tab": "seguranca",
+              "section": "Segurança",
+              "sectionId": "definicoes.md#seguranca"
+            }
+          ],
+          "summary": "Quem entra: administradores e super admin (pela matriz de permissões, com as exceções por pessoa).",
+          "sections": [
+            {
+              "id": "definicoes.md#inicio",
+              "file": "definicoes.md",
+              "slug": "inicio",
+              "title": "Definições",
+              "level": 1,
+              "summary": "Quem entra: administradores e super admin (pela matriz de permissões, com as exceções por pessoa).",
+              "text": "**Quem entra**: administradores e super admin (pela matriz de permissões, com as exceções por pessoa). Algumas coisas são só do **super admin**: o remetente dos emails de sistema, \"CRM: juntar sozinho as fichas óbvias\", notificações, calendários/contactos/Drive Google, Web & SEO, Google Business, API keys e terminar as sessões de todos. Os admins veem-nas mas não as mudam (aparece \"só o super admin muda\").\n\nSeparadores (um link com `?tab=estado`, `?tab=automacoes`… abre o separador certo, mesmo com a página já aberta):"
+            },
+            {
+              "id": "definicoes.md#estado",
+              "file": "definicoes.md",
+              "slug": "estado",
+              "title": "Estado",
+              "level": 2,
+              "summary": "Saúde das tarefas automáticas (crons), o cartão Agendador (só o super admin) e IA — custo do mês.",
+              "text": "Saúde das tarefas automáticas (crons), o cartão **Agendador** (só o super admin) e **IA — custo do mês**.\n- Se a leitura falhar aparece **Estado desconhecido** com \"Tentar de novo\" — nunca \"Tudo a correr\" sem dados.\n- **Salta há dias** = o cron corre mas salta há mais de 2 dias por falta de configuração ou de ligação (Zello por configurar, BD da Multipark sem endereço, Google Ads/Business desligado, conta a religar). Conta como problema. Saltar porque um interruptor está desligado, fora de horas ou porque outra corrida está a trabalhar **não** conta.\n- **Parado** = sem corridas há mais de 2× o intervalo esperado. O mail-sync é medido pela cadência em vigor (5 em 5 min sem o push do Gmail, 1×/dia com ele). Um cron parado há mais de 30 dias continua a aparecer como Parado (a última corrida de cada um nunca se apaga).\n- **Retirados**: um trabalho que já saiu da agenda (ex.: `multipark-db-sync`, retirado a 27 set) e não corre há mais de 7 dias deixa de aparecer na lista e nos alertas; fica só o nome numa nota por baixo. O histórico das corridas fica guardado.\n- **Saltado** (Agendador) = correu mas não fez o trabalho (ex.: interruptor desligado, sem configuração). Não conta como **Último OK**.\n- Os erros mostrados nunca levam segredos (tokens, passwords em endereços)."
+            },
+            {
+              "id": "definicoes.md#automacoes",
+              "file": "definicoes.md",
+              "slug": "automacoes",
+              "title": "Automações",
+              "level": 2,
+              "summary": "Interruptores de cada automação, incluindo a Inteligência artificial.",
+              "text": "Interruptores de cada automação, incluindo a **Inteligência artificial**. Cada um diz o estado **agora** e de onde vem: *definido aqui*, *pela variável do servidor* ou *por omissão*. \"Seguir o servidor\" tira o que foi definido aqui.\n- **\"IA: separar emails e WhatsApp pelas caixas\"** vem **ligado**: a IA lê os emails das caixas partilhadas pelo sentido e as conversas novas do WhatsApp vão sozinhas para a caixa do tema (o que a IA não percebe vai para o info; se a IA falhar nada se mexe e volta a tentar); recrutamento em 1.º contacto cria a lead e a candidatura. Nunca responde a ninguém. O limiar de certeza e o máximo por vez estão em Parâmetros → IA → **\"IA a separar emails e WhatsApp: limiar e teto\"**.\n- Os casos que a IA vê nos emails (14 out 2026): **\"IA: reclamações que chegam a outras caixas vão para as Reclamações\"** (**ligado**; certeza média cria \"Por confirmar (IA)\"), **\"IA: objetos perdidos que chegam às caixas vão para os Perdidos e Achados\"**, **\"IA: críticas e ocorrências por email vão para a caixa delas e ficam lidas\"**, **\"IA: rever os emails que já estão nas caixas\"**, **\"IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@\"** e **\"IA: reclamações e perdidos que um parceiro manda em nome de um cliente abrem o caso\"** (sempre \"Por confirmar\", sem tomar o email do parceiro pelo do cliente) — estes cinco vêm **desligados**. Certezas em Parâmetros → IA → **\"IA: reclamações e perdidos vistos nas caixas — certezas\"**; dias e lote do varrimento em **\"IA: rever os emails que já estão nas caixas — dias e lote\"**.\n- Os dois da IA que leem ficheiros pessoais inteiros (documentos do RH e anexos/CV dos emails do RH) dizem por baixo \"Só corre com a IA em Vertex AI na UE (hoje: …)\". A verde: a IA está em Vertex AI numa região da UE e correm quando ligados. A laranja: não correm, mesmo ligados, até a IA passar para o Vertex AI na UE (variáveis na Vercel; ver `docs/ia.md`)."
+            },
+            {
+              "id": "definicoes.md#integracoes",
+              "file": "definicoes.md",
+              "slug": "integracoes",
+              "title": "Integrações",
+              "level": 2,
+              "summary": "Resumo; o estado, os testes e a gestão de cada ligação vivem na página Integrações.",
+              "text": "Resumo; o estado, os testes e a gestão de cada ligação vivem na página **Integrações**."
+            },
+            {
+              "id": "definicoes.md#comunicacao",
+              "file": "definicoes.md",
+              "slug": "comunicacao",
+              "title": "Comunicação",
+              "level": 2,
+              "summary": "Caixas de email, Envio de email (Gmail) — o remetente só o super admin muda (os admins podem testá-lo) —, calendários partilhados da escala, Google em tempo…",
+              "text": "Caixas de email, **Envio de email (Gmail)** — o remetente só o super admin muda (os admins podem testá-lo) —, calendários partilhados da escala, Google em tempo real, Contactos Google e Google Drive. Um cartão que não consegue ler mostra o erro e \"Tentar de novo\" (antes desaparecia).\n- **Testar a triagem dos emails (IA)** (só o super admin): carrega em **Testar a triagem** e uns 260 emails de exemplo (já rotulados; português, inglês, espanhol e francês), em três conjuntos — o **principal**, um **de controlo** e um **cego** (escrito na auditoria antes de ver os outros), para a meta não ser medida só com os exemplos de quem fez as regras —, passam pelo mesmo pedido e pelas mesmas regras de produção, com o modelo real e com os interruptores dos casos como se estivessem todos ligados. Para cada conjunto mostra quantas **reclamações** e **perdidos** a IA reconheceu (a meta é mais de 90 % em todos), quantos ficariam **\"Por confirmar (IA)\"**, o acerto por categoria e os emails que falhou. Uma reclamação ou um perdido só contam quando o caso abriria de facto. Não cria casos nem mexe na Comunicação; gasta uma leitura de IA por email (aparece no custo do mês) e tem um **limite de vezes por hora e por dia** (uma corrida completa por hora, umas 4 por dia). O resultado fica também nos logs (linha \"[triagem-eval]\")."
+            },
+            {
+              "id": "definicoes.md#parametros",
+              "file": "definicoes.md",
+              "slug": "parametros",
+              "title": "Parâmetros",
+              "level": 2,
+              "summary": "Serviços → tarefas no topo: por cidade e tipo de serviço extra, Gera tarefa e um responsável opcional.",
+              "text": "- **Serviços → tarefas** no topo: por cidade e tipo de serviço extra, **Gera tarefa** e um responsável opcional. Se as regras gravadas não carregarem, não se pode gravar (antes apareciam as regras por omissão e gravar apagava as verdadeiras).\n- IVA e TSU com data de efeito, prazos (SLA), destinatários de email, disponibilidades, IA, contas Zello excluídas do GPS, parques que a operação não faz.\n- **Alertas sem PDA/Zello**: os telefones por cidade e a **cópia** (todas as cidades), um número por linha.\n- **Hora apertada pela Fila (por cidade)** (Extras-dia; **desligada** por omissão): ligada, a parte \"entregas lentas\" da hora apertada (Pressão e escala do Extras-dia) usa a **Fila** em vez do tempo total do pedido à assinatura, quando a Fila está medida em pelo menos 60 % das entregas da cidade; senão fica o total. Desligada, as horas apertadas ficam exatamente como até aqui.\n- **Limite de velocidade (GPS do Zello)** (Operação, desde 14 out 2026): o limite em km/h (**120** por omissão, a autoestrada em Portugal; um só, porque o Zello não diz em que estrada se vai), a tolerância em % (**0** por omissão, ou seja acima de 120 km/h; antes eram 10 %, 132 km/h, e o valor antigo gravado passou sozinho para 0 %, com a linha no histórico) e quantos pontos seguidos acima dele fazem um excesso (2), em três campos; por baixo diz o limite que conta (ex.: \"acima de 120 km/h\"). Vale para os excessos da recolha do Zello, a Atividade diária, o Resumo do dia, a Avaliação (1 excesso de velocidade, −10, por dia acima do limite) e o Desempenho. Substitui a tabela antiga de limites (que não tinha ecrã). Os dias já recolhidos ficam como estavam até se voltarem a dividir (Atividade diária → Histórico Diário → Forçar re-divisão): na Avaliação e no Desempenho cada dia conta acima do **maior** entre o limite de hoje e o limite com que foi recolhido (os de antes contam a 132), para nunca contar um excesso que a recolha não confirmou. O aviso às chefias é o interruptor **\"Avisos de excesso de velocidade (GPS do Zello)\"** (Automações; desligado por omissão).\n- **Avaliação fechada até (fecho mensal)** e **Avaliação: quem fecha o mês** (Pessoas, só o super admin muda): a data do último dia fechado da Avaliação (vazio = nada fechado; os dias até lá já não se recalculam, ajustam nem contestam) e as contas que, além do super admin, podem fechar e reabrir em Avaliação → Mês (escolhem-se na lista). Fecha-se cada mês antes de pagar os prémios; o primeiro é novembro.\n- **Aeroportos (terminal no ponto)** (no cartão Extras-dia): latitude, longitude e raio (metros) do aeroporto de Lisboa, Porto e Faro. Só conta com o interruptor **\"Terminal no ponto (aeroporto)\"** ligado (Automações; desligado por omissão). Ver a ajuda \"RH e ponto\".\n  - **+ Zona de terminal**: cada aeroporto pode ter até 6 zonas (ex.: **T1**, **T2**), cada uma com centro (latitude, longitude) e raio (50 a 5 000 m). Com zonas, **só elas contam**; sem zonas vale o círculo do aeroporto (1 500 m por omissão).\n  - Entrar no terminal: distância − imprecisão do GPS ≤ raio. O \"Ainda estás no terminal?\" usa as mesmas zonas (fora = distância − imprecisão > raio).\n  - Se o centro de um parque (centro de custos com **raio de picagem**) cair dentro de uma zona, aparece um **aviso** com o parque e a zona: quem estivesse no parque contava como \"no aeroporto\". Confirma as zonas antes de ligar o interruptor.\n  - Para os **tempos de entrega e de recolha**, dá às zonas o nome **T1** ou **T2**: com mais de uma zona sem esse nome, os tempos não sabem qual é qual (aparece um aviso; o ponto funciona na mesma). Também avisa se uma zona do terminal passar a tocar na zona **P2** (Zonas da operação).\n- **Zonas da operação (GPS)** (Operação; só o super admin muda): as zonas dos parques (**P2**, **PD**, **central**, **coberto**…) **vêm das garagens da Multipark** — o centro é o do **link do mapa** de cada garagem (a Multipark não guarda latitude/longitude nas garagens, só no parque) e o raio é o de omissão do tipo (P2 e coberto 150 m, PD e central 200 m). Aqui gravam-se só as **exceções**, por cidade (Lisboa, Porto, Faro): ajustar o raio (50 a 1 000 m), corrigir o centro ou o tipo de uma garagem, ou dar o centro a uma garagem **sem coordenadas** na Multipark. Servem aos tempos das recolhas (a saída do P2 pelo GPS quando a app não tem o início do movimento).\n  - **Zonas em vigor**: cada garagem com o tipo, o raio e de onde vem (Multipark, Multipark ajustada aqui, ou só daqui); **Ajustar** cria a exceção; **Dar o centro** para as garagens sem coordenadas. Uma garagem fica sem coordenadas quando o link do mapa na Multipark não as traz: só o nome do sítio, ou um **link curto** (`maps.app.goo.gl/…`), que a dashboard não abre. Nesse caso abre o link no browser, copia o link completo e cola-o em **Link do mapa** na exceção (o centro preenche-se sozinho), ou usa **Sugerir centros**. Dos links completos lê-se o pino do sítio (não o centro do ecrã). O **mapa** mostra as zonas à escala, as zonas do terminal (tracejado) e os parques; **Ver no mapa** abre o Google Maps.\n  - **Sugerir centros** (recurso para as garagens sem coordenadas): lê a Multipark (só leitura) e propõe o centro pelo link do mapa, pela mediana das posições da app nos movimentos das últimas 4 semanas que acabam nessa garagem, ou pelo centro do parque. **Usar** preenche a exceção; só fica quando carregas em **Guardar**.\n  - **Uma zona P2 que toque numa zona do terminal não grava** (a saída do terminal e a paragem no P2 ficavam iguais): afasta o centro ou diminui o raio. Zonas de tipos diferentes que se tocam e parques dentro de uma zona do terminal só dão aviso.\n- **Papéis das garagens (tempos das recolhas)** (Operação; só o super admin muda): cada garagem da app é **provisória** (P2: conta o tempo até sair), **já num parque** (CENTRAL, CENTRAL COBERTO: deixa de se medir) ou **parque certo** (PD, PD FORA, COBERTO: arrumado se o tipo de lugar bater — descobertos e toldo no PD, interior no coberto). Os nomes comparam-se sem maiúsculas nem espaços. Uma garagem fora da lista conta como \"parque certo\" e fica marcada \"garagem sem papel\". Por isso um **toldo no PD** está arrumado para os tempos, embora a Passagem de turno o mostre a amarelo nos mal arrumados (\"se der, coberta\") — lá a pergunta é outra: onde fica melhor quando houver lugar.\n- **Tempos de entrega e de recolha** (Operação; só o super admin muda): **meta da entrega** (15 min: Fila + Trânsito, o nosso tempo), **recolha atrasada no T2** (15 min depois de o cliente ligar), **medir desde** (3 abr 2026) e **GPS desde** (15 set 2026) para o preenchimento para trás, **contar desde a chamada do cliente** (ligado: a Fila começa no mais cedo entre a chamada — central Vodafone ou WhatsApp, pelo telefone da reserva — e o pendente), **linha no briefing por email** (desligado; ainda só registado) e o **portão dos tempos com GPS** (fechado: só o super admin vê o Trânsito, o Cliente das entregas, o nosso tempo, a % na meta, o tempo no terminal e o T2, como provisórios, e os outros veem \"Em calibração\"; aberto, com `\"visible\": true`, aparecem por cidade e período a partir de `minCoveragePct` % de cobertura e `minN` medições — 60 % e 20 por omissão — e abaixo disso \"Sem dados suficientes\"; vale no Resumo do dia, no dia do condutor, na Pressão, na Semana, na Ficha da reserva e nos tempos por condutor. Abre-se depois da calibração, quando o cartão \"De onde vêm os tempos\" da Pressão mostrar ≥ 60 % numa cidade). O trabalho que os calcula é o interruptor **\"Tempos de entrega e de recolha (trabalho noturno)\"** (Automações; desligado por omissão; ver a ajuda do Agendador). Cada tempo fica com o **condutor** a quem pertence (quem pegou no carro, quem esperou o cliente, quem o tirou do terminal ou do P2, quem o arrumou), para as médias por condutor ao longo do tempo comparadas com os colegas da mesma cidade e tipo de serviço — só informação, não dá pontos.\n- Interruptor **\"Terminal no ponto (aeroporto)\"** (Automações): terminal pelo perfil, \"Ainda estás no terminal?\" e pagamento das horas de terminal. Desligado por omissão; desligado não aparece nada, o vigia de 5 em 5 min não corre e o ordenado fica igual.\n- **Extras-dia** (cartão no fim dos Parâmetros; mudam a previsão, a Pressão e a proposta automática da escala do Extras-dia):\n  - **Tempo por carro conforme as pessoas no turno**: os minutos que cada condutor leva por carro conforme as pessoas no turno (com o TL; 2 = TL + 1 extra) e o mínimo de pessoas quando há trabalho, por cidade. É o que decide quantos extras a previsão pede em cada hora.\n  - **Tempos medidos desde**: o dia a partir do qual a Pressão mede os tempos; a janela vai desse dia até ontem e cresce todos os dias.\n  - **Percentil do tempo por carro, por cidade**: que valor do tempo medido se usa em cada cidade (50, 60, 75, 85 ou 90). Por omissão **p75 em Lisboa** e **p60 no Porto e em Faro** (75 = em 3 de cada 4 vezes foi mais rápido do que isto; 60 = um pouco acima do meio).\n  - **Escala com os tempos medidos (por cidade)** (desligado por omissão): ligado, o número de extras usa o tempo por carro que a equipa fez nas horas cheias, nunca acima da tabela.\n  - **Recolha pelo meio de uma entrega (por cidade)** (desligado por omissão): ligado, a recolha no mesmo terminal entre 10 min antes e 30 min depois de uma entrega não conta como um carro a mais.\n  - **Hora apertada pela Fila (por cidade)**: ver acima.\n  - **Hora da proposta automática de escala** (por omissão **14:00**) e **Dias propostos com antecedência** (por omissão 1 = só amanhã): só a primeira proposta de cada dia e cidade; não substitui uma escala já proposta ou confirmada e num dia mexido à mão já não mexe.\n  - **Confirmar e avisar automaticamente** (ligado por omissão) e **Hora da confirmação automática** (por omissão **18:00**): a proposta de amanhã que ninguém confirmou nem suspendeu é confirmada a essa hora e os extras são avisados por WhatsApp e email.\n  - **Ponto de encontro (aviso de escala)**: texto curto por cidade que vai no WhatsApp e no email da escala (vazio = não se indica).\n- Um valor gravado que já não é válido fica assinalado (a aplicação usa a omissão até se gravar de novo)."
+            },
+            {
+              "id": "definicoes.md#notificacoes",
+              "file": "definicoes.md",
+              "slug": "notificacoes",
+              "title": "Notificações",
+              "level": 2,
+              "summary": "Quem recebe cada aviso (só o super admin muda).",
+              "text": "Quem recebe cada aviso (só o super admin muda)."
+            },
+            {
+              "id": "definicoes.md#seguranca",
+              "file": "definicoes.md",
+              "slug": "seguranca",
+              "title": "Segurança",
+              "level": 2,
+              "summary": "Validade das API keys (até ao fim do dia escolhido, hora de Lisboa) e Terminar sessões.",
+              "text": "Validade das API keys (até ao fim do dia escolhido, hora de Lisboa) e **Terminar sessões**."
+            },
+            {
+              "id": "definicoes.md#gravar-ao-mesmo-tempo-e-historico",
+              "file": "definicoes.md",
+              "slug": "gravar-ao-mesmo-tempo-e-historico",
+              "title": "Gravar ao mesmo tempo e histórico",
+              "level": 2,
+              "summary": "Duas pessoas a mudar ao mesmo tempo: se outra pessoa gravou a mesma definição ou interruptor depois de abrires a página, aparece \"Alguém mudou isto…",
+              "text": "**Duas pessoas a mudar ao mesmo tempo**: se outra pessoa gravou a mesma definição ou interruptor depois de abrires a página, aparece \"Alguém mudou isto entretanto\" e nada é gravado; os valores atualizam-se e voltas a gravar.\n\n**Histórico de alterações** (fim de Parâmetros): quem mudou, quando, antes → depois; filtra-se por definição ou interruptor. Também fica nos Logs, com o nome da definição."
+            }
+          ]
+        },
+        {
+          "id": "definicoes.agendador",
+          "file": "agendador.md",
+          "group": "Sistema",
+          "module": "definicoes",
+          "title": "Agendador (tarefas automáticas)",
+          "routes": [
+            "/definicoes"
+          ],
+          "tabs": [],
+          "summary": "Todas as tarefas automáticas da app (sincronizar o Gmail, reservas Multipark, extras, recolha GPS do Zello, relatórios, Google Ads…) correm a partir de um só…",
+          "sections": [
+            {
+              "id": "agendador.md#inicio",
+              "file": "agendador.md",
+              "slug": "inicio",
+              "title": "Agendador (tarefas automáticas)",
+              "level": 1,
+              "summary": "Todas as tarefas automáticas da app (sincronizar o Gmail, reservas Multipark, extras, recolha GPS do Zello, relatórios, Google Ads…) correm a partir de um só…",
+              "text": "Todas as tarefas automáticas da app (sincronizar o Gmail, reservas Multipark, extras, recolha GPS do Zello, relatórios, Google Ads…) correm a partir de **um só endereço**, `/api/cron/tick`. Um serviço externo gratuito, o **cron-job.org**, chama-o de **5 em 5 minutos**; em cada chamada a app vê, pela hora de Lisboa, o que está na altura e corre essas tarefas uma a uma. O que não couber nessa chamada fica para a seguinte.\n\nAntes eram os workflows do GitHub a chamar cada tarefa, mas o GitHub atrasava-os horas (o Gmail chegou a sincronizar só 8 vezes num dia). Hoje o GitHub **não agenda nada**: os workflows ficam só para corridas manuais. (A \"rede de segurança\" de hora a hora saiu a 2 out 2026.) Se o cron-job.org falhar, o aviso chega por email do próprio cron-job.org (passo 6) e as tarefas aparecem como **Parado** no Estado do sistema."
+            },
+            {
+              "id": "agendador.md#configurar-o-cron-job-org-dono-super-admin-uma-vez",
+              "file": "agendador.md",
+              "slug": "configurar-o-cron-job-org-dono-super-admin-uma-vez",
+              "title": "Configurar o cron-job.org (dono / super admin, uma vez)",
+              "level": 2,
+              "summary": "Cria uma conta em cron-job.org e carrega em Create cronjob.",
+              "text": "1. Cria uma conta em **cron-job.org** e carrega em **Create cronjob**.\n2. **Title**: `Multipark — agendador`.\n3. **URL**: `https://dashboard.multipark.pt/api/cron/tick`\n4. **Execution schedule**: **Every 5 minutes** (a cada 5 minutos). O fuso horário não interessa — a app usa sempre a hora de Lisboa.\n5. Separador **Advanced**:\n   - **Request method**: `GET`.\n   - **Headers** → **Add header**: nome `Authorization`, valor `Bearer ` seguido do segredo `CRON_SECRET` (o mesmo que está no Vercel, em Settings → Environment Variables). Cola o segredo **só no cron-job.org** — nunca o escrevas em conversas, emails ou tarefas.\n   - **Timeout**: `30` segundos (o máximo do plano gratuito chega: a app responde logo, em 1–2 s, com **202 Accepted** e a lista do que vai correr, e continua o trabalho em segundo plano).\n   - **Treat redirects with HTTP 3xx status code as success**: desligado.\n6. **Notifications**: liga **Notify me when… execution of the cronjob fails** e **…the cronjob will be disabled because of too many failures**. Assim recebes um email se a app deixar de responder (ex.: segredo errado → 401, app em baixo → 5xx).\n7. Guarda e carrega em **Test run**: tem de dar **202** (ou **401** se o segredo estiver mal colado — corrige o header).\n\nPronto. Não é preciso mais nada no GitHub."
+            },
+            {
+              "id": "agendador.md#o-que-corre-e-quando-hora-de-lisboa",
+              "file": "agendador.md",
+              "slug": "o-que-corre-e-quando-hora-de-lisboa",
+              "title": "O que corre e quando (hora de Lisboa)",
+              "level": 2,
+              "summary": "Reservas: as páginas (Reservas do dia, ficha da reserva, Ocorrências, Avaliação, Extras-Dia, Parcerias) leem a BD da Multipark ao vivo — nada é copiado por…",
+              "text": "| Tarefa | Quando |\n| --- | --- |\n| Gmail (Comunicação — todo o email recebido, pipelines por alias, renovação do push) | de 5 em 5 min; **1× por dia** (rede de segurança e renovação do push) quando o push do Gmail está ligado (MAIL_PUSH) e chegou um push nas últimas 24 h — sem push volta sozinho aos 5 min |\n| IA na comunicação (triagem do WhatsApp: intenção e urgência de cada conversa; se a resposta da IA vier inválida 3 vezes seguidas na mesma conversa desiste até chegar mensagem nova do cliente; falhas passageiras — IA lenta ou em baixo — voltam sempre a tentar; os emails que ficaram por ler pela IA na sincronização ou em que a IA falhou — até 3 tentativas) | de 15 em 15 min |\n| Comunicação: casos por criar e emails das caixas revistos pela IA — os emails da reclamacoes@/perdidos@… cujo caso falhou voltam a ser tentados (antes, com o push do Gmail, só 1×/dia); com o interruptor **\"IA: rever os emails que já estão nas caixas\"** (desligado por omissão), a triagem passa pelos emails dos últimos 30 dias ainda sem caso, 6 de cada vez (trabalho `mail-backfill`) | de 15 em 15 min |\n| Fila do webhook Multipark (repescagem do que falhou à chegada, incluindo as **tarefas dos serviços** que falharam no webhook) · Google: alterações por enviar/receber que falharam (repetição) | de hora a hora |\n| Serviços → tarefas: as tarefas **nascem quando chega o webhook da reserva** (saídas até 72 h; vão logo para o Google Tarefas); o que falhar no webhook repete-se de hora a hora. A volta diária revê as saídas das próximas 48 h (cria as mais longe quando chegam lá e junta os team leaders escalados entretanto). Regras em Definições → Parâmetros → **Serviços → tarefas**. À mão: `/api/cron/services-tasks` (trabalho `services-tasks`) | 1×/dia a partir das 18:00 |\n| Serviços: aviso das **tarefas de amanhã** aos team leaders e supervisores da cidade (sino e email). Lê só a nossa BD, por isso sai mesmo com a Multipark em baixo. **Desligado por omissão**: interruptor em Definições → Automações (\"Serviços: aviso das tarefas de amanhã\") (trabalho `services-tomorrow`) | 1×/dia a partir das 18:00, a seguir à volta |\n| CRM: fichas de cliente — **quando chega o webhook da reserva**; a volta diária apanha o que tenha escapado (trabalho `crm-sync`) | 1×/dia a partir das 04:00 |\n| CRM: juntar sozinho as fichas óbvias (mesmo nome + mesmo telefone, email ou NIF; separa-se em Rever fichas → Juntas recentemente) (trabalho `crm-auto-merge`) | 1×/dia depois das sugestões das 05:15 (o mais tardar 06:00); se não acabar, continua 5 min depois |\n| Operacional: a trabalhar sem PDA ou Zello ligado (ponto aberto sem PDA, Zello desligado, movimentos na Multipark sem ponto; lista em Operacional → PDAs, avisos só com os interruptores ligados) (trabalho `ops-presence`) | de 5 em 5 min |\n| Terminal: \"Ainda estás no terminal?\" (GPS do Zello de quem está no terminal; pergunta e liberta o lugar sem resposta). Só com o interruptor \"Terminal no ponto (aeroporto)\" ligado; desligado não lê nada (trabalho `terminal-watch`) | de 5 em 5 min |\n| Caixa: varredura do dinheiro (lê ao vivo da BD da Multipark as reservas dos nossos parques alteradas, as que estão dentro e as que saíram nas últimas 48 h; guarda um retrato quando o dinheiro muda e abre, atualiza ou resolve os casos da **Correção de caixa**). À mão: `/api/cron/cash-sweep` (trabalho `cash-sweep`) | de 3 em 3 horas (a caixa só se confere depois); se ficar a meio continua 5 min depois; o fecho das 06:15 revê as saídas de ontem e anteontem |\n| Caixa: fecho do dia (todas as saídas de ontem e anteontem, com as mesmas regras). À mão: `/api/cron/cash-close` (trabalho `cash-close`) | diário, a partir das 06:15 |\n| Caixa: reler os dias confirmados — os dias da **Confirmação da caixa** já fechados (fechado, a aprovar ou aprovado) dos últimos 45 dias voltam a ser comparados com a Multipark; se o dinheiro de uma reserva selada mudou, se uma reserva entrou ou saiu do dia ou se as contas do dia mudaram, o dia **reabre sozinho** e é avisado (trabalho `cash-confirm-recheck`) | de hora a hora |\n| Caixa: confirmar os pagamentos das saídas de ontem e anteontem: pago online tem o pagamento Stripe na Multipark (sempre); com os interruptores ligados, também Stripe, Viva Wallet (multibanco) e InvoiceExpress. À mão: `/api/cron/cash-external` (trabalho `cash-external`) | diário, a partir das 07:00 |\n| Google Tarefas/Calendário/Contactos/Drive — sincronização completa (rede de segurança; o resto é em tempo real, ver Ajuda → Google em tempo real) | de 4 em 4 horas |\n| Google: renovar os canais de notificação (Calendário e Drive) | 1×/dia a partir das 03:40 |\n| Automação dos extras · ligações funcionário ↔ utilizador | de hora a hora |\n| Escala automática dos extras (propor às 14h, confirmar às 18h, por omissão) | de hora a hora, das 08h às 23h |\n| GPS do Zello — recolha provisória do próprio dia | 1×/dia entre as 23:15 e as 23:55 (se falhar, fica para a final) |\n| GPS: re-dividir os últimos 31 dias com o limite de velocidade de hoje — **só quando o super admin pede** em Atividade diária → Histórico Diário (sem pedido não faz nada); continua de onde ficou, não avisa ninguém (trabalho `gps-resplit-backfill`) | de 5 em 5 min, até ~40 s de cada vez |\n| Manutenção diária + recolha GPS do Zello final (D-2) | 1×/dia a partir das 04:30 |\n| RH — regra documental dos extras (documentos em falta) | 1×/semana, segunda a partir das 04:45 |\n| RH — pedir os documentos em falta aos extras ativos (WhatsApp e email; 1 pedido a cada 7 dias por pessoa, no máximo 4 automáticos). **Desligado por omissão**: interruptor em Definições → Automações (\"Pedir documentos em falta aos extras\"). À mão: `/api/cron/rh-docs-request` (trabalho `rh-docs-request`) | 1×/semana, segunda a partir das 10:00 (se não couber, continua no tick seguinte) |\n| Formação — FAQs novas da base de conhecimento (2 ou 3 documentos, até 3 FAQs publicadas e marcadas \"IA\"; nunca repete as que existem nem as arquivadas). **Desligado por omissão**: interruptor em Definições → Automações (\"Formação: FAQs novas da base de conhecimento (semanal)\"). À mão: **Gerar agora** em Formação → FAQs (trabalho `kb-faq-weekly`) | 1×/semana, segunda a partir das 09:30 |\n| Extras-Dia: pressão (BD da Multipark desde 3 abr 2026, a janela cresce todos os dias; por grupo de parques × dia da semana × hora e, nas cidades, o tempo por carro de cada condutor; guarda o resultado na nossa BD para o separador **Pressão**) | 1×/dia a partir das 04:45 (lê só o dia de ontem de cada grupo e junta-o aos dias guardados; um grupo de cada vez; se não couber, continua no tick seguinte — a primeira vez preenche desde 3 abr, dia a dia, ao longo de várias horas). À mão: `/api/cron/extras-pressure` (`?reprocessar=AAAA-MM-DD` volta a ler um dia já guardado) |\n| Briefing diário e relatórios de segunda | 1×/dia a partir das 07:30 |\n| Anomalias: repetir as explicações da IA que falharam (no máximo mais 2 vezes por alerta, com pelo menos 12 h de intervalo, em grupos mais pequenos; até 3 pedidos à IA de cada vez). Segue o interruptor das anomalias (\"OPS_ANOMALIES\"). À mão: `/api/cron/ops-anomaly-retries` (trabalho `ops-anomaly-retries`) | 1×/dia a partir das 09:00 (se o tempo não chegar, continua no tick seguinte) |\n| Avaliação (último mês, 31 dias; lê os movimentos em tempo real da BD da Multipark) | 1×/dia, depois da manutenção diária (o mais tardar às 06:00) |\n| Tempos de entrega e de recolha: para cada entrega e recolha que **fechou nos últimos 3 dias** (dias operacionais 03h→03h), a **Fila** (desde a chamada do cliente — central Vodafone ou WhatsApp, pelo telefone da reserva — ou do pendente), o **Trânsito** e a **espera pelo cliente** (pela paragem no terminal no GPS do Zello; o \"Cheguei\" só quando não há GPS) e, nas recolhas, o tempo **no terminal**, **no P2** e **até arrumado**, com o **condutor de cada tempo**. Uma leitura da BD da Multipark por noite (só leitura, com teto de 25 s que a própria BD corta); D-1 com o GPS provisório, D-2 e D-3 com o final; linhas finais não se refazem; um ciclo que desaparece fica anulado (nada se apaga) — mas uma leitura vazia, ou que perca de repente muitas linhas, não anula nada e deixa \"ANULAÇÃO SUSPENSA\" no log. Depois preenche para trás desde 3 abr 2026 (GPS desde 15 set), em blocos de 7 dias (2 nos dias com GPS), no máximo 2 por vez e **só até às 09h** (o que faltar continua na manhã seguinte; a primeira vez são ~37 leituras, numa ou duas manhãs). Noites que faltaram (Multipark em baixo, interruptor desligado uns dias) também entram para trás. Mudar zonas, papéis das garagens ou a janela das chamadas refaz os últimos 14 dias. Linha `[tempos]` no log com os números do dia por cidade. **Desligado por omissão**: interruptor em Definições → Automações (\"Tempos de entrega e de recolha (trabalho noturno)\"). À mão: `/api/cron/service-times?reprocessar=AAAA-MM-DD..AAAA-MM-DD` (até 120 dias; um bloco por chamada; a resposta diz o que falta em `next`). O \"à mão\" funciona **mesmo com o interruptor desligado**, de propósito: é o \"dia reprocessado à mão\" que se confere antes de o ligar — só com a chave das tarefas automáticas, só escreve na tabela dos tempos e não avisa ninguém (trabalho `service-times`) | 1×/dia a partir das 05:30, depois da recolha GPS final (o mais tardar às 07:00) |\n| Google Ads e Meta Ads | 1×/dia a partir das 05:45 (última semana) e no dia 2 de cada mês (mês anterior); Google Ads também ao domingo a partir das 06:15 (últimos 35 dias, para as conversões que a Google acerta depois) |\n| Google Ads: cliques (gclid → campanha) — de que campanha é cada clique, para ligar à campanha as reservas cujo link só traz o gclid. Interruptor em Definições → Automações (\"Google Ads: ligar reservas à campanha pelo clique (gclid)\"; **ligado** por omissão) | de hora a hora: hoje e ontem de todas as contas e, aos poucos, até 10 dias em falta por conta (a Google só guarda 90 dias); o que não couber fica para a hora seguinte |\n| Web & SEO | 1×/dia a partir das 09:00 (ou da hora escolhida nas Definições, se for mais tarde) |\n\n**Reservas**: as páginas (Reservas do dia, ficha da reserva, Ocorrências, Avaliação, Extras-Dia, Parcerias) leem a BD da Multipark **ao vivo** — nada é copiado por iniciativa própria. Para a nossa cópia financeira (`multipark_bookings`) e o CRM entram só pelo **webhook** da Multipark; a **Fila do webhook Multipark** (de hora a hora) repete o que falhou e completa o detalhe de cada reserva. A sincronização de reservas recentes/futuras, a da BD Multipark, a reconciliação diária e a cópia do histórico de cada reserva **foram retiradas** (27 set 2026); o histórico antigo (anterior a 2 mar 2026) continua guardado e é mostrado quando a BD da Multipark não tem nada.\n\nFora da agenda: **Base de conhecimento** (atualiza-se quando a Google avisa que um ficheiro das pastas mudou e na verificação de 4 em 4 horas do Google; o botão **Sincronizar agora** continua) e **Google Business Profile** (só à mão, em pausa até a Google aprovar o acesso).\n\n**Recolha GPS do Zello**: o Zello dá o dia de hoje durante o próprio dia, deixa de o dar à meia-noite e só o volta a dar cerca de 2 dias depois. Por isso há duas recolhas: uma **provisória** às 23:15–23:55 (o dia de hoje, para o Histórico Diário e a Atividade do Dia terem dados logo) e a **final** às 04:30, do dia de **anteontem** (D-2), que substitui a provisória (inclui os turnos que acabam depois da meia-noite) e recupera qualquer dia dos últimos 7 que tenha ficado incompleto. O alerta \"GPS desligado\" sai uma só vez por condutor e dia. Entram **todas** as contas Zello, incluindo as que são \"admin\" no Zello; ficam de fora só as da lista **Contas Zello excluídas do GPS** (Definições → Parâmetros → Operação). Recolher à mão o dia de **ontem** não é possível (o Zello não o dá nesse momento).\n\nAs linhas antigas do GPS com a velocidade no formato errado (anteriores à correção, \"v1\") **ficam na base de dados**, mas já não são recalculadas nem entram na avaliação. Para as apagar à mão há um script em `scripts/sql/gps-antigo-apagar.sql`.\n\nDias recolhidos vazios (o antigo erro de recolher \"ontem\"): `scripts/sql/gps-dias-vazios.sql` lista-os; depois, em **Histórico Diário**, escolhe o dia e carrega em **Recolher Dados** — a recolha manual volta a buscar as linhas vazias (as que têm dados não são tocadas)."
+            },
+            {
+              "id": "agendador.md#ler-o-cartao-agendador-definicoes-estado-so-super-admin",
+              "file": "agendador.md",
+              "slug": "ler-o-cartao-agendador-definicoes-estado-so-super-admin",
+              "title": "Ler o cartão \"Agendador\" (Definições → Estado, só super admin)",
+              "level": 2,
+              "summary": "Cada linha é uma tarefa, com a cadência, e:",
+              "text": "Cada linha é uma tarefa, com a cadência, e:\n- **Última** — quando começou a última corrida; **Duração**; **Último OK** — há quanto tempo acabou bem.\n- **Próxima** — \"no próximo tick\" ou quando volta a estar na altura.\n- Estado: **OK**; **A meio (retoma)** — não coube numa chamada e continua sozinha na seguinte (normal em tarefas grandes); **Erro** — com a mensagem por baixo; **A correr**.\n- **Feito neste período** — a tarefa diária/mensal já terminou hoje/este mês.\n- **Tentativas falhadas** — uma tarefa diária que falha volta a tentar de 30 em 30 min, até 3 vezes; depois espera pelo dia seguinte.\n- **A última corrida não terminou** — a função foi cortada pelo limite de tempo; conta como falha e volta a tentar.\n\nO cartão **Estado do sistema** (por cima) continua a mostrar o histórico de corridas de cada tarefa e marca **Parado** quando uma tarefa não corre há mais do dobro do intervalo. Se **todas** ficarem paradas ao mesmo tempo, o problema é o cron-job.org (conta desativada, segredo mudado no Vercel sem mudar lá) — vê a linha **Agendador (cron-job.org → /api/cron/tick)**."
+            },
+            {
+              "id": "agendador.md#corridas-manuais",
+              "file": "agendador.md",
+              "slug": "corridas-manuais",
+              "title": "Corridas manuais",
+              "level": 2,
+              "summary": "GitHub → Actions → \"Agendador — tick (corrida manual)\" → Run workflow: corre um tick completo e mostra o relatório (vermelho se alguma tarefa falhou).",
+              "text": "- **GitHub → Actions → \"Agendador — tick (corrida manual)\" → Run workflow**: corre um tick completo e mostra o relatório (vermelho se alguma tarefa falhou). Usa o segredo `CRON_SECRET` dos Actions do GitHub: se der **401**, esse segredo não é igual ao do Vercel (o cron-job.org não é afetado).\n- **GitHub → Actions → \"Multipark Sync Cron\" (e os outros workflows) → Run workflow**: corre cada tarefa à mão (extras, escala, ligações, manutenção diária, avaliação, anúncios e briefing — já sem sync de reservas).\n- Chamar o tick duas vezes ao mesmo tempo não faz mal: cada tarefa só corre numa chamada de cada vez."
+            }
+          ]
+        },
+        {
+          "id": "definicoes.google-tempo-real",
+          "file": "google-tempo-real.md",
+          "group": "Sistema",
+          "module": "definicoes",
+          "title": "Google em tempo real (Calendário, Drive, Tarefas e Contactos)",
+          "routes": [
+            "/definicoes",
+            "/perfil"
+          ],
+          "tabs": [],
+          "summary": "Desde 26 set 2026 a app já não pergunta à Google de 15 em 15 minutos se mudou alguma coisa.",
+          "sections": [
+            {
+              "id": "google-tempo-real.md#inicio",
+              "file": "google-tempo-real.md",
+              "slug": "inicio",
+              "title": "Google em tempo real (Calendário, Drive, Tarefas e Contactos)",
+              "level": 1,
+              "summary": "Desde 26 set 2026 a app já não pergunta à Google de 15 em 15 minutos se mudou alguma coisa.",
+              "text": "Desde 26 set 2026 a app já não pergunta à Google de 15 em 15 minutos se mudou alguma coisa. Sincroniza **quando alguma coisa muda**:"
+            },
+            {
+              "id": "google-tempo-real.md#o-que-muda-no-dashboard-vai-logo-para-o-google",
+              "file": "google-tempo-real.md",
+              "slug": "o-que-muda-no-dashboard-vai-logo-para-o-google",
+              "title": "O que muda no dashboard vai logo para o Google",
+              "level": 2,
+              "summary": "Criar, editar ou concluir uma tarefa, mudar a escala (turno criado, alterado, apagado ou escala confirmada), atribuir uma formação, mudar o responsável ou o…",
+              "text": "Criar, editar ou concluir uma tarefa, mudar a escala (turno criado, alterado, apagado ou escala confirmada), atribuir uma formação, mudar o responsável ou o SLA de uma reclamação e carregar uma prova numa reclamação (espelho no Shared Drive) — a app envia logo para o Google, em segundo plano (não atrasa o que estás a fazer). Se a Google falhar, a app volta a tentar sozinha (de hora a hora, com esperas cada vez maiores)."
+            },
+            {
+              "id": "google-tempo-real.md#calendario-e-drive-em-tempo-real",
+              "file": "google-tempo-real.md",
+              "slug": "calendario-e-drive-em-tempo-real",
+              "title": "Calendário e Drive: em tempo real",
+              "level": 2,
+              "summary": "Calendário \"Multipark\" de cada pessoa e calendários partilhados da escala (um por cidade): quando alguém mexe num evento no Google Calendar, a Google avisa a…",
+              "text": "- **Calendário \"Multipark\"** de cada pessoa e **calendários partilhados da escala** (um por cidade): quando alguém mexe num evento no Google Calendar, a Google avisa a app e ela sincroniza logo **só esse calendário**.\n- **Drive — pastas da base de conhecimento** (Shared Drive \"Multipark\"): quando um ficheiro dessas pastas é criado, alterado ou apagado, a Google avisa a app e ela atualiza o índice (os documentos alterados são lidos outra vez). Ficheiros de outras pastas do Shared Drive são ignorados.\n\nOs avisos da Google chegam a `https://dashboard.multipark.pt/api/google/push` e cada \"canal\" tem um segredo próprio — pedidos sem o segredo certo são recusados. Os canais duram até 7 dias; a app renova-os sozinha todos os dias (tarefa **Google: renovar canais de notificação**, às 03:40)."
+            },
+            {
+              "id": "google-tempo-real.md#tarefas-e-contactos-enquanto-tens-o-dashboard-aberto",
+              "file": "google-tempo-real.md",
+              "slug": "tarefas-e-contactos-enquanto-tens-o-dashboard-aberto",
+              "title": "Tarefas e Contactos: enquanto tens o dashboard aberto",
+              "level": 2,
+              "summary": "O Google Tasks e os Contactos Google não avisam a app quando mudam.",
+              "text": "O Google Tasks e os Contactos Google não avisam a app quando mudam. Por isso sincronizam **quando abres o dashboard** e **de 5 em 5 minutos enquanto o tens aberto** (com a aba visível). Quando fechas o dashboard ou mudas de aba, param. Várias abas abertas não fazem mais chamadas à Google (no máximo uma sincronização a cada 5 minutos por pessoa).\n\nExemplo: concluis uma tarefa no telemóvel, no Google Tasks — aparece concluída no dashboard na próxima vez que o abrires (ou em até 5 minutos, se já o tens aberto)."
+            },
+            {
+              "id": "google-tempo-real.md#rede-de-seguranca-de-4-em-4-horas",
+              "file": "google-tempo-real.md",
+              "slug": "rede-de-seguranca-de-4-em-4-horas",
+              "title": "Rede de segurança: de 4 em 4 horas",
+              "level": 2,
+              "summary": "Mesmo sem avisos, a app faz uma sincronização completa de 4 em 4 horas (Tarefas, Calendário, Contactos, calendários partilhados, Drive e base de conhecimento).",
+              "text": "Mesmo sem avisos, a app faz uma sincronização completa de 4 em 4 horas (Tarefas, Calendário, Contactos, calendários partilhados, Drive e base de conhecimento). Assim, se algum aviso se perder, nada fica desatualizado mais do que 4 horas."
+            },
+            {
+              "id": "google-tempo-real.md#ver-o-estado",
+              "file": "google-tempo-real.md",
+              "slug": "ver-o-estado",
+              "title": "Ver o estado",
+              "level": 2,
+              "summary": "Perfil → Google Tarefas & Calendário: a última sincronização, se o teu calendário está \"em tempo real\" (e o último aviso da Google) e a última sincronização…",
+              "text": "- **Perfil → Google Tarefas & Calendário**: a última sincronização, se o teu calendário está \"em tempo real\" (e o último aviso da Google) e a última sincronização das Tarefas/Contactos enquanto tinhas o dashboard aberto. **Sincronizar agora** continua a funcionar.\n- **Definições → Comunicação → Google em tempo real** (admins): cada canal (calendários partilhados, Drive da base de conhecimento e o total dos calendários pessoais) com o estado **Ativo**, **A expirar (renova hoje)** ou **Expirado**, a data em que expira e o último aviso; as alterações por enviar/receber. O super admin tem **Renovar agora**.\n- **Definições → Estado → Agendador** (super admin): as tarefas **Google: alterações por enviar/receber (repetição)**, **Google Tarefas, Calendário, Contactos e Drive (rede de segurança)** e **Google: renovar canais de notificação**."
+            },
+            {
+              "id": "google-tempo-real.md#configuracao",
+              "file": "google-tempo-real.md",
+              "slug": "configuracao",
+              "title": "Configuração",
+              "level": 2,
+              "summary": "Não é preciso configurar nada na Google Cloud: os avisos usam as APIs do Calendário e do Drive que já estão ligadas.",
+              "text": "Não é preciso configurar nada na Google Cloud: os avisos usam as APIs do Calendário e do Drive que já estão ligadas. O endereço vem da variável `APP_URL` do Vercel, que tem de ser `https://dashboard.multipark.pt` (os endereços de pré-visualização do Vercel não recebem avisos). Para desligar os avisos (fica só a sincronização de 4 em 4 horas e a das Tarefas/Contactos com o dashboard aberto), define `GOOGLE_PUSH_DISABLED=1` no Vercel."
+            }
+          ]
+        },
+        {
+          "id": "definicoes.ia",
+          "file": "ia-no-dashboard.md",
+          "group": "Sistema",
+          "module": "ia",
+          "title": "Onde é que a IA trabalha no dashboard",
+          "routes": [
+            "/definicoes"
+          ],
+          "tabs": [],
+          "summary": "A IA escreve textos e sugere.",
+          "sections": [
+            {
+              "id": "ia-no-dashboard.md#inicio",
+              "file": "ia-no-dashboard.md",
+              "slug": "inicio",
+              "title": "Onde é que a IA trabalha no dashboard",
+              "level": 1,
+              "summary": "A IA escreve textos e sugere.",
+              "text": "A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, pontuações) vêm sempre do sistema. Cada funcionalidade tem um interruptor em **Definições → Automações → Inteligência artificial** (só administradores)."
+            },
+            {
+              "id": "ia-no-dashboard.md#so-quando-carregas-no-botao",
+              "file": "ia-no-dashboard.md",
+              "slug": "so-quando-carregas-no-botao",
+              "title": "Só quando carregas no botão",
+              "level": 4,
+              "summary": "Despesas: \"Extrair com IA\" lê a fatura e preenche o formulário.",
+              "text": "- **Despesas:** \"Extrair com IA\" lê a fatura e preenche o formulário. Quem grava és tu.\n- **Passagem de turno → Despesas do turno:** ao tirar a foto do talão, a mesma IA das Despesas lê-o e preenche o cartão. Quem lança és tu.\n- **Críticas:** \"Gerar com IA\" faz um rascunho. Publicar exige \"Aprovar e publicar\".\n- **WhatsApp:** \"Resumo da conversa (IA)\" e \"Sugerir resposta\". A sugestão vai para a caixa de texto e nunca é enviada sozinha.\n- **Comunicação (email):** \"Rascunho IA\" fica no editor.\n- **Tarefas:** \"Criar tarefas a partir de texto\" (team leader para cima). Só cria depois de confirmares.\n- **Leads de Extras:** \"Resumo IA\" e \"Rascunho com IA\", só para quem edita as leads. Enviar exige \"Aprovar\".\n- **Passagem de turno:** \"Resumir agora\" refaz o resumo da passagem gravada.\n- **Formação:** \"Gerar perguntas (IA)\" cria rascunhos por publicar. O **Tutor** responde no manual, no vídeo e no quiz.\n  - **Quiz:** ao carregares em **Jogar**, a IA faz 10 perguntas novas a partir da base de conhecimento (sem IA, perguntas fixas). A resposta certa fica no servidor.\n  - **Procurar formação:** a IA escolhe a formação certa no catálogo (sem IA, pesquisa por palavras).\n  - **FAQs → Gerar agora** (quem gere a formação): 2 ou 3 documentos da base de conhecimento dão até 3 FAQs novas, publicadas e marcadas \"IA\".\n- **Rádio:** \"Transcrever\".\n- **Multis:** o chat em todas as páginas."
+            },
+            {
+              "id": "ia-no-dashboard.md#sozinha-automatica",
+              "file": "ia-no-dashboard.md",
+              "slug": "sozinha-automatica",
+              "title": "Sozinha (automática)",
+              "level": 4,
+              "summary": "Passagem de turno: resumo para o turno seguinte quando entregas a passagem (a 1.ª vez que a guardas); à segunda-feira, o resumo da semana.",
+              "text": "1. **Passagem de turno:** resumo para o turno seguinte **quando entregas** a passagem (a 1.ª vez que a guardas); à segunda-feira, o resumo da semana.\n   - Se a alterares depois, a IA não volta a correr sozinha: aparece **resumo desatualizado** e carregas em **Resumir agora**.\n2. **Briefing do dia** (Dashboard e Tarefas): um parágrafo por cidade a partir das 07:30, também por email às chefias.\n3. **Alertas** em Operações, Despesas e Marketing: uma linha a explicar cada anomalia (feita uma vez por dia; se a IA falhar, tenta no máximo mais 2 vezes, com pelo menos 12 h de intervalo, em grupos mais pequenos e num trabalho à parte, a partir das 09:00 (depois dos briefings e relatórios), e depois o alerta fica só com a frase dos números). Condutores e extras veem o alerta, mas não a linha da IA. Nas Reservas ficam ao lado do Dashboard (no telemóvel, por cima). Carrega no título para os encolher. O **✕** tira um alerta da lista para toda a gente; nada se apaga, e em **Tirados** dá para o **Repor**.\n4. **Avaliação:** a explicação aparece ao abrir. Só se refaz quando os números mudam.\n5. **Críticas:** rascunho automático para as críticas novas (escritas nos últimos 14 dias; numa 1.ª importação de um perfil, só as desses 14 dias), que fica por aprovar.\n6. **Reclamações:** sugestões de tipo, prioridade, SLA e reserva, com um rascunho de resposta.\n   - Com confiança alta, preenche sozinha os campos vazios. Há sempre **Desfazer**.\n7. **WhatsApp:** etiqueta a intenção e a urgência; uma conversa **nova** vai para a caixa do tema (a que já tem caixa fica onde está).\n   - **Email:** a IA lê os emails das caixas partilhadas pelo sentido (não por palavras): as conversas novas vão para a caixa do tema, por ler; o que não percebe vai para o info. As **reclamações** (e, com o interruptor, os **perdidos**) que lá estejam — mesmo escondidas noutro pedido, numa resposta ou num reencaminhamento — abrem o caso no módulo (certeza média: \"Por confirmar (IA)\") e a conversa vai para a caixa do caso. Na conversa lê-se \"Movido pela IA → caixa (motivo)\". Para medir: Definições → Comunicação → **Testar a triagem** (super admin).\n   - Alguém a candidatar-se pela 1.ª vez (email ou WhatsApp) entra nos **Leads de Extras** como lead (e candidatura, se houver email), com a nota \"Entrou pela IA\".\n8. **Perdidos & Achados:** procura possíveis correspondências.\n9. **Disponibilidade dos extras:** quando a resposta não é clara, a IA interpreta-a.\n   - Com confiança alta, marca a disponibilidade e responde por WhatsApp.\n   - Abaixo disso, cria uma tarefa para uma pessoa.\n10. **Relatórios de segunda-feira:** por email (direção, marketing, operações e RH).\n11. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.\n12. **FAQs da formação** (se ligares o interruptor semanal): à segunda-feira, até 3 FAQs novas a partir da base de conhecimento, publicadas e marcadas \"IA\". Arquivar uma é dizer \"esta não\": não volta."
+            },
+            {
+              "id": "ia-no-dashboard.md#comecam-desligadas-so-um-administrador-as-liga",
+              "file": "ia-no-dashboard.md",
+              "slug": "comecam-desligadas-so-um-administrador-as-liga",
+              "title": "Começam desligadas (só um administrador as liga)",
+              "level": 2,
+              "summary": "ler os documentos do RH para preencher a ficha (o IBAN fica sempre como pedido ao RH, exceto para quem o pode mudar na hora);",
+              "text": "- ler os documentos do RH para preencher a ficha (o IBAN fica sempre como pedido ao RH, exceto para quem o pode mudar na hora);\n- ler os CV dos emails do RH;\n  - estas duas mandam o ficheiro inteiro, por isso **só correm com a IA em Vertex AI na UE**. Sem isso não correm, mesmo ligadas. Em **Definições → Automações**, ao lado do interruptor, aparece \"Só corre com a IA em Vertex AI na UE (hoje: …)\". O sítio onde a IA está vê-se também no cartão **IA — custo do mês** (\"Gemini (Vertex AI)\" ou \"Gemini\");\n- juntar fichas de clientes;\n- as FAQs semanais da formação (o botão **Gerar agora** funciona na mesma)."
+            },
+            {
+              "id": "ia-no-dashboard.md#dados-pessoais",
+              "file": "ia-no-dashboard.md",
+              "slug": "dados-pessoais",
+              "title": "Dados pessoais",
+              "level": 4,
+              "summary": "Nos textos, os emails, os telefones, o NIF, o IBAN e as matrículas são tapados antes de irem para a IA.",
+              "text": "- Nos textos, os emails, os telefones, o NIF, o IBAN e as matrículas são tapados antes de irem para a IA.\n- Os ficheiros vão inteiros: faturas, áudio do rádio, documentos e CV do RH, e PDFs dos manuais. Os documentos e CV do RH só com a IA em Vertex AI na UE.\n\n**Nunca, sem uma pessoa:** emails ou respostas a clientes e publicações no Google."
+            },
+            {
+              "id": "ia-no-dashboard.md#quanto-a-ia-usa-administradores",
+              "file": "ia-no-dashboard.md",
+              "slug": "quanto-a-ia-usa-administradores",
+              "title": "Quanto a IA usa (administradores)",
+              "level": 4,
+              "summary": "Em Definições → Estado, o cartão IA — custo do mês mostra o gasto por funcionalidade.",
+              "text": "- Em **Definições → Estado**, o cartão **IA — custo do mês** mostra o gasto por funcionalidade.\n- Logo abaixo, **IA — uso por dia**: carrega em **Ver o uso por dia** e escolhe os dias (7 a 62) e, se quiseres, uma funcionalidade. Por dia vês as chamadas, os erros, as **bloqueadas** (orçamento ou \"só UE\" dos documentos do RH), os tokens, o custo e a hora da primeira e da última chamada (UTC).\n- Por baixo, **Leituras repetidas**: a mesma coisa (por exemplo, a mesma crítica) lida pela IA mais de uma vez, as 100 com mais vezes. As conversas do Multis não contam.\n- Só leitura: nada muda ao abrir. O raciocínio de cada funcionalidade muda-se em **Definições → Parâmetros → Raciocínio da IA por funcionalidade**."
+            }
+          ]
+        },
+        {
+          "id": "integracoes",
+          "file": "integracoes.md",
+          "group": "Sistema",
+          "module": "integracoes",
+          "title": "Integrações (estado das ligações externas)",
+          "routes": [
+            "/integracoes"
+          ],
+          "tabs": [],
+          "summary": "Página Integrações (menu Sistema): um cartão por ligação externa — Google Ads, Meta, Google Business, WhatsApp, Gmail, Google…",
+          "sections": [
+            {
+              "id": "integracoes.md#inicio",
+              "file": "integracoes.md",
+              "slug": "inicio",
+              "title": "Integrações (estado das ligações externas)",
+              "level": 1,
+              "summary": "Página Integrações (menu Sistema): um cartão por ligação externa — Google Ads, Meta, Google Business, WhatsApp, Gmail, Google…",
+              "text": "Página **Integrações** (menu Sistema): um cartão por ligação externa — Google Ads, Meta, Google Business, WhatsApp, Gmail, Google Tarefas/Calendário/Contactos/Drive, Analytics, Search Console, PageSpeed, Zello, IA, BD Multipark, armazenamento.\n\n**Quem vê**: só **administradores e super admin** (desde out 2026). Os outros papéis deixaram de ver a página (viam erros de todo o país e corriam testes com custo).\n- **Ligação Google Business Profile** (conta, perfis e importar avaliações): no fundo desta página — antes estava no topo das Críticas. Só aparece a admin/super admin com todas as cidades.\n- **Google Business pela Windsor** (dentro do cartão do Google Business): com a chave `WINDSOR_API_KEY` na Vercel, **Ir buscar os perfis à Windsor** traz os perfis (associa cada um ao parque e marca \"Importar avaliações\") e **Importar avaliações pela Windsor** traz as avaliações. Só serve quando a conta Google não está ligada diretamente. A recolha sozinha e a publicação das respostas têm interruptores próprios (vêm desligados); a publicação precisa também das ações de escrita ativas na equipa da Windsor.\n- **Ligar e desligar o Google Ads e o Google Business**: só o **super admin**. Ao desligar, a autorização é **revogada na Google**; os dados recolhidos e a escolha das contas/perfis ficam. Com o interruptor **Aviso quando desligam uma integração** ligado (Definições → Automações; vem desligado), os administradores e o super admin recebem no sino \"Google … foi desligado\" (menos quem desligou).\n- O teste da **BD Multipark** é só do super admin."
+            },
+            {
+              "id": "integracoes.md#o-que-cada-cartao-diz",
+              "file": "integracoes.md",
+              "slug": "o-que-cada-cartao-diz",
+              "title": "O que cada cartão diz",
+              "level": 4,
+              "summary": "Configurada / Não configurada: se as variáveis do servidor existem (os valores nunca aparecem).",
+              "text": "- **Configurada / Não configurada**: se as variáveis do servidor existem (os valores nunca aparecem). O **armazenamento** só fica \"Configurada\" com o Vercel Blob ou com as **4** variáveis do S3 (região, bucket e as duas chaves).\n- **Ligado / Reautorização necessária / Erro**: o estado guardado. \"Ligado, com erro\" (âmbar) quando está ligado mas a última recolha falhou.\n- **Última recolha com sucesso**: a última recolha que acabou bem (não a última tentativa).\n- Erros e avisos (ex.: a chave de cifra, o desempenho dos perfis Google).\n\n**Estado desconhecido**: se o estado guardado não se consegue ler (base de dados em baixo, consulta a falhar), o selo fica cinzento \"Estado desconhecido\" com o motivo e \"Tentar de novo\" — nunca \"Sem problemas conhecidos\" por engano."
+            },
+            {
+              "id": "integracoes.md#testar",
+              "file": "integracoes.md",
+              "slug": "testar",
+              "title": "Testar",
+              "level": 4,
+              "summary": "Não envia nem altera nada.",
+              "text": "- Não envia nem altera nada. As partes pessoais do **Google Drive, Tarefas/Calendário e Contactos** testam-se com a **tua** conta Google (se ainda não as ativaste no Perfil, o teste diz que essa parte ficou por testar) — nunca com a de um colega.\n- No máximo **10 testes por minuto** por pessoa.\n- Um teste da **Meta** com o token recusado marca a ligação como \"Reautorização necessária\".\n\n**Avisos aos administradores**: quando uma ligação passa a precisar de religar ou dá erro, ou um cron para, os administradores recebem um aviso (uma vez por mudança). O detalhe vai sem segredos."
+            },
+            {
+              "id": "integracoes.md#central-vodafone-consola-one-net-so-o-super-admin",
+              "file": "integracoes.md",
+              "slug": "central-vodafone-consola-one-net-so-o-super-admin",
+              "title": "Central Vodafone (consola One Net) (só o super admin)",
+              "level": 2,
+              "summary": "A consola da Vodafone (One Net Attendant Console) só regista chamadas num CRM conhecido.",
+              "text": "- A consola da Vodafone (One Net Attendant Console) só regista chamadas num CRM conhecido. A dashboard faz de **Sugar CRM**: cada chamada que a consola regista fica na dashboard em nome de quem atendeu ou fez, e conta no **Desempenho** (Pessoas → Condutores e agentes).\n- **Ligar**:\n  1. Liga o interruptor **Central Vodafone: receber as chamadas da consola** (Definições → Automações; vem desligado). Desligado, a dashboard responde \"desligada\" e só regista que a consola tentou.\n  2. Aqui, no cartão **Central Vodafone**, cria um **acesso por pessoa**: escolhe a conta da dashboard e o utilizador (ex.: ana.silva). A palavra-passe aparece **só uma vez**; escreve-a logo na consola dessa pessoa.\n  3. Na consola: **Ligar a um servidor CRM → Sugar CRM**. Descrição \"Dashboard\", **Ativar CRM** e **Registar chamadas do histórico** ligados. No **Server URL**, cola o endereço do cartão. Quando pedir, usa o utilizador e a palavra-passe da pessoa desse computador.\n- **Revogar** um acesso: a consola dessa pessoa deixa logo de registar. As chamadas que já registou ficam. O acesso revogado mostra quando e por quem.\n- **Reativar** (num acesso revogado, por exemplo por engano): a consola volta a entrar com a **mesma palavra-passe** que já tem, sem mexer nela. Só se a conta da pessoa estiver ativa. Fica no histórico quem revogou e quem reativou.\n- O cartão mostra as **últimas chamadas** e **o que a consola pediu e o que o Xsi respondeu** (sem palavras-passe). Serve para ver se a consola está a chegar e o que manda.\n- **Quem está a ligar**: quando entra uma chamada, a consola pergunta o número à dashboard. A dashboard procura primeiro nas fichas do **RH** (a equipa a ligar), depois nas fichas do **CRM** (a com mais reservas, com \"Cliente\" ou \"Cliente Pro\" e o número de reservas) e por fim nos contactos do CRM. Se não encontrar, responde \"Sem ficha (+351…)\" para a consola ter onde registar a chamada.\n- A chamada fica ligada a esse contacto. Abrir o contacto na consola leva à ficha do cliente na dashboard.\n- A consola regista a chamada só com o contacto, sem o número. A dashboard usa o número da pesquisa que a consola acabou de fazer (até 6 horas antes). Em **Últimas chamadas registadas** vês quem atendeu ou ligou, com quem foi (Equipa, Cliente ou Contacto, com ligação para a ficha), o número e a duração. A consola só manda minutos, por isso uma chamada curta aparece como \"menos de 1 min\".\n- **Chamadas internas**: a consola só regista uma chamada quando a pesquisa encontra um contacto. Quem liga de uma extensão (por exemplo, o 410) aparece como \"Extensão 410\" e a chamada fica registada como **Interna**.\n- **Procurar pelo nome na consola**: na pesquisa de contactos da consola, escreve 3 ou mais letras do nome. Aparecem as fichas do **RH** (com o telefone de trabalho) e os clientes do **CRM** (com o telefone principal). A partir daí ligas pela consola. Quem não tem telefone não aparece.\n- **Botões \"Ligar\" da dashboard**: abrem um link `tel:`, que o Windows entrega ao programa escolhido para \"TEL\" (por exemplo, a Ligação ao Telemóvel). Para ligar pela consola, escolhe a Attendant Console em Definições → Aplicações → Aplicações predefinidas → \"TEL\". A consola **não pode estar a correr como administrador** (Propriedades do atalho → Compatibilidade): se estiver, cada clique abre uma consola nova, pede o login e não liga.\n  - O número vai como a central o marca: os de Portugal **sem o +351** (só os 9 dígitos) e os de fora com **00** (ex.: 0034…). Com o \"+351\" a consola não fazia a chamada.\n- **Tocar no dashboard** (interruptor **Central Vodafone: tocar no dashboard**, em Definições → Automações; vem desligado): quando entra uma chamada na consola de uma pessoa, o dashboard dela mostra, em qualquer página, **quem está a ligar** (nome, Cliente ou Equipa, reservas) com **Abrir ficha**, e toca até 12 s.\n  - Só para quem tem um acesso da consola ativo, e só com o \"receber as chamadas da consola\" ligado (o toque vem da pesquisa que a consola faz à dashboard).\n  - **Já atendi** (ou clicar em qualquer sítio do aviso) cala esta chamada; **Sem som neste browser** deixa só o aviso. **Avisar fora do separador** pede ao Windows para mostrar a chamada também com o dashboard escondido.\n  - As chamadas que fazes pelos botões **Ligar** da dashboard não tocam: o aviso diz \"a ligar\".\n  - Atender e desligar continua a ser **na consola**. Atender a partir da dashboard só com o Xsi, quando a Vodafone der o endereço certo.\n- **Desempenho**: as chamadas registadas pela consola contam para quem atendeu ou ligou: atendidas, feitas, perdidas (recebidas não atendidas), devolvidas (a 1.ª chamada feita para um número com uma perdida nas 24 h anteriores) e os minutos ao telefone. As internas (com colegas do RH ou de extensões) ficam registadas, mas não contam, exceto as do supervisor a ligar aos extras."
+            },
+            {
+              "id": "integracoes.md#xsi-da-one-net-todas-as-linhas-telemoveis-incluidos",
+              "file": "integracoes.md",
+              "slug": "xsi-da-one-net-todas-as-linhas-telemoveis-incluidos",
+              "title": "Xsi da One Net (todas as linhas, telemóveis incluídos)",
+              "level": 3,
+              "summary": "O Xsi é a ligação direta à plataforma da Vodafone.",
+              "text": "O Xsi é a ligação direta à plataforma da Vodafone. Ao contrário da consola, vê as chamadas de toda a gente, nos fixos e nos telemóveis One Net, incluindo as não atendidas. Só o super admin o configura, no mesmo cartão (Integrações → Central Vodafone → **Xsi da One Net**):\n\n1. **Servidor Xsi**: o endereço que a Vodafone deu (https). Pode ser só o anfitrião ou o endereço completo.\n2. **Utilizador** e **palavra-passe** do Xsi. A palavra-passe fica guardada **cifrada** e nunca volta a aparecer. Para a mudar, escreve a nova e guarda.\n3. **Utilizador a ler** (opcional): só se a Vodafone te deu um administrador. Põe aqui o utilizador One Net de uma pessoa para o teste.\n4. **Testar ligação**: lê o perfil, o diretório da empresa e os registos de chamadas. Não muda nada na Vodafone. Mostra:\n   - cada passo, com a explicação se falhar (\"utilizador ou palavra-passe errados\", \"o IP da dashboard não está autorizado\", \"barrado pela proteção anti-robôs da Vodafone\"…). Este último quer dizer que o servidor da Vodafone mostrou uma página de verificação em vez de responder; a Vodafone tem de autorizar o servidor da dashboard;\n   - o diretório da One Net, cruzado com as fichas do RH pelo telefone. Quem aparece \"sem ficha no RH com este número\" precisa do número certo na ficha.\n   - O que o Xsi respondeu fica em \"Ver o que a consola pediu e o que o Xsi respondeu\".\n\nPor agora o Xsi só se testa. O registo automático das chamadas e o botão \"Ligar pela central\" vêm a seguir, com um interruptor desligado."
+            }
+          ]
+        },
+        {
+          "id": "integracoes.google-ads",
+          "file": "integracoes-google-ads.md",
+          "group": "Sistema",
+          "module": "integracoes",
+          "title": "Integrações → Google Ads e Meta Ads",
+          "routes": [
+            "/integracoes/google-ads"
+          ],
+          "tabs": [],
+          "summary": "Aqui liga-se o Google Ads, escolhem-se as contas a recolher e vê-se o histórico das recolhas.",
+          "sections": [
+            {
+              "id": "integracoes-google-ads.md#inicio",
+              "file": "integracoes-google-ads.md",
+              "slug": "inicio",
+              "title": "Integrações → Google Ads e Meta Ads",
+              "level": 1,
+              "summary": "Aqui liga-se o Google Ads, escolhem-se as contas a recolher e vê-se o histórico das recolhas.",
+              "text": "Aqui liga-se o Google Ads, escolhem-se as contas a recolher e vê-se o histórico das recolhas. Os números aparecem no **Marketing**. Nada aqui altera campanhas ou orçamentos."
+            },
+            {
+              "id": "integracoes-google-ads.md#quem-faz-o-que",
+              "file": "integracoes-google-ads.md",
+              "slug": "quem-faz-o-que",
+              "title": "Quem faz o quê",
+              "level": 4,
+              "summary": "Ligar, voltar a autorizar e desligar o Google Ads: só o super admin.",
+              "text": "- **Ligar, voltar a autorizar e desligar o Google Ads**: só o **super admin**. O retorno da Google tem de chegar à mesma sessão que carregou em \"Ligar\" (senão a ligação é recusada).\n- **Escolher contas, marca/cidade e a recolha inicial**: quem gere as Integrações.\n- **Recolha diária / 35 dias / mensal à mão**: quem pode editar as Integrações."
+            },
+            {
+              "id": "integracoes-google-ads.md#contas",
+              "file": "integracoes-google-ads.md",
+              "slug": "contas",
+              "title": "Contas",
+              "level": 4,
+              "summary": "O interruptor diz se a conta é recolhida.",
+              "text": "- O interruptor diz se a conta é **recolhida**. Desligar uma conta pára as recolhas dela; o gasto **já recolhido continua a contar** no Marketing (foi dinheiro gasto).\n- Mudar o interruptor ou a marca/cidade fica registado nos Logs (antes → depois). Mudar a marca/cidade de uma campanha (Marketing → Anúncios) também."
+            },
+            {
+              "id": "integracoes-google-ads.md#recolhas-automaticas",
+              "file": "integracoes-google-ads.md",
+              "slug": "recolhas-automaticas",
+              "title": "Recolhas automáticas",
+              "level": 4,
+              "summary": "Diária (a partir das 05:45): última semana.",
+              "text": "- **Diária** (a partir das 05:45): última semana.\n- **Domingo** (a partir das 06:15): **últimos 35 dias** — a Google continua a acertar conversões semanas depois do clique; esta recolha apanha esses acertos.\n- **Mensal** (dia 2): o mês anterior fechado.\n- Cada recolha corre em partes curtas. Se não acabar dentro do tempo, fica **parcial** e continua na chamada seguinte (não fica a meio para sempre).\n- Se outra recolha ainda estiver a correr, esta fica **para a próxima volta** — já não conta como feita.\n\n**Recolha inicial (37 meses)**: pede de novo todo o histórico e substitui o que está guardado. Pede confirmação e só quem gere as Integrações a vê."
+            },
+            {
+              "id": "integracoes-google-ads.md#cliques-gclid-campanha-no-cartao-recolha-jorge-8-out-2026-as",
+              "file": "integracoes-google-ads.md",
+              "slug": "cliques-gclid-campanha-no-cartao-recolha-jorge-8-out-2026-as",
+              "title": "Cliques (gclid → campanha) (no cartão Recolha; Jorge, 8 out 2026 — as campanhas davam 0 reservas ligadas)",
+              "level": 2,
+              "summary": "Com o auto-tagging, o link da reserva só traz o gclid.",
+              "text": "- Com o auto-tagging, o link da reserva só traz o **gclid**. O Google Ads sabe de que campanha é cada clique (relatório *click_view*); a app lê-o **de hora a hora** e guarda-o numa tabela de apoio, para ligar essas reservas à campanha no Marketing.\n- Em cada volta: **hoje e ontem** de todas as contas recolhidas e, aos poucos, os **dias em falta** (até 10 por conta e por volta, do mais recente para trás). A Google só guarda **90 dias** de cliques — mais para trás não há.\n- O cartão mostra o **último dia lido**, os **dias em falta** (dos últimos 89 até ontem, com o mais antigo), quantos cliques estão guardados e a última leitura. A primeira vez faltam todos; ficam em dia ao fim de umas horas.\n- **Ler cliques agora**: faz já uma volta (quem pode editar as Integrações). Só lê do Google Ads; nada é alterado lá.\n- Interruptor em **Definições → Automações → \"Google Ads: ligar reservas à campanha pelo clique (gclid)\"** — **ligado** por omissão. Desligado: deixa de ler cliques novos — as reservas com cliques já lidos continuam ligadas; as outras só pelo ID da campanha no link.\n- Uma conta sem acesso aos cliques (erro 403) é saltada nessa volta e aparece o aviso; as outras seguem.\n\n**Desligar**: revoga a autorização na Google e pára as recolhas; os dados já recolhidos ficam. Se a Google não responder, desliga na mesma e avisa para tirares o acesso em myaccount.google.com → Segurança."
+            },
+            {
+              "id": "integracoes-google-ads.md#estados",
+              "file": "integracoes-google-ads.md",
+              "slug": "estados",
+              "title": "Estados",
+              "level": 4,
+              "summary": "Reautorização necessária: a Google deixou de aceitar a autorização (ou o token guardado já não se consegue abrir porque a chave de cifra mudou).",
+              "text": "- **Reautorização necessária**: a Google deixou de aceitar a autorização (ou o token guardado já não se consegue abrir porque a chave de cifra mudou). Carrega em \"Voltar a autorizar\".\n- **Erro com invalid_client**: o GOOGLE_ADS_CLIENT_ID/SECRET no servidor está errado — religar não resolve; corrige as variáveis na Vercel.\n- **Estado desconhecido**: a página não conseguiu ler o estado; aparece \"Tentar de novo\" (nunca fica verde por engano).\n- **Chave de cifra**: ao definir a `INTEGRATIONS_ENCRYPTION_KEY` depois de já haver ligações, os tokens antigos continuam a abrir (chave antiga) e passam para a nova sozinhos.\n\n**Conversões**: o \"ROAS Google (reportado)\" e as conversões da Google no Marketing são **só do Google Ads** (antes misturavam a Meta). \"Conversões (Google + Meta)\" junta as duas plataformas (cada uma também aparece à parte).\n\n**Meta Ads**: configura-se com variáveis no servidor (META_ACCESS_TOKEN, META_AD_ACCOUNT_IDS). As contas aparecem depois da primeira recolha."
+            }
+          ]
+        },
+        {
+          "id": "logs",
+          "file": "logs.md",
+          "group": "Sistema",
+          "module": "logs",
+          "title": "Logs (registo de atividade)",
+          "routes": [
+            "/logs"
+          ],
+          "tabs": [],
+          "summary": "Página Logs (menu Sistema): o registo do que se faz na plataforma — quem, quando, o quê e em que registo.",
+          "sections": [
+            {
+              "id": "logs.md#inicio",
+              "file": "logs.md",
+              "slug": "inicio",
+              "title": "Logs (registo de atividade)",
+              "level": 1,
+              "summary": "Página Logs (menu Sistema): o registo do que se faz na plataforma — quem, quando, o quê e em que registo.",
+              "text": "Página **Logs** (menu Sistema): o registo do que se faz na plataforma — quem, quando, o quê e em que registo. **Só o super admin** a vê, e não se dá por exceção pessoal (desde out 2026)."
+            },
+            {
+              "id": "logs.md#quem-fez",
+              "file": "logs.md",
+              "slug": "quem-fez",
+              "title": "Quem fez",
+              "level": 4,
+              "summary": "Uma pessoa: aparece o nome dela.",
+              "text": "- Uma pessoa: aparece o nome dela. Se a conta foi fundida noutra, os registos antigos **continuam com a conta antiga** (fica desativada, não se apaga) — já não passam para a outra pessoa.\n- **Sistema** (ícone de robô): uma ação automática. A etiqueta diz de onde veio: **Automático (agendador)**, **API key** (com o nome e o início da chave nos detalhes), **Site**, **Webhook** ou **Sistema**. Antes, muitas destas apareciam em nome do primeiro super admin.\n- Registos antigos não têm origem (filtro \"Sem origem\").\n\n**Filtros**: pesquisa livre (detalhes, ação, entidade, pessoa), datas, **Quem** (uma pessoa ou \"Só automático\"), **Origem**, **Entidade** (os nomes repetidos, como employee/employees, contam como um), **Registo #** e **Ação** (todas as que existem). Carregar no **#número** de uma linha mostra só a história desse registo. **Limpar** tira todos os filtros.\n\n**Separador Caixa**: a história da caixa, como fica guardada na própria caixa — passos dos casos (abertos, reabertos, resolvidos, notas), contagens gravadas, talões de multibanco juntados/tirados, multibanco do dia confirmado, extratos da Viva Wallet importados e recebimentos do fim do mês. Filtros por tipo, pessoa, datas e texto; CSV. Só leitura: nada se muda daqui.\n\n**Dados sensíveis**: os detalhes nunca guardam o IBAN, o NIF, o telefone, o cartão ou um segredo por inteiro — ficam só os últimos dígitos (ex.: `PT50 •••0154`, `NIF •••6789`, `•••678`). Os emails ficam (identificam as contas).\n\n**Retenção**: **24 meses** para tudo. Fica **sempre** o histórico de cada ficha do CRM e as mudanças de papel/permissões. O que a aplicação precisa de lembrar (\"já se pediu a cidade a este extra\", \"esta ficha veio do site\") vive na própria ficha, não nos logs.\n\n**Apagar vs arquivar**: \"Apagou\" só aparece para coisas sem dados (ex.: um nó de projeto vazio, com o nome no registo). Parcerias, reclamações, chaves e o resto **arquivam** ou **revogam** — o registo diz o quê e porquê.\n\n**CSV**: exporta as linhas carregadas (com a origem). Cada célula vai entre aspas e um texto começado por `=`, `+`, `-` ou `@` leva um apóstrofo, para o Excel nunca o correr como fórmula.\n\n**Erro**: se a leitura falhar aparece o erro com \"Tentar de novo\" — nunca \"Nenhum log\"."
+            }
+          ]
+        },
+        {
+          "id": "multis",
+          "file": "multis.md",
+          "group": "Sistema",
+          "module": "multis",
+          "title": "Multis (o assistente de IA da equipa)",
+          "routes": [
+            "/multis/falhas",
+            "/perfil"
+          ],
+          "tabs": [],
+          "summary": "O Multis é o assistente de IA da Multipark dentro da aplicação.",
+          "sections": [
+            {
+              "id": "multis.md#inicio",
+              "file": "multis.md",
+              "slug": "inicio",
+              "title": "Multis (o assistente de IA da equipa)",
+              "level": 1,
+              "summary": "O Multis é o assistente de IA da Multipark dentro da aplicação.",
+              "text": "O **Multis** é o assistente de IA da Multipark dentro da aplicação. Apresenta-se com \"Olá! Eu sou o Multis. Em que posso ajudar?\". O botão redondo com o **P da Multipark e uma estrelinha** está no canto inferior direito de todas as páginas."
+            },
+            {
+              "id": "multis.md#o-que-lhe-podes-pedir",
+              "file": "multis.md",
+              "slug": "o-que-lhe-podes-pedir",
+              "title": "O que lhe podes pedir",
+              "level": 4,
+              "summary": "Como se usa a aplicação (\"Como crio uma tarefa?\"): responde com os passos e os nomes dos menus e botões.",
+              "text": "1. **Como se usa** a aplicação (\"Como crio uma tarefa?\"): responde com os passos e os nomes dos menus e botões.\n2. **Números do teu trabalho** (\"Quantas reservas há amanhã em Lisboa?\", \"Quantos extras estão escalados?\"): consulta como tu, com as tuas cidades e permissões.\n3. **Procedimentos e manuais** da empresa (base de conhecimento), com a fonte de cada resposta.\n\n**No computador** o Multis abre um **painel fixo à direita**: o resto do ecrã encolhe e continua a funcionar, podes mudar de página e ele **não fecha**. Fecha-o no **X**; quando o voltares a abrir (mesmo depois de recarregar a página) volta à **mesma conversa**.\n\n**No telemóvel** abre por baixo, em folha; fecha-se a arrastar para baixo ou tocando fora.\n\n**Conversas**: o ícone do relógio mostra as conversas dos últimos 30 dias; o **+** começa uma nova; podes apagar a conversa aberta."
+            },
+            {
+              "id": "multis.md#regras",
+              "file": "multis.md",
+              "slug": "regras",
+              "title": "Regras",
+              "level": 4,
+              "summary": "Só lê: não cria, não altera, não envia nada.",
+              "text": "- Só lê: não cria, não altera, não envia nada. Se pedires uma ação, explica como a fazes.\n- Não vê o que tu não vês (as mesmas cidades e permissões).\n- Confirma sempre os números importantes na página respetiva.\n- **Pesquisa global** (Ctrl+K): **Perguntar ao Multis** abre-o com o que escreveste."
+            },
+            {
+              "id": "multis.md#memoria-o-que-o-multis-tem-de-lembrar",
+              "file": "multis.md",
+              "slug": "memoria-o-que-o-multis-tem-de-lembrar",
+              "title": "Memória (o que o Multis tem de lembrar)",
+              "level": 4,
+              "summary": "Escreve uma mensagem a começar por \"Lembra-te\" (ou \"Memoriza\", \"Não te esqueças\"), por exemplo: «Lembra-te: sou do Porto, dá-me sempre os números por parque».",
+              "text": "1. Escreve uma mensagem a **começar por \"Lembra-te\"** (ou \"Memoriza\", \"Não te esqueças\"), por exemplo: «Lembra-te: sou do Porto, dá-me sempre os números por parque».\n2. O Multis responde **«Fica guardado: …»**. Guarda-se tal e qual (não é a IA que decide) e vale para todas as conversas a seguir.\n3. Vês as notas no botão **Memória** (marcador, no topo do painel): acrescentas à mão, **Arquivar** (com **Desfazer**) e **Repor** as arquivadas. Nada se apaga.\n- Até **30 notas** por pessoa, **300 caracteres** cada. Uma mensagem a terminar em \"?\" é uma pergunta, não se guarda.\n- **Memória da empresa**: notas para todos (ex.: «O parque X fecha às 2h»). Toda a gente as vê; só os **administradores** as escrevem e arquivam (até 100).\n- O Multis segue as notas como preferências, mas **nunca** passa por cima das permissões, das cidades ou das regras. Se uma nota disser uma coisa e os dados outra, valem os dados.\n- Desliga-se em **Definições → Automações → IA: memória do Multis** (desligada, a Memória desaparece do painel)."
+            },
+            {
+              "id": "multis.md#avaliar-respostas",
+              "file": "multis.md",
+              "slug": "avaliar-respostas",
+              "title": "Avaliar respostas (👍/👎)",
+              "level": 4,
+              "summary": "Por baixo de cada resposta há 👍 e 👎.",
+              "text": "- Por baixo de cada resposta há **👍** e **👎**. No 👎 escolhes o que estava errado (**Resposta errada**, **Incompleta**, **Não percebeu a pergunta**, **Não sabia / sem dados**, **Outro**) e podes escrever o que esperavas. Podes mudar de ideias.\n- Quando o Multis diz que não sabe, que não tem acesso, que não encontrou nos manuais, ou uma consulta dá erro, a resposta fica marcada **sozinha**."
+            },
+            {
+              "id": "multis.md#perguntas-que-falharam-so-administradores",
+              "file": "multis.md",
+              "slug": "perguntas-que-falharam-so-administradores",
+              "title": "Perguntas que falharam (só administradores)",
+              "level": 2,
+              "summary": "Abre no relógio do Multis → Perguntas que falharam, ou em Definições → Automações → Inteligência artificial → Multis: perguntas que falharam.",
+              "text": "1. Abre no relógio do Multis → **Perguntas que falharam**, ou em **Definições → Automações → Inteligência artificial → Multis: perguntas que falharam**.\n2. Filtra por **período** (7, 30 ou 90 dias), **motivo** e **Por tratar / Tratadas**. Cada linha tem a pessoa, a página, a pergunta, a resposta, o motivo, as consultas feitas e a ajuda usada, e se foi **👎 da pessoa** ou **Automática**. Em cima, os totais de 👍 e 👎 do período.\n3. Depois de corrigir a ajuda ou a ferramenta, **Marcar como tratada** com uma nota (tem **Desfazer**). Nada se apaga; as perguntas ficam guardadas mesmo depois de a conversa desaparecer (30 dias).\n\n**Como o Multis encontra a ajuda**: pelas palavras da pergunta e, com a base de conhecimento ligada, também **pelo significado** — até 3 páginas da ajuda por pergunta, e de uma página longa só a parte que interessa."
+            }
+          ]
+        },
+        {
+          "id": "perfil",
+          "file": "perfil.md",
+          "group": "Sistema",
+          "module": "ficha",
+          "title": "Perfil (foto, notificações, palavra-passe, sessões, contas Google)",
+          "routes": [
+            "/perfil"
+          ],
+          "tabs": [],
+          "summary": "O Perfil tem o teu cartão, atalhos e o que é só teu.",
+          "sections": [
+            {
+              "id": "perfil.md#inicio",
+              "file": "perfil.md",
+              "slug": "inicio",
+              "title": "Perfil (foto, notificações, palavra-passe, sessões, contas Google)",
+              "level": 1,
+              "summary": "O Perfil tem o teu cartão, atalhos e o que é só teu.",
+              "text": "O **Perfil** tem o teu cartão, atalhos e o que é só teu. Abre para todos (extras e condutores incluídos):\n- no telemóvel, no menu de baixo, à direita (**Perfil**);\n- no computador, na tua fotografia (canto de cima, à direita) → **O meu perfil**."
+            },
+            {
+              "id": "perfil.md#atalhos",
+              "file": "perfil.md",
+              "slug": "atalhos",
+              "title": "Atalhos",
+              "level": 4,
+              "summary": "O meu ponto abre o separador Ponto da tua ficha.",
+              "text": "- **O meu ponto** abre o separador Ponto da tua ficha. À direita diz \"entrada aberta\" ou \"picar entrada\"; se não tens ficha diz \"sem ficha\", e se o estado não se conseguir ler diz \"estado indisponível\" (não \"picar entrada\").\n- **A minha ficha** abre a tua ficha nos RH (dados, documentos, IBAN — ver a ajuda \"RH e ponto\").\n- **A minha disponibilidade** abre a página onde marcas os dias e turnos em que podes trabalhar (ver a ajuda \"Disponibilidade\")."
+            },
+            {
+              "id": "perfil.md#este-telemovel-no-telemovel-num-pda-nao-aparece",
+              "file": "perfil.md",
+              "slug": "este-telemovel-no-telemovel-num-pda-nao-aparece",
+              "title": "Este telemóvel (no telemóvel; num PDA não aparece)",
+              "level": 2,
+              "summary": "Registar este telemóvel como meu: o teu telemóvel passa a telemóvel pessoal (não é um PDA partilhado).",
+              "text": "- **Registar este telemóvel como meu**: o teu telemóvel passa a **telemóvel pessoal** (não é um PDA partilhado). Aparece em Operacional → PDAs → Telemóveis pessoais com o nome de quem tem sessão nele e usa o teu Zello (o da tua ficha).\n- Num telemóvel pessoal a sessão **não** acaba na saída do ponto e não tira o PDA nem o Zello a ninguém. Se outra pessoa entrar nele, aparece o nome dela; o Zello continua o teu.\n- **Deixar de ser pessoal** (o dono, ou uma chefia): fica no histórico; podes voltar a registá-lo.\n- Se o telemóvel já é de outra pessoa, diz de quem é. Num PDA registado não deixa (uma chefia converte o PDA em Operacional → PDAs → botão **Pessoal?** nesse PDA).\n- Um telemóvel que era PDA e foi convertido sem dono mostra **Registar este telemóvel como meu**: quem carregar fica dono."
+            },
+            {
+              "id": "perfil.md#foto",
+              "file": "perfil.md",
+              "slug": "foto",
+              "title": "Foto",
+              "level": 4,
+              "summary": "Adicionar foto / Trocar a foto: tira com a câmara ou carrega uma imagem (JPEG, PNG ou WebP; a app reduz-a antes de enviar).",
+              "text": "- **Adicionar foto / Trocar a foto**: tira com a câmara ou carrega uma imagem (JPEG, PNG ou WebP; a app reduz-a antes de enviar). É obrigatória para picar o ponto e é a que se compara com a selfie do ponto. Cada troca fica registada."
+            },
+            {
+              "id": "perfil.md#notificacoes",
+              "file": "perfil.md",
+              "slug": "notificacoes",
+              "title": "Notificações",
+              "level": 4,
+              "summary": "Só aparecem os tipos que te podem chegar (pela tua área e cidade).",
+              "text": "- Só aparecem os tipos que te podem chegar (pela tua área e cidade). Desliga os que não precisas; os **obrigatórios** (cadeado) não se desligam. **Ocorrência crítica** e **A trabalhar sem PDA ou Zello** ficam obrigatórias só quando o interruptor **Avisos críticos obrigatórios** está ligado (Definições → Automações; vem desligado) — desligado, voltas a ter o que tinhas escolhido. Nos que têm email, há o interruptor **Também por email**.\n- Cada interruptor grava sozinho (com duas abas abertas, uma já não desfaz a outra) e fica registado o que silenciaste.\n- Se a lista não se conseguir ler, aparece um erro com **Tentar de novo** (nunca \"Não há notificações para o teu papel\" por engano)."
+            },
+            {
+              "id": "perfil.md#palavra-passe-so-com-entrar-com-email-e-codigo-ligado-so-uti",
+              "file": "perfil.md",
+              "slug": "palavra-passe-so-com-entrar-com-email-e-codigo-ligado-so-uti",
+              "title": "Palavra-passe (só com Entrar com email e código ligado; só utilizadores, extras e condutores)",
+              "level": 2,
+              "summary": "Diz se já tens palavra-passe.",
+              "text": "- Diz se já tens palavra-passe. **Criar** (a primeira) ou **Mudar** (pede a atual).\n- Esqueceste-te? Sai e entra com um código: durante 15 minutos podes criar outra sem a antiga.\n- Mudar termina as sessões nos outros aparelhos (este fica).\n- Pelo menos 8 caracteres; não pode ser fácil, nem ter o teu nome, nem uma data.\n- Se hoje a palavra-passe foi errada 5 vezes, o cartão diz que está bloqueada até ao fim do dia (entra com um código)."
+            },
+            {
+              "id": "perfil.md#avisos-no-telemovel-team-leaders-e-acima-com-entrar-com-emai",
+              "file": "perfil.md",
+              "slug": "avisos-no-telemovel-team-leaders-e-acima-com-entrar-com-emai",
+              "title": "Avisos no telemóvel (team leaders e acima, com Entrar com email e código ligado)",
+              "level": 2,
+              "summary": "Ativar avisos: recebes no telemóvel os códigos de entrada de quem os pede, mesmo com a app fechada.",
+              "text": "- **Ativar avisos**: recebes no telemóvel os códigos de entrada de quem os pede, mesmo com a app fechada. Depois de entrar, o TL e o supervisor veem também um pedido curto para os ativar (uma vez por aparelho).\n- No iPhone, primeiro instala a app no ecrã principal (Partilhar → Adicionar ao ecrã principal).\n- **Num PDA** os avisos são de quem tem a sessão nesse momento: passam para a pessoa seguinte quando ela entra e param quando a sessão acaba (saída do ponto, Sair, outra pessoa entra, 16 h, PDA retirado). No PDA o aviso diz só **\"Tens um aviso\"** (sem nomes) e abre a app."
+            },
+            {
+              "id": "perfil.md#contas-google-email-tarefas-calendario-contactos",
+              "file": "perfil.md",
+              "slug": "contas-google-email-tarefas-calendario-contactos",
+              "title": "Contas Google (email, Tarefas, Calendário, Contactos)",
+              "level": 2,
+              "summary": "Se as tuas preferências não se conseguirem ler, os interruptores ficam bloqueados com um aviso — nada é gravado por cima com os valores de omissão.",
+              "text": "- Se as tuas preferências não se conseguirem ler, os interruptores ficam bloqueados com um aviso — nada é gravado por cima com os valores de omissão. Cada interruptor grava só o que mudaste.\n- Desligar **Sugestões a partir dos meus contactos** apaga os contactos lidos."
+            },
+            {
+              "id": "perfil.md#terminar-sessoes-noutros-aparelhos",
+              "file": "perfil.md",
+              "slug": "terminar-sessoes-noutros-aparelhos",
+              "title": "Terminar sessões noutros aparelhos",
+              "level": 4,
+              "summary": "Num PDA (aparelho registado), ao entrar a Google pede sempre para escolher a conta — assim ninguém entra por engano com a conta de quem usou o PDA antes.",
+              "text": "- **Num PDA** (aparelho registado), ao entrar a Google pede **sempre** para escolher a conta — assim ninguém entra por engano com a conta de quem usou o PDA antes.\n- Com **Entrar com email e código** ligado, a sessão num PDA registado acaba sozinha na **saída do ponto** (feita em qualquer aparelho), no **Sair**, quando **outra pessoa entra** no PDA ou ao fim de **16 h** — ver a ajuda \"Entrada\". Terminar as outras sessões (ou mudar a palavra-passe) **no próprio PDA** não muda isto; feito **noutro aparelho** (ou com \"Repor acesso\"), a sessão no PDA também acaba e o PDA deixa de receber os teus avisos.\n- Perdeste o telemóvel ou entraste num PDA partilhado? Carrega em **Terminar sessões noutros aparelhos**: todas as outras sessões fecham (este aparelho continua ligado). **Sair** só fecha este aparelho.\n\n**Sem centro de custos**: consegues na mesma pôr a foto, abrir a tua ficha, marcar a disponibilidade, carregar documentos, ver o PDA e terminar sessões. O aviso diz para pedires ao RH a tua cidade.\n\n**Conta não ligada a nenhuma ficha**: aparece **\"Liga a tua conta\"** com a conta Google com que entraste e duas opções — **Sou novo — quero candidatar-me** (cria a tua ficha de candidato) ou **Já me candidatei / já trabalhei convosco com outro email** (escreves o email ou o telefone que usaste; com o código por email ligado escreves o código que chega a esse email, senão o RH confirma). Também podes sair e entrar com o email que deste ao RH.\n\n**Candidatura por aprovar**: no topo de A minha ficha aparece o estado. Preenche os dados e carrega os documentos; quando o RH aprovar, a tua conta passa a extra sozinha.\n\n**Bem-vindo de volta**: se a tua ficha está **inativa**, entras como utilizador e vês no topo de A minha ficha e da Disponibilidade o botão **Voltei, quero trabalhar**. Avisa o RH (no sino, sem WhatsApp nem email); atualiza também os teus dias livres. Não picas o ponto até o RH te reativar.\n\n**Acesso bloqueado** (ex.: documentos em falta): no ecrã de bloqueio carregas os teus documentos em **Carregar os teus documentos**. O RH revê e liberta o acesso."
+            }
+          ]
+        },
+        {
+          "id": "permissoes",
+          "file": "permissoes.md",
+          "group": "Sistema",
+          "module": "permissoes",
+          "title": "Permissões",
+          "routes": [
+            "/permissoes",
+            "/utilizadores"
+          ],
+          "tabs": [],
+          "summary": "Utilizadores — Cartões ou Lista (botão no topo da lista de utilizadores): vês as contas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+          "sections": [
+            {
+              "id": "permissoes.md#inicio",
+              "file": "permissoes.md",
+              "slug": "inicio",
+              "title": "Permissões",
+              "level": 1,
+              "summary": "Utilizadores — Cartões ou Lista (botão no topo da lista de utilizadores): vês as contas em cartões com foto ou numa lista compacta — no telemóvel e no PC.",
+              "text": "**Utilizadores — Cartões ou Lista** (botão no topo da lista de utilizadores): vês as contas em **cartões com foto** ou numa **lista** compacta — no telemóvel e no PC. A escolha fica guardada neste aparelho, para esta página."
+            },
+            {
+              "id": "permissoes.md#utilizadores-agente-e-ligacoes",
+              "file": "permissoes.md",
+              "slug": "utilizadores-agente-e-ligacoes",
+              "title": "Utilizadores — agente e ligações",
+              "level": 4,
+              "summary": "A coluna Agente mostra o agente da Multipark da ficha de cada conta (das fichas ativas; \"extra\" quando é um segundo agente da mesma pessoa).",
+              "text": "- A coluna **Agente** mostra o agente da Multipark da ficha de cada conta (das fichas ativas; \"extra\" quando é um segundo agente da mesma pessoa). Uma conta que é a conta extra de uma ficha aparece com \"conta extra\" na coluna Ficha RH. O aviso \"Várias fichas ativas\" só aparece quando há mesmo mais de uma ficha **ativa**.\n- O botão **Ligações** (ícone de corrente, quem gere o RH) abre a ficha da pessoa com as contas de login e os agentes: **Ligar conta**, **Separar** uma conta, **Anexar agente** e **Separar** um agente. Separar só desliga: a conta e o agente ficam como estão. Uma conta sem ficha abre **Ligar a uma ficha do RH**.\n- **Desativar uma conta desativa também a ficha** da pessoa (quando é a conta principal e a pessoa não tem outra conta ativa), com o mesmo motivo; **reativar** a conta reativa a ficha. O agente da Multipark continua ligado nos dois casos. No sentido contrário, desativar a ficha no RH desativa a conta principal e as contas extra.\n- **Desativar pede o motivo, em dois grupos**: **Inativo — pode voltar** (inatividade, fora do país, a pedido, fim de contrato, baixa, documentos, mudança de função): a pessoa sai das listas, da escala e dos avisos, mas se for extra/condutor pode voltar a entrar como utilizador e dizer \"Voltei\". **Desativado — fica bloqueado** (roubou, despedido, trabalha mal, comportamento, faltas, segurança, outro, conta/ficha duplicada): não volta a entrar.\n- **Pôr inativo** (sugestão): quem gere o RH vê um aviso com as pessoas de ficha ativa **sem atividade há mais de 6 meses** (sem ações como agente da Multipark, ponto, extras nem entradas na app). Escolhe quem pôr inativo, ou **Agora não** (volta daqui a 7 dias). Fica inativo com o motivo \"Inatividade\" (a ficha, a conta e as contas extra, como desativar no RH); o agente fica ligado e nada se apaga. Os dias mudam-se em Definições → \"Sugerir pôr inativo ao fim de (dias sem atividade)\" (0 desliga).\n- **Suspender** (botão no topo de cada ficha do RH, não é desativar): fica sem acesso à app até alguém carregar em **Desbloquear**; a ficha, a conta e o agente ficam como estão. Administradores nunca ficam bloqueados.\n- A lista já não sai pela direita do ecrã: as colunas quebram linha e **Departamento** e **Criado em** só aparecem em ecrãs largos.\n\nO que cada pessoa pode ver e fazer depende do **papel** (Extra, Condutor, Team Leader, Supervisor, Frontoffice, Backoffice, Admin, Super Admin) e da **cidade** do centro de custos da ficha. Papéis de cidade veem só a sua cidade; Frontoffice e acima veem todas."
+            },
+            {
+              "id": "permissoes.md#pagina-permissoes-supervisor-backoffice-admin-e-acima",
+              "file": "permissoes.md",
+              "slug": "pagina-permissoes-supervisor-backoffice-admin-e-acima",
+              "title": "Página Permissões (Supervisor, Backoffice, Admin e acima)",
+              "level": 2,
+              "summary": "Menu Sistema → Permissões.",
+              "text": "1. Menu **Sistema → Permissões**.\n2. **Por pessoa**: escolhe a pessoa e dá ou retira acesso a cada módulo (alcance: próprio, equipa, cidade, nacional; ações: ver, editar, exportar, gerir). Podes pôr data de fim.\n3. **Quem tem acesso**: por módulo, quem tem e porquê (papel ou exceção).\n4. **Permissões especiais**: cidades extra, totais financeiros, Team Leader na escala do Extras-Dia.\n\n**Regras**: não podes dar o que não tens; só gere contas abaixo de ti. Se vês \"Acesso não autorizado\", pede a quem gere as permissões. Sem centro de custos na ficha, o acesso às cidades fica bloqueado."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+};

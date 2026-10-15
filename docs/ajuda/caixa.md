@@ -1,6 +1,9 @@
 ---
 modulo: caixa
+grupo: Financeiro
+pagina: caixa
 titulo: Caixa
+separadores: dia=Separadores, confirmacao=Confirmação da caixa, resumo=Separadores, correcao=Correção de caixa — casos
 rotas: /caixa
 palavras: caixa por dia, 03:00, dia da caixa, quem fechou, quem entregou, despesas do turno, dia certo, dia não certo, caixa, dinheiro, recebido, por cobrar, no-shows, correção de caixa, conferência, era, é, webhook, preço mudou, preço zerado, método de pagamento, divergência, caixa fechada, invoicexpress, stripe, viva wallet, talão, talao, foto do talão, multibanco, tpa, transferência, fim do mês, pro, agregador, agente, recebimento, comprovativo, confirmar pagamentos, contagem, fecho de caixa
 ---
@@ -80,5 +83,5 @@ O botão **Comparar** é só leitura. Além dele, desde 29 set 2026 há uma **va
 6. **Valores do dia**: o João escreve o dinheiro do **envelope** e o **MB** dos talões (e uma nota, obrigatória se houver diferença) e **Fecha o dia**. Não fecha com vermelhos por justificar, com um turno por declarar, antes das 03:00 do dia seguinte ou sem os dados completos da Multipark.
 7. **Diferença do dia > 30 €** (ou justificações por aprovar) → o dia fica **amarelo no mês** ("à espera do Jorge") e o Jorge recebe um aviso na app; **> 70 €** também por email.
 8. **Jorge** (Caixa → gerir), em **Confirmação → Mês**: vê os dias a amarelo e **aprova** o dia (aprova as justificações por decidir) ou aprova/recusa cada justificação. **Recusar reabre o dia.** Quem fechou o dia ou justificou não o pode aprovar.
-9. **Depois de fechado**: todas as manhãs (06:15) o sistema relê os dias fechados dos últimos 45 dias; se a Multipark mudou o dinheiro de uma reserva selada, ou se uma reserva entrou/saiu do dia, ou se uma validação voltou de "sim" a "não", o dia **reabre sozinho** e o Jorge é avisado.
+9. **Depois de fechado**: **de hora a hora** (trabalho `cash-confirm-recheck`, ver a ajuda do Agendador) o sistema relê os dias fechados dos últimos 45 dias, primeiro os que há mais tempo não eram relidos (até 200 por corrida); se a Multipark mudou o dinheiro de uma reserva selada, ou se uma reserva entrou/saiu do dia, ou se uma validação voltou de "sim" a "não", o dia **reabre sozinho** e o Jorge é avisado.
 10. **Registo**: tudo o que se faz fica num registo que não se apaga, em cadeia (cada passo leva o carimbo do anterior); o ecrã mostra **Registo íntegro**. Justificações, decisões e ficheiros nunca se apagam (um ficheiro retirado continua guardado).

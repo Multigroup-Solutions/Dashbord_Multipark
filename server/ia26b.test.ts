@@ -39,7 +39,7 @@ describe("26b — inventário da IA", () => {
     const help = src("docs/ajuda/ia-no-dashboard.md");
     expect(help).toMatch(/^---\nmodulo: ia\n/);
     expect(help).toContain("**Sozinha (automática)**");
-    expect(help).toContain("**Começam desligadas**");
+    expect(help).toContain("## Começam desligadas (só um administrador as liga)");
     expect(src("server/assistant/helpDocs.generated.ts")).toContain("ia-no-dashboard.md");
   });
 });

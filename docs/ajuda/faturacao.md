@@ -1,12 +1,15 @@
 ---
 modulo: faturacao
+grupo: Financeiro
+pagina: faturacao
 titulo: Faturação
-rotas: /faturacao, /financeiro, /anual
-palavras: marketplace, dupla comissão, prior velho, preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, marketing, anúncios, período de consumo, no-shows, financeiro, anual, totais
+separadores: real=Ler a página, costs=Ler a página, forecast=Ler a página
+rotas: /faturacao, /faturacao/diagnose, /anual
+palavras: diagnóstico de faturação, diagnose, filtros progressivos, usado na faturação, top 20 bookings, receita por campaign, marketplace, dupla comissão, prior velho, preço inicial, preços iniciais, histórico, reservas.csv, ao vivo, base da multipark, faturação, faturacao, receita, margem, fecho previsto, previsão, realizado, custos detalhados, caixa, comissões, iva, receita esperada, marketing, anúncios, período de consumo, no-shows, financeiro, anual, totais
 ---
 # Faturação
 
-Receita, custos e margem por período (só super admin; o dashboard Financeiro é para admin e acima).
+Receita, custos e margem por período (só super admin; o dashboard Financeiro, com a mesma base, é para admin e acima — ver a ajuda dos Dashboards → Financeiro).
 
 As reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro — a cidade do parque é a reconhecida: Prior Velho e Moscavide contam como Lisboa, Maia como Porto…). As reservas do **Marketplace** dos parques de terceiros não entram na receita; nos nossos parques, uma reserva vinda pelo Marketplace paga 20 % ao Marketplace e, se também tiver parceiro, conta só o Marketplace (nunca duas comissões). Já não dependem de importações nem da cópia antiga. Se a base da Multipark não responder (ou faltar a permissão de ver totais), a página diz o porquê, em vez de números a zero, e tem um botão **Tentar de novo**.
 
@@ -19,6 +22,8 @@ As reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao v
    - A **Caixa** e a **Correção de caixa** passaram para o seu item do menu: **Financeiro → Caixa** (ver a ajuda "Caixa"). Os links antigos (/faturacao?tab=cash-check) vão lá ter sozinhos.
 3. Os valores de margem são sem IVA. Despesas já contadas pelo RH/ponto não entram duas vezes.
 
+## Anual (/anual)
+
 **Anual** mostra o ano mês a mês, com o mesmo motor da Faturação: receita, despesas (com a TSU paga), comissões, ordenados e equipa do dia (os meses importados do histórico trazem a TSU calculada), IVA a pagar e lucro.
 - O **mês em curso** conta o realizado até hoje, e os meses futuros só a previsão ("prev."). O **Fecho previsto** do ano soma o realizado dos meses passados com a previsão dos outros.
 - Escolhe o **ano** (desde 2016), o intervalo **De / Até** (o "De" nunca fica depois do "Até") e o centro de custos. **Comparar com** mostra outro ano lado a lado.
@@ -28,3 +33,15 @@ As reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao v
 - Se aparecer **"Não foi possível calcular o ano"**, é uma falha (por exemplo, a base de dados da Multipark em baixo), não um ano a zero: usa **Tentar de novo**.
 
 As taxas de IVA e TSU mudam-se em **Definições → Parâmetros**.
+
+## Diagnóstico de Faturação (/faturacao/diagnose)
+Serve para perceber **porque é que um total da receita não bate**: soma a receita com filtros que se vão juntando, um a um, para se ver em que passo o número muda. Não está no menu (abre-se pelo endereço) e só funciona para quem **gere a Faturação** e vê totais financeiros (na prática o super admin); sem isso aparece "Não foi possível fazer o diagnóstico." com **Tentar de novo**.
+- **De / Até** (por omissão o mês atual) e **Atualizar**. Usa a cidade/marca do topo; sem nenhuma escolhida aparece um aviso amarelo: o diagnóstico cobre todos os nossos parques.
+- Os valores são o **total da reserva com IVA** (as linhas de preço da reserva na Multipark, ou o preço da reserva), lidos ao vivo da BD da Multipark, só dos nossos parques, em dias de Lisboa — não são os valores sem IVA dos cartões da Faturação.
+- **Somas com filtros progressivos** (Filtro / Bookings / Receita):
+  1. saída no período, qualquer estado (todos os nossos parques, sem o filtro de cidade/marca);
+  2. e, além disso, só as entregues (**CHECKED_OUT**, a receita realizada);
+  3. e, além disso, o filtro do projeto (cidade/marca) — a linha marcada **USADO NA FATURAÇÃO**.
+  Por baixo: os projetos incluídos e as **canceladas no período** (n.º e valor).
+- **Receita por projeto**, **Receita por campaign** (campanha/parceiro), **Por estado da reserva** (todos os estados, saída no período) e **Top 20 bookings por valor** (as entregues mais caras).
+- Leitura: se o passo 1 → 2 cai muito, há reservas com saída no período que ainda não foram dadas como entregues; se o 2 → 3 cai, a diferença está no filtro de cidade/marca (parques de outro projeto).

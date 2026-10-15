@@ -1,5 +1,7 @@
 ---
 modulo: clientes
+grupo: Suporte
+pagina: clientes
 titulo: Clientes (CRM: fichas, filtros, juntar e separar)
 rotas: /clientes, /clientes/rever
 palavras: ligar agente, agente da multipark, agentes do parceiro, mesma pessoa, recusadas, não é a mesma pessoa, ia nas dúvidas, telefonar ao cliente, escrever email ao cliente, consentimento, contactar, ao vivo, base da multipark, clientes, cliente, crm, ficha, parceiro, parceiros, agregador, agregadores, agência, agências, parkos, comissão, percentagem, marketplace, parque parceiro, nós agregamos, conta corrente, extrato, saldo, dívida, em dívida, pago, pagamento, fim do mês, cliente pro, ficha de cliente, número de cliente, filtro, filtros, pesquisa, cidade, região, país, parque, parques usados, segmento, vip, recorrente, em risco, pro, empresa, juntar, fundir, separar, repetido, duplicado, email estranho, sem email, agregador, matrícula, carro, cor do carro, foto, iban, filtros guardados, abrir na multipark
@@ -14,7 +16,7 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - **Contactos**: email, WhatsApp e SMS vêm **ligados por defeito** para quem tem reservas (está nos termos e condições e é preciso para a recolha, a entrega e a fatura). Podem ser desligados na ficha; o que se muda à mão (também "Por saber") não volta a mudar sozinho.
 - O **nome** e o **NIF** mudados à mão também ficam: a carga das reservas já não volta a pôr um NIF que se limpou (por ser de outra pessoa).
 
-**Quando duas fichas são a mesma pessoa** (regras do dono)
+## Quando duas fichas são a mesma pessoa (regras do dono)
 - **O mesmo nome**: o 1.º e o último nome iguais, sem contar acentos, maiúsculas, pontos, traços, "_", asteriscos, apóstrofos ou números ("António Gonçalves", "antonio_goncalves", "Antonio Gonçalves1"). Os nomes do meio não contam; um nome de uma palavra só ou só com a inicial ("A. Gonçalves") **não** é o mesmo nome.
 - **O mesmo nome + um dado igual** (email, telefone ou matrícula, ou o mesmo NIF) → é a mesma pessoa.
 - **Nome diferente** → só com o **mesmo email e o mesmo telefone** (quem atende e lê o email é a mesma pessoa). Só um dos dois fica como sugestão.
@@ -25,7 +27,7 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 - Com as regras de cima: a reserva liga-se sozinha à ficha com o mesmo nome e um dado igual, ou com o mesmo email **e** telefone. Tudo o resto cria uma ficha nova e, se parecer a mesma pessoa, aparece em **Rever fichas**.
 - Uma reserva que já estava ligada a uma ficha e passou a ter o **nome de outra pessoa** fica onde está, mas os contactos e o carro dessa pessoa não vão para a ficha.
 
-**Lista** (menu **Suporte → Clientes**)
+## Lista (menu **Suporte → Clientes**)
 1. Na barra de pesquisa escreve e escolhe **onde procurar** (nome, email, telefone, matrícula, NIF, n.º de cliente, n.º de reserva, cor ou modelo do carro, notas). Cada opção mostra quantos clientes encontra. Em **Qualquer campo**, um número também procura o **n.º de reserva**.
 2. Filtra por **Segmento**, **Cidade**, **Região**, **País**, **Parque**, **País do cliente** (pelo telefone), **Canal de origem**, **Parceiro**, **Pro ou particular**, **Pessoa ou empresa** e **Avisos**. Vários valores no mesmo filtro = um **ou** outro; filtros diferentes = todos ao mesmo tempo.
    - O número ao lado de cada cidade, parque, canal e parceiro são **reservas** (não clientes); o do país do cliente são clientes.
@@ -60,23 +62,23 @@ Cada cliente tem uma **ficha** com o nosso **n.º de cliente**. As fichas são c
 
 **Cartões ou lista em todos os separadores**: **Clientes**, **Pro**, **Agregadores e agências** e **Parcerias** têm o botão **Cartões / Lista**. A escolha fica guardada neste aparelho, separador a separador (por omissão, cartões).
 
-**Clientes Pro e conta corrente** (separador **Pro**)
+## Clientes Pro e conta corrente (separador **Pro**)
 - Os Pro pagam no fim do mês. As contas e os valores vêm da BD da Multipark e atualizam-se sozinhos de 30 em 30 minutos: reservas Pro a débito, pagamentos a crédito.
 - A lista mostra quem tem **saldo em dívida** (meses já acabados por pagar) primeiro, o que já gastou **este mês** e o **pago este ano**. Carrega numa conta para abrir a ficha.
 - Na ficha de um Pro aparece a **Conta corrente**: saldo em dívida, mês em curso, pago este ano, prazo médio de pagamento, os meses (pago / por pagar / em curso) e os movimentos, com **Exportar** para Excel.
 - Um mês fica **pago** quando a Multipark regista o pagamento. Os pagamentos registam-se **na Multipark** (botão **Registar pagamento na Multipark**); aqui não se paga nada.
 - Os valores em euros só aparecem a quem vê totais financeiros. Quem trabalha numa cidade vê só os parques dessa cidade.
 
-**Agregadores e agências** (separador na lista de clientes)
+## Agregadores e agências (separador na lista de clientes)
 - Os parceiros que trabalham nos nossos parques, lidos ao vivo da Multipark: tipo, percentagem que ficam em cada parque, reservas deste mês e dos últimos 12, valor e o que é **nosso** (o que fica depois da percentagem deles).
 - **Agregadores**: cobram o cliente e ficam com a percentagem deles; no fim do mês mandamos-lhes o extrato e faturamos o que é nosso. **Agências**: a percentagem é nossa e vão pagando. As reservas contam pelo **mês de entrada** do carro.
 - Na página do parceiro: mês a mês, últimas reservas (com **Abrir na Multipark**), clientes que vieram por eles, dados fiscais e o cartão **No CRM** (ligação ao registo nas Parcerias, contacto e notas).
 - Cartão **Agentes da Multipark** (quem vê as Parcerias): os agentes (as pessoas que marcam pelo portal da agência) ligados a este parceiro. **Ligar agente** (quem gere as Parcerias) procura o agente pelo nome ou email e liga-o; se já estava noutro parceiro, pergunta antes de o passar. O **X** tira-o deste parceiro. Não mexe nos clientes. Só dá depois de o parceiro estar ligado a um registo das Parcerias (cartão **No CRM**).
 
-**Parcerias (nós agregamos)** (separador na lista de clientes)
+## Parcerias (nós agregamos) (separador na lista de clientes)
 - Os parques que não são nossos, em que levamos clientes pelo marketplace e ficamos com uma comissão: dono, contactos, reservas e a nossa comissão, mês a mês. Aqui contam as reservas **com a nossa comissão** (as que lhes levámos) — são os nossos clientes; a contagem de **todas** as reservas do Marketplace de cada parque está em Parcerias → Parques e no Marketing. No topo, a etiqueta **operado por nós** / **não operado** (a comissão é diferente). A cidade do parque é a reconhecida (Prior Velho → Lisboa, Maia → Porto…), por isso quem vê Lisboa também vê um parque com "Prior Velho" na cidade.
 
-**Rever fichas** (botão **Rever fichas** na lista)
+## Rever fichas (botão **Rever fichas** na lista)
 - **Junção automática**: todas as madrugadas, depois das sugestões das 05:15 (se não acabar, continua), o CRM junta sozinho os pares que as **regras do dono** resolvem (ver "Quando duas fichas são a mesma pessoa"). Fica a ficha com mais reservas. Cada junção aparece em **Juntas recentemente** (por **regras**) e no registo das duas fichas, e pode ser separada. O botão **Juntar agora** (só o super admin, e só com o interruptor ligado) corre-a já. Interruptor em Definições → Automações ("CRM: juntar sozinho as fichas óbvias").
 - **IA nas dúvidas** (interruptor "IA: fichas de clientes duvidosas", **desligado por omissão**): os pares que as regras não resolvem (nome diferente, nome de uma palavra…) vão à IA, que dá um parecer — **a mesma pessoa**, **pessoas diferentes** ou **não sabe** — com a certeza e o porquê. Só junta sozinha com **85 % ou mais** (aparece em **Juntas recentemente** como **IA**); o resto fica nas sugestões com o parecer à vista. A IA recebe só o 1.º nome e comparações ("telefone igual", "NIF diferente"), nunca emails, telefones, matrículas ou NIF. Empresas, Pro e NIF diferentes nunca vão à IA. Um par a que a IA não responda fica **não sabe** ("A IA não respondeu a este par.") e não volta a ser perguntado, a não ser que as fichas mudem.
 - **Sugestões para juntar**: as duas fichas lado a lado, com o que coincide (telefone, matrícula, NIF, email), os **avisos** (vermelho = nunca se junta sozinho: empresa, cliente Pro, NIF diferente; amarelo = não conta: email genérico, telefone/email/matrícula em várias fichas, nome de uma palavra, nome diferente) e o **parecer da IA**. **Juntar** (backoffice e administração), **Trocar qual fica** ou **Não é a mesma pessoa** (quem edita clientes; pede confirmação). Se outra pessoa já juntou ou recusou o par, aparece o aviso e nada muda.

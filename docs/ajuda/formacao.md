@@ -1,6 +1,9 @@
 ---
 modulo: formacao
+grupo: Pessoas
+pagina: formacao
 titulo: Formação
+separadores: mine=Fazer a tua formação, quiz=Quiz, career=Carreira, faqs=FAQs, paths=Gestão, dashboard=Gestão
 rotas: /formacao
 palavras: formação, formacao, curso, vídeos, manuais, faqs, quiz, exame, carreira, percurso, percursos, acompanhamento, formação obrigatória, formação em falta, formação por verificar, certificado, nível, n1, n2, n3, n4, promoção, prazo, lembrete, arquivar, procurar formação, faz esta formação, formação por área, área, subsecção, multipark, dashboard, operacional, comunicação, arrumar por área, área proposta, quiz da ia, perguntas novas, perguntas fixas, rever tentativa, faqs da ia, faqs automáticas, gerar agora
 ---
@@ -55,7 +58,7 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
   - **Gerar agora** escolhe 2 ou 3 documentos da base de conhecimento (primeiro os atualizados há pouco e os que ainda não deram FAQ) e a IA escreve até 3 FAQs novas, com resposta curta e a ligação ao documento. Entram logo publicadas, marcadas **IA**.
   - Só usa documentos que **todos** podem ver (sem papéis nem cidades marcados) e nunca a ajuda da app.
   - Nunca repete uma FAQ que existe ou que arquivaste: **Arquivar** uma FAQ da IA é dizer "esta não".
-  - Para correr sozinho **uma vez por semana** (segunda a partir das 09:30), liga **Formação: FAQs novas da base de conhecimento (semanal)** em Definições → Automações. Vem **desligado**. Precisa também de **IA: FAQs a partir da base de conhecimento** (ligado).
+  - Para correr sozinho **uma vez por semana** (segunda a partir das 09:30), liga **Formação: FAQs novas da base de conhecimento (semanal)** em Definições → Automações (vem **desligado por omissão**; o estado de agora vê-se nesse interruptor). Vem **desligado**. Precisa também de **IA: FAQs a partir da base de conhecimento** (ligado).
   - O cartão diz se o semanal está ligado e o que aconteceu da última vez.
   - **Gerar agora** pode ser usado no máximo 3 vezes por hora e 8 por dia (para toda a gente junta). Corre uma geração de cada vez: se a semanal ou outra pessoa já estiver a gerar, aparece "já há uma geração a correr" — tenta daqui a um minuto.
 - **Arquivar** (antes "Eliminar") vídeos, manuais, FAQs, perguntas e percursos tira-os das listas, mas nada se apaga. Um vídeo ou manual arquivado deixa de contar nos percursos, por isso ninguém fica preso por ele.

@@ -1,6 +1,9 @@
 ---
 modulo: reservas_operacoes
+grupo: Operações
+pagina: operacoes.listas
 titulo: Reservas, Recolhas, Entregas e Cancelados (listas por período)
+separadores: dashboard=O Dashboard (primeira aba), reservas=As quatro listas, entradas=As quatro listas, saidas=As quatro listas, cancelados=As quatro listas
 rotas: /operacoes
 palavras: operado por nós, não operado, dashboard das operações, número diferente, pendentes, compras por acabar, reservas criadas, lista de reservas por período, recolhas, entregas, cancelados, canceladas, cancelamentos, cancelamento, motivo do cancelamento, reembolso, quem cancelou, período, comparar, período anterior, por parque, canal, direto, parceiro, marketplace, falta pagar, csv, multipark, toldo, toldos, coberto, tipo de lugar
 ---

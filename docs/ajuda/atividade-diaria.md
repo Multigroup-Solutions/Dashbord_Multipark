@@ -1,6 +1,9 @@
 ---
 modulo: atividade_diaria
+grupo: Operações
+pagina: operacional
 titulo: Actividade Diária (quem fez o quê, GPS e PDAs)
+separadores: dia=Atividade do Dia, resumo=Resumo do dia, semana=Semana, mes=Avaliação do mês, live=Ao Vivo, history=Histórico Diário, pdas=PDAs, radio=Rádio
 rotas: /operacional
 palavras: fila, trânsito, nosso tempo, meta da entrega, na meta, tempo do cliente, total, chamada do cliente, no terminal, no p2, até arrumado, atrasadas no t2, em calibração, sem dados suficientes, provisório, cobertura dos tempos, dentro da meta, fora da meta, máxima no trânsito, re-dividir os últimos 31 dias, re-divisão em segundo plano, limite de velocidade, 120 km/h, 132 km/h, picos do gps, início do movimento, mudança de lugar, mudanças de lugar, telemóveis pessoais, telemóvel pessoal, é um telemóvel pessoal, telemóvel do team leader, telemóvel do supervisor, zello amarelo, linha do tempo do terminal, terminal vazio, buraco no terminal, ainda estás no terminal, no aeroporto, fora do aeroporto, sem gps, terminal agora, quem está no terminal, pôr no terminal, passar o terminal, fechar o terminal, semana, quadro da semana, semana por hora, entregas por hora, recolhas por hora, quantas entregas, tempo por carro, p75, dia operacional, resumo do dia, quem trabalhou, dia do condutor, velocidade máxima, velocidade por entrega, excesso de velocidade, km da equipa, horas paradas, parado no turno, entregas mais lentas, entrega lenta, pedidos à espera, excesso de pedidos, chefe de turno, equipa do turno, sem passagem de turno, entregas a tempo, entregas atrasadas, recolhas atrasadas, horas trabalhadas, tempo parado, reclamações dos carros que saíram, reclamações das saídas, avaliação do mês, ranking do mês, dono do pda, zello do pda, nome do zello, trajeto, mapa das velocidades, geojson, recolher dados, forçar re-divisão, escolher pessoa, actividade diária, atividade diária, atividade do dia, quem fez o quê, recolhas, entregas, movimentações, no horário, fora do horário, escalados, km, quilómetros, gps, zello, velocidade, excessos, histórico de velocidade, ao vivo, mapa, pda, pdas, check-in do pda, retirar pda, agente por ligar, parceiro, pda sem login, ponto
 ---
@@ -27,7 +30,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 - Clica no **nome** para abrir a **ficha** da pessoa no RH. Clica no resto da linha (ou carrega em Enter) para abrir **o dia dessa pessoa**: ações, GPS com o trajeto, PDAs e ponto.
 - **Todas as pessoas** (por cima da tabela) escolhe uma pessoa só; **Todas** volta à lista toda.
 
-**Resumo do dia** (supervisão)
+## Resumo do dia (supervisão)
 - Estava na **Passagem de turno** e passou para aqui (12 out 2026), com tudo o que tinha. Na Passagem de turno ficou só uma ligação para cá.
 1. Separador **Resumo do dia**. Escolhe o dia e a cidade. O dia é o operacional (03:00 → 03:00).
 2. **Cartões do topo**: recolhas, entregas, **reclamações do dia** (as que chegaram nesse dia), **reclamações dos carros que saíram** (a mesma regra da Atividade do Dia) e ainda:
@@ -47,7 +50,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 5. **Entregas (tarde)**: um cartão por tempo, com a **mediana** em grande, o p75 e a média por baixo e **medido em X %** (de quantas entregas há esse tempo).
    - **Fila**: da chamada do cliente (central ou WhatsApp, pelo telefone da reserva) ou do pendente, o que vier primeiro, até o condutor pegar no carro ("em entrega"). Mostra como está o trabalho e serve para acertar os extras.
    - **Trânsito**: de pegar no carro até chegar ao terminal (o carro parou na zona do terminal, ou o condutor saiu a pé, pelo GPS do Zello).
-   - **Nosso**: Fila + Trânsito. **Na meta**: a % de entregas com o nosso tempo dentro da meta (**Definições → Parâmetros → "Tempos: meta da entrega"**, 15 min por omissão).
+   - **Nosso**: Fila + Trânsito. **Na meta**: a % de entregas com o nosso tempo dentro da meta (**Definições → Parâmetros → "Tempos: meta da entrega"**, {{regra:serviceTimes.targetMinutes}} min por omissão).
    - **Cliente**: do terminal até o cliente assinar. É a espera pelo cliente, não é tempo nosso.
    - **Total**: da chamada (ou do pendente) à assinatura.
    - Por baixo, **de onde vêm os tempos**: quantas começaram na chamada, no pendente ou sem pedido, e quantas chegadas foram pelo GPS, pelo botão "Cheguei" ou ficaram sem medição (com os motivos, ex.: "Sem Zello", "GPS por recolher").
@@ -77,10 +80,10 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 2. Escolhe **Entregas** ou **Recolhas** e **Quantidade**, **Tempo por carro** ou **Tempos**.
 3. Cada **linha** é um dia **operacional** (03:00 → 03:00). As **colunas** são as horas, das 03h às 02h: as colunas 00, 01 e 02 são a madrugada a seguir, ainda desse dia.
    - **Quantidade**: carros entregues (entrega feita) ou recolhidos (recolha feita) nessa hora.
-   - **Tempo por carro**: a métrica da Pressão, minutos entre o início de uma entrega (ou recolha) e o início do serviço seguinte do mesmo condutor, dos serviços começados nessa hora. Mostra-se o **p75**: em 3 de cada 4 vezes foi isto ou menos. Em **itálico** com contorno tracejado: menos de 5 serviços (pouco fiável).
+   - **Tempo por carro**: a métrica da Pressão, minutos entre o início de uma entrega (ou recolha) e o início do serviço seguinte do mesmo condutor, dos serviços começados nessa hora. Mostra-se o **p75**: em 3 de cada 4 vezes foi isto ou menos. É **sempre o p75**, em todas as cidades — no Porto e em Faro a Pressão do Extras-Dia usa o p{{regra:extras.timesPercentile.porto}} (o percentil da cidade), por isso os números não batem: é a mesma medição com outro percentil. Em **itálico** com contorno tracejado: menos de 5 serviços (pouco fiável).
    - **Tempos**: escolhe ao lado qual — nas entregas **Fila**, **Trânsito**, **Nosso tempo**, **% na meta**, **Cliente** ou **Total**; nas recolhas **Cliente**, **No terminal** ou **No P2** (o que cada um é está no Resumo do dia). Mostra-se o p75 (ou a %), pela hora em que o cliente ligou (ou ficou pendente / em recolha). Células com menos de 5 casos ficam em branco. Vêm da tabela dos tempos (o cálculo da noite): sem ela, aparece o aviso. Os tempos com GPS seguem o mesmo portão (Em calibração / Sem dados suficientes), aqui para a cidade e a semana.
    - A coluna **Total** é o dia todo; a linha **Total** é a semana toda nessa hora. Nas quantidades são somas; no tempo é o p75 de todos os serviços (não a média das células).
-   - Mais escuro = mais carros (ou mais minutos). Cinzento = sem casos. Na semana atual, as horas que ainda não chegaram ficam em branco, tracejadas.
+   - Mais escuro = mais carros (ou mais minutos); no **% na meta** mais escuro = mais entregas na meta (**melhor**). Cinzento = sem casos. Na semana atual, as horas que ainda não chegaram ficam em branco, tracejadas.
 4. **Carrega numa célula** (ou num total) para ver o detalhe: quantos foram entregues (ou recolhidos) e quantos pedidos houve, o tempo por carro (n.º, média, mediana e p75), o **pendente → entregue** dos pedidos dessa hora (ou, nas recolhas, o tempo da recolha, de começada a feita), quantas pessoas tiveram ações e os **tempos** dessa hora (os que se podem ver).
 - Uma semana já fechada vem dos dias que o cálculo da noite da Pressão guardou; a semana atual (ou uma que não esteja guardada) lê-se na hora da BD da Multipark, só dessa cidade e dessa semana. Por baixo do quadro diz de onde veio. Não entram os parques que a operação não faz.
 - Se a leitura falhar aparece o motivo, nunca um quadro a zeros.
@@ -131,7 +134,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 - Com **Entrar com email e código** ligado, só o team leader (ou acima) lê o QR, os supervisores são avisados quando um PDA passa para outro aparelho e a sessão no PDA acaba na saída do ponto. A **limpeza única de cada PDA** (uma conta Google da empresa; Chrome sem guardar palavras-passe) está na ajuda do Ponto → PDAs.
 - **Retirar** (o caixote, só administração) passa o PDA a **Inativo**. Nunca se apaga: o histórico de quem o teve e o GPS partido por pessoa ficam.
 
-**Telemóveis pessoais** (por baixo dos PDAs)
+## Telemóveis pessoais (por baixo dos PDAs)
 - São os telemóveis de uma pessoa (team leaders, supervisores, qualquer um), **não** PDAs partilhados. Cada pessoa regista o seu no **Perfil → Este telemóvel → Registar este telemóvel como meu**.
 - Cada um aparece com o nome de quem tem sessão nele agora (**"Telemóvel de Márcia Costa"**, "Agora com…"). Sem ninguém, mostra quem lá esteve por último. O **dono** é quem o registou.
 - O **Zello** é o da ficha do dono (a conta Zello instalada no telemóvel). Quem entra no telemóvel de outra pessoa não lhe muda nem lhe tira o Zello. Sem Zello na ficha não fica amarelo (há quem não use); só fica amarelo se o Zello da ficha não bater com a lista do Zello.
@@ -139,6 +142,9 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 - Botão **Pessoal?** ("É um telemóvel pessoal", num PDA registado, para quem edita PDAs, do team leader para cima): para o telemóvel de alguém que foi registado por engano como PDA. Escolhes de quem é (a lista traz quem já o teve; ou **Ninguém por agora**, e quem carregar em **Registar este telemóvel como meu** nesse telemóvel fica dono). O PDA passa a **Inativo** (o histórico fica), a sessão de PDA que lá estiver acaba, o check-in aberto fecha e o telemóvel passa sozinho a pessoal na próxima entrada (os avisos no telemóvel passam a ser da pessoa).
 - O **Zello** do PDA: se a ficha do dono não tem nenhum (e mais ninguém o tem), passa para a ficha. Se a ficha já tem outro (ou outra ficha tem este), não se mexe e aparece um aviso a dizer qual era, para confirmares na ficha. Com **Zello: nome de quem tem o PDA** ligado, a conta Zello do telemóvel deixa de ter nome de PDA e fica com o nome do dono.
 - **Deixar de ser pessoal**: o dono no próprio telemóvel, ou quem edita PDAs na lista. Nunca se apaga.
+
+**Rádio**
+- O separador **Rádio** (quem tem o módulo Rádio) tem as gravações do Zello, as provas e as transcrições — ver a ajuda "Rádio".
 
 **Quando a leitura falha**
 - Aparece um aviso vermelho **"Não foi possível carregar…"** com **Tentar de novo**. Os cartões mostram **—** em vez de 0. Uma falha nunca aparece como "sem atividade", "sem dados" ou "nada em aberto".

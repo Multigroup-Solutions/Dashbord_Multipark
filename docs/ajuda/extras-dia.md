@@ -1,8 +1,11 @@
 ---
 modulo: extras_dia
+grupo: Operações
+pagina: extras-dia
 titulo: Extras-Dia
+separadores: dia=Ver a previsão, pressao=Separador "Pressão"
 rotas: /extras-dia
-palavras: tempos, fila, trânsito, nosso tempo, na meta, total pedido assinatura, início da entrega, no terminal, no p2, até arrumado, t2 atrasadas, hora apertada pela fila, de onde vêm os tempos, cobertura dos tempos, em calibração, sem dados suficientes, zellos que não batem, zonas em falta, garagens sem papel, diagnóstico dos tempos, calibração, coordenadas das garagens, recolha atrasada no T2, sonda dos tempos, sonda62, copiar resumo, cobertura do GPS, intervalo entre pontos, paragem no terminal, tempo por carro das recolhas, tempo por carro das entregas, quadro das recolhas, entregas e recolhas separadas, juntas, habitual, dias livres habituais, habitual não neste dia, mexido à mão, a mão humana manda, tirados à mão, proposta voltou a pôr, sistema voltou a pôr, reprocessar, dia a dia, a meio, notas do dia, notas internas, nota do dia, nota interna, trabalhou mal, carta < 3 anos, carta pendente de validação, sem carta, aviso da carta, faltam escalar, falta gente, disponíveis por escalar, escalados, indicador de pessoal, aviso de trabalho por email, pré-visualização do aviso, email pessoal, madrugada, 00h às 03h, até às 3h, 24 horas, das 03h às 03h, pode ser team leader na escala, quem pode ser TL, pesquisar pessoa, ficha do RH, p75 explicado, dados de uma janela anterior, fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
+palavras: p60, percentil, percentil da cidade, média por hora, contagem real, mais escuro, tempos, fila, trânsito, nosso tempo, na meta, total pedido assinatura, início da entrega, no terminal, no p2, até arrumado, t2 atrasadas, hora apertada pela fila, de onde vêm os tempos, cobertura dos tempos, em calibração, sem dados suficientes, zellos que não batem, zonas em falta, garagens sem papel, diagnóstico dos tempos, calibração, coordenadas das garagens, recolha atrasada no T2, sonda dos tempos, sonda62, copiar resumo, cobertura do GPS, intervalo entre pontos, paragem no terminal, tempo por carro das recolhas, tempo por carro das entregas, quadro das recolhas, entregas e recolhas separadas, juntas, habitual, dias livres habituais, habitual não neste dia, mexido à mão, a mão humana manda, tirados à mão, proposta voltou a pôr, sistema voltou a pôr, reprocessar, dia a dia, a meio, notas do dia, notas internas, nota do dia, nota interna, trabalhou mal, carta < 3 anos, carta pendente de validação, sem carta, aviso da carta, faltam escalar, falta gente, disponíveis por escalar, escalados, indicador de pessoal, aviso de trabalho por email, pré-visualização do aviso, email pessoal, madrugada, 00h às 03h, até às 3h, 24 horas, das 03h às 03h, pode ser team leader na escala, quem pode ser TL, pesquisar pessoa, ficha do RH, p75 explicado, dados de uma janela anterior, fora do aeroporto, oriente, sete rios, rossio, entrecampos, estação, terminal 2, recolha pelo meio, entrega e recolha, recolha no regresso, tempos medidos na escala, escala com os tempos medidos, tempo por carro, minutos por carro, condutor por carro, tempo por condutor, na estrada, horas cheias, tempos medidos, percentil, pessoas no turno, sem cidade, funcionários na escala, arquivo da escala, tirar da escala, aviso desatualizado, previsão incompleta, proposta automática, suspender, compras online por pagar, pressão, hora apertada, horas apertadas, tempo de entrega, tempo de recolha, horas de ponta, carga, extras dia, extras, escala, escalar, turno, turnos, previsão, pico, condutores necessários, team leader, TL, avisar, aviso de trabalho, preencher com disponíveis, cobertura, slots, lavagens, chegadas, saídas, mandar para casa, custo escalado
 ---
 # Extras-Dia
 
@@ -28,30 +31,34 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - A barra ao lado do total mostra a carga dessa hora: verde = chegadas, laranja = saídas, à escala da hora mais cheia do dia.
    - **Condutores** = extras precisos nessa hora, **além do team leader**. Passa o rato pelo cabeçalho para ver a regra das pessoas por turno.
    - Carrega numa hora para ver os blocos de 20 min; num bloco, para ver as reservas.
-7. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, desde abril de 2026, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75). Passa o rato por cima para ver o motivo. Com **"Hora apertada pela Fila"** ligada na cidade (ver Pressão), a parte das entregas lentas usa a **Fila**.
+7. Na tabela **Por hora**, a etiqueta **hora apertada** marca as horas que, desde abril de 2026, estiveram no top 20 % desse dia da semana em carros por hora ou em tempo de entrega (p75 do Total). Passa o rato por cima para ver o motivo. Com **"Hora apertada pela Fila"** ligada na cidade (ver Pressão), a parte das entregas lentas usa a **Fila**.
 
-**Separador "Pressão"** (quando é que aperta)
+## Separador "Pressão" (quando é que aperta)
 1. Em cima, escolhe o separador **Pressão** (o separador **Dia** é a previsão de sempre).
 2. Logo em cima escolhe o **grupo de parques** (a cidade toda, uma marca + cidade como Airpark Lisboa, ou o Marketplace) e **o que queres ver no mapa**, nos botões grandes:
    - **Carros por hora**: chegadas + saídas concluídas nessa hora, média por dia.
    - **Total (pedido → assinatura)** (antes "Tempo de entrega"): minutos desde o cliente pedir o carro (pendente) até assinar a entrega. Junta a fila, o caminho até ao terminal e a espera pelo cliente. Os números não mudaram, só o nome.
    - Na cidade toda há mais três:
      - **Tempo por carro**: minutos de cada condutor por carro, do início de um serviço ao início do seguinte do mesmo condutor. Inclui o regresso, o trânsito e as esperas. Uma **entrega com recolha pelo meio** (o mesmo condutor começa uma recolha até 30 min depois de entregar) conta como **um** serviço.
+       - O valor do mapa é o **percentil da cidade** (Definições → Parâmetros → **Percentil do tempo por carro, por cidade**): por omissão **p{{regra:extras.timesPercentile.lisbon}} em Lisboa** e **p{{regra:extras.timesPercentile.porto}} no Porto e em Faro**. O botão diz qual está em uso (ex.: "Tempo por carro (p{{regra:extras.timesPercentile.porto}})"). Os outros mapas (Total, Início da entrega → assinatura, Tempos) usam sempre o **p75**.
        - Por cima do mapa escolhe **Entregas**, **Recolhas** ou **Juntas**. Entregas = os serviços que começam com o início de uma entrega (a recolha pelo meio fica dentro dela); Recolhas = os que começam com o início de uma recolha (inclui levar o carro ao parque). **Juntas** é o quadro de antes, as duas juntas, e é o que a escala usa. Mesmas regras, mesmas cores e mesma legenda.
        - Logo a seguir à mudança (12 out 2026) só há **Juntas**: o cálculo da noite relê os dias desde abril com as entregas e as recolhas separadas, e os botões **Entregas** e **Recolhas** acendem quando acabar. Enquanto isso, a Pressão mostra o último cálculo completo.
      - **Início da entrega → assinatura** (antes "Na estrada"): desde que o condutor pega no carro (em entrega) até o cliente assinar. Junta o caminho e a espera pelo cliente no terminal.
      - **Tempos**: os tempos separados, da tabela dos tempos (o cálculo da noite). Escolhe ao lado qual:
        - entregas: **Fila** (da chamada do cliente, ou do pendente, até pegar no carro — é a que serve para acertar os extras), **Trânsito** (até chegar ao terminal, pelo GPS), **Nosso tempo** (Fila + Trânsito), **% na meta**, **Cliente** (a espera pelo cliente no terminal) e **Total**;
        - recolhas: **Cliente** (da chamada ao check-in), **No terminal**, **No P2**, **Até arrumado** e **% T2 atrasadas**.
-       - Mostra-se o p75 (ou a %) por dia da semana × hora, desde abril. Células com menos de 5 casos ficam em branco. Por cima diz em quanto % das entregas (ou recolhas) esse tempo está medido.
-       - Os tempos com GPS (Trânsito, Nosso, % na meta, Cliente das entregas, No terminal, T2) estão **em calibração**: só o super admin os vê, marcados como provisórios; os outros veem "Em calibração". Quando o super admin abrir o portão (Definições → Parâmetros → **Tempos com GPS: portão**), aparecem na cidade com pelo menos 60 % das entregas medidas e 20 medições; abaixo disso, "Sem dados suficientes".
+       - Mostra-se o p75 (ou a %) por dia da semana × hora, desde abril. Células com menos de {{regra:extras.pressureMinSample}} casos ficam em branco. Por cima diz em quanto % das entregas (ou recolhas) esse tempo está medido.
+       - Os tempos com GPS (Trânsito, Nosso, % na meta, Cliente das entregas, No terminal, T2) estão **em calibração**: só o super admin os vê, marcados como provisórios; os outros veem "Em calibração". Quando o super admin abrir o portão (Definições → Parâmetros → **Tempos com GPS: portão**), aparecem na cidade com pelo menos {{regra:serviceTimes.gpsGate.minCoveragePct}} % das entregas medidas e {{regra:serviceTimes.gpsGate.minN}} medições (por omissão); abaixo disso, "Sem dados suficientes".
        - Se a janela tiver tempos de mais e a leitura chegar ao limite, entram os dias mais recentes e por cima diz "Leitura cortada no limite". Mudar o portão ou a meta vale logo (não fica à espera da cache).
        - O botão só aparece quando há tempos guardados (o cálculo da noite **Tempos de entrega e de recolha** está ligado, ou um dia foi reprocessado à mão).
      - **Pessoas a trabalhar**: quantas pessoas diferentes trabalharam nessa hora, **sempre com o TL** (se nessa hora não carregou em nenhum botão na app, junta-se 1). São TL os colaboradores com posto Team Leader e o agente da Multipark ligado à ficha.
-3. **O mapa (dia da semana × hora)** ocupa quase o ecrã. Por cima diz em palavras o que a cor quer dizer; por baixo há a legenda (os 4 tons de azul com os valores, cinzento = sem dados, contorno laranja = hora apertada, horas a âmbar = horas de ponta).
+3. **O mapa (dia da semana × hora)** ocupa quase o ecrã. Por cima diz em palavras o que a cor quer dizer; por baixo há a legenda (os 4 tons de azul com os valores, cinzento = sem dados, contorno laranja = hora apertada, horas a âmbar = horas de ponta). Nos tempos, mais escuro = mais minutos (pior); no **% na meta** é ao contrário: **mais escuro = mais entregas na meta (melhor)**.
    - **Carrega numa célula** (ou passa o rato) para ver o detalhe dessa hora: volume, carros em simultâneo, entrega, recolha, por carro (juntas, só entregas e só recolhas), na estrada, recolhido → no parque e pessoas.
    - **O que é o p75?** Ordenam-se os casos dessa hora do mais rápido ao mais lento: o p75 é o valor a 75 % do caminho. Em 3 de cada 4 vezes demorou isso ou menos; só 1 em 4 demorou mais. Usa-se em vez da média para os dias maus contarem sem que um caso raro estrague tudo.
-   - Uma célula **cinzenta** não tem dados: sem movimento nessa hora, ou menos de 5 casos (pouco fiável).
+   - **E o p{{regra:extras.timesPercentile.porto}}?** É a mesma conta a {{regra:extras.timesPercentile.porto}} % do caminho: em 6 de cada 10 vezes demorou isso ou menos — um pouco acima do meio (a mediana é o p50), menos prudente do que o p75. É o que o **Tempo por carro** usa no Porto e em Faro por omissão. A caixa "O que é o p75 (e o p…)?" do ecrã explica só o p75.
+   - **Média por hora vs contagem real**: **Carros por hora** é a **média por dia** desse dia da semana e hora em toda a janela (ex.: 4,5 carros/h às sextas 17h), não a contagem de um dia concreto; para o dia real vê a Atividade diária → **Semana** (contagens desse dia). Os tempos são percentis dos casos de toda a janela.
+   - A **Semana** da Atividade diária mostra o tempo por carro sempre em **p75** (em todas as cidades): no Porto e em Faro não bate com a Pressão, que usa o p{{regra:extras.timesPercentile.porto}} — é a mesma medição com outro percentil.
+   - Uma célula **cinzenta** não tem dados: sem movimento nessa hora, ou menos de {{regra:extras.pressureMinSample}} casos (pouco fiável).
    - Se o último cálculo de um grupo falhou, aparece um aviso amarelo e o mapa mostra os dados do dia anterior que correu bem (em vez de ficar vazio).
 4. **Onde aperta**: frases curtas com os blocos mais apertados, por exemplo "sextas 17–20h em Lisboa: 42 saídas/h, entrega p75 28 min".
    - **Hora apertada pela Fila** (Definições → Parâmetros → **Hora apertada pela Fila (por cidade)**, **desligada** por omissão): ligada numa cidade, a parte "entregas lentas" da hora apertada (no mapa, em "Onde aperta" e na escala do separador **Dia**) usa o p75 da **Fila** em vez do total — a Fila é o que mostra se falta gente; o total também tem o caminho e a espera pelo cliente. Só quando a Fila está medida em pelo menos **60 %** das entregas da cidade; abaixo disso fica o total e por baixo diz porquê. Desligada, as horas apertadas ficam exatamente como até aqui.
@@ -59,8 +66,8 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - **Horas cheias**: cada pessoa teve pelo menos um serviço nessa hora. É aqui que se vê a capacidade.
    - **Horas calmas**: o intervalo inclui esperar por trabalho.
    - Ao lado aparece o **máximo** da tabela, para comparar.
-   - O valor é o p75 em Lisboa e o p60 no Porto e em Faro: em 75 % (ou 60 %) das vezes foi isto ou menos. Muda-se em Definições → Parâmetros → **Percentil do tempo por carro, por cidade**.
-   - A cinzento: menos de 5 serviços, pouco fiável.
+   - O valor é o p{{regra:extras.timesPercentile.lisbon}} em Lisboa e o p{{regra:extras.timesPercentile.porto}} no Porto e em Faro (por omissão): em {{regra:extras.timesPercentile.lisbon}} % (ou {{regra:extras.timesPercentile.porto}} %) das vezes foi isto ou menos. Muda-se em Definições → Parâmetros → **Percentil do tempo por carro, por cidade**.
+   - A cinzento: menos de {{regra:extras.pressureMinSample}} serviços, pouco fiável.
 6. **Carga × tempo de entrega**: tabela que compara o tempo de entrega consoante os carros tratados nessa hora, separando horas de ponta (07–10h e 17–20h, aproximação do trânsito) do resto do dia.
 7. **Notas do dia** (por cidade): o cartão **Notas do dia DD/MM** mostra as notas internas desse dia de trabalho (das 03h às 03h do dia seguinte).
    - O dia começa no **dia da escala** da página; muda-se com as setas ou a data, e **Dia da escala** volta a ele.
@@ -78,7 +85,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - Ligado numa cidade, a previsão, a escala automática e a estimativa passam a usar o tempo por carro **medido nas horas cheias** (com o percentil da cidade), mas **nunca acima do máximo** da tabela.
    - Um escalão com menos de 30 serviços medidos continua com o valor da tabela. Na previsão, a linha da capacidade diz em cada escalão se é **medido** (com o máximo ao lado) ou **tabela**.
 
-**De onde vêm os tempos** (só o super admin)
+## De onde vêm os tempos (só o super admin)
 1. Em **Extras-Dia → Pressão**, perto do fim, o cartão **De onde vêm os tempos** mostra, por cidade e semana (as últimas 8):
    - **Entregas**: quantas, com **chamada** do cliente no início da Fila, com a chegada pelo **GPS** e pelo **botão** "Cheguei";
    - **Recolhas**: quantas, com a saída do terminal pelo **GPS** e pelo **início do movimento na app**;
@@ -87,7 +94,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 3. Por baixo: as **garagens sem papel** (acrescenta-as em Definições → **Papéis das garagens**) e quantas linhas dos últimos 14 dias foram calculadas com outra versão ou outras zonas (refazem-se sozinhas nas noites seguintes).
 - Só contagens: nada de reservas, nomes nem telefones.
 
-**Diagnóstico dos tempos (calibração)** (só o super admin)
+## Diagnóstico dos tempos (calibração) (só o super admin)
 1. Em **Extras-Dia → Pressão**, no fim da página, está o cartão **Diagnóstico dos tempos (calibração)**. Só o super admin o vê e só ele o pode correr.
 2. Escolhe o **Último dia** (por omissão, há 3 dias: o GPS desse dia já é o final), quantos **Dias** para trás (só esse dia, 7 ou 14) e a **Cidade** (ou **Todas**). Depois carrega em **Correr**.
    - Lê um dia de cada vez e cada dia pode demorar até um minuto. Podes carregar em **Parar** e ver o que já veio.
@@ -116,7 +123,7 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 3. Por baixo da linha da capacidade aparece 🔁 com quantas recolhas são pelo meio e quanto muda o pico de extras.
 4. Liga-se por cidade em Definições → Parâmetros → **Recolha pelo meio de uma entrega** (desligado por omissão). Ligado, a previsão, a escala automática e a estimativa deixam de contar essas recolhas como carro (no T2 fica só a meia extra).
 
-**Escalar a equipa** (Team Leader, Supervisor e acima)
+## Escalar a equipa (Team Leader, Supervisor e acima)
 1. Na secção **Equipa Manhã / Noite**, carrega em **Adicionar**, **escreve o nome** da pessoa e escolhe-a da lista do RH; depois as horas de início e de fim.
    - **Só entra na escala quem está registado no RH.** Já não se escreve um nome à mão: se a pessoa não aparece, cria primeiro a ficha em Recursos Humanos.
    - A lista põe primeiro quem começa pelo que escreveste. Está dividida: a cidade da escala, outras cidades, e no fim quem não tem cidade na ficha (não se pode escolher).
