@@ -533,6 +533,21 @@ export function absenceForScheduler(l: NoticeLeave): SchedulerAbsence {
   };
 }
 
+/**
+ * Ao extra que avisa "não vou estar" num dia em que JÁ está na escala: esse
+ * aviso não tira a falta (só o que vem antes de ser escalado) — que fale com
+ * quem escala. null = nenhum desses dias. PURA.
+ */
+export function alreadyScheduledWarning(days: readonly string[] | null | undefined): string | null {
+  const list = Array.from(new Set((days ?? []).filter(Boolean))).sort();
+  if (!list.length) return null;
+  const shown = list.slice(0, 5).map(shortDayPt);
+  const txt = shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} e ${shown[shown.length - 1]}`;
+  const more = list.length > 5 ? ` (e mais ${list.length - 5})` : "";
+  const one = list.length === 1;
+  return `Já estavas na escala a ${txt}${more}: este aviso não tira a falta ${one ? "desse dia" : "desses dias"}. Fala com quem escala para te tirar.`;
+}
+
 /** A marca, na nota da possível falta, de quem tinha avisado antes de ser escalado. */
 export const NOTICE_NO_SHOW_MARK = "(antes de ser escalado): sem pontos";
 

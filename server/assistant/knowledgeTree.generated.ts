@@ -2253,7 +2253,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "rh-ponto.md#regras-que-valem-sempre"
        ],
        "container": false,
-       "chars": 4247
+       "chars": 4413
       },
       {
        "id": "rh-ponto.md#lancar-ausencia",

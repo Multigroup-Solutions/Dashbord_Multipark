@@ -454,6 +454,8 @@ describe("interruptores e definições", () => {
     expect(ed).not.toMatch(/`Conta \$\{|`Ficha \$\{/);
     expect(ed).toContain('"Conta que já não está ativa"');
     expect(ed).toContain('"Pessoa que já não está ativa"');
+    // o extra que avisa num dia em que já está na escala fica a saber que não tira a falta (fala com quem escala)
+    expect(src("client/src/pages/FeriasPage.tsx")).toContain("const late = alreadyScheduledWarning(r.alreadyScheduled);");
     for (const f of ["client/src/pages/FeriasPage.tsx", "client/src/components/ferias/FeriasBits.tsx"]) {
       expect(src(f), f).not.toMatch(/`(Conta|Ficha|Pedido|Ausência) #?\$\{/);
     }

@@ -31,7 +31,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { downloadBase64 } from "@/components/ferias/FeriasBits";
 import {
-  LEAVE_STATUS_LABELS, LEAVE_TYPE_LABELS, isRealIsoDay, leaveInputError, shortDayPt, vacationYearWarning, workingDaysIn,
+  LEAVE_STATUS_LABELS, LEAVE_TYPE_LABELS, alreadyScheduledWarning, isRealIsoDay, leaveInputError, shortDayPt, vacationYearWarning, workingDaysIn,
   type LeaveStatus, type LeaveTypeShown,
 } from "@shared/leaves";
 import { ptHolidayOf } from "@shared/workSchedule";
@@ -430,6 +430,9 @@ function MineTab({ isExtra, daysPerYear, city, isSuperAdmin }: { isExtra: boolea
   const request = trpc.rh.leaves.request.useMutation({
     onSuccess: (r) => {
       toast.success(isExtra ? "Aviso registado: quem escala já vê." : r.status === "approved" ? "Férias marcadas (aprovadas)." : `Pedido enviado${r.approvers ? ` (${r.approvers} ${r.approvers === 1 ? "pessoa pode" : "pessoas podem"} aprovar)` : ""}.`);
+      // já estava na escala nalgum desses dias: o aviso não tira a falta desse dia (fala com quem escala)
+      const late = alreadyScheduledWarning(r.alreadyScheduled);
+      if (late) toast.warning(late, { duration: 15_000 });
       setFrom(""); setTo(""); setNotes("");
       utils.rh.leaves.invalidate();
     },

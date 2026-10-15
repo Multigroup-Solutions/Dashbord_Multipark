@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   cancelled: [] as any[],
   notified: [] as any[],
   cityAccess: new Map<number, any>(),
+  scheduled: [] as Array<{ employeeId: number; assignmentDate: string; isTeamLeader: number }>,
+  scheduleFails: false,
 }));
 
 const PROJECTS = [
@@ -33,6 +35,11 @@ vi.mock("./db", async (original) => {
     execute: async (q: any) => {
       const { sql: t, params } = dialect.sqlToQuery(q);
       if (t.includes("FROM projects")) return [PROJECTS];
+      if (t.includes("FROM extras_dia_assignments")) {
+        if (state.scheduleFails) throw new Error("tabela da escala indisponível");
+        const [empId, from, to] = params as any[];
+        return [state.scheduled.filter((a) => a.employeeId === empId && a.isTeamLeader === 0 && a.assignmentDate >= from && a.assignmentDate <= to).map((a) => ({ assignmentDate: a.assignmentDate }))];
+      }
       if (t.includes("FROM users")) return [state.users.filter((u) => u.isActive)];
       if (t.includes("hasLeaves")) {
         return [state.employees.map((e) => ({ ...e, hasLeaves: state.leaves.some((l) => l.employeeId === e.id && active(l)) ? 1 : 0 }))
@@ -97,6 +104,7 @@ vi.mock("./terminalPay", () => ({ closedPayrollMonthKeys: async () => { if (stat
 vi.mock("./notify", () => ({ notify: async (i: any) => { state.notified.push(i); return { recipients: [], emailed: 0, duplicates: 0, city: null }; } }));
 
 import { cancelLeave, decideLeave, launchLeave, leaveMap, leaveMapForPdf, pendingForApprover, requestLeave, resolveLeaveViewer, assertPeriodOpen } from "./leaves";
+import { alreadyScheduledWarning } from "../shared/leaves";
 import { cityScope } from "./cityScope";
 
 const U = { jorge: { id: 1, role: "super_admin" }, rh: { id: 3, role: "backoffice" }, supLx: { id: 4, role: "supervisor" }, ana: { id: 20, role: "frontoffice" }, rui: { id: 21, role: "condutor" }, ze: { id: 22, role: "extra" }, parceiro: { id: 24, role: "user" } };
@@ -133,6 +141,7 @@ beforeEach(() => {
   state.closed = new Set();
   state.closedFails = false;
   state.created = []; state.cancelled = []; state.notified = [];
+  state.scheduled = []; state.scheduleFails = false;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -160,6 +169,32 @@ describe("pedir", () => {
     const r = await requestLeave(await viewer(U.ze), { fromDate: "2026-11-20", toDate: "2026-11-22" });
     expect(r).toMatchObject({ status: "approved", approvers: 0 });
     expect(state.created[0]).toMatchObject({ leaveType: "unavailable", status: "approved", decidedById: null });
+  });
+  it("(auditoria final) extra que avisa num dia em que JÁ está na escala: o aviso fica e ele fica a saber que não tira a falta", async () => {
+    state.scheduled = [
+      { employeeId: 12, assignmentDate: "2026-11-21", isTeamLeader: 0 },
+      { employeeId: 12, assignmentDate: "2026-11-22", isTeamLeader: 1 }, // TL: não dá possível falta
+      { employeeId: 12, assignmentDate: "2026-11-25", isTeamLeader: 0 }, // fora do período
+      { employeeId: 11, assignmentDate: "2026-11-21", isTeamLeader: 0 }, // outra pessoa
+    ];
+    const r = await requestLeave(await viewer(U.ze), { fromDate: "2026-11-20", toDate: "2026-11-22" });
+    expect(r).toMatchObject({ status: "approved", alreadyScheduled: ["2026-11-21"] });
+    expect(state.created[0]).toMatchObject({ leaveType: "unavailable", status: "approved" });
+    expect(alreadyScheduledWarning(r.alreadyScheduled)).toBe("Já estavas na escala a 21/11: este aviso não tira a falta desse dia. Fala com quem escala para te tirar.");
+    // a escala por ler não impede o aviso (fica gravado; só não há a dica)
+    state.scheduleFails = true;
+    const r2 = await requestLeave(await viewer(U.ze), { fromDate: "2026-11-27", toDate: "2026-11-27" });
+    expect(r2).toMatchObject({ status: "approved", alreadyScheduled: [] });
+    // funcionários: as férias não perguntam à escala (a falta deles já é sem pontos)
+    const r3 = await requestLeave(await viewer(U.ana), { fromDate: "2026-11-16", toDate: "2026-11-20" });
+    expect(r3.alreadyScheduled).toEqual([]);
+  });
+  it("(auditoria final) o texto do aviso: um dia, vários, mais de cinco; nenhum → nada", () => {
+    expect(alreadyScheduledWarning([])).toBeNull();
+    expect(alreadyScheduledWarning(null)).toBeNull();
+    expect(alreadyScheduledWarning(["2026-11-03", "2026-11-01", "2026-11-03"])).toBe("Já estavas na escala a 01/11 e 03/11: este aviso não tira a falta desses dias. Fala com quem escala para te tirar.");
+    expect(alreadyScheduledWarning(["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07"]))
+      .toBe("Já estavas na escala a 01/11, 02/11, 03/11, 04/11 e 05/11 (e mais 2): este aviso não tira a falta desses dias. Fala com quem escala para te tirar.");
   });
   it("as do super admin ficam aprovadas sozinhas", async () => {
     const r = await requestLeave(await viewer(U.jorge), { fromDate: "2026-11-16", toDate: "2026-11-17" });

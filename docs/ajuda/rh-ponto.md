@@ -270,6 +270,7 @@ Só aparece com o interruptor **"RH: mapa de férias e pedidos"** ligado (Defini
 - Marcas de que dia a que dia não podes vir. Entra logo: não precisa de aprovação e não é pago.
 - Quem escala no **Extras-Dia** vê "indisponível (avisou a DD/MM)" ao escolher-te e na tua linha da escala. A **proposta automática** (e o "Preencher com disponíveis") deixa de te pôr nesses dias; à mão ainda te podem pôr, com o aviso.
 - **Avisa antes de seres escalado.** Se te escalarem na mesma e faltares, a falta desse dia fica **sem pontos** (e não conta para a ordem da proposta automática). Se avisares **depois** de estares escalado, é uma falta normal. "Escalado" conta desde que **te puseram nesse dia**: se te puserem numa linha que era de outra pessoa, ou mudarem a tua linha para outro dia, conta a partir daí.
+- Se já estavas na escala (ou na proposta) num desses dias, o aviso fica, mas aparece a dizer que **não tira a falta desse dia**: fala com quem escala para te tirar.
 - Podes cancelar o teu aviso.
 
 **Por aprovar** (quem aprova)

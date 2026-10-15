@@ -468,7 +468,10 @@ export async function requestLeave(v: LeaveViewer, input: { fromDate: string; to
   if (leaveType === "unavailable" || v.role === "super_admin") {
     const id = await createEmployeeLeave({ employeeId: v.employeeId, leaveType, fromDate: input.fromDate, toDate: input.toDate, notes, createdById: v.userId, status: "approved", decidedById: leaveType === "vacation" ? v.userId : null });
     await logActivity({ userId: v.userId, action: "create", entity: "employee_leave", entityId: v.employeeId, details: `${leaveType === "unavailable" ? "indisponível" : "férias (aprovadas sozinhas: super admin)"} ${input.fromDate}→${input.toDate}` });
-    return { id, status: "approved" as const, approvers: 0 };
+    // O extra que avisa num dia em que JÁ está na escala (ou na proposta) fica a saber que esse aviso não tira a
+    // falta desse dia (só o que vem antes de ser escalado — Jorge, 15 out 2026): que fale com quem escala.
+    const alreadyScheduled = leaveType === "unavailable" ? await scheduledDaysOf(v.employeeId, input.fromDate, input.toDate) : [];
+    return { id, status: "approved" as const, approvers: 0, alreadyScheduled };
   }
   const ap = await approversForEmployee(v.employeeId, v.settings);
   const id = await createEmployeeLeave({ employeeId: v.employeeId, leaveType, fromDate: input.fromDate, toDate: input.toDate, notes, createdById: v.userId, status: "requested", approverUserIds: ap.userIds });
@@ -479,7 +482,24 @@ export async function requestLeave(v: LeaveViewer, input: { fromDate: string; to
     body: `${workingDaysIn(input.fromDate, input.toDate, v.city)} dia(s) úteis.${notes ? `\nNota: ${notes}` : ""}\nAprova ou recusa no Mapa de férias → Por aprovar.`,
     link: "/ferias?tab=aprovar", entity: { type: "employee_leave", id: id ?? `${v.employeeId}-${input.fromDate}` },
   });
-  return { id, status: "requested" as const, approvers: ap.userIds.length };
+  return { id, status: "requested" as const, approvers: ap.userIds.length, alreadyScheduled: [] as string[] };
+}
+
+/**
+ * Os dias do período em que a pessoa já está na escala do Extras-Dia (linha
+ * proposta ou confirmada, fora as de TL, que não dão possível falta). Só para
+ * avisar a própria pessoa; erro → nenhum (o aviso fica gravado na mesma).
+ */
+async function scheduledDaysOf(employeeId: number, from: string, to: string): Promise<string[]> {
+  try {
+    const rows = rowsOf(await (await db()).execute(sql`SELECT DISTINCT assignmentDate FROM extras_dia_assignments
+       WHERE employeeId = ${employeeId} AND isTeamLeader = 0 AND assignmentDate >= ${from} AND assignmentDate <= ${to}
+       ORDER BY assignmentDate LIMIT 62`));
+    return rows.map((r) => String(r.assignmentDate).slice(0, 10)).filter((d) => d >= from && d <= to);
+  } catch (err: any) {
+    console.warn("[férias] escala do extra não lida:", String(err?.message ?? err).slice(0, 160));
+    return [];
+  }
 }
 
 // ─── Aprovar ou recusar ──────────────────────────────────────────────────────
