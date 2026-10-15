@@ -20,7 +20,7 @@
 import { addDays, lisbonWallTimeUtcMs, operationalDayOf } from "./lisbonDay";
 
 export interface FixedScheduleRow {
-  /** id da linha: com dias duplicados ganha o mais baixo (plano 63, §10.3) */
+  /** id da linha: nos dias duplicados (a mesma pessoa e dia da semana) conta a de TRABALHO de id mais baixo (plano 63, 10a — workRowOn) */
   id?: number | null;
   employeeId: number;
   /** 0 = domingo … 6 = sábado (como no RH e no processamento salarial) */
@@ -145,7 +145,7 @@ export type DayPlan =
 export interface DayPlanInput {
   /** dia de CALENDÁRIO (Lisboa) */
   calendarDay: string;
-  /** linhas do horário fixo DESTA pessoa; com dias duplicados ganha a de trabalho de id mais baixo (fixedRowOn) */
+  /** linhas do horário fixo DESTA pessoa; com dias duplicados ganha a de trabalho de id mais baixo (workRowOn) */
   schedules: readonly FixedScheduleRow[];
   /** exceções DESTA pessoa (ativas; com duas no mesmo dia ganha a mais recente) */
   overrides?: readonly ScheduleOverrideRow[];
@@ -177,25 +177,24 @@ export function activeOverrideOn(overrides: readonly ScheduleOverrideRow[], day:
   return best;
 }
 
-const isWork = (s: FixedScheduleRow) => !(s.isWorkDay === false || Number(s.isWorkDay) === 0);
+/** Linha de trabalho (isWorkDay ≠ 0/false; sem o campo conta como trabalho). PURA. */
+export const isWorkRow = (s: { isWorkDay?: boolean | number | null }) => !(s.isWorkDay === false || Number(s.isWorkDay) === 0);
 
 /**
- * A linha do horário fixo desse dia da semana. Com dias duplicados (não há
- * UNIQUE pessoa+dia) ganha a de TRABALHO de id mais baixo (sem id, a 1.ª da
- * lista); só quando nenhuma é de trabalho fica a folga. É o que a Avaliação e
- * as faltas sempre leram (a consulta delas só traz `isWorkDay = 1`; o 10a
- * escolhe a de id mais baixo entre essas) e o que a folha conta como dia de
- * trabalho (qualquer linha de trabalho) — assim o ecrã, o Perfil e os
- * leitores dizem o mesmo. PURA.
+ * A linha do horário fixo que CONTA num dia da semana — a regra única da
+ * Avaliação (atraso), das faltas, da folha de ordenados, do ecrã da ficha, do
+ * quadro dos Fins de semana e do Perfil (plano 63, 10a + 10b). Não há UNIQUE
+ * pessoa+dia na tabela; nos dias duplicados conta, entre as linhas de TRABALHO
+ * desse dia, a de id mais baixo (é o que a Avaliação e as faltas já liam: as
+ * consultas filtram `isWorkDay = 1`); sem ids, a primeira da lista. Uma folga
+ * de id mais baixo NÃO ganha a uma linha de trabalho: o dia só é folga quando
+ * TODAS as linhas dele são folga (devolve undefined). PURA.
  */
-export function fixedRowOn(schedules: readonly FixedScheduleRow[], weekday: number): FixedScheduleRow | null {
-  let best: FixedScheduleRow | null = null;
-  for (const s of schedules) {
-    if (Number(s.weekday) !== weekday) continue;
-    if (!best) { best = s; continue; }
-    const sw = isWork(s), bw = isWork(best);
-    if (sw !== bw) { if (sw) best = s; continue; }
-    if (s.id != null && best.id != null && Number(s.id) < Number(best.id)) best = s;
+export function workRowOn<T extends { id?: number | null; weekday: number; isWorkDay?: boolean | number | null }>(list: readonly T[], weekday: number): T | undefined {
+  let best: T | undefined;
+  for (const x of list) {
+    if (Number(x.weekday) !== weekday || !isWorkRow(x)) continue;
+    if (!best || (x.id != null && best.id != null && Number(x.id) < Number(best.id))) best = x;
   }
   return best;
 }
@@ -228,9 +227,10 @@ export function dayPlan(i: DayPlanInput): DayPlan {
   }
   const holiday = ptHolidayOf(cal, i.city);
   if (holiday) return { kind: "none", reason: "holiday", holiday };
-  const s = fixedRowOn(i.schedules, weekdayOf(cal));
-  if (!s) return { kind: "none", reason: "no_schedule" };
-  if (!isWork(s)) return { kind: "none", reason: "day_off" };
+  const wd = weekdayOf(cal);
+  const s = workRowOn(i.schedules, wd);
+  // sem linha de trabalho: folga se o dia tem linhas (todas folga), senão não há horário
+  if (!s) return { kind: "none", reason: i.schedules.some((x) => Number(x.weekday) === wd) ? "day_off" : "no_schedule" };
   const h = hoursOfHhmm(s.startTime);
   if (h == null) return { kind: "none", reason: "invalid_time" };
   const he = hoursOfHhmm(s.endTime ?? null);
@@ -257,7 +257,7 @@ export function fixedScheduledStarts(startDay: string, endDay: string, schedules
   const byEmp = new Map<number, FixedScheduleRow[]>();
   for (const work of [true, false]) {
     for (const s of schedules) {
-      if (!s.employeeId || isWork(s) !== work) continue;
+      if (!s.employeeId || isWorkRow(s) !== work) continue;
       const list = byEmp.get(s.employeeId) ?? [];
       list.push(s);
       byEmp.set(s.employeeId, list);

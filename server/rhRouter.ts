@@ -12,8 +12,9 @@ import { superAdminGuard } from "./userAdminRules";
 import { guardedAccountChange } from "./superAdminLock";
 import { DEACTIVATION_NOTES_MAX, DIALOG_DEACTIVATION_REASON_CODES, DEACTIVATION_REASON_OTHER_MAX } from "../shared/deactivationReasons";
 import { canViewEmployee, canViewTimeAndSchedule, canEditPersonal, canEditContract, canDeleteDocument, employeeAccess, sanitizeEmployee, sanitizeEmployeeRows, isOwn, PERSONAL_FIELDS, CONTRACT_FIELDS, type EmployeeRef, isRhAdmin, canEditIdentity, isRhFor, canChangeIbanDirectly, canApproveIbanRequests, canManageEmployee, contractEditError, createEmployeeError, selfUploadDocTypeError, canValidateDocuments, documentUploadError, initialDocumentStatus, canViewInternalNotes, canEditInternalNote } from "./rhAccess";
-import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
+import { applyDocsCompliance, detectExtraDiaNoShows, listPendingPenalties, reviewPenalty, dismissFixedNoShow, listSuspiciousTimeRecords, reviewTimeRecord, insertTimeRecordAtomic, createPayrollRun, listPayrollRuns, getPayrollRun, transitionPayrollRun } from "./rhService";
 import { matchKey } from "../shared/textKey";
+import { pontoTrailInputSchema } from "../shared/pontoMode";
 import { noLinkedRecordMessage } from "../shared/ownAccess";
 import { importExtrasFromCsv } from "./extrasImport";
 import { PHOTO_MAX_BASE64_CHARS } from "./photoUpload";
@@ -21,6 +22,7 @@ import { DOC_REJECT_REASON_MAX, DOC_TYPE_LABELS } from "../shared/employeeDocume
 import { NOTE_BODY_MAX, NOTE_EDIT_WINDOW_MS, NOTE_KINDS, NOTE_KIND_LABELS } from "../shared/employeeNotes";
 import { docsRequestRouter } from "./rhDocsRequestRouter";
 import { weekendsRouter } from "./rhWeekendsRouter";
+import { FIXED_NO_SHOW_DISMISS_LABELS, FIXED_NO_SHOW_DISMISS_LEAVE, FIXED_NO_SHOW_DISMISS_REASONS, scheduleDayLabel, scheduleDayToSave, weekdayShort } from "../shared/scheduleReview";
 
 /** 41c: ~10 MB por documento (base64 ≈ 4/3 do ficheiro). */
 const DOC_MAX_BASE64_CHARS = 14_000_000;
@@ -92,7 +94,7 @@ async function notesContext(user: { id: number; role: string }, employeeId: numb
   await assertEmployeeAccess(employeeId);
   return { viewer, ref };
 }
-import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, deleteSchedule, getTimeRecords, getLastTimeRecord, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
+import { getAllUsers, createManualUser, getUserByEmail, getOpenPenalties, clearPenalty, unblockEmployeeLogin, getEmployeeLeaves, createEmployeeLeave, deleteEmployeeLeave, getEmployeeSalaryHistory, getRhDashboardSummary, toggleUserActive, deactivationColumns, getUserById, resolveProjectIds, logActivity, getAllEmployees, getEmployeeById, getEmployeeByUserId, createEmployee, updateEmployee, deleteEmployee, getEmployeeDocuments, createEmployeeDocument, archiveEmployeeDocument, getDocumentChecklistForEmployee, getAllEmployeesDocumentStatus, getEmployeeSchedules, upsertSchedule, setScheduleDayOff, getTimeRecords, getLastTimeRecord, checkGeofenceNote, setProjectGeofence, deleteProjectGeofence, listProjectGeofences, getMonthlyHours, getExtraRates, seedExtraRates, updateExtraRate, getHRStats, createInviteToken, countActiveSuperAdmins, getPayrollData, savePayslipRecord } from "./db";
 import { generatePayrollPdf } from "./payrollPdf";
 import { generatePayslipPdf, generateAllPayslipsPdf } from "./payslipPdf";
 import { ROLE_HIERARCHY, requireRole, resolveDeactivationOrThrow } from "./routerGuards";
@@ -1228,27 +1230,69 @@ export const rhRouter = router({
         return getEmployeeSchedules(input.employeeId);
       }),
 
+    /**
+     * Plano 63 (10a): só "HH:MM" nos dias de trabalho (e entrada ≠ saída);
+     * muda TODAS as linhas desse dia da semana (acerta os duplicados sem
+     * apagar nada); antes → depois fica no registo de atividade.
+     */
     upsert: protectedProcedure
       .input(z.object({
         employeeId: z.number(),
-        weekday: z.number().min(0).max(6),
-        startTime: z.string(),
-        endTime: z.string(),
+        weekday: z.number().int().min(0).max(6),
+        startTime: z.string().max(12),
+        endTime: z.string().max(12),
         isWorkDay: z.boolean(),
       }))
       .mutation(async ({ ctx, input }) => {
         // 41c: gerir a ficha (admin+ ou supervisor da cidade), nunca de outra cidade.
         await assertCanManageEmployee(ctx.user, input.employeeId);
-        await upsertSchedule({ ...input, isWorkDay: input.isWorkDay ? 1 : 0 });
-        return { success: true };
+        const day = scheduleDayToSave(input);
+        if (!day.ok) throw new TRPCError({ code: "BAD_REQUEST", message: day.error });
+        const { before } = await upsertSchedule({ employeeId: input.employeeId, weekday: input.weekday, startTime: day.startTime, endTime: day.endTime, isWorkDay: day.isWorkDay });
+        const after = scheduleDayLabel({ weekday: input.weekday, ...day });
+        const was = before.length ? Array.from(new Set(before.map((r) => scheduleDayLabel({ weekday: input.weekday, ...r })))).join(" / ") : "sem linha";
+        if (was !== after) {
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "schedule", entityId: input.employeeId,
+            details: `Horário ${weekdayShort(input.weekday)}: ${was} → ${after}${before.length > 1 ? ` (${before.length} linhas desse dia acertadas)` : ""}` });
+        }
+        return { success: true, rows: Math.max(1, before.length) };
       }),
 
+    /** Plano 63 (10a): "apagar" um dia passa a FOLGA (isWorkDay = 0). Nada se apaga. */
     delete: protectedProcedure
-      .input(z.object({ employeeId: z.number(), weekday: z.number().min(0).max(6) }))
+      .input(z.object({ employeeId: z.number(), weekday: z.number().int().min(0).max(6) }))
       .mutation(async ({ ctx, input }) => {
         await assertCanManageEmployee(ctx.user, input.employeeId);
-        await deleteSchedule(input.employeeId, input.weekday);
-        return { success: true };
+        const { before } = await setScheduleDayOff(input.employeeId, input.weekday);
+        if (before.some((r) => Number(r.isWorkDay) !== 0)) {
+          const was = Array.from(new Set(before.map((r) => scheduleDayLabel({ weekday: input.weekday, ...r })))).join(" / ");
+          await logActivity({ userId: ctx.user.id, action: "update", entity: "schedule", entityId: input.employeeId, details: `Horário ${weekdayShort(input.weekday)}: ${was} → folga` });
+        }
+        return { success: true, dayOff: true };
+      }),
+
+    /**
+     * Plano 63 (10a): "Horários por rever" — o que ver antes de ligar as
+     * faltas automáticas (RH_FALTAS_HORARIO). Só leitura; quem gere o RH
+     * (supervisor da cidade, back office, administrador, super admin), nas
+     * suas cidades.
+     */
+    review: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "rh", "manage");
+      const { loadScheduleReview } = await import("./scheduleReview");
+      return loadScheduleReview();
+    }),
+
+    /**
+     * "Fora das faltas automáticas" (rh.noShowSkip): pôr a pessoa até uma
+     * data (com motivo) ou tirá-la (`until` null). Quem gere a ficha dela.
+     */
+    setNoShowSkip: protectedProcedure
+      .input(z.object({ employeeId: z.number().int().positive(), until: z.string().max(10).nullable(), reason: z.string().max(120).optional() }))
+      .mutation(async ({ ctx, input }) => {
+        await assertCanManageEmployee(ctx.user, input.employeeId);
+        const { changeNoShowSkip } = await import("./scheduleReview");
+        return changeNoShowSkip(ctx.user, { employeeId: input.employeeId, until: input.until, reason: input.reason ?? null });
       }),
   }),
 
@@ -1379,6 +1423,9 @@ export const rhRouter = router({
         // Plano 56 B1: "Estou no terminal" marcado na entrada (+ imprecisão do GPS, metros)
         terminal: z.boolean().optional(),
         accuracy: z.number().min(0).max(1_000_000).optional(),
+        // Plano 63 (passo 1): rasto da picagem (de onde veio a selfie, idade do ficheiro, imprecisão do GPS).
+        // Tolerante (nunca recusa o ponto): um rasto estranho fica vazio (pontoTrailInputSchema) e os valores são limpos em pontoTrailColumns.
+        trail: pontoTrailInputSchema,
       }))
       .mutation(async ({ ctx, input }) => {
         // admin pode picar a qualquer um; outros só ao próprio
@@ -1459,6 +1506,9 @@ export const rhRouter = router({
           photoUrl = result.url;
           photoKey = key;
         }
+        // Plano 63 (passo 1): rasto da picagem — só com PONTO_MODOS ligado; só informação (não mexe nas horas).
+        const { pontoTrailForRecord } = await import("./pontoModes");
+        const trail = await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id, input: input.trail, hasPhoto: !!photoKey });
         // Inserção ATÓMICA (linha do colaborador bloqueada): dois toques
         // simultâneos já não criam duas entradas.
         try {
@@ -1471,6 +1521,7 @@ export const rhRouter = router({
             locationName: input.locationName ?? null,
             notes: [geoNoteIn, input.notes].filter(Boolean).join(" · ") || null,
             ...(terminalIn.atAirport != null ? { atAirport: terminalIn.atAirport } : {}),
+            ...trail,
           });
         } catch (e: any) {
           throw new TRPCError({ code: "BAD_REQUEST", message: String(e?.message ?? e) });
@@ -1517,6 +1568,9 @@ export const rhRouter = router({
         longitude: z.string().optional(),
         locationName: z.string().optional(),
         notes: z.string().optional(),
+        // Plano 63 (passo 1): rasto da picagem (de onde veio a selfie, idade do ficheiro, imprecisão do GPS).
+        // Tolerante (nunca recusa o ponto): um rasto estranho fica vazio (pontoTrailInputSchema) e os valores são limpos em pontoTrailColumns.
+        trail: pontoTrailInputSchema,
       }))
       .mutation(async ({ ctx, input }) => {
         if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) {
@@ -1546,6 +1600,9 @@ export const rhRouter = router({
           photoUrl = result.url;
           photoKey = key;
         }
+        // Plano 63 (passo 1): rasto da picagem — só com PONTO_MODOS ligado; só informação (não mexe nas horas).
+        const { pontoTrailForRecord } = await import("./pontoModes");
+        const trail = await pontoTrailForRecord({ employeeId: input.employeeId, actorUserId: ctx.user.id, input: input.trail, hasPhoto: !!photoKey });
         // Regra do Jorge (turnos máx. 12h): entrada aberta há >16h = esquecimento
         // de check-out. Corta às 12h (sem extraordinárias) e marca a VERMELHO
         // para revisão — não paga dias inteiros de horas fantasma.
@@ -1590,6 +1647,7 @@ export const rhRouter = router({
         try {
           ({ id: outRecordId } = await insertTimeRecordAtomic(input.employeeId, "check_out", {
             recordedAt: outAtDb,
+            ...trail,
             photoUrl,
             photoKey,
             latitude: input.latitude ?? null,
@@ -1948,6 +2006,26 @@ export const rhRouter = router({
         requireAccess(ctx.user, "rh", "edit");
         const r = await reviewPenalty(input.id, input.decision, ctx.user, input.note ?? null);
         await logActivity({ userId: ctx.user.id, action: input.decision === "confirmed" ? "confirm_penalty" : "dismiss_penalty", entity: "employee_penalty", entityId: input.id, details: `${input.decision}${input.note ? ` — ${input.note}` : ""} · pontos ${r.points}${r.blocked ? " · BLOQUEADO" : ""}` });
+        return r;
+      }),
+    /**
+     * Plano 63 (10a): dispensar uma possível falta do HORÁRIO FIXO com motivo.
+     * Férias, Baixa e Justificada criam a ausência aprovada desse dia (por isso
+     * pedem quem gere a ficha, como lançar a ausência na ficha); "picou noutro
+     * sistema / picagem perdida" fica marcada para a verificação do ponto.
+     */
+    dismissFixed: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), reason: z.enum(FIXED_NO_SHOW_DISMISS_REASONS), note: z.string().max(120).optional() }))
+      .mutation(async ({ ctx, input }) => {
+        requireAccess(ctx.user, "rh", "edit");
+        if (FIXED_NO_SHOW_DISMISS_LEAVE[input.reason]) {
+          const empId = await employeeIdOfRecord("employee_penalties", input.id);
+          if (empId == null) throw new TRPCError({ code: "NOT_FOUND", message: "Possível falta não encontrada." });
+          await assertCanManageEmployee(ctx.user, empId, "Só quem gere a ficha lança a ausência (Férias, Baixa ou Justificada). Podes libertar sem motivo ou como picagem perdida.");
+        }
+        const r = await dismissFixedNoShow(input.id, input.reason, ctx.user, input.note ?? null);
+        await logActivity({ userId: ctx.user.id, action: "dismiss_penalty", entity: "employee_penalty", entityId: input.id,
+          details: `Dispensada — ${FIXED_NO_SHOW_DISMISS_LABELS[input.reason]}${r.day ? ` (${r.day})` : ""}${r.leaveId ? ` · ausência #${r.leaveId} (${r.leaveType}) criada` : r.leaveAlready ? " · já havia ausência nesse dia" : ""}${input.note ? ` — ${input.note}` : ""}`.slice(0, 1000) });
         return r;
       }),
   }),

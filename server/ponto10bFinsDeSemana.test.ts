@@ -70,7 +70,7 @@ vi.mock("./notify", () => ({ notify: async () => undefined }));
 import { detectFixedScheduleNoShows } from "./rhService";
 import { computeEmployeeDays, scheduledStartUtcMs, type EngineInput } from "./evaluationCore";
 import { buildEvaluationIdentity } from "./evaluationIdentity";
-import { activeOverrideOn, dayPlan, fixedRowOn, fixedScheduledStarts, OVERRIDE_REASONS, type FixedScheduleRow, type ScheduleOverrideRow } from "../shared/workSchedule";
+import { activeOverrideOn, dayPlan, fixedScheduledStarts, OVERRIDE_REASONS, workRowOn, type FixedScheduleRow, type ScheduleOverrideRow } from "../shared/workSchedule";
 import { addDays, lisbonWallTimeUtcMs, operationalDayOf } from "../shared/lisbonDay";
 import { correctionRange } from "../shared/terminalWatch";
 import { hoursOfHhmm, ptHolidayOf, type LeaveRow } from "../shared/workSchedule";
@@ -131,13 +131,13 @@ describe("dayPlan — Extras-Dia > exceção > horário fixo", () => {
   });
   it("[R2] duplicados: duas linhas de quarta (ids 7 e 9) → usa a 7, venha pela ordem que vier", () => {
     const dup = [row(2, 3, "11:00", "20:00", { id: 9 }), row(2, 3, "08:00", "17:00", { id: 7 })];
-    expect(fixedRowOn(dup, 3)).toMatchObject({ id: 7, startTime: "08:00" });
+    expect(workRowOn(dup, 3)).toMatchObject({ id: 7, startTime: "08:00" });
     expect(dayPlan({ calendarDay: "2026-11-04", schedules: dup })).toMatchObject({ startTime: "08:00" });
   });
   it("duplicados com uma folga e um dia de trabalho → ganha o de trabalho (o que a Avaliação e as faltas leem, e o que a folha conta)", () => {
     // a consulta dos leitores só traz isWorkDay = 1: a linha 9; o quadro e o Perfil leem as duas e têm de dizer o mesmo
     const dup = [row(2, 3, "00:00", "00:00", { id: 7, isWorkDay: false }), row(2, 3, "08:00", "17:00", { id: 9 }), row(2, 3, "10:00", "19:00", { id: 12 })];
-    expect(fixedRowOn(dup, 3)).toMatchObject({ id: 9 });
+    expect(workRowOn(dup, 3)).toMatchObject({ id: 9 });
     expect(dayPlan({ calendarDay: "2026-11-04", schedules: dup })).toMatchObject({ kind: "work", startTime: "08:00" });
     expect(fixedScheduledStarts("2026-11-04", "2026-11-04", dup).map((f) => iso(f.startMs))).toEqual(["2026-11-04T08:00:00.000Z"]);
     expect(fixedScheduledStarts("2026-11-04", "2026-11-04", dup.filter((r) => r.isWorkDay))).toEqual(fixedScheduledStarts("2026-11-04", "2026-11-04", dup));

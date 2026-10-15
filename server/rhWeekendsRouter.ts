@@ -24,7 +24,7 @@ import {
   type OverrideChange, type OverrideRecord,
 } from "./scheduleOverrides";
 import { addDays } from "../shared/lisbonDay";
-import { OVERRIDE_REASONS, activeOverrideOn, fixedRowOn, weekdayOf, type ScheduleOverrideRow } from "../shared/workSchedule";
+import { OVERRIDE_REASONS, activeOverrideOn, weekdayOf, workRowOn, type ScheduleOverrideRow } from "../shared/workSchedule";
 import {
   HHMM_RE, MAX_WEEKENDS, boardWarnings, compensationMap, compensationServing, dayLabelPt, defaultDutyHours, isValidDay, isWeekendDay, planCompensations, planOf,
   rotationPattern, rotationTargets, saturdaysFrom, warningText, weekendBoard, type PersonSchedule,
@@ -385,9 +385,9 @@ export const weekendsRouter = router({
     const today = todayLisbon();
     const person = await loadPerson(me.id, addDays(today, -7), addDays(today, 120));
     const fixed = [1, 2, 3, 4, 5, 6, 0].map((weekday) => {
-      const s = fixedRowOn(person.schedules, weekday);
-      const work = !!s && !(s.isWorkDay === false || Number(s.isWorkDay) === 0);
-      return { weekday, isWorkDay: work, startTime: work ? String(s!.startTime).slice(0, 5) : null, endTime: work && s!.endTime ? String(s!.endTime).slice(0, 5) : null };
+      // a mesma linha que o dayPlan, a Avaliação, as faltas e a folha (workRowOn); sem linha de trabalho → folga
+      const s = workRowOn(person.schedules, weekday);
+      return { weekday, isWorkDay: !!s, startTime: s ? String(s.startTime).slice(0, 5) : null, endTime: s?.endTime ? String(s.endTime).slice(0, 5) : null };
     });
     const weekends = saturdaysFrom(today, 8).flatMap((sat) => [sat, addDays(sat, 1)]).map((day) => {
       const plan = planOf(person, day);

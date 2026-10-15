@@ -274,6 +274,7 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
       driverPenaltyPoints: Number(r.driverPoints ?? 0),
     })),
     fixedSchedules: fixedSchedules.map((r) => ({
+      // plano 63 (10a): nos dias duplicados conta a linha de TRABALHO de id mais baixo (workRowOn)
       id: r.id != null ? Number(r.id) : null, employeeId: Number(r.employeeId), weekday: Number(r.weekday), startTime: String(r.startTime ?? ""), endTime: r.endTime != null ? String(r.endTime) : null,
       isWorkDay: Number(r.isWorkDay) === 1, contractStart: r.contractStart ? String(r.contractStart).slice(0, 10) : null, contractEnd: r.contractEnd ? String(r.contractEnd).slice(0, 10) : null,
       city: cityOfProjectId(r.projectId != null ? Number(r.projectId) : null),

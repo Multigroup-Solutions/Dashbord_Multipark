@@ -49,6 +49,8 @@ const OWN_RECORD_PATHS: Record<string, 'id' | 'employeeId'> = {
   'extrasAvailability.forEmployee': 'employeeId', 'rh.loginLinks': 'employeeId',
   // Dias livres habituais da própria ficha (8 out 2026) — só a leitura; gravar a sua é pelo setMyPattern.
   'extrasAvailability.patternFor': 'employeeId',
+  // Plano 63 (passo 1): o modo do ponto da própria ficha e o "Li" do seu aviso (o servidor confirma que é a própria).
+  'pontoModes.get': 'employeeId', 'pontoModes.ack': 'employeeId',
 };
 
 /**

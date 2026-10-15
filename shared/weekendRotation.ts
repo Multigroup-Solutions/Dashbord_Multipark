@@ -13,7 +13,7 @@
  * PURO (igual no cliente e no servidor).
  */
 import { addDays } from "./lisbonDay";
-import { dayPlan, fixedRowOn, hoursOfHhmm, ptHolidayOf, weekdayOf, type DayPlan, type FixedScheduleRow, type LeaveRow, type ScheduleOverrideRow } from "./workSchedule";
+import { dayPlan, hoursOfHhmm, ptHolidayOf, weekdayOf, workRowOn, type DayPlan, type FixedScheduleRow, type LeaveRow, type ScheduleOverrideRow } from "./workSchedule";
 
 export const DEFAULT_DUTY_START = "09:00";
 export const DEFAULT_DUTY_END = "18:00";
@@ -73,8 +73,9 @@ export function planOf(p: PersonSchedule, day: string, opts: { withoutOverrides?
 
 /** Horas por omissão de um dia de serviço: as do horário fixo nesse dia da semana (se for de trabalho); sem ele, 09:00–18:00. PURA. */
 export function defaultDutyHours(schedules: readonly FixedScheduleRow[], day: string): { startTime: string; endTime: string } {
-  const s = fixedRowOn(schedules, weekdayOf(day));
-  const ok = s && !(s.isWorkDay === false || Number(s.isWorkDay) === 0) && hoursOfHhmm(s.startTime) != null && hoursOfHhmm(s.endTime ?? null) != null;
+  // a mesma linha que o dayPlan, a Avaliação, as faltas e a folha (workRowOn: a de TRABALHO de id mais baixo)
+  const s = workRowOn(schedules, weekdayOf(day));
+  const ok = s && hoursOfHhmm(s.startTime) != null && hoursOfHhmm(s.endTime ?? null) != null;
   return ok ? { startTime: String(s!.startTime).slice(0, 5), endTime: String(s!.endTime).slice(0, 5) } : { startTime: DEFAULT_DUTY_START, endTime: DEFAULT_DUTY_END };
 }
 
