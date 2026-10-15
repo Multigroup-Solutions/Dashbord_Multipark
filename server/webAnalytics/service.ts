@@ -5,11 +5,11 @@
  * ("Testar" nas Integrações e nas Definições).
  */
 import {
-  DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, businessJoin, comparisonRange, cruxTargets, daysBetweenInclusive, evaluateWebAlerts, parseCursor,
+  DEFAULT_WEB_ANALYTICS_CONFIG, WEB_ANALYTICS_SETTING_KEY, businessJoin, comparisonRange, cruxTargets, daysBetweenInclusive, evaluateWebAlerts, funnelMissing, parseCursor,
   scopeByBrand, webFactsText, webInsightFallback,
   type AlertInputs, type CompareMode, type WebAlert, type WebAnalyticsConfig, type WebWeekFacts,
 } from "../../shared/webAnalytics";
-import { addDays, daysInRange } from "../../shared/lisbonDay";
+import { addDays, daysInRange, lisbonDayOf } from "../../shared/lisbonDay";
 import { adSpendByDay, bookingsByDay, dimCompare, gaDaily, gaDailyByProperty, scDaily, scDailyBySite, sumGa, sumSc } from "./queries";
 import { cursorKey, errorKey, gaUnitKey, scUnitKey, type LastRunInfo } from "./sync";
 
@@ -30,7 +30,7 @@ function parseJson<T>(raw: string | null): T | null {
 
 // ─── Vista geral ────────────────────────────────────────────────────────────
 
-export interface OverviewInput { from: string; to: string; brand?: string | null; compare: CompareMode }
+export interface OverviewInput { from: string; to: string; brand?: string | null; compare: CompareMode; /** testes */ now?: number }
 
 export async function webOverview(i: OverviewInput) {
   const cfg = await loadWebAnalyticsConfig();
@@ -44,8 +44,9 @@ export async function webOverview(i: OverviewInput) {
   ]);
   const list = (source: "ga" | "sc", dim: any, limit: number, sort: any) =>
     dimCompare({ source, ids: source === "ga" ? scope.properties : scope.sites, dim, cur, prev, sort, limit, offset: 0 }).then((r) => r.rows);
-  const [channels, devicesGa, devicesSc, events] = await Promise.all([
+  const [channels, devicesGa, devicesSc, events, allEvents] = await Promise.all([
     list("ga", "channel", 12, "sessions"), list("ga", "device", 6, "sessions"), list("sc", "device", 6, "clicks"), list("ga", "event", 20, "sessions"),
+    list("ga", "allEvents", 40, "keyEvents"),
   ]);
   // Negócio: reservas (Multipark) e gasto (anúncios) no mesmo período e marca.
   // 19a: reservas da Multipark em baixo → `bookingsError` (o ecrã diz "indisponível"), nunca 0 reservas / 0 % de conversão.
@@ -60,24 +61,33 @@ export async function webOverview(i: OverviewInput) {
   const businessPrev = businessJoin(daysInRange(prev.from, prev.to), { sessions: sessionsMap(gaPrev), bookings: bookPrev, spend: spendPrev.byDay });
 
   // Séries alinhadas (dia i do período ↔ dia i da comparação).
+  // Plano 64 (F2): um dia sem linha do GA4 ainda não foi recolhido (a recolha vai até ontem e grava
+  // todos os dias da janela, com zeros) → null (a linha pára) em vez de 0; hoje vem marcado como parcial.
+  const today = lisbonDayOf(i.now ?? Date.now());
   const curDays = daysInRange(cur.from, cur.to), prevDays = daysInRange(prev.from, prev.to);
   const gaBy = new Map(gaCur.map((r) => [r.day, r])), gaPrevBy = new Map(gaPrev.map((r) => [r.day, r]));
   const scBy = new Map(scCur.map((r) => [r.day, r])), scPrevBy = new Map(scPrev.map((r) => [r.day, r]));
   const series = curDays.map((day, idx) => {
     const pd = prevDays[idx];
     const b = business.rows[idx];
+    const ga = gaBy.get(day);
     return {
-      day,
-      sessions: gaBy.get(day)?.sessions ?? 0, prevSessions: pd ? gaPrevBy.get(pd)?.sessions ?? 0 : null,
-      users: gaBy.get(day)?.totalUsers ?? 0, keyEvents: gaBy.get(day)?.keyEvents ?? 0,
+      day, partial: day === today,
+      sessions: ga ? ga.sessions : null, prevSessions: pd ? gaPrevBy.get(pd)?.sessions ?? null : null,
+      users: ga ? ga.totalUsers : null, keyEvents: ga ? ga.keyEvents : null,
       clicks: scBy.get(day)?.clicks ?? null, prevClicks: pd ? scPrevBy.get(pd)?.clicks ?? null : null,
       impressions: scBy.get(day)?.impressions ?? null, position: scBy.get(day)?.position ?? null,
       siteBookings: b?.siteBookings ?? 0, conversionRate: b?.conversionRate ?? null, spend: b?.spend ?? 0,
     };
   });
-  // Funil pela ordem das Definições (só os eventos que existem).
+  // Funil pela ordem das Definições (só os eventos que existem) e os passos que não chegaram ao GA4.
   const evBy = new Map(events.map((e) => [e.value, e]));
   const funnel = cfg.funnelEvents.filter((e) => evBy.has(e)).map((e) => ({ event: e, count: evBy.get(e)!.cur.events ?? 0, prevCount: evBy.get(e)!.prev.events ?? 0 }));
+  // Plano 64 (F2): o que a propriedade GA4 conta como "evento-chave" (o KPI do GA4 não são reservas)
+  // e os eventos que o site envia (para escolher os do funil). Vazio até à 1.ª recolha desta parte.
+  const keyEventsByName = allEvents.filter((e) => (e.cur.keyEvents ?? 0) > 0 || (e.prev.keyEvents ?? 0) > 0)
+    .map((e) => ({ event: e.value, keyEvents: e.cur.keyEvents ?? 0, prevKeyEvents: e.prev.keyEvents ?? 0, events: e.cur.events ?? 0 }));
+  const siteEvents = allEvents.filter((e) => (e.cur.events ?? 0) > 0).sort((a, b) => (b.cur.events ?? 0) - (a.cur.events ?? 0)).map((e) => e.value);
 
   const store = await state();
   const lastRun = parseJson<LastRunInfo>(await store.getState("lastRun"));
@@ -108,6 +118,13 @@ export async function webOverview(i: OverviewInput) {
     channels,
     devices: { ga: devicesGa, sc: devicesSc },
     funnel,
+    /** Plano 64 (F2): passos do funil das Definições e os que não chegaram ao GA4 no período. */
+    funnelEvents: cfg.funnelEvents,
+    funnelMissing: funnelMissing(cfg.funnelEvents, events.filter((e) => (e.cur.events ?? 0) > 0).map((e) => e.value)),
+    /** Plano 64 (F2): eventos que o GA4 conta como eventos-chave (os do KPI) e todos os que o site envia; allEventsCollected = já há dados desta parte. */
+    keyEventsByName,
+    siteEvents,
+    allEventsCollected: allEvents.length > 0,
     business: { totals: business.totals, prevTotals: businessPrev.totals, adSpendAvailable: spendCur.available, adSpendError: spendCur.error ?? null, bookingsError },
     lastRun,
     lastSuccessAt: await store.getState("lastSuccessAt"),
@@ -229,6 +246,7 @@ export async function buildWeekFacts(cfg: WebAnalyticsConfig, today: string): Pr
 const INSIGHT_SYSTEM = [
   "És analista de marketing digital da Multipark (parques de estacionamento e valet nos aeroportos de Lisboa, Porto e Faro).",
   "Recebes só totais agregados da última semana vs a anterior (Google Analytics 4, Search Console, PageSpeed e reservas feitas no site).",
+  "Os eventos-chave do GA4 são eventos marcados na propriedade (podem incluir visitas a páginas), NÃO são reservas nem conversões: a conversão real é a das reservas feitas no site.",
   "Escreve em português de Portugal (PT-PT), 3 a 5 frases curtas, sem listas nem títulos: o que mudou e a explicação mais provável a partir dos números (canal, pesquisas, velocidade, sazonalidade).",
   "Usa só os números dados; nunca inventes valores nem causas que os dados não suportem — se não houver explicação clara, diz que é preciso ver mais detalhe.",
 ].join(" ");

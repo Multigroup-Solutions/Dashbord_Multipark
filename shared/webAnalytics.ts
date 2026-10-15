@@ -16,6 +16,7 @@
 import { z } from "zod";
 import { MAIL_BRAND_IDS, MAIL_BRAND_LABELS, type MailBrand } from "./mail";
 import { addDays, daysInRange } from "./lisbonDay";
+import { MARKETPLACE_BRAND } from "./projectTree";
 
 export const WEB_ANALYTICS_SETTING_KEY = "marketing.webAnalytics";
 export const GA4_SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
@@ -280,9 +281,16 @@ export function parseCursor(raw: unknown): SourceCursor {
 export const GA_TOTAL_METRICS = ["sessions", "totalUsers", "newUsers", "engagedSessions", "keyEvents", "totalRevenue"] as const;
 export const GA_DIM_METRICS = ["sessions", "totalUsers", "engagedSessions", "keyEvents", "totalRevenue"] as const;
 export const GA_EVENT_METRICS = ["eventCount", "totalUsers"] as const;
+/**
+ * Plano 64 (F2): TODOS os eventos que o site envia (sem o filtro do funil),
+ * com quantos contam como evento-chave — para se ver no ecrã O QUE a
+ * propriedade GA4 conta como "conversão" (só leitura; a configuração do GA4
+ * não muda) e que nomes de eventos existem para o funil.
+ */
+export const GA_ALL_EVENT_METRICS = ["eventCount", "keyEvents"] as const;
 
-export type GaPart = "totals" | "channel" | "landing" | "device" | "country" | "city" | "event";
-export const GA_PARTS: readonly GaPart[] = ["totals", "channel", "landing", "device", "country", "city", "event"];
+export type GaPart = "totals" | "channel" | "landing" | "device" | "country" | "city" | "event" | "allEvents";
+export const GA_PARTS: readonly GaPart[] = ["totals", "channel", "landing", "device", "country", "city", "event", "allEvents"];
 export type GaDimKind = Exclude<GaPart, "totals">;
 export const GA_DIMS: Record<GaDimKind, { apiName: string; topN: number; label: string }> = {
   channel: { apiName: "sessionDefaultChannelGroup", topN: 25, label: "Canal" },
@@ -291,6 +299,7 @@ export const GA_DIMS: Record<GaDimKind, { apiName: string; topN: number; label: 
   country: { apiName: "country", topN: 30, label: "País" },
   city: { apiName: "city", topN: 30, label: "Cidade" },
   event: { apiName: "eventName", topN: 20, label: "Evento" },
+  allEvents: { apiName: "eventName", topN: 40, label: "Evento (todos)" },
 };
 /** Linhas por página no runReport (máx. da API 250 000; ficamos longe). */
 export const GA_PAGE_LIMIT = 10_000;
@@ -309,12 +318,12 @@ export function gaTotalsRequest(from: string, to: string) {
 }
 
 export function gaDimRequest(kind: GaDimKind, from: string, to: string, opts: { offset?: number; funnelEvents?: readonly string[] } = {}) {
-  const metrics = kind === "event" ? GA_EVENT_METRICS : GA_DIM_METRICS;
+  const metrics = kind === "event" ? GA_EVENT_METRICS : kind === "allEvents" ? GA_ALL_EVENT_METRICS : GA_DIM_METRICS;
   return {
     dateRanges: [{ startDate: gaDate(from), endDate: gaDate(to) }],
     dimensions: [{ name: "date" }, { name: GA_DIMS[kind].apiName }],
     metrics: metrics.map((name) => ({ name })),
-    orderBys: [{ metric: { metricName: kind === "event" ? "eventCount" : "sessions" }, desc: true }],
+    orderBys: [{ metric: { metricName: kind === "event" || kind === "allEvents" ? "eventCount" : "sessions" }, desc: true }],
     limit: String(GA_PAGE_LIMIT),
     offset: String(opts.offset ?? 0),
     ...(kind === "event" ? { dimensionFilter: { filter: { fieldName: "eventName", inListFilter: { values: [...(opts.funnelEvents ?? [])], caseSensitive: true } } } } : {}),
@@ -686,7 +695,7 @@ export interface BusinessTotals extends BusinessDayInput {
   conversionRate: number | null;
   /** Todas as reservas ÷ sessões (indicador, inclui telefone/parceiros). */
   bookingsPerSession: number | null;
-  /** Receita das reservas do site ÷ sessões. */
+  /** Valor das reservas do site ÷ sessões (terceiros: só a nossa comissão, como no Marketing). */
   revenuePerSession: number | null;
   /** Gasto em anúncios ÷ sessões. */
   spendPerSession: number | null;
@@ -727,8 +736,38 @@ export function businessJoin(days: readonly string[], byDay: {
 
 /** Nome do nó "marca" da árvore de projetos ↔ id da marca ("Multipark" → multipark). PURA. */
 export function brandIdOfName(name: string | null | undefined): WebBrand | null {
-  const k = String(name ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z]/g, "");
+  const k = brandKey(name);
   return (WEB_BRAND_IDS as readonly string[]).includes(k) ? (k as WebBrand) : null;
+}
+const brandKey = (name: string | null | undefined) => String(name ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z]/g, "");
+
+/**
+ * Marca do Web & SEO de um nó "marca" da árvore (plano 64, F2): o nó
+ * "Marketplace" (multipark.pt / multipark.app — onde estão as campanhas
+ * "Multipark - <Cidade> - PT" e as reservas do Marketplace) é a marca
+ * MULTIPARK; as outras pelo nome (brandIdOfName). Antes o "Marketplace" não
+ * casava com marca nenhuma e a marca Multipark ficava sem reservas nem gasto. PURA.
+ */
+export function webBrandOfTreeBrand(name: string | null | undefined): WebBrand | null {
+  if (name != null && brandKey(name) === brandKey(MARKETPLACE_BRAND)) return "multipark";
+  return brandIdOfName(name);
+}
+
+/**
+ * Eventos que o GA4 recolhe sozinho (automáticos e "medição otimizada"):
+ * visitas e envolvimento, nunca uma reserva. Marcados como evento-chave,
+ * inflacionam o "evento-chave" muito acima das sessões (plano 64, F2).
+ */
+export const GA4_AUTO_EVENTS: readonly string[] = [
+  "page_view", "session_start", "first_visit", "user_engagement", "scroll", "click", "view_search_results",
+  "file_download", "form_start", "video_start", "video_progress", "video_complete",
+];
+export const isGa4AutoEvent = (name: string) => GA4_AUTO_EVENTS.includes(name);
+
+/** Passos do funil (pela ordem das Definições) que não chegaram ao GA4 no período. PURA. */
+export function funnelMissing(funnelEvents: readonly string[], present: Iterable<string>): string[] {
+  const have = new Set(present);
+  return funnelEvents.filter((e) => !have.has(e));
 }
 
 // ─── Resumo semanal (factos para a IA e texto fixo) ────────────────────────
@@ -754,7 +793,7 @@ const signedPct = (cur: number, prev: number) => {
 export function webFactsText(f: WebWeekFacts): string {
   const L: string[] = [`Semana ${f.from} a ${f.to} vs semana anterior.`];
   if (f.ga) {
-    L.push(`Sessões: ${fmtNum(f.ga.sessions)} (${signedPct(f.ga.sessions, f.ga.prevSessions)}); utilizadores ${fmtNum(f.ga.users)} (${signedPct(f.ga.users, f.ga.prevUsers)}); conversões (eventos-chave) ${fmtNum(f.ga.keyEvents)} (${signedPct(f.ga.keyEvents, f.ga.prevKeyEvents)}).`);
+    L.push(`Sessões: ${fmtNum(f.ga.sessions)} (${signedPct(f.ga.sessions, f.ga.prevSessions)}); utilizadores ${fmtNum(f.ga.users)} (${signedPct(f.ga.users, f.ga.prevUsers)}); eventos-chave GA4 (eventos marcados no GA4, não são reservas) ${fmtNum(f.ga.keyEvents)} (${signedPct(f.ga.keyEvents, f.ga.prevKeyEvents)}).`);
     if (f.ga.revenue || f.ga.prevRevenue) L.push(`Receita GA4: ${fmtNum(f.ga.revenue)} € (${signedPct(f.ga.revenue, f.ga.prevRevenue)}).`);
   }
   if (f.channels.length) L.push(`Canais (sessões): ${f.channels.slice(0, 6).map((c) => `${c.name} ${fmtNum(c.cur)} (${signedPct(c.cur, c.prev)})`).join("; ")}.`);
@@ -772,7 +811,7 @@ export function webFactsText(f: WebWeekFacts): string {
 /** Texto fixo (IA desligada/sem orçamento) — os mesmos números. PURA. */
 export function webInsightFallback(f: WebWeekFacts): string {
   const parts: string[] = [];
-  if (f.ga) parts.push(`Sessões ${signedPct(f.ga.sessions, f.ga.prevSessions)} (${fmtNum(f.ga.sessions)}) e conversões ${signedPct(f.ga.keyEvents, f.ga.prevKeyEvents)} face à semana anterior.`);
+  if (f.ga) parts.push(`Sessões ${signedPct(f.ga.sessions, f.ga.prevSessions)} (${fmtNum(f.ga.sessions)}) e eventos-chave GA4 ${signedPct(f.ga.keyEvents, f.ga.prevKeyEvents)} face à semana anterior.`);
   if (f.channels.length) {
     const moved = f.channels.filter((c) => c.prev > 0).map((c) => ({ c, p: pctChange(c.cur, c.prev) ?? 0 })).sort((a, b) => Math.abs(b.p) - Math.abs(a.p))[0];
     if (moved && Math.abs(moved.p) >= 0.1) parts.push(`O canal que mais mudou foi ${moved.c.name} (${signedPct(moved.c.cur, moved.c.prev)}).`);

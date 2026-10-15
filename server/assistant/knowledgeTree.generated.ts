@@ -947,7 +947,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "KPIs do período escolhido com a variação face ao período anterior ou ao mesmo período do ano passado (seta e percentagem; na posição média, descer é bom).",
        "children": [],
        "container": false,
-       "chars": 2191
+       "chars": 4217
       },
       {
        "id": "web-analytics.md#configurar-super-admin",
@@ -1022,7 +1022,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "web-analytics.md#problemas-comuns"
        ],
        "container": false,
-       "chars": 1278
+       "chars": 1332
       },
       {
        "id": "web-analytics.md#problemas-comuns",

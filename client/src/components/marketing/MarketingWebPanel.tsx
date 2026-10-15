@@ -10,7 +10,11 @@
  *    posição) e páginas a perder cliques;
  *  - Velocidade: PageSpeed móvel/computador com verde/âmbar/vermelho;
  *  - Negócio: reservas feitas no site ÷ sessões, receita por sessão e gasto
- *    dos anúncios por sessão (mesmas reservas das Reservas & Operações).
+ *    dos anúncios por sessão (as mesmas reservas do Painel do Marketing, com o
+ *    Marketplace — plano 64, F2).
+ *  - Plano 64 (F2): o KPI do GA4 chama-se "Eventos-chave GA4" (não são
+ *    reservas) e há a lista dos eventos que o GA4 conta como tal; o funil diz
+ *    que passos não chegam ao GA4; o dia de hoje vem marcado como parcial.
  */
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
@@ -29,11 +33,11 @@ import {
   AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Gauge, Globe, Loader2, MousePointerClick,
   MapPin, RefreshCw, Search, Settings, ShoppingCart, Sparkles, TrendingUp, Users,
 } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { STICKY_FIRST_COL, TABS_SCROLL } from "@/components/finance/layoutClasses";
 import { AXIS_TICK, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE, eurCompact } from "@/lib/financeFormat";
 import { fmtPTDateTime } from "@/lib/lisbonTime";
-import { WEB_BRAND_LABELS, type CompareMode, type WebBrand } from "@shared/webAnalytics";
+import { WEB_BRAND_LABELS, isGa4AutoEvent, type CompareMode, type WebBrand } from "@shared/webAnalytics";
 
 import { SERIES, Delta, Kpi, PsChip, eur, fmtDay, lisbonDay, num, pctOf, posFmt, shortDay } from "./webKpi";
 import { GbpBusinessCard, GbpSection } from "./MarketingGbpPanel";
@@ -48,15 +52,23 @@ function initialSection(): string {
 
 type Common = { from: string; to: string; brand: "" | WebBrand; compare: CompareMode };
 
+/** Plano 64 (F2): o que é o "evento-chave" do GA4 (antes chamado "Conversões"). */
+const KEY_EVENTS_TIP = "Eventos que a propriedade GA4 tem marcados como «evento-chave» (podem ser visitas a páginas, scroll, cliques…). NÃO são reservas: a conversão real é a das reservas da Multipark (separador Negócio).";
+/** Rótulo do dia em curso nos gráficos por dia. */
+const TODAY_LABEL = "hoje";
+/** "a, b e c". */
+const listPt = (xs: readonly string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} e ${xs[xs.length - 1]}`);
+
 // ─── Tabela paginada (servidor) ─────────────────────────────────────────────
 
 type GaCol = "sessions" | "users" | "engaged" | "keyEvents" | "revenue";
 type ScCol = "clicks" | "impressions" | "ctr" | "position";
 
-function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, search, cols, pageSize = 25 }: {
+/** `showSource`: o nome da propriedade GA4 por baixo de cada linha (só com mais de uma propriedade na vista — com uma, era sempre o mesmo). */
+function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, search, cols, pageSize = 25, showSource = true }: {
   common: Common; source: "ga" | "sc"; dim: string; title: string; firstCol: string;
   sorts: Array<{ value: string; label: string }>; defaultSort: string; search?: boolean;
-  cols: Array<GaCol | ScCol>; pageSize?: number;
+  cols: Array<GaCol | ScCol>; pageSize?: number; showSource?: boolean;
 }) {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState(defaultSort);
@@ -67,7 +79,8 @@ function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, se
   const { data, isLoading, isFetching, error } = listQ;
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
-  const head: Record<GaCol | ScCol, string> = { sessions: "Sessões", users: "Utilizadores", engaged: "Envolvimento", keyEvents: "Conversões", revenue: "Receita", clicks: "Cliques", impressions: "Impressões", ctr: "CTR", position: "Posição" };
+  const head: Record<GaCol | ScCol, string> = { sessions: "Sessões", users: "Utilizadores", engaged: "Envolvimento", keyEvents: "Eventos-chave GA4", revenue: "Receita", clicks: "Cliques", impressions: "Impressões", ctr: "CTR", position: "Posição" };
+  const headTip: Partial<Record<GaCol | ScCol, string>> = { keyEvents: KEY_EVENTS_TIP };
   const cell = (r: any, c: GaCol | ScCol) => {
     switch (c) {
       case "sessions": return <><div>{num(r.cur.sessions)}</div><div className="text-[11px]"><Delta cur={r.cur.sessions} prev={r.prev.sessions} /></div></>;
@@ -108,7 +121,7 @@ function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, se
           <TableHeader>
             <TableRow>
               <TableHead className="min-w-[180px]">{firstCol}</TableHead>
-              {cols.map((c) => <TableHead key={c} className="text-right">{head[c]}</TableHead>)}
+              {cols.map((c) => <TableHead key={c} className="text-right" title={headTip[c]}>{head[c]}</TableHead>)}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -118,7 +131,7 @@ function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, se
               <TableRow key={r.key}>
                 <TableCell className="max-w-[320px]">
                   <div className="truncate text-sm" title={r.value}>{r.value || "(sem valor)"}</div>
-                  {r.sourceLabel && <div className="text-[11px] text-muted-foreground truncate">{r.sourceLabel}</div>}
+                  {showSource && r.sourceLabel && <div className="text-[11px] text-muted-foreground truncate">{r.sourceLabel}</div>}
                 </TableCell>
                 {cols.map((c) => <TableCell key={c} className="text-right align-top">{cell(r, c)}</TableCell>)}
               </TableRow>
@@ -133,6 +146,57 @@ function DimTable({ common, source, dim, title, firstCol, sorts, defaultSort, se
             <Button variant="outline" size="sm" className="h-8" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} aria-label="Página seguinte"><ChevronRight className="w-4 h-4" /></Button>
           </div>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Eventos-chave GA4 (plano 64, F2) ───────────────────────────────────────
+
+/**
+ * O que a propriedade GA4 conta como "evento-chave" (o número do KPI): por
+ * evento, com a quota. Só leitura — o dashboard não muda a configuração do
+ * GA4; quem a gere decide o que desmarcar.
+ */
+function KeyEventsCard({ data, keyTotal, compareLabel }: {
+  data: { allEventsCollected: boolean; keyEventsByName: Array<{ event: string; keyEvents: number; prevKeyEvents: number; events: number }>; ga: { hasData: boolean } };
+  keyTotal: number; compareLabel: string;
+}) {
+  if (!data.ga.hasData) return null;
+  const rows = data.keyEventsByName;
+  const auto = rows.filter((r) => isGa4AutoEvent(r.event) && r.keyEvents > 0);
+  return (
+    <Card>
+      <CardHeader className="pb-1"><CardTitle className="text-sm">Eventos-chave GA4 (o que o GA4 conta como «conversão»)</CardTitle></CardHeader>
+      <CardContent className="p-0 overflow-x-auto">
+        {!data.allEventsCollected ? (
+          <p className="px-4 py-3 text-xs text-muted-foreground">A lista aparece depois da próxima recolha do GA4 (diária; ou «Atualizar agora»).</p>
+        ) : !rows.length ? (
+          <p className="px-4 py-3 text-xs text-muted-foreground">Nenhum evento marcado como evento-chave neste período.</p>
+        ) : (
+          <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
+            <TableHeader>
+              <TableRow><TableHead>Evento</TableHead><TableHead className="text-right">Eventos-chave</TableHead><TableHead className="text-right">Quota</TableHead><TableHead className="text-right">vs {compareLabel}</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.event}>
+                  <TableCell className="text-sm">
+                    <span className="font-mono text-xs">{r.event}</span>
+                    {isGa4AutoEvent(r.event) && <Badge variant="outline" className="ml-2 font-normal text-[10px]">automático do GA4 · não é reserva</Badge>}
+                  </TableCell>
+                  <TableCell className="text-right">{num(r.keyEvents, 0)}</TableCell>
+                  <TableCell className="text-right">{pctOf(keyTotal ? r.keyEvents / keyTotal : null, 0)}</TableCell>
+                  <TableCell className="text-right text-[11px]"><Delta cur={r.keyEvents} prev={r.prevKeyEvents} /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        <p className="text-[11px] text-muted-foreground px-4 py-2">
+          {auto.length > 0 && <><b>{listPt(auto.map((r) => r.event))}</b> {auto.length > 1 ? "são eventos automáticos" : "é um evento automático"} do GA4 (visitas, envolvimento), não reservas — contam no cartão «Eventos-chave GA4» e fazem-no subir. </>}
+          Quem gere o GA4 decide o que conta: GA4 → Administração → Apresentação de dados → Eventos → «Marcar como evento-chave». O dashboard só lê (não muda o GA4). A conversão real é a das reservas (separador Negócio).
+        </p>
       </CardContent>
     </Card>
   );
@@ -170,17 +234,21 @@ export default function MarketingWebPanel() {
   });
   const canEdit = !!settings.data?.canEdit;
 
-  const series = useMemo(() => (data?.series ?? []).map((r) => ({ ...r, label: shortDay(r.day) })), [data]);
+  // Plano 64 (F2): o dia em curso aparece como "hoje" (parcial: o GA4 vai até ontem, as reservas ainda entram).
+  const series = useMemo(() => (data?.series ?? []).map((r) => ({ ...r, label: r.partial ? TODAY_LABEL : shortDay(r.day) })), [data]);
+  const hasToday = series.some((r) => r.partial);
   const compareLabel = compare === "yoy" ? "mesmo período do ano passado" : "período anterior";
   const g = data?.ga, s = data?.sc, b = data?.business;
   const channelTotal = (data?.channels ?? []).reduce((t, c) => t + (c.cur.sessions ?? 0), 0);
+  const gaSources = (data?.sources ?? []).filter((x) => x.source === "ga").length;
+  const keyTotal = (data?.keyEventsByName ?? []).reduce((t, e) => t + e.keyEvents, 0);
 
   return (
     <div className="space-y-4">
       <div className="flex items-end justify-between flex-wrap gap-2">
         <p className="text-xs text-muted-foreground max-w-2xl">
           Google Analytics 4 e Search Console (totais por dia, recolhidos 1×/dia) e PageSpeed (1×/semana). A Search Console chega com ~2–3 dias de atraso.
-          Reservas pela data de criação, sem canceladas; "no site" = feitas nos sites das marcas.
+          Reservas: as mesmas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; "no site" = feitas num site (formulário ou site da marca). A marca Multipark inclui o Marketplace.
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <Select value={brand || "all"} onValueChange={(v) => setBrand(v === "all" ? "" : (v as WebBrand))}>
@@ -291,12 +359,13 @@ export default function MarketingWebPanel() {
             <Kpi icon={Users} label="Utilizadores" value={num(g?.cur.totalUsers)} cur={g?.cur.totalUsers} prev={g?.prev.totalUsers} hint={`${num(g?.cur.newUsers)} novos`} />
             <Kpi icon={TrendingUp} label="Taxa de envolvimento" value={pctOf(g && g.cur.sessions ? g.cur.engagedSessions / g.cur.sessions : null, 0)}
               cur={g && g.cur.sessions ? g.cur.engagedSessions / g.cur.sessions : null} prev={g && g.prev.sessions ? g.prev.engagedSessions / g.prev.sessions : null} />
-            <Kpi icon={ShoppingCart} label="Conversões (eventos-chave)" value={num(g?.cur.keyEvents, 0)} cur={g?.cur.keyEvents} prev={g?.prev.keyEvents} hint={g?.cur.revenue ? `receita GA4 ${eurCompact(g.cur.revenue)}` : undefined} />
+            <Kpi icon={ShoppingCart} label="Eventos-chave GA4" value={num(g?.cur.keyEvents, 0)} cur={g?.cur.keyEvents} prev={g?.prev.keyEvents} tip={KEY_EVENTS_TIP}
+              hint={`não são reservas${g?.cur.sessions ? ` · ${num(g.cur.keyEvents / g.cur.sessions, 1)} por sessão` : ""}${g?.cur.revenue ? ` · receita GA4 ${eurCompact(g.cur.revenue)}` : ""}`} />
             <Kpi icon={MousePointerClick} label="Cliques Google (orgânico)" value={num(s?.cur.clicks)} cur={s?.cur.clicks} prev={s?.prev.clicks} hint={s?.hasData ? undefined : "sem dados"} />
             <Kpi icon={Globe} label="Impressões" value={num(s?.cur.impressions)} cur={s?.cur.impressions} prev={s?.prev.impressions} hint={`CTR ${pctOf(s?.cur.ctr)}`} />
             <Kpi icon={Search} label="Posição média" value={posFmt(s?.cur.position)} cur={s?.cur.position} prev={s?.prev.position} invert abs={(d) => `${d > 0 ? "+" : "−"}${posFmt(Math.abs(d))}`} hint="menor é melhor" />
             <Kpi icon={ShoppingCart} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate}
-              hint={b?.bookingsError ? "reservas da Multipark indisponíveis" : `${num(b?.totals.siteBookings)} reservas no site`} />
+              hint={b?.bookingsError ? "reservas da Multipark indisponíveis" : `${num(b?.totals.siteBookings)} reservas no site`} tip="Reservas feitas no site (as mesmas do Painel do Marketing, com o Marketplace) ÷ sessões do GA4. Indicador, não atribuição." />
           </div>
 
           <Tabs value={section} onValueChange={setSection}>
@@ -322,8 +391,10 @@ export default function MarketingWebPanel() {
                       <Legend wrapperStyle={{ fontSize: 12 }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                       <Line type="monotone" dataKey="sessions" name="Sessões" stroke="var(--wb-1)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                       <Line type="monotone" dataKey="prevSessions" name={`Sessões (${compareLabel})`} stroke="var(--muted-foreground)" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+                      {hasToday && <ReferenceLine x={TODAY_LABEL} stroke="var(--muted-foreground)" strokeDasharray="2 3" label={{ value: "parcial", position: "insideTopRight", fontSize: 10, fill: "var(--muted-foreground)" }} />}
                     </LineChart>
                   </ResponsiveContainer>
+                  {hasToday && <p className="text-[11px] text-muted-foreground">«hoje» é o dia em curso: o GA4 só é recolhido até ontem, por isso a linha pára no último dia recolhido (não cai a zero).</p>}
                 </CardContent>
               </Card>
 
@@ -332,7 +403,7 @@ export default function MarketingWebPanel() {
                   <CardHeader className="pb-2"><CardTitle className="text-sm">Canais (GA4)</CardTitle></CardHeader>
                   <CardContent className="p-0 overflow-x-auto">
                     <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
-                      <TableHeader><TableRow><TableHead>Canal</TableHead><TableHead className="text-right">Sessões</TableHead><TableHead className="text-right">Quota</TableHead><TableHead className="text-right">Conversões</TableHead><TableHead className="text-right">Receita</TableHead></TableRow></TableHeader>
+                      <TableHeader><TableRow><TableHead>Canal</TableHead><TableHead className="text-right">Sessões</TableHead><TableHead className="text-right">Quota</TableHead><TableHead className="text-right" title={KEY_EVENTS_TIP}>Eventos-chave GA4</TableHead><TableHead className="text-right">Receita</TableHead></TableRow></TableHeader>
                       <TableBody>
                         {!data.channels.length && <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Sem dados.</TableCell></TableRow>}
                         {data.channels.map((c) => (
@@ -375,11 +446,13 @@ export default function MarketingWebPanel() {
                 </Card>
               </div>
 
-              {data.funnel.length > 0 && (
+              <KeyEventsCard data={data} keyTotal={keyTotal} compareLabel={compareLabel} />
+
+              {g?.hasData && data.funnelEvents.length > 0 && (
                 <Card>
                   <CardHeader className="pb-1"><CardTitle className="text-sm">Funil de reserva (eventos GA4)</CardTitle></CardHeader>
                   <CardContent>
-                    <ResponsiveContainer width="100%" height={Math.max(120, data.funnel.length * 44)}>
+                    {data.funnel.length > 0 && <ResponsiveContainer width="100%" height={Math.max(120, data.funnel.length * 44)}>
                       <BarChart data={data.funnel} layout="vertical" margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
                         <CartesianGrid horizontal={false} stroke="var(--border)" />
                         <XAxis type="number" tick={AXIS_TICK} tickLine={false} axisLine={false} allowDecimals={false} />
@@ -389,14 +462,26 @@ export default function MarketingWebPanel() {
                         <Bar dataKey="count" name="Eventos" fill="var(--wb-1)" radius={[0, 4, 4, 0]} maxBarSize={22} />
                         <Bar dataKey="prevCount" name={`Eventos (${compareLabel})`} fill="var(--muted-foreground)" fillOpacity={0.45} radius={[0, 4, 4, 0]} maxBarSize={22} />
                       </BarChart>
-                    </ResponsiveContainer>
-                    <p className="text-[11px] text-muted-foreground">Eventos definidos em Definições → Integrações → Web & SEO (só aparecem os que existem na GA4).</p>
+                    </ResponsiveContainer>}
+                    {data.funnelMissing.length > 0 && (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 px-3 py-2 text-xs flex items-start gap-2 mt-2" role="note">
+                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>
+                          {data.funnelMissing.length === data.funnelEvents.length
+                            ? <>Nenhum dos passos do funil ({listPt(data.funnelEvents)}) chegou ao GA4 neste período.</>
+                            : <>Só chega{data.funnelEvents.length - data.funnelMissing.length > 1 ? "m" : ""} ao GA4: <b>{listPt(data.funnelEvents.filter((e) => !data.funnelMissing.includes(e)))}</b>. Os passos <b>{listPt(data.funnelMissing)}</b> não chegaram neste período.</>}
+                          {" "}O site não envia estes eventos (ou usa outros nomes), por isso o funil não mostra onde as pessoas desistem.
+                          {data.siteEvents.length > 0 && <> Eventos que o site envia: {listPt(data.siteEvents.slice(0, 15))}{data.siteEvents.length > 15 ? "…" : ""}.</>}
+                        </span>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-muted-foreground mt-1">Passos definidos em Definições → Integrações → Web & SEO (Eventos do funil); só aparecem os que existem na GA4.</p>
                   </CardContent>
                 </Card>
               )}
 
-              <DimTable common={common} source="ga" dim="landing" title="Páginas de entrada" firstCol="Página"
-                sorts={[{ value: "sessions", label: "Mais sessões" }, { value: "keyEvents", label: "Mais conversões" }, { value: "losing", label: "A perder sessões" }, { value: "gaining", label: "A ganhar sessões" }]}
+              <DimTable common={common} source="ga" dim="landing" title="Páginas de entrada" firstCol="Página" showSource={gaSources > 1}
+                sorts={[{ value: "sessions", label: "Mais sessões" }, { value: "keyEvents", label: "Mais eventos-chave GA4" }, { value: "losing", label: "A perder sessões" }, { value: "gaining", label: "A ganhar sessões" }]}
                 defaultSort="sessions" search cols={["sessions", "engaged", "keyEvents", "revenue"]} />
 
               <div className="space-y-2">
@@ -450,9 +535,11 @@ export default function MarketingWebPanel() {
             {/* ── Negócio ── */}
             <TabsContent value="negocio" className={`mt-4 space-y-4 ${SERIES}`}>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <Kpi icon={ShoppingCart} label="Reservas feitas no site" value={b?.bookingsError ? "—" : num(b?.totals.siteBookings)} cur={b?.bookingsError ? null : b?.totals.siteBookings} prev={b?.bookingsError ? null : b?.prevTotals.siteBookings} hint={b?.bookingsError ? "indisponíveis (BD da Multipark não respondeu)" : `de ${num(b?.totals.bookings)} no total`} />
+                <Kpi icon={ShoppingCart} label="Reservas feitas no site" value={b?.bookingsError ? "—" : num(b?.totals.siteBookings)} cur={b?.bookingsError ? null : b?.totals.siteBookings} prev={b?.bookingsError ? null : b?.prevTotals.siteBookings} hint={b?.bookingsError ? "indisponíveis (BD da Multipark não respondeu)" : `de ${num(b?.totals.bookings)} no total (com o Marketplace)`}
+                  tip="As mesmas reservas do Painel do Marketing (com o Marketplace), pela data de criação, sem canceladas; «no site» = origem site/formulário (a mesma regra do Painel)." />
                 <Kpi icon={TrendingUp} label="Conversão web → reserva" value={b?.bookingsError ? "—" : pctOf(b?.totals.conversionRate, 2)} cur={b?.bookingsError ? null : b?.totals.conversionRate} prev={b?.bookingsError ? null : b?.prevTotals.conversionRate} hint={b?.bookingsError ? "reservas indisponíveis" : "reservas no site ÷ sessões"} />
-                <Kpi icon={TrendingUp} label="Receita por sessão" value={eur(b?.totals.revenuePerSession, 2)} cur={b?.totals.revenuePerSession} prev={b?.prevTotals.revenuePerSession} hint="reservas do site (c/ IVA) ÷ sessões" />
+                <Kpi icon={TrendingUp} label="Receita por sessão" value={b?.bookingsError ? "—" : eur(b?.totals.revenuePerSession, 2)} cur={b?.bookingsError ? null : b?.totals.revenuePerSession} prev={b?.bookingsError ? null : b?.prevTotals.revenuePerSession}
+                  hint={b?.bookingsError ? "reservas indisponíveis" : "valor das reservas do site (c/ IVA) ÷ sessões"} tip="Parques nossos pelo preço; parques de terceiros (Marketplace) só pela nossa comissão — o valor do Marketing." />
                 <Kpi icon={MousePointerClick} label="Gasto em anúncios por sessão" value={eur(b?.totals.spendPerSession, 2)} cur={b?.totals.spendPerSession} prev={b?.prevTotals.spendPerSession} invert
                   hint={b?.adSpendError ? `erro a ler o gasto dos anúncios: ${b.adSpendError}` : b?.adSpendAvailable ? `${eurCompact(b?.totals.spend ?? 0)} gastos · ${eur(b?.totals.spendPerSiteBooking, 2)}/reserva no site` : "sem dados de anúncios no período"} />
               </div>
@@ -470,10 +557,12 @@ export default function MarketingWebPanel() {
                       <Bar yAxisId="s" dataKey="sessions" name="Sessões" fill="var(--wb-1)" fillOpacity={0.35} radius={[4, 4, 0, 0]} maxBarSize={20} />
                       <Line yAxisId="s" type="monotone" dataKey="siteBookings" name="Reservas no site" stroke="var(--wb-2)" strokeWidth={2} dot={false} />
                       <Line yAxisId="r" type="monotone" dataKey="conversionRate" name="Conversão" stroke="var(--wb-3)" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls />
+                      {hasToday && <ReferenceLine yAxisId="s" x={TODAY_LABEL} stroke="var(--muted-foreground)" strokeDasharray="2 3" label={{ value: "parcial", position: "insideTopRight", fontSize: 10, fill: "var(--muted-foreground)" }} />}
                     </ComposedChart>
                   </ResponsiveContainer>
                   <p className="text-[11px] text-muted-foreground">
-                    Indicador, não atribuição: compara as sessões da GA4 com as reservas feitas nos sites (origem API/formulário) no mesmo dia e marca.
+                    {hasToday && <>«hoje» é o dia em curso: as reservas de hoje ainda estão a entrar e o GA4 ainda não tem as sessões de hoje. </>}
+                    Indicador, não atribuição: compara as sessões da GA4 com as reservas feitas num site (origem API/formulário — a regra do Painel do Marketing, com o Marketplace) no mesmo dia e marca.
                     O detalhe por canal pago está em <Link href="/marketing" className="underline">Dashboard</Link> e <Link href="/marketing/canais" className="underline">Canais e clientes</Link>.
                   </p>
                 </CardContent>

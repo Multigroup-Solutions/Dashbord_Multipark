@@ -16,3 +16,16 @@ export function classifyBookingOrigin(b: {
   }
   return { group: 'outros', label: 'Sem origem' };
 }
+
+/**
+ * Origens em que a reserva é feita num SITE (o formulário multipark.app ou o
+ * site de uma marca por API) — onde o gclid/utm pode chegar. A REGRA ÚNICA
+ * (plano 64, F2) do Painel do Marketing ("Reservas feitas no site", qualidade
+ * da atribuição) e do Web & SEO (conversão web → reserva, receita por sessão).
+ */
+export const SITE_BOOKING_ORIGINS: readonly string[] = ['API', 'GENERAL_FORM'];
+
+/** A reserva foi feita num site (SITE_BOOKING_ORIGINS)? PURA. */
+export function isSiteBooking(origin: string | null | undefined): boolean {
+  return !!origin && SITE_BOOKING_ORIGINS.includes(origin);
+}
