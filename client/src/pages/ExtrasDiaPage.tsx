@@ -672,6 +672,16 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
                 {" "}(hora de Lisboa, no dia anterior).
               </p>
             )}
+            {/* Plano MPV F7 (D4b): o que a confirmação automática faz a este dia, mexido à mão. */}
+            {d?.state?.manual && d.settings.autoConfirm && d.state.status === "proposed" && (
+              <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5">
+                {d.settings.manualEditAtConfirm === "confirm"
+                  ? `Mexido à mão: às ${d.settings.autoConfirmAt} é confirmado na mesma, como está.`
+                  : d.settings.manualEditAtConfirm === "if_older_30m"
+                    ? `Mexido à mão: só é confirmado sozinho 30 min depois da última mudança.`
+                    : `Mexido à mão: às ${d.settings.autoConfirmAt} não é confirmado sozinho${d.settings.alertsOn ? " (o TL, o supervisor e o back office são avisados)" : ""} — confirma tu.`}
+              </p>
+            )}
           </div>
           {canEdit && <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" disabled={busy || !targetDate} onClick={() => propose.mutate({ date: targetDate, city })}

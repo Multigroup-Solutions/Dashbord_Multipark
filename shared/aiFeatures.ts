@@ -96,6 +96,8 @@ export const AI_FEATURES = {
   // enviado sem aprovação humana; tudo `lite` (regra do dono).
   complaint_triage: { label: "Reclamações: triagem e rascunho", flag: "AI_COMPLAINT_TRIAGE", tier: "lite", essential: false },
   review_auto_draft: { label: "Críticas: rascunho automático", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
+  // Plano MPV F7 (§6.2): resposta às 5★ publicada sozinha (interruptor REVIEW_AUTO_PUBLISH_5STAR); lite (regra do dono).
+  review_auto_publish: { label: "Críticas 5★: resposta publicada sozinha", flag: "AI_REVIEW_AUTO_DRAFTS", tier: "lite", essential: false },
   whatsapp_triage: { label: "WhatsApp: intenção e urgência", flag: "AI_WHATSAPP_TRIAGE", tier: "lite", essential: false },
   // 17f: separar os emails novos pela caixa do tema. Jorge (8 out 2026): todas as caixas
   // partilhadas; o WhatsApp usa a intenção da triagem (sem 2.ª chamada) com o mesmo interruptor.

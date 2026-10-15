@@ -2639,6 +2639,39 @@ export const appRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: safeError(error) });
       }
     }),
+    // Plano MPV F7 (§6.2): resposta automática às 5★ (interruptor REVIEW_AUTO_PUBLISH_5STAR).
+    // Estado da crítica (null = nunca entrou na fila — o normal com o interruptor desligado).
+    autoPublishFor: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "criticas", "view");
+      const review = await getGoogleReviewById(input.id); // âmbito de cidade
+      if (!review) return null;
+      const { autoPublishFor } = await import("./reviewAutoPublish");
+      return autoPublishFor(input.id);
+    }),
+    // "Cancelar" a resposta que está à espera (6 h): não sai; nada se apaga.
+    autoPublishCancel: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      requireAccess(ctx.user, "criticas", "edit");
+      const review = await getGoogleReviewById(input.id); // âmbito de cidade
+      if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      const { cancelAutoPublish } = await import("./reviewAutoPublish");
+      const r = await cancelAutoPublish(input.id, ctx.user.id);
+      if (r.cancelled) await logActivity({ userId: ctx.user.id, action: "review_auto_publish_cancel", entity: "google_review", entityId: input.id, details: "Resposta automática (5★) cancelada antes de sair" });
+      return r;
+    }),
+    // Estado geral (ligado? parado por falhas? quantas à espera?).
+    autoPublishStatus: protectedProcedure.query(async ({ ctx }) => {
+      requireAccess(ctx.user, "criticas", "view");
+      const { autoPublishStatus } = await import("./reviewAutoPublish");
+      return autoPublishStatus();
+    }),
+    // "Retomar" depois de parar por 3 falhas seguidas (admin).
+    autoPublishResume: protectedProcedure.mutation(async ({ ctx }) => {
+      requireRole(ctx.user.role, "admin");
+      const { resumeAutoPublish } = await import("./reviewAutoPublish");
+      const r = await resumeAutoPublish();
+      if (r.resumed) await logActivity({ userId: ctx.user.id, action: "review_auto_publish_resume", entity: "google_review", details: "Publicação automática das 5★ retomada" });
+      return r;
+    }),
     // Aprovar = o texto está bom. Não é "respondida": isso só quando publicada.
     approveResponse: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "edit");

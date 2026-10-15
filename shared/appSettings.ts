@@ -38,6 +38,8 @@ import {
 } from "./serviceTimes";
 import { EVALUATION_CLOSED_UNTIL_KEY, EVALUATION_CLOSERS_KEY, isIsoDay } from "./evaluationClose";
 import { operationalDayOf } from "./lisbonDay";
+import { MANUAL_EDIT_AT_CONFIRM_DEFAULT, MANUAL_EDIT_AT_CONFIRM_MODES, type ManualEditAtConfirm } from "./extrasSchedule";
+import { DEFAULT_REMINDER_RECIPIENTS, reminderRecipientsSchema } from "./extrasReminders";
 
 // ─── Entrar com código (plano 56) ───────────────────────────────────────────
 
@@ -828,9 +830,10 @@ export const SETTINGS = {
     key: "extras.autoProposeAt",
     group: "extras",
     label: "Hora da proposta automática de escala",
-    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (só a primeira proposta de cada dia e cidade: não substitui uma escala já proposta ou confirmada, e num dia mexido à mão já não mexe).",
+    description: "A partir desta hora (Lisboa) o sistema propõe a escala dos próximos dias com os extras disponíveis (só a primeira proposta de cada dia e cidade: não substitui uma escala já proposta ou confirmada, e num dia mexido à mão já não mexe). O agendador vê de 15 em 15 min, por isso a proposta sai até 15 min depois desta hora. Com o interruptor dos lembretes ligado, o lembrete sai 30 min antes.",
     schema: hhmmSchema,
-    defaultValue: "14:00",
+    // Plano MPV F7 (D4, Jorge 15 out 2026): proposta às 11:00 (antes 14:00).
+    defaultValue: "11:00",
     wiring: "live",
   }),
   "extras.autoProposeDaysAhead": def({
@@ -855,9 +858,30 @@ export const SETTINGS = {
     key: "extras.autoConfirmAt",
     group: "extras",
     label: "Hora da confirmação automática",
-    description: "Hora (Lisboa) a partir da qual a proposta de amanhã é confirmada e enviada automaticamente (se não estiver suspensa).",
+    description: "Hora (Lisboa) a partir da qual a proposta de amanhã é confirmada e enviada automaticamente (se não estiver suspensa). O agendador vê de 15 em 15 min. Um dia mexido à mão segue a regra \"Dia mexido à mão na hora da confirmação\".",
     schema: hhmmSchema,
-    defaultValue: "18:00",
+    // Plano MPV F7 (D4, Jorge 15 out 2026): confirmar e chamar às 15:00 (antes 18:00).
+    defaultValue: "15:00",
+    wiring: "live",
+  }),
+  // Plano MPV F7 (D4b, por decidir pelo Jorge): as três opções; omissão = a mais segura.
+  "extras.manualEditAtConfirm": def({
+    key: "extras.manualEditAtConfirm",
+    group: "extras",
+    label: "Dia mexido à mão na hora da confirmação",
+    description: "O que a confirmação automática faz a um dia em que alguém mexeu à mão (pôs, tirou, mudou horas, refez a proposta…): confirmar na mesma, como está (o que se fazia até aqui); não confirmar e avisar o TL, o supervisor e o back office da cidade (sino e email, com o interruptor \"Extras-dia: avisos da escala\"; repete às 18:00 se continuar por confirmar) para confirmarem eles; ou só confirmar quando a última mudança à mão tiver mais de 30 min (até lá volta a ver de 15 em 15 min; uma mudança depois das ~23:15 avisa, porque já não dá para confirmar sozinho). Omissão: confirma na mesma (o que se faz hoje), até o Jorge decidir.",
+    schema: z.enum(MANUAL_EDIT_AT_CONFIRM_MODES as [ManualEditAtConfirm, ...ManualEditAtConfirm[]], { error: "Escolhe uma das três opções." }),
+    defaultValue: MANUAL_EDIT_AT_CONFIRM_DEFAULT,
+    wiring: "live",
+  }),
+  // Plano MPV F7 (D4c, por decidir pelo Jorge): a quem vão os lembretes, por cidade e em que dias.
+  "extras.reminderRecipients": def({
+    key: "extras.reminderRecipients",
+    group: "extras",
+    label: "Lembretes da escala: a quem e em que dias (por cidade)",
+    description: "Os lembretes 30 min antes da proposta e da confirmação automáticas (interruptor \"Extras-dia: lembretes antes da proposta e da confirmação\", em Definições → Automações) vão, em cada cidade, às pessoas com estes papéis nessa cidade e às contas juntadas, só nos dias da semana escolhidos (o dia em que o lembrete sai). Sino da app; o email segue o Perfil de cada pessoa. Omissão: team leader e supervisor da cidade, todos os dias.",
+    schema: reminderRecipientsSchema,
+    defaultValue: DEFAULT_REMINDER_RECIPIENTS,
     wiring: "live",
   }),
   "extras.meetingPoints": def({
@@ -1145,6 +1169,12 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   // D30 (Jorge, 3 out 2026): interruptor próprio. Sem valor próprio segue a
   // "Automação dos extras" (como era até aqui) — nada muda até alguém o mudar.
   { name: "EXTRAS_AVAILABILITY_AUTO_REPLY", label: "Extras: resposta automática no WhatsApp", description: "Quando um extra responde pelo WhatsApp ao pedido de disponibilidade (ou carrega Sim/Não no aviso de turno), marca os dias e responde-lhe sozinho. Desligado: a resposta fica na caixa do WhatsApp para uma pessoa tratar. Sem valor próprio, segue a \"Automação dos extras\".", followsFlag: "EXTRAS_AUTOMATION" },
+  // Plano MPV F7 (D4/D4c): avisa gente → desligado até o Jorge decidir a quem vão (D4c).
+  { name: "EXTRAS_REMINDERS", label: "Extras-dia: lembretes antes da proposta e da confirmação", description: "30 min antes da proposta automática (10:30, por omissão) e da confirmação automática (14:30) avisa no sino quem está em Definições → Parâmetros → \"Lembretes da escala: a quem e em que dias\" (omissão: TL e supervisor da cidade, todos os dias) com o estado da escala de amanhã. Só com a \"Automação dos extras\" ligada. Desligado por omissão.", defaultEnabled: false },
+  // Plano MPV F7 (§6.1, auditoria): avisos novos a pessoas → desligados até o Jorge ver (regra da casa).
+  { name: "EXTRAS_SCHEDULE_ALERTS", label: "Extras-dia: avisos da escala (por confirmar, por avisar, cobertura)", description: "Sino e email ao TL, ao supervisor e ao back office da cidade (e aos admins, se ninguém da cidade os receber) quando: um dia mexido à mão não foi confirmado sozinho; um extra ficou por avisar (nenhum canal chegou depois das tentativas todas); a escala confirmada cobre menos de 80 % das horas; ou a confirmação automática falhou. Desligado: nada disto avisa ninguém (a escala corre na mesma). Desligado por omissão.", defaultEnabled: false },
+  // Plano MPV F7 (§6.1): mexe na escala sozinho → desligado até o Jorge ver.
+  { name: "EXTRAS_COMPLETE_BEFORE_CONFIRM", label: "Extras-dia: completar com quem respondeu antes da confirmação", description: "30 min antes da confirmação automática (14:30, por omissão), num dia com a proposta automática ainda intocada, acrescenta às horas em falta os extras que marcaram disponibilidade depois da proposta (só acrescenta, nunca tira ninguém; num dia mexido à mão não faz nada). As linhas novas ficam \"proposta automática\" e o lembrete da confirmação diz quem entrou. Desligado por omissão.", defaultEnabled: false },
   // D31 (Jorge, 3 out 2026): era só a variável WHATSAPP_SLA_NOTIFY=off; a variável continua a valer.
   { name: "WHATSAPP_SLA_NOTIFY", label: "WhatsApp: aviso de conversas por responder", description: "De hora a hora, avisa no sino as conversas do WhatsApp fora do prazo de resposta, as urgentes e as que têm a janela de 24 h a fechar (por cidade e ao responsável). Desligado: a caixa continua a mostrar os atrasos, só não avisa." },
   { name: "LEAD_REMINDERS", label: "Lembretes das leads de extras", description: "Lembretes automáticos às leads que ainda não responderam." },
@@ -1174,6 +1204,8 @@ export const AUTOMATION_FLAGS: readonly AutomationFlag[] = [
   // 33a (Jorge, 6 out 2026): Google Business pela Windsor — escreve/publica → desligados por omissão.
   { name: "GBP_WINDSOR_SYNC", label: "Críticas: importar do Google Business pela Windsor", description: "Quando a Google não está ligada diretamente, a recolha agendada vai buscar as avaliações dos perfis escolhidos à Windsor (WINDSOR_API_KEY) e põe-nas nas Críticas, como a ligação direta (1–3 estrelas → Reclamações). A 1.ª vez vai até 3 anos para trás; depois os últimos 60 dias. O botão \"Importar pela Windsor\" funciona sem isto. Desligado por omissão.", defaultEnabled: false },
   { name: "GBP_WINDSOR_REPLY", label: "Críticas: publicar respostas no Google pela Windsor", description: "Quando a Google não está ligada diretamente, o \"Aprovar e publicar\" das Críticas publica a resposta pela Windsor (ação reply_to_review — tem de estar ativa na equipa da Windsor). A resposta é pública e substitui a anterior. Desligado: publica-se no perfil Google e marca-se \"Já publiquei\". Desligado por omissão.", defaultEnabled: false },
+  // Plano MPV F7 (§6.2, D6): conteúdo PÚBLICO publicado sem uma pessoa → desligado e só o super admin o liga.
+  { name: "REVIEW_AUTO_PUBLISH_5STAR", label: "Críticas 5★: publicar a resposta sozinho (6 h depois)", description: "Para as críticas de 5★ ligadas ao Google (API ou Windsor), recentes, sem reclamação, sem resposta e sem links, contactos, insultos ou instruções no texto: a IA barata escreve a resposta, que fica 6 h à vista na crítica (com \"Cancelar\") e só depois é publicada, com o utilizador do sistema — antes de publicar volta a ler a crítica no Google (tem de continuar com 5★, o mesmo texto e sem resposta). No máximo 20 por dia e por perfil; pára sozinho ao fim de 3 falhas seguidas e avisa. Desligar pára as que estão à espera (as já publicadas ficam). Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
   // Jorge (14 out 2026): "porque é que os 141 não dão aviso nenhum?" — avisa gente → desligado por omissão.
   // Tarefa 62 (Q8, Jorge: "não vem: marca-se falta"): as faltas de quem tem horário fixo, como as dos extras.
   { name: "RH_FALTAS_HORARIO", label: "RH: possíveis faltas de quem tem horário fixo", description: "Todas as madrugadas (manutenção diária), quem tinha horário fixo na ficha do RH (Horário; funcionários — os extras regem-se pela escala) num dia de trabalho e não picou a entrada fica como \"possível falta\" na lista RH → Possíveis faltas, para alguém da operação confirmar ou dispensar. Confirmada, fica marcada como falta, sem pontos de penalização (não soma para o bloqueio da app das 3 faltas dos extras). Fora: quem estava na escala do Extras-Dia nesse dia (tem a sua regra), férias e baixas, dias livres do horário, fora do contrato, os feriados (nacionais e o municipal da cidade da ficha: 13 jun Lisboa, 24 jun Porto, 7 set Faro) e quem mexeu em carros na Multipark. Não avisa ninguém. Desligado por omissão.", defaultEnabled: false, superAdminOnly: true },
@@ -1353,9 +1385,13 @@ export const CRON_JOBS: readonly CronJob[] = [
   { name: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", intervalMinutes: 240, workflow: "tick" },
   { name: "google-watch-renew", label: "Google: renovar canais de notificação (Calendário/Drive)", intervalMinutes: 1440, workflow: "tick" },
   { name: "extras-auto", label: "Automação dos extras", intervalMinutes: 60, workflow: "tick" },
-  // De hora a hora entre as 08h e as 23h (Lisboa); 300 min para a pausa da
-  // noite (~9 h) não aparecer como "parado".
+  // De 15 em 15 min entre as 08h e as 23h (Lisboa; plano MPV F7); 300 min para
+  // a pausa da noite (~9 h) não aparecer como "parado".
   { name: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", intervalMinutes: 300, workflow: "tick" },
+  // Plano MPV F7: lembretes 30 min antes da proposta e da confirmação (interruptor EXTRAS_REMINDERS). Igual: 08h–23h.
+  { name: "extras-reminders", label: "Extras-dia: lembretes antes da proposta e da confirmação", intervalMinutes: 300, workflow: "tick" },
+  // Plano MPV F7 (§6.2): críticas 5★ respondidas sozinhas (interruptor REVIEW_AUTO_PUBLISH_5STAR, desligado). 08h–23h.
+  { name: "reviews-5star", label: "Críticas 5★: responder sozinho (6 h depois, desligado por omissão)", intervalMinutes: 300, workflow: "tick" },
   { name: "identity-sweep", label: "Ligações funcionário ↔ utilizador", intervalMinutes: 60, workflow: "tick" },
   // CRM (27 set 2026): fichas de cliente a partir das reservas + sugestões de fusão.
   { name: "crm-sync", label: "CRM: fichas de cliente a partir das reservas", intervalMinutes: 1440, workflow: "tick" },
