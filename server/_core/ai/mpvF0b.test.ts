@@ -496,6 +496,29 @@ describe("reserva do teto próprio: nunca fica presa e é do tamanho do turno", 
     expect(ownBudgetReservedForTests("assistant_smart", 7, t0 + 1_001)).toEqual({ feature: 0, user: 0 });
   });
 
+  it("duas reservas em paralelo da mesma pessoa: libertar uma (mesmo duas vezes) não apaga a outra", () => {
+    const releaseA = reserveOwnBudget("assistant_smart", 7, 0.3);
+    const releaseB = reserveOwnBudget("assistant_smart", 7, 0.5);
+    expect(ownBudgetReservedForTests("assistant_smart", 7).user).toBeCloseTo(0.8);
+    releaseA();
+    releaseA();
+    expect(ownBudgetReservedForTests("assistant_smart", 7).user).toBeCloseTo(0.5);
+    releaseB();
+    expect(ownBudgetReservedForTests("assistant_smart", 7)).toEqual({ feature: 0, user: 0 });
+  });
+
+  it("a reserva só sai depois de o custo real estar gravado", async () => {
+    let reservedDuringInsert = -1;
+    setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse("ok")]) });
+    h.db = createFakeDb((q) => {
+      if (/INSERT INTO\s+`?ai_usage_log/i.test(q.sql)) reservedDuringInsert = ownBudgetReservedForTests("assistant_smart", 7).user;
+      return q.sql.includes("AS dayEur") ? [[{ dayEur: "0", monthEur: "0" }]] : q.sql.includes("userId = ?") ? [[{ spent: "0" }]] : [[]];
+    });
+    await runAi({ feature: "assistant_smart", input: "?", userId: 7 });
+    expect(reservedDuringInsert).toBeGreaterThan(0);
+    expect(ownBudgetReservedForTests("assistant_smart", 7)).toEqual({ feature: 0, user: 0 });
+  });
+
   it("o runAi dá à reserva a validade de 2× o prazo do pedido", async () => {
     let seen = 0;
     setAiProvidersForTests({ gemini: createFakeProvider("gemini", [async () => {

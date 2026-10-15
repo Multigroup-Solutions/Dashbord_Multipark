@@ -329,16 +329,21 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
   const maxOutFor = (m: string) =>
     opts.scaleMaxTokensForThinking ? maxTokensFor(maxTokens, thinkingLevelFor(m, env, thinkingFor()), { noThinking: !supportsThinkingLevel(m) }) : maxTokens;
 
+  // A reserva só sai depois de o custo real estar gravado: durante o INSERT a pergunta conta a dobrar
+  // (lado prudente), em vez de uma leitura fresca de outra pergunta não a ver de todo.
   const finish = async (status: "ok" | "error", errorCode: string | null) => {
-    releaseOwn();
-    await logAiUsage({
-      ...meta, tier, provider: providerId, model,
-      inputTokens: usageTotal.inputTokens, outputTokens: usageTotal.outputTokens, cachedTokens: usageTotal.cachedTokens,
-      costEur: cost, latencyMs: Date.now() - started, status, errorCode,
-      finishReason: lastFinishReason,
-      rounds: tools ? rounds.length : null,
-      forcedFinal: tools ? forcedFinal : null,
-    });
+    try {
+      await logAiUsage({
+        ...meta, tier, provider: providerId, model,
+        inputTokens: usageTotal.inputTokens, outputTokens: usageTotal.outputTokens, cachedTokens: usageTotal.cachedTokens,
+        costEur: cost, latencyMs: Date.now() - started, status, errorCode,
+        finishReason: lastFinishReason,
+        rounds: tools ? rounds.length : null,
+        forcedFinal: tools ? forcedFinal : null,
+      });
+    } finally {
+      releaseOwn();
+    }
   };
 
   type Step =
