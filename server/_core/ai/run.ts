@@ -248,6 +248,28 @@ export function parseStructured<S extends z.ZodType>(text: string, schema: S): z
   return r.data;
 }
 
+/**
+ * Fornecedor, modelo e nível de raciocínio JÁ resolvidos que o `runAi` vai usar
+ * nesta funcionalidade (mesma ordem: Definições `ai.featureTiers` e
+ * `ai.thinkingLevels`, env). Para chaves de cache (plano MPV F6b, seguimento):
+ * mudar o modelo ou o raciocínio muda a chave. null = sem fornecedor.
+ */
+export async function resolvedAiCall(
+  feature: AiFeature,
+  opts: Pick<RunAiBase, "tier" | "model" | "thinkingLevel" | "thinkingFromCaller" | "env"> = {},
+): Promise<{ provider: AiProviderId; model: string; thinking: string | null } | null> {
+  const env = opts.env ?? process.env;
+  const tier: AiTier = resolveFeatureTier(feature, { requested: opts.tier, settings: await loadFeatureTierSettings(), env });
+  const providerId = selectProvider(env, feature);
+  if (!providerId) return null;
+  const model = opts.model || resolveModel(tier, providerId, env);
+  const requested = opts.thinkingFromCaller
+    ? opts.thinkingLevel
+    : resolveThinkingLevel(feature, { requested: opts.thinkingLevel, settings: await loadThinkingLevelSettings() });
+  const forTier = tier === "smart" && requested === "minimal" ? undefined : requested;
+  return { provider: providerId, model, thinking: thinkingLevelFor(model, env, forTier) };
+}
+
 export function runAi<S extends z.ZodType>(opts: RunAiBase & { schema: S }): Promise<RunAiResult<z.output<S>>>;
 export function runAi(opts: RunAiBase & { schema?: undefined }): Promise<RunAiResult<string>>;
 export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<RunAiResult<unknown>> {

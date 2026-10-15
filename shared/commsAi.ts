@@ -309,12 +309,30 @@ const OPEN_VERBS: ReadonlySet<string> = new Set(["abre", "abrem", "abriu", "abri
 /** "sem urgência", "não é urgente", "nada urgente" — negação logo antes: não conta. */
 const NEGATIONS: ReadonlySet<string> = new Set(["sem", "nao", "nada", "nenhuma", "nenhum", "no", "not"]);
 
-/** A mensagem tem uma palavra de urgência (acidente, avaria, roubo, preso, "não abre"…)? PURA. */
-export function whatsappUrgentByWords(text: string | null | undefined): boolean {
+/**
+ * Só as FORTES (seguimento F6b): acidente, avaria, roubo/furto/assalto,
+ * batida/colisão, incêndio, ferido, polícia, reboque, urgente/emergência. Sem
+ * "ajuda", "preso", "portão" nem "não abre" — numa resposta de disponibilidade
+ * "obrigado pela ajuda" ou "abro o portão às 6h" não são urgências.
+ */
+const STRONG_URGENT_STEMS: readonly string[] = [
+  "acident", "avari", "roub", "furt", "assalt", "colis", "colid", "embat", "sinistr", "incendi", "ferid",
+  "policia", "reboqu", "reboc", "urgen", "emergenc", "accident", "crash", "stolen", "theft", "robber", "injur", "police", "emergency",
+];
+const STRONG_URGENT_WORDS: ReadonlySet<string> = new Set(["bateu", "bati", "batida", "bateram", "fogo", "psp", "gnr", "inem", "fire"]);
+
+/**
+ * A mensagem tem uma palavra de urgência (acidente, avaria, roubo, preso,
+ * "não abre"…)? `strongOnly`: só as fortes (a urgência por regra nas respostas
+ * de disponibilidade, sem IA). PURA.
+ */
+export function whatsappUrgentByWords(text: string | null | undefined, opts: { strongOnly?: boolean } = {}): boolean {
   const w = matchWords(text);
+  const stems = opts.strongOnly ? STRONG_URGENT_STEMS : URGENT_STEMS;
+  const words = opts.strongOnly ? STRONG_URGENT_WORDS : URGENT_WORDS;
   return w.some((word, i) => {
-    if (OPEN_VERBS.has(word)) return w[i - 1] === "nao" || (w[i - 2] === "nao" && w[i - 1] === "se");
-    if (!(URGENT_WORDS.has(word) || URGENT_STEMS.some((s) => word.startsWith(s)))) return false;
+    if (OPEN_VERBS.has(word)) return !opts.strongOnly && (w[i - 1] === "nao" || (w[i - 2] === "nao" && w[i - 1] === "se"));
+    if (!(words.has(word) || stems.some((s) => word.startsWith(s)))) return false;
     // "urgen…" negado ("sem urgência", "não é urgente") não é urgência.
     if (word.startsWith("urgen")) {
       const before = w.slice(Math.max(0, i - 2), i);
