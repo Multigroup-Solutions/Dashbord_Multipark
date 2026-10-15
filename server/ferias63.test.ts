@@ -449,4 +449,13 @@ describe("interruptores e definições", () => {
       expect(block, name).toContain("await assertMapOn();");
     }
   });
+  it("(auditoria final) sem números de registo no ecrã: contas e pessoas que já não estão ativas dizem-se por palavras", () => {
+    const ed = src("client/src/components/ferias/VacationApprovalsEditor.tsx");
+    expect(ed).not.toMatch(/`Conta \$\{|`Ficha \$\{/);
+    expect(ed).toContain('"Conta que já não está ativa"');
+    expect(ed).toContain('"Pessoa que já não está ativa"');
+    for (const f of ["client/src/pages/FeriasPage.tsx", "client/src/components/ferias/FeriasBits.tsx"]) {
+      expect(src(f), f).not.toMatch(/`(Conta|Ficha|Pedido|Ausência) #?\$\{/);
+    }
+  });
 });

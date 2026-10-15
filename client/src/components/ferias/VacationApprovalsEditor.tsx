@@ -27,7 +27,8 @@ function AccountsPicker({ ids, users, disabled, onChange }: { ids: number[]; use
         <div className="flex flex-wrap gap-1.5">
           {ids.map((id) => {
             const u = byId.get(id);
-            const label = u?.name || u?.email || `Conta ${id}`;
+            // sem números de registo no ecrã: uma conta que já não vem na lista (desativada) diz-se assim
+            const label = u ? (u.name || u.email || "Conta sem nome") : "Conta que já não está ativa";
             return (
               <span key={id} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs">
                 {label}
@@ -86,7 +87,7 @@ export function VacationApprovalsEditor({ value, onChange, disabled }: { value: 
         {value.people.map((p, i) => (
           <div key={`${p.employeeId}-${i}`} className="rounded-[14px] border p-2.5 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold">{nameOf.get(p.employeeId) ?? `Ficha ${p.employeeId}`}</span>
+              <span className="text-sm font-semibold">{nameOf.get(p.employeeId) ?? (peopleQ.isLoading ? "A carregar…" : "Pessoa que já não está ativa")}</span>
               <Input className="h-7 max-w-xs text-xs" placeholder="Nota (opcional)" value={p.note ?? ""} disabled={disabled} maxLength={120}
                 onChange={(e) => onChange({ ...value, people: value.people.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)) })} />
               <Button type="button" size="sm" variant="ghost" className="ml-auto h-7" disabled={disabled} aria-label="Tirar exceção"
