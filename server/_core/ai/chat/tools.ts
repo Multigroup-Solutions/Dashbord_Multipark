@@ -40,10 +40,20 @@ export interface ChatTool<Ctx> {
   /** JSON Schema de objeto (tipos simples: string, integer, boolean, enum). */
   parameters?: Record<string, unknown>;
   available(ctx: Ctx): boolean;
-  /** `extra.redact`: o contexto de redação do turno (para quem precise de o usar à mão). */
-  run(args: Record<string, unknown>, ctx: Ctx, extra?: { redact?: RedactionContext }): Promise<Record<string, unknown>>;
+  /**
+   * `extra.redact`: o contexto de redação do turno (para quem precise de o usar à mão);
+   * `extra.maskPeople`: a mesma opção do executor (false → colegas só pelo 1.º nome).
+   */
+  run(args: Record<string, unknown>, ctx: Ctx, extra?: { redact?: RedactionContext; maskPeople?: boolean }): Promise<Record<string, unknown>>;
   /** Campos com dados pessoais no resultado (ver ToolPiiFields). */
   pii?: ToolPiiFields;
+  /**
+   * A ferramenta já passa os seus campos `pii` pela redação do turno (com
+   * `extra.redact`/`extra.maskPeople`) ANTES de cortar textos ou listas — o
+   * executor não volta a redigir (um corte antes da redação deixava escapar
+   * "joao@gmail.c…"). Plano MPV F4.
+   */
+  selfRedacts?: boolean;
 }
 
 /**
@@ -138,7 +148,8 @@ export function makeToolExecutor<Ctx>(
     const tool = byName.get(call.name);
     if (!tool || !tool.available(ctx)) return { error: "Ferramenta indisponível para esta pessoa." };
     try {
-      return redactToolResult(await tool.run(args, ctx, { redact: opts.redact }), tool.pii, opts.redact, { maskPeople: opts.maskPeople });
+      const result = await tool.run(args, ctx, { redact: opts.redact, maskPeople: opts.maskPeople });
+      return tool.selfRedacts ? result : redactToolResult(result, tool.pii, opts.redact, { maskPeople: opts.maskPeople });
     } catch (err) {
       if (err instanceof ToolUserError) return { error: err.message };
       const code = (err as any)?.code;
