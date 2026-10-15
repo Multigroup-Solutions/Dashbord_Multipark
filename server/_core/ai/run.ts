@@ -55,8 +55,8 @@ import {
 } from "./features";
 import { toProviderJsonSchema } from "./jsonSchema";
 import { fallbackTier, maxTokensFor, resolveModel, supportsThinkingLevel, type AiTier } from "./models";
-import { costEur, type TokenUsage } from "./pricing";
-import { enforceBudget, getPriceOverrides, logAiUsage, ownBudgetCheck, reserveOwnBudget } from "./usage";
+import { costEur, priceFor, type TokenUsage } from "./pricing";
+import { enforceBudget, getPriceOverrides, logAiUsage, ownBudgetCheck, ownBudgetTurnEstimateEur, reserveOwnBudget } from "./usage";
 import { euVertexOk, requiresEuVertex } from "../../../shared/aiLimits";
 
 /** Prazo por omissão (a função do Vercel morre aos 60 s). */
@@ -285,13 +285,12 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
       throw new AiBudgetExceededError("own", own.reason);
     }
   }
-  // Reserva à cabeça o máximo estimado do turno (pedidos ao mesmo tempo contam com ela); liberta-se ao registar o custo real.
-  const releaseOwn = reserveOwnBudget(opts.feature, opts.userId ?? null);
+  // A reserva do teto próprio só se faz mesmo antes do pedido (ver abaixo), com try/finally.
+  let releaseOwn: () => void = () => undefined;
 
   try {
     await enforceBudget(def.essential);
   } catch (err) {
-    releaseOwn();
     await logAiUsage({ ...meta, tier, provider: providerId, model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, costEur: 0, latencyMs: 0, status: "blocked", errorCode: "budget" });
     throw err;
   }
@@ -482,6 +481,26 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
     finishReason: lastFinishReason, rounds: rounds.length, forcedFinal, fallback,
   });
 
+  // Reserva à cabeça o custo MÁXIMO estimado do turno (pedidos ao mesmo tempo
+  // contam com ela): teto de saída × preço de saída + entrada estimada × preço
+  // de entrada, × as chamadas possíveis; mínimo 0,20 €. Feita aqui, colada ao
+  // try/finally — nada entre as duas pode lançar —, liberta-se ao registar o
+  // custo real (finish) e, se a função morrer pelo limite da Vercel, expira
+  // sozinha ao fim de 2× o prazo do pedido.
+  if (hasOwnBudget(opts.feature)) {
+    const textChars = (opts.system?.length ?? 0)
+      + (opts.history ?? []).reduce((a, t) => a + (t.text?.length ?? 0), 0)
+      + parts.reduce((a, p) => a + (p.type === "text" ? p.text.length : 4_000), 0)
+      + (tools ? JSON.stringify(tools.declarations).length : 0);
+    const estimate = ownBudgetTurnEstimateEur({
+      price: priceFor(model, overrides),
+      maxOutputTokens: maxOutFor(model),
+      inputTokens: Math.ceil(textChars / 4),
+      calls: tools ? maxRounds + 1 : 1,
+    });
+    releaseOwn = reserveOwnBudget(opts.feature, opts.userId ?? null, estimate, { ttlMs: 2 * Math.max(1_000, deadline - started) });
+  }
+
   try {
     for (;;) {
       let step: Step;
@@ -527,6 +546,8 @@ export async function runAi(opts: RunAiBase & { schema?: z.ZodType }): Promise<R
     console.warn(`[ai] ${opts.feature} falhou: ${aiErrorCode(final)} (tentativas: ${attempts}, ${providerId}/${model})`);
     await finish("error", aiErrorCode(final));
     throw final;
+  } finally {
+    releaseOwn(); // já libertada no finish; isto cobre qualquer saída inesperada
   }
 }
 

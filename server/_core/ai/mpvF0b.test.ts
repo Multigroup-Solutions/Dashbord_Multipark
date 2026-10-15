@@ -28,7 +28,7 @@ import { aiFeatureAvailableLogged, resetEuOnlyLogForTests } from "./status";
 import { createFakeDb, createFakeProvider, httpError, okResponse, type FakeQuery } from "./testUtils";
 import {
   OWN_BUDGET_TURN_RESERVE_EUR, aiUsageDaily, aiUsageSummary, dayBounds, logAiUsage, monthSpendEur, ownBudgetCheck, ownBudgetDecision, ownBudgetReservedForTests,
-  reserveOwnBudget, resetAiUsageCachesForTests,
+  reserveOwnBudget, resetAiUsageCachesForTests, ownBudgetTurnEstimateEur,
 } from "./usage";
 import { AI_OWN_BUDGET_FEATURES, hasOwnBudget } from "../../../shared/aiFeatures";
 import { AI_ASSISTANT_SMART_DEFAULT_BUDGET, AUTOMATION_FLAGS, validateSetting } from "../../../shared/appSettings";
@@ -471,5 +471,69 @@ describe("migração 0695 (resposta do Multis com marcadores)", () => {
     const schema = readFileSync(resolve(__dirname, "../../../drizzle/schema.ts"), "utf8");
     expect(schema).toContain("contentMasked: mediumtext(),");
     expect(schema).toContain("maskedNames: text(),");
+  });
+});
+
+// ─── Seguimento do F0b: reserva sem ficar presa e estimativa do turno ───────
+
+describe("reserva do teto próprio: nunca fica presa e é do tamanho do turno", () => {
+  it("se a preparação do pedido lançar, não fica reserva nenhuma", async () => {
+    setAiProvidersForTests({ gemini: createFakeProvider("gemini", [okResponse("nunca")]) });
+    const opts: any = { feature: "assistant_smart", userId: 7 };
+    Object.defineProperty(opts, "input", { get() { throw new Error("input partido"); } });
+    await expect(runAi(opts)).rejects.toThrow(/input partido/);
+    expect(ownBudgetReservedForTests("assistant_smart", 7)).toEqual({ feature: 0, user: 0 });
+  });
+
+  it("uma reserva expirada (a função morreu sem a libertar) deixa de contar", async () => {
+    const t0 = Date.now();
+    reserveOwnBudget("assistant_smart", 7, 2.9, { ttlMs: 1_000, now: t0 });
+    expect(ownBudgetReservedForTests("assistant_smart", 7, t0 + 500)).toEqual({ feature: 2.9, user: 2.9 });
+    // no ownBudgetCheck também: ainda válida bloqueia a pessoa (2,9 + 0,2 ≥ 3); expirada já não
+    h.db = createFakeDb((q) => (q.sql.includes("AS dayEur") ? [[{ dayEur: "0", monthEur: "0" }]] : q.sql.includes("userId = ?") ? [[{ spent: "0.2" }]] : [[]]));
+    expect(await ownBudgetCheck("assistant_smart", 7, t0 + 500)).toMatchObject({ ok: false, reason: "user_day" });
+    expect(await ownBudgetCheck("assistant_smart", 7, t0 + 1_001)).toMatchObject({ ok: true });
+    expect(ownBudgetReservedForTests("assistant_smart", 7, t0 + 1_001)).toEqual({ feature: 0, user: 0 });
+  });
+
+  it("o runAi dá à reserva a validade de 2× o prazo do pedido", async () => {
+    let seen = 0;
+    setAiProvidersForTests({ gemini: createFakeProvider("gemini", [async () => {
+      seen = ownBudgetReservedForTests("assistant_smart", 7, Date.now() + 2 * 3_000 - 200).user;
+      const gone = ownBudgetReservedForTests("assistant_smart", 7, Date.now() + 2 * 3_000 + 1_000).user;
+      expect(gone).toBe(0);
+      return okResponse("ok");
+    }]) });
+    await runAi({ feature: "assistant_smart", input: "?", userId: 7, timeoutMs: 3_000 });
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it("estimativa: saída máxima × preço × chamadas + entrada; nunca abaixo de 0,20 €", () => {
+    const p = { input: 2 * USD_TO_EUR, output: 10 * USD_TO_EUR };
+    expect(ownBudgetTurnEstimateEur({ price: p, maxOutputTokens: 1000, inputTokens: 1000, calls: 1 })).toBe(0.2);
+    // Argon, "default" (8 192 de saída), 10 000 tokens de entrada, 5 chamadas
+    expect(ownBudgetTurnEstimateEur({ price: p, maxOutputTokens: 8192, inputTokens: 10_000, calls: 5 }))
+      .toBeCloseTo(5 * (8192 * 10 + 10_000 * 2) * USD_TO_EUR / 1e6, 6);
+  });
+
+  it("Argon com raciocínio 'default' e ferramentas: a reserva é a estimativa do turno (> 0,20 €)", async () => {
+    let reserved = 0;
+    const p = createFakeProvider("gemini", [async () => {
+      reserved = ownBudgetReservedForTests("assistant_smart", 7).user;
+      return okResponse("Feito.", "gemini-4-argon");
+    }]);
+    setAiProvidersForTests({ gemini: p });
+    const system = "R".repeat(40_000);
+    await runAi({
+      feature: "assistant_smart", system, input: "?", userId: 7, maxTokens: 2048, thinkingLevel: "default", scaleMaxTokensForThinking: true,
+      tools: { declarations: [TOOL], execute, maxRounds: 4 },
+    });
+    expect(p.calls[0].maxOutputTokens).toBe(8192);
+    const expected = ownBudgetTurnEstimateEur({
+      price: priceFor("gemini-4-argon"), maxOutputTokens: 8192, inputTokens: Math.ceil((40_000 + 1 + JSON.stringify([TOOL]).length) / 4), calls: 5,
+    });
+    expect(expected).toBeGreaterThan(0.4);
+    expect(reserved).toBeCloseTo(expected, 6);
+    expect(ownBudgetReservedForTests("assistant_smart", 7)).toEqual({ feature: 0, user: 0 });
   });
 });
