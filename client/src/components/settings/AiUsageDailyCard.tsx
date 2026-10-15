@@ -75,6 +75,7 @@ export function AiUsageDailyCard() {
                       <th className="py-1 px-1 font-medium text-right">Chamadas</th>
                       <th className="py-1 px-1 font-medium text-right">Erros</th>
                       <th className="py-1 px-1 font-medium text-right">Bloq.</th>
+                      <th className="py-1 px-1 font-medium text-right hidden md:table-cell" title="Texto de recurso / chamada final sem ferramentas / cortadas por MAX_TOKENS">Recurso / final / máx.</th>
                       <th className="py-1 px-1 font-medium text-right hidden sm:table-cell">Tokens (entrada/saída)</th>
                       <th className="py-1 px-1 font-medium text-right">Custo</th>
                       <th className="py-1 px-1 font-medium text-right hidden sm:table-cell">1.ª–última (UTC)</th>
@@ -90,6 +91,9 @@ export function AiUsageDailyCard() {
                         <td className="py-1 px-1 text-right tabular-nums">
                           {r.blocked ? n(r.blocked) : "—"}
                           {r.euOnly > 0 && <span className="text-muted-foreground"> ({n(r.euOnly)} só UE)</span>}
+                        </td>
+                        <td className="py-1 px-1 text-right tabular-nums hidden md:table-cell whitespace-nowrap" title="Texto de recurso / chamada final sem ferramentas / cortadas por MAX_TOKENS">
+                          {r.fallbacks || r.forcedFinal || r.maxTokens ? `${n(r.fallbacks)} / ${n(r.forcedFinal)} / ${n(r.maxTokens)}` : "—"}
                         </td>
                         <td className="py-1 px-1 text-right tabular-nums hidden sm:table-cell">{n(r.inputTokens)} / {n(r.outputTokens)}</td>
                         <td className="py-1 px-1 text-right tabular-nums">{eur(r.costEur)}</td>

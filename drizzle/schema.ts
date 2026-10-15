@@ -937,12 +937,12 @@ export const employees = mysqlTable("employees", {
 	deactivatedById: int(),
 	// 0585 (49c): a pessoa INATIVA carregou em "Voltei, quero trabalhar" (o RH vê "Quer voltar").
 	comebackRequestedAt: datetime({ mode: 'string' }),
-	// 0720 (plano 63): cópia do modo do ponto de HOJE (NULL = sem modo; fixed | exempt | always_on).
+	// 0820 (plano 63): cópia do modo do ponto de HOJE (NULL = sem modo; fixed | exempt | always_on).
 	// Só para mostrar — o ordenado e a Avaliação leem o histórico (employee_ponto_modes).
 	pontoMode: varchar({ length: 12 }),
 });
 
-// 0720 (plano 63, passo 1): histórico do modo do ponto — "a partir de" (dia
+// 0820 (plano 63, passo 1): histórico do modo do ponto — "a partir de" (dia
 // operacional). Uma mudança posterior com data igual ou anterior substitui as
 // seguintes (shared/pontoMode.ts). Nada se apaga.
 export const employeePontoModes = mysqlTable("employee_ponto_modes", {
@@ -958,7 +958,7 @@ export const employeePontoModes = mysqlTable("employee_ponto_modes", {
 	index("idx_employee_ponto_modes_emp").on(table.employeeId, table.effectiveFrom),
 ]);
 
-// 0720: alertas do ponto (zona, caras, turnos longos, fim de semana da isenção…).
+// 0820: alertas do ponto (zona, caras, turnos longos, fim de semana da isenção…).
 // Um por (ficha, dedupeKey); a chave não leva o id da ficha (juntar fichas).
 export const pontoAlerts = mysqlTable("ponto_alerts", {
 	id: int().autoincrement().primaryKey(),
@@ -984,7 +984,7 @@ export const pontoAlerts = mysqlTable("ponto_alerts", {
 	index("idx_ponto_alerts_emp_day").on(table.employeeId, table.day),
 ]);
 
-// 0720: avisos escritos lidos ("Li" na app ou em papel, registado pelo RH).
+// 0820: avisos escritos lidos ("Li" na app ou em papel, registado pelo RH).
 // As colunas da ativação do modo 3 (foto, GPS, Zello) só se preenchem no passo 8.
 export const pontoModeAcks = mysqlTable("ponto_mode_acks", {
 	id: int().autoincrement().primaryKey(),
@@ -1400,6 +1400,8 @@ export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
 	city: varchar({ length: 16 }).notNull(),
 	status: varchar({ length: 12 }).notNull(),
 	attempts: int().default(0).notNull(),
+	// 0705 (plano MPV F7): teto de tentativas desta linha (as de antes ficam com 3).
+	maxAttempts: int().default(3).notNull(),
 	detail: varchar({ length: 300 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -1407,6 +1409,24 @@ export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
 (table) => [
 	uniqueIndex("uq_edn_version").on(table.assignmentId, table.version, table.kind, table.channel),
 	index("idx_edn_date_city").on(table.assignmentDate, table.city),
+]);
+
+// 0705 (plano MPV F7) — avisos da escala que só saem uma vez (lembretes das
+// 10:30/14:30, "mexido à mão", "ficaram por avisar", cobertura baixa, completado).
+export const extrasDiaAlerts = mysqlTable("extras_dia_alerts", {
+	id: int().autoincrement().primaryKey(),
+	assignmentDate: varchar({ length: 10 }).notNull(),
+	city: varchar({ length: 16 }).notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	alertKey: varchar({ length: 64 }).default('').notNull(),
+	detail: varchar({ length: 1000 }),
+	recipients: int(),
+	attempts: int().default(1).notNull(),
+	released: tinyint().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_eda_alert").on(table.assignmentDate, table.city, table.kind, table.alertKey),
 ]);
 
 // 0540 — notas internas do dia de trabalho (Extras-dia → Pressão): várias por
@@ -1581,7 +1601,50 @@ export const googleReviews = mysqlTable("google_reviews", {
 	// 0123 — sentimento (positivo/neutro/negativo) e rascunho automático já tentado
 	aiSentiment: varchar({ length: 10 }),
 	aiDraftAttemptedAt: timestamp({ mode: 'string' }),
-});
+	// 0700 (plano MPV F6b) — marcas reversíveis: não é crítica / repetida de outra (nunca se apaga).
+	notAReview: tinyint().default(0).notNull(),
+	duplicateOf: int(),
+	reviewMarkedAt: datetime({ mode: 'string' }),
+	reviewMarkedById: int(),
+	reviewMarkUndoneAt: datetime({ mode: 'string' }),
+	reviewMarkBackup: text(),
+},
+(table) => [
+	// 0700 — "repetidas desta" sem ler a tabela toda.
+	index("idx_google_reviews_duplicate_of").on(table.duplicateOf),
+]);
+
+/**
+ * 0705 (plano MPV F7, §6.2) — fila das respostas automáticas às críticas de 5★
+ * (interruptor REVIEW_AUTO_PUBLISH_5STAR). Uma linha por crítica; nada se apaga.
+ */
+export const reviewAutoPublish = mysqlTable("review_auto_publish", {
+	id: int().autoincrement().primaryKey(),
+	reviewId: int().notNull(),
+	googleLocationId: int(),
+	projectId: int(),
+	status: varchar({ length: 16 }).notNull(),
+	replyText: text(),
+	reviewTextAtPrepare: text(),
+	reason: varchar({ length: 300 }),
+	scheduledFor: datetime({ mode: 'string' }),
+	attempts: int().default(0).notNull(),
+	lastAttemptAt: datetime({ mode: 'string' }),
+	publishedAt: datetime({ mode: 'string' }),
+	channel: varchar({ length: 12 }),
+	cancelledById: int(),
+	cancelledAt: datetime({ mode: 'string' }),
+	verifiedAt: datetime({ mode: 'string' }),
+	verifyFailures: int().default(0).notNull(),
+	alertedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_rap_review").on(table.reviewId),
+	index("idx_rap_status_when").on(table.status, table.scheduledFor),
+	index("idx_rap_location_published").on(table.googleLocationId, table.publishedAt),
+]);
 
 /** 0285 — alertas "a trabalhar sem PDA ou Zello ligado" (shared/opsPresence.ts). */
 export const opsPresenceAlerts = mysqlTable("ops_presence_alerts", {
@@ -2643,7 +2706,7 @@ export const timeRecords = mysqlTable("time_records", {
 	reviewedAt: timestamp({ mode: 'string' }),
 	reviewNote: varchar({ length: 255 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
-	// 0720 (plano 63) — rasto da picagem, só informação (nenhuma conta de horas o lê):
+	// 0820 (plano 63) — rasto da picagem, só informação (nenhuma conta de horas o lê):
 	// o modo do ponto nesse dia, de onde veio a selfie (camera | file), a idade do
 	// ficheiro (s), a imprecisão do GPS (m) e a conta que picou.
 	pontoMode: varchar({ length: 12 }),
@@ -3801,6 +3864,9 @@ export const aiChatMessages = mysqlTable("ai_chat_messages", {
 	// 0690: versão ("v1" | "mpv") e nível (lite/fast/smart) da resposta — para o 👍/👎.
 	variant: varchar({ length: 16 }),
 	tier: varchar({ length: 16 }),
+	// 0695: a resposta com os nomes dos colegas como [NOME_n] + o mapa (o histórico do turno seguinte não leva os nomes).
+	contentMasked: mediumtext(),
+	maskedNames: text(),
 },
 (table) => [
 	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),

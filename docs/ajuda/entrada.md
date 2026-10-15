@@ -1,14 +1,16 @@
 ---
 modulo: dashboards
+grupo: Dashboards
+pagina: dashboards.entrada
 titulo: Entrada, menu e "Sem acesso"
-rotas: /, /dashboard, /modulos
+rotas: /, /modulos
 palavras: entrar no pda, sessão do pda, a sessão termina em 10 s, sessão terminou, google nos pdas, sem google no pda, o chrome guarda a palavra-passe, código por email, acesso@, pede o código ao tl, entrar com email, palavra-passe, esqueci a palavra-passe, pedir código, código de entrada, código de 6 algarismos, cria a tua palavra-passe, agora não, palavra-passe bloqueada, com o teu papel entra-se com google, repor acesso, entrar com código, liga a tua conta, sou novo, candidatar-me, já me candidatei, outro email, código por email, voltei, inativo, desativado, entrar, login, google, sem acesso, acesso recusado, não consigo entrar, sessão, sair, perfil, menu, página em branco, erro, versão nova, recarregar, sem centro de custos, notificação não abre, instalar app, ícone
 ---
 # Entrada, menu e "Sem acesso"
 
-**Entrar**: "Entrar com Google" na página inicial. Depois de entrar vais para o teu ecrã: o Dashboard (quem o vê), as Tarefas (team leaders) ou a tua ficha (extras e condutores).
+**Entrar**: "Entrar com Google" na página inicial. Depois de entrar vais para o teu ecrã: se vieste de um link, para essa página; senão, quem tem papel abaixo de team leader (utilizador, extra, condutor) vai para a ficha (RH), team leaders e acima **sem** a permissão Dashboards vão para as Tarefas e **com** ela para o Dashboard. Os números dos Dashboards estão na ajuda "Dashboards".
 
-**Entrar com email e código** (só com o interruptor **Entrar com email e código** ligado em Definições → Automações; vem desligado — desligado, entra-se só com a Google, como sempre)
+## Entrar com email e código (só com o interruptor **Entrar com email e código** ligado em Definições → Automações; vem desligado — desligado, entra-se só com a Google, como sempre)
 - A página de entrada passa a ter **Email**, **Palavra-passe** e **Entrar**. O botão **Entrar com Google** continua lá.
 - **Primeira vez ou esqueceste-te? Pedir código**: escreve o email e carrega aí. Aparece "Pedimos o código ao TL e ao supervisor de serviço. Pede-lhes o código de 6 algarismos." Escreve o código **no mesmo aparelho onde o pediste** (noutro não funciona). Vale **10 minutos** e dá para errar **5 vezes**. Dá para colar. **Pedir outro código** só passado 1 minuto (os 3 últimos pedidos deste aparelho continuam a valer).
 - Depois do código aparece **Cria a tua palavra-passe** (pelo menos 8 caracteres; não pode ser fácil como 12345678, nem ter o teu nome, nem uma data como o dia de anos). **Agora não** salta este passo — da próxima vez pedes outro código.
@@ -23,7 +25,7 @@ palavras: entrar no pda, sessão do pda, a sessão termina em 10 s, sessão term
 - Tudo fica nos Logs: código pedido e a quem foi, entradas (Google, código, palavra-passe), palavra-passe criada/mudada/reposta, tentativas erradas.
 - Uma conta Google cujo email já está noutra conta ligada a **outra** Google não se junta sozinha: a entrada é recusada e os admins são avisados (juntam em Ligações).
 
-**Entrar num PDA** (só com **Entrar com email e código** ligado; desligado, os PDAs entram como sempre, com a Google)
+## Entrar num PDA (só com **Entrar com email e código** ligado; desligado, os PDAs entram como sempre, com a Google)
 - Num **PDA registado** (registado pelo QR) a sessão fica **presa a esse PDA** e acaba sozinha quando: dás **saída do ponto** (em qualquer aparelho, também no telemóvel), carregas em **Sair**, **outra pessoa entra** no PDA, o ponto esquecido é fechado sozinho, ou ao fim de **16 horas**. Funciona também para quem ainda não tem ficha (contas novas, candidatos).
 - Depois da saída do ponto aparece o **resumo da saída** (horas, km do Zello) e **"A sessão termina em 10 s"**; depois volta à página de entrada para a pessoa seguinte. **Terminar já** sai logo.
 - **Team leaders e supervisores** entram num PDA registado com **código** (sem palavra-passe). O código só vai a quem está **acima** da pessoa (o código de um TL vai aos supervisores; o de um supervisor ao backoffice e aos admins) — nunca a um colega do mesmo nível, que podia entrar como ele. Fora dos PDAs continuam com a Google.
@@ -32,7 +34,7 @@ palavras: entrar no pda, sessão do pda, a sessão termina em 10 s, sessão term
 - No PDA a página pede ao Chrome para **não sugerir** emails nem palavras-passe, e o email escrito não fica para a pessoa seguinte. Para o Chrome **não guardar** nada, faz a limpeza única de cada PDA (ver a ajuda do Ponto → PDAs) — sem ela o Chrome pode perguntar se quer guardar a palavra-passe.
 - Um separador antigo aberto no PDA não termina a sessão de quem entrou depois.
 
-**Código por email** (definição **Código de entrada vai para**, Definições → Operação; vem em **TL + supervisor de serviço**)
+## Código por email (definição **Código de entrada vai para**, Definições → Operação; vem em **TL + supervisor de serviço**)
 - Com **email**, o código vai para o email da própria pessoa, enviado pela conta **acesso@multipark.pt** (uma conta só para isto, nunca uma caixa da Comunicação — se for, não envia). O email traz só o código e "escreve-o no aparelho onde pediste" (sem link) e nunca aparece na Comunicação.
 - Se o email não sair, aparece **"Não conseguimos enviar o email agora — pede o código ao TL"** e o código vai para o TL e o supervisor de serviço, como hoje.
 - No máximo **10 emails de código por dia** para o mesmo endereço (ninguém enche a caixa de outra pessoa). O código nunca vai no assunto do email, só no texto.
@@ -49,11 +51,11 @@ palavras: entrar no pda, sessão do pda, a sessão termina em 10 s, sessão term
 
 **O que abre para quem**
 - O **Perfil** e o **Menu** abrem para todos, incluindo extras e condutores.
-- Um ecrã do menu que não é para ti mostra **"Sem acesso a esta página"** com **Ir para o início** e **Sair** (antes saltava em silêncio para outra página).
+- Um ecrã do menu que não é para ti mostra **"Sem acesso a esta página"** com **Ir para o início** e **Sair** (antes saltava em silêncio para outra página). A exceção são os endereços de entrada **/**, **/dashboard** e **/dashboards**: sem os Dashboards, levam sem aviso ao 1.º ecrã do teu menu; com eles, **/dashboard** vai dar a **/dashboards**.
 - **Sem centro de custos**: aparece o aviso, mas abrem o teu perfil, a tua ficha, a disponibilidade e a avaliação. Se a leitura do acesso falhar, aparece o erro com "Tentar de novo" (não é o mesmo que não ter centro de custos).
 - **Acesso bloqueado** (documentos/penalizações) e **Sem acesso** têm o botão **Sair** — num PDA partilhado, a pessoa seguinte consegue entrar.
 
-**Dashboard**: cada cartão que não carrega diz **"Não carregou · tentar de novo"** (antes mostrava 0); sem permissão diz **"Sem acesso"**. Os atalhos só mostram os dashboards que podes abrir.
+**Dashboard**: cada cartão que não carrega diz **"Não carregou · tentar de novo"** (antes mostrava 0); sem permissão diz **"Sem acesso"** — exceto as despesas (Despesas Mês e Pendente), que só se pedem para admin e super admin e nos outros papéis mostram 0 €. Os atalhos só mostram os dashboards que podes abrir. O que cada cartão conta está na ajuda "Dashboards".
 
 **Notificações** (sino): se não carregarem aparece o erro, não "Sem notificações". Carregar numa notificação para a página onde já estás abre mesmo o registo certo.
 

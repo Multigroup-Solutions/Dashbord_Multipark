@@ -179,16 +179,25 @@ export type ParsedGoogleReview = {
  * Extrai a informação útil de um email de notificação do Google Business
  * Profile ("X deixou uma crítica sobre Y" / "crítica de N estrela(s)").
  * Robusto a variações: tudo é best-effort, rating 0 quando não deteta.
+ *
+ * `subject` (plano MPV F6b, R3 — com o REVIEWS_DEDUP): a Google manda às vezes
+ * o "X deixou uma crítica sobre Y" só no ASSUNTO e o corpo começa por "Google
+ * Business Profile" — sem o assunto ficava sem nome nem parque. O corpo
+ * continua a mandar; o assunto só preenche o que falta.
  */
-export function parseGoogleReviewNotification(rawBody: string): ParsedGoogleReview {
+export function parseGoogleReviewNotification(rawBody: string, subject = ""): ParsedGoogleReview {
   const text = (rawBody || "").replace(/\r/g, "");
+  const subj = String(subject || "").replace(/[\r\n]+/g, " ").replace(/^\s*((re|fwd?|enc|tr):\s*)+/i, "").trim();
 
   // "recebeu uma nova crítica de 5 estrela(s)"
-  const ratingMatch = text.match(/cr[íi]tica de\s+([1-5])\s+estrela/i);
-  const rating = ratingMatch ? Number(ratingMatch[1]) : 0;
+  const ratingMatch = text.match(/cr[íi]tica de\s+([1-5])\s+estrela/i) ?? subj.match(/cr[íi]tica de\s+([1-5])\s+estrela/i);
+  // Com o assunto (REVIEWS_DEDUP): o outro formato só traz as estrelas desenhadas ("★★★★☆").
+  const starsMatch = !ratingMatch && subj ? text.match(/^\s*(★{1,5})☆*\s*$/m) : null;
+  const rating = ratingMatch ? Number(ratingMatch[1]) : starsMatch ? starsMatch[1].length : 0;
 
   // "Cantinho deixou uma crítica sobre Airpark - Estacionamento ..."
-  const whoMatch = text.match(/^\s*(.{2,80}?)\s+deixou uma cr[íi]tica sobre\s+(.{2,120}?)\s*$/im);
+  const WHO_RE = /^\s*(.{2,80}?)\s+deixou uma cr[íi]tica sobre\s+(.{2,120}?)\s*$/im;
+  const whoMatch = text.match(WHO_RE) ?? (subj ? subj.match(WHO_RE) : null);
   let reviewerName = whoMatch?.[1]?.trim();
   const parkName = whoMatch?.[2]?.trim();
 

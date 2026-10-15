@@ -389,7 +389,7 @@ describe("WhatsApp: conversa nova â†’ caixa + etiqueta; com conversa anterior nÃ
     expect(wa).not.toContain("classify");
     const t = src("server/whatsappTriage.ts");
     expect(t.match(/runAi\(/g)?.length).toBe(1);
-    expect(t).toContain("routeAfterTriage(conversationId, { intent, confidence: normalizeConfidence(r.output.confidence)");
+    expect(t).toContain("routeAfterTriage(conversationId, { intent, confidence: r.confidence");
     expect(t).not.toContain("applyBoxFromIntent");
   });
 });

@@ -79,6 +79,24 @@ export const LATE_ARRIVAL_FROM_MINUTES = 5;
 export const MAX_LATE_ARRIVALS_PER_DAY = 1;
 
 /**
+ * GPS do Zello (14 out 2026): um dia com a máxima acima do limiar conta no
+ * máximo isto de excessos de velocidade por pessoa e dia.
+ */
+export const MAX_GPS_SPEEDING_PER_DAY = 1;
+
+/**
+ * Excessos de velocidade de um dia depois de juntar o GPS do Zello (dia acima
+ * do limiar): o GPS só conta (MAX_GPS_SPEEDING_PER_DAY) se nesse dia de
+ * CALENDÁRIO de Lisboa não houver já um alerta ou uma penalização RH de
+ * velocidade e se o dia ainda não tiver excessos — nunca conta a dobrar. Usada
+ * em server/evaluationCore.ts (computeEmployeeDays). PURA.
+ */
+export function speedingWithGpsDay(current: number, calendarDayHasSpeedEvent: boolean): number {
+  if (calendarDayHasSpeedEvent || current > 0) return current;
+  return MAX_GPS_SPEEDING_PER_DAY;
+}
+
+/**
  * Versão das regras com que um dia foi calculado (employee_day_metrics.rulesVersion, 0670).
  * 1 = antes de 14 out 2026 (inícios de movimento contados, entregas pelo pedido + 15 min, atrasos à entrada sem limite por dia);
  * 2 = regras de 14 out 2026;

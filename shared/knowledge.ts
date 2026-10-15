@@ -15,9 +15,20 @@
 import { z } from "zod";
 import { ROLES, type Role } from "./access";
 
-export const KB_SOURCES = ["drive", "upload", "help"] as const;
+/**
+ * "help_sec" (plano MPV F3): as SECÇÕES da ajuda, uma por documento, com a
+ * referência `help:<ficheiro>.md#<secção>` — para a pesquisa por secção do
+ * MPV. Ficam FORA de tudo o que já existe (manuais do Multis v1, ajuda do v1
+ * por ficheiro, formação, pesquisa global, lista da página) salvo quando
+ * pedidas explicitamente; as `help:<ficheiro>.md` de sempre continuam.
+ */
+export const KB_SOURCES = ["drive", "upload", "help", "help_sec"] as const;
 export type KbSource = (typeof KB_SOURCES)[number];
-export const KB_SOURCE_LABELS: Record<KbSource, string> = { drive: "Google Drive", upload: "Carregado", help: "Ajuda da app" };
+export const KB_SOURCE_LABELS: Record<KbSource, string> = { drive: "Google Drive", upload: "Carregado", help: "Ajuda da app", help_sec: "Ajuda da app (secções)" };
+/** Fonte das secções da ajuda (MPV). */
+export const KB_HELP_SECTION_SOURCE = "help_sec" as const satisfies KbSource;
+/** A ajuda da app (por ficheiro ou por secção) — atualiza-se sozinha com cada versão. */
+export const isHelpSource = (s: string | null | undefined): boolean => s === "help" || s === KB_HELP_SECTION_SOURCE;
 
 export const KB_STATUSES = ["pending", "processing", "synced", "error", "skipped"] as const;
 export type KbStatus = (typeof KB_STATUSES)[number];

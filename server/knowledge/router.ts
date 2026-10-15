@@ -16,7 +16,7 @@ import { requireAccess, withOverrides } from "../_core/access";
 import { cityScope } from "../cityScope";
 import {
   KB_DIRECT_KEY_RE, KB_MAX_DIRECT_UPLOAD_BYTES, KB_MAX_DIRECT_UPLOAD_MB, KB_MAX_UPLOAD_BYTES, KB_MAX_UPLOAD_MB, KB_SOURCES, KB_STATUSES, KB_UPLOAD_MIME, canSeeKbDoc, knowledgeConfigSchema, kbVisibilitySchema, parseKnowledgeConfig,
-  safeCitationHref,
+  isHelpSource, safeCitationHref,
 } from "../../shared/knowledge";
 import { kbViewerFrom } from "./retrieve";
 import * as store from "./store";
@@ -90,7 +90,7 @@ export const knowledgeRouter = router({
   status: protectedProcedure.query(async ({ ctx }) => {
     manage(ctx.user);
     const d = await store.kbDb();
-    const { loadKnowledgeConfig, embeddingsWanted } = await import("./sync");
+    const { loadKnowledgeConfig, embeddingsWanted, helpSectionsWanted } = await import("./sync");
     const cfg = await loadKnowledgeConfig();
     const { loadDriveConfig } = await import("../google/driveService");
     const { dwdConfigured } = await import("../google/workspace");
@@ -103,6 +103,8 @@ export const knowledgeRouter = router({
       // 18d: sem o `.catch(() => ({}))` — uma falha diz-se, não aparece "0 documentos".
       counts: await store.statusCounts(d),
       embeddingsActive: await embeddingsWanted(cfg),
+      // MPV: as secções da ajuda ("help_sec") só existem com o interruptor ligado (o filtro só as mostra aí).
+      helpSections: await helpSectionsWanted(),
       lastRun,
     };
   }),
@@ -235,7 +237,7 @@ export const knowledgeRouter = router({
     const d = await store.kbDb();
     const doc = await store.getDoc(d, input.id);
     if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado." });
-    if (doc.source === "help") throw new TRPCError({ code: "BAD_REQUEST", message: "A ajuda da app atualiza-se sozinha com cada versão." });
+    if (isHelpSource(doc.source)) throw new TRPCError({ code: "BAD_REQUEST", message: "A ajuda da app atualiza-se sozinha com cada versão." });
     // A processar agora → não se mete outro processamento por cima (18d: duplicava os trechos).
     if (doc.status === "processing") throw new TRPCError({ code: "CONFLICT", message: "Este documento está a ser processado — espera uns minutos." });
     // Força nova extração (checksum limpo) — ex.: depois de corrigir o ficheiro.
@@ -294,7 +296,7 @@ export const knowledgeRouter = router({
       throw new TRPCError({ code: "NOT_FOUND", message: "Documento não encontrado." });
     }
     if (doc.source === "drive") return { url: safeCitationHref(doc.webViewLink), title: doc.title };
-    if (doc.source === "help") return { url: safeCitationHref(doc.webViewLink) ?? "/", title: doc.title };
+    if (isHelpSource(doc.source)) return { url: safeCitationHref(doc.webViewLink) ?? "/", title: doc.title };
     const { storagePresignGet } = await import("../storage");
     const { url } = await storagePresignGet(doc.fileKey || doc.fileUrl || "", { fallbackUrl: doc.fileUrl, expiresSeconds: 600 });
     if (!url) throw new TRPCError({ code: "NOT_FOUND", message: "Ficheiro não encontrado." });

@@ -9,6 +9,10 @@
  * Multis 2 (8 out 2026): 👍/👎 em cada resposta (MultisFeedback), separador
  * Memória (MultisMemoryPanel; escondido com AI_ASSISTANT_MEMORY desligado) e,
  * para admins, o atalho para "Perguntas que falharam" (/multis/falhas).
+ *
+ * Plano MPV (F0b): manda com o status e cada pergunta o separador e o registo
+ * abertos (useMultisPage nas páginas; o servidor valida); no piloto mostra a
+ * nota "modo económico" quando o teto do piloto foi atingido.
  */
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -24,7 +28,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { ASSISTANT_DEFAULT_MAX_INPUT, ASSISTANT_NAME, MULTIS_PANEL_WIDTH_PX } from "@shared/assistant";
 import { MultisIcon } from "./MultisIcon";
-import { setMultisConversation, setMultisOpen, useMultisState } from "./multisStore";
+import { setMultisConversation, setMultisOpen, useMultisPageState, useMultisState } from "./multisStore";
 import { MultisFeedback } from "./MultisFeedback";
 import { MultisMemoryPanel } from "./MultisMemoryPanel";
 
@@ -36,6 +40,8 @@ type Msg = {
   /** Id da resposta guardada (para o 👍/👎). */
   id?: number | null;
   rating?: 1 | -1 | null;
+  /** Respondida no modo económico (piloto com o teto atingido): o texto do motivo. */
+  economy?: string | null;
 };
 
 const TOOL_LABELS: Record<string, string> = {
@@ -87,7 +93,13 @@ export function AssistantWidget() {
     return () => window.removeEventListener(ASSISTANT_ASK_EVENT, onAsk);
   }, []);
 
-  const status = trpc.assistant.status.useQuery({ path: location }, { enabled: open, staleTime: 60_000 });
+  // Separador e registo abertos (só se forem desta página; o servidor valida).
+  const page = useMultisPageState();
+  const pagePath = location.split("?")[0];
+  const pageCtx = page.path === pagePath
+    ? { ...(page.tab ? { tab: page.tab } : {}), ...(page.entity ? { entity: page.entity } : {}) }
+    : {};
+  const status = trpc.assistant.status.useQuery({ path: location, ...pageCtx }, { enabled: open, staleTime: 60_000 });
   const history = trpc.assistant.messages.useQuery(conversationId ? { conversationId } : undefined, {
     enabled: open && !fresh,
     staleTime: 30_000,
@@ -106,7 +118,7 @@ export function AssistantWidget() {
       if (r.ok) {
         setConversationId(r.conversationId);
         setFresh(false);
-        setMessages((prev) => [...prev, { key: `a-${Date.now()}`, role: "assistant", content: r.answer, tools: r.toolsUsed, id: r.messageId, rating: null }]);
+        setMessages((prev) => [...prev, { key: `a-${Date.now()}`, role: "assistant", content: r.answer, tools: r.toolsUsed, id: r.messageId, rating: null, economy: "economy" in r && r.economy ? (r.economyNote ?? "Modo económico") : null }]);
         void utils.assistant.conversations.invalidate();
         if (r.memory === "saved") void utils.assistant.memory.list.invalidate();
       } else {
@@ -151,7 +163,7 @@ export function AssistantWidget() {
     if (!q || ask.isPending || q.length > maxChars) return;
     setMessages((prev) => [...prev, { key: `u-${Date.now()}`, role: "user", content: q }]);
     setInput("");
-    ask.mutate({ question: q, conversationId: conversationId ?? undefined, newConversation: fresh || !conversationId ? true : undefined, path: location });
+    ask.mutate({ question: q, conversationId: conversationId ?? undefined, newConversation: fresh || !conversationId ? true : undefined, path: location, ...pageCtx });
   }
 
   useEffect(() => {
@@ -236,6 +248,9 @@ export function AssistantWidget() {
             {unavailable}
           </div>
         )}
+        {!unavailable && status.data?.economyNote && (
+          <p role="status" className="mb-3 text-xs text-muted-foreground">{status.data.economyNote}</p>
+        )}
 
         {shown.length === 0 && !history.isLoading && (
           <div className="flex flex-col items-center gap-4 py-6 text-center">
@@ -281,6 +296,9 @@ export function AssistantWidget() {
                         <div className="mt-1 text-[11px] text-muted-foreground">
                           Consultei: {m.tools.map((t) => TOOL_LABELS[t] ?? t).join(", ")}
                         </div>
+                      )}
+                      {m.economy && (
+                        <div className="mt-1 text-[11px] text-muted-foreground" title={m.economy}>Modo económico</div>
                       )}
                       {m.id != null && <MultisFeedback messageId={m.id} rating={m.rating} onRated={(r) => setRating(m.key, r)} />}
                     </>

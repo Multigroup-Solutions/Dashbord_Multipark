@@ -1,5 +1,7 @@
 ---
 modulo: permissoes
+grupo: Sistema
+pagina: permissoes
 titulo: Permissões
 rotas: /permissoes, /utilizadores
 palavras: pôr inativo, inativo, desativado, pode voltar, fica bloqueado, suspender, suspensão, sem atividade, 6 meses, desativar conta e ficha, coluna agente, ligações, separar conta, ligar conta, cartões, lista, ver em cartões, ver em lista, foto, permissões, permissao, acesso, acessos, papel, função, override, dar acesso, retirar acesso, quem tem acesso, cidades extra, totais financeiros, módulo, sem acesso, acesso não autorizado
@@ -19,7 +21,7 @@ palavras: pôr inativo, inativo, desativado, pode voltar, fica bloqueado, suspen
 
 O que cada pessoa pode ver e fazer depende do **papel** (Extra, Condutor, Team Leader, Supervisor, Frontoffice, Backoffice, Admin, Super Admin) e da **cidade** do centro de custos da ficha. Papéis de cidade veem só a sua cidade; Frontoffice e acima veem todas.
 
-**Página Permissões** (Supervisor, Backoffice, Admin e acima)
+## Página Permissões (Supervisor, Backoffice, Admin e acima)
 1. Menu **Sistema → Permissões**.
 2. **Por pessoa**: escolhe a pessoa e dá ou retira acesso a cada módulo (alcance: próprio, equipa, cidade, nacional; ações: ver, editar, exportar, gerir). Podes pôr data de fim.
 3. **Quem tem acesso**: por módulo, quem tem e porquê (papel ou exceção).

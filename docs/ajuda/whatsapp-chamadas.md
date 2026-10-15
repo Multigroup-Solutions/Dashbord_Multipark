@@ -1,5 +1,7 @@
 ---
 modulo: whatsapp_chamadas
+grupo: Comunicação
+pagina: whatsapp.chamadas
 titulo: WhatsApp — Chamadas de voz
 rotas: /whatsapp
 palavras: chamada, chamadas, ligar, telefonar, atender, recusar, desligar, chamada perdida, devolver chamada, por devolver, autorização para ligar, microfone, toque, calling api, voz
@@ -37,7 +39,7 @@ Os clientes podem **ligar para o número de WhatsApp da empresa** e a chamada é
 3. Com autorização: **Ligar agora**. O painel mostra "A chamar…", "A tocar no cliente…" e depois o cronómetro.
 4. Uma chamada devolvida com sucesso tira o cliente da lista **por devolver**. Também podes marcar à mão (**Devolvida**).
 
-**Limites da Meta** (o dashboard avisa):
+### Limites da Meta (o dashboard avisa)
 - pedidos de autorização: 1 por 24 h e 2 por 7 dias, por cliente;
 - até 100 chamadas ligadas por cliente em 24 h;
 - 2 chamadas seguidas sem resposta → o cliente recebe um aviso; à 4.ª a Meta **retira a autorização**.

@@ -58,6 +58,50 @@ export async function aiFeatureAvailableFresh(feature: AiFeature, env: Env = pro
   return aiFeatureAvailable(feature, env);
 }
 
+const euOnlyLoggedAt = new Map<string, number>();
+
+/** Só testes. */
+export function resetEuOnlyLogForTests(): void {
+  euOnlyLoggedAt.clear();
+}
+
+/**
+ * Como `aiFeatureAvailableFresh`, para quem verifica o portão "só Vertex AI
+ * na UE" ANTES do runAi (RH: documentAutofill, rhAttachmentReader): quando a
+ * funcionalidade está configurada e ligada mas o portão a trava, deixa a linha
+ * "blocked / eu_only" no registo (sem conteúdo), como o runAi faz — para se
+ * poder confirmar que nada saiu (plano MPV F0a/F0b, RGPD). `throttleMs`: no
+ * máximo uma linha por funcionalidade nesse intervalo, por instância (para os
+ * varrimentos que correm de minutos a minutos). Nunca lança.
+ */
+export async function aiFeatureAvailableLogged(
+  feature: AiFeature,
+  meta: { userId?: number | null; entity?: string | null; entityId?: number | null; throttleMs?: number } = {},
+  env: Env = process.env,
+): Promise<boolean> {
+  await aiFeatureEnabledFresh(feature);
+  if (aiFeatureAvailable(feature, env)) return true;
+  try {
+    const regionBlocks = !aiFeatureRegionOk(feature, env) && !!selectProvider(env, feature) && isAiFeatureEnabled(feature, { env });
+    if (!regionBlocks) return false;
+    const now = Date.now();
+    const last = euOnlyLoggedAt.get(feature);
+    if (meta.throttleMs && last != null && now - last < meta.throttleMs) return false;
+    euOnlyLoggedAt.set(feature, now);
+    const provider = selectProvider(env, feature)!;
+    const { AI_FEATURES } = await import("./features");
+    const { resolveModel } = await import("./models");
+    const { logAiUsage } = await import("./usage");
+    const tier = AI_FEATURES[feature].tier;
+    await logAiUsage({
+      feature, tier, provider, model: resolveModel(tier, provider, env),
+      userId: meta.userId ?? null, entity: meta.entity ?? null, entityId: meta.entityId ?? null,
+      inputTokens: 0, outputTokens: 0, cachedTokens: 0, costEur: 0, latencyMs: 0, status: "blocked", errorCode: "eu_only",
+    });
+  } catch { /* o registo nunca parte a funcionalidade */ }
+  return false;
+}
+
 /** Teste barato (Integrações → Testar). */
 export async function testAi(userId?: number | null): Promise<{ model: string; provider: string }> {
   const r = await runAi({ feature: "healthcheck", input: "Responde só: ok", maxTokens: 64, timeoutMs: 20_000, retries: 0, userId: userId ?? null });

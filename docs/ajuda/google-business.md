@@ -1,5 +1,7 @@
 ---
 modulo: marketing
+grupo: Financeiro
+pagina: marketing.google-business
 titulo: Google Business Profile (perfis Google: desempenho, horários, publicações)
 rotas: /marketing/web
 palavras: push, notificações push, google business, google business profile, business profile, gbp, google my business, perfil google, perfis google, maps, google maps, impressões, chamadas, direções, pedidos de direções, cliques no site, pesquisas, horário, horários especiais, feriados, publicações, novidades, ofertas, eventos, quota 0, pedir acesso, api do business profile, testar, performance api
@@ -15,21 +17,21 @@ Em **Marketing → Web & SEO → Google Business** vês o desempenho dos perfis 
 - **Críticas por semana** (volume e média) e **pesquisas** que mostraram os perfis (por mês completo; a Google esconde as pequenas: "< 15").
 - Filtros por **cidade** e **perfil**. Em **Negócio** há o cartão "chamadas e direções vs reservas por cidade" (indicador, não atribuição).
 
-**Horários** (ícone do calendário na linha do perfil)
+## Horários (ícone do calendário na linha do perfil)
 1. O horário é lido na hora do Google.
 2. Liga "Alterar o horário normal" para mudar os dias (Aberto com intervalos, 24 horas ou Fechado). Um intervalo como 22:00–02:00 fecha depois da meia-noite.
 3. **Horários especiais** (feriados, fechos): adiciona o dia, marca Fechado ou indica as horas. Só esses dias mudam — os outros horários especiais de cada perfil ficam.
 4. Em "Aplicar a" escolhe vários perfis (Todos, Lisboa, Porto, Faro ou um a um) para aplicar de uma vez.
 5. **Aplicar no Google…** pede confirmação. O resultado vem por perfil (✓/✗ com o motivo). Fica no registo de atividade.
 
-**Publicações** (ícone do megafone)
+## Publicações (ícone do megafone)
 - Vês as publicações do perfil e podes apagá-las (com confirmação).
 - Nova publicação: **Novidade**, **Oferta** ou **Evento**, texto (até 1500 caracteres), botão opcional (**Reservar**, **Encomendar**, **Saber mais** com endereço https; **Ligar** usa o telefone do perfil), imagem opcional (endereço https de uma imagem). Ofertas e eventos precisam de título e datas.
 - **Rascunho IA**: escreve o tema e a IA (lite) propõe o texto — fica no editor, nada é publicado sem carregares em Publicar. Respeita o interruptor "IA: rascunho de publicações Google Business" e o orçamento.
 - Podes publicar em vários perfis de uma vez. A Google revê cada publicação antes de a mostrar.
 - Perguntas & Respostas não existem aqui: a Google descontinuou essa API.
 
-**Alertas** (1×/dia depois da recolha; limiares em **Configurar**)
+## Alertas (1×/dia depois da recolha; limiares em **Configurar**)
 - "Críticas Google: alertas" (vai a quem gere as Críticas da cidade do perfil): média de estrelas dos últimos 7 dias 0,5★ abaixo da dos 90 dias anteriores (com pelo menos 3 críticas) e críticas sem resposta há mais de 48 h.
 - "Alertas Google Business" (Marketing): impressões ou chamadas da semana 30% abaixo da anterior (com base mínima), perfil sem controlo/suspenso, fechado, alterado pela Google ou com edições pendentes.
 
@@ -46,7 +48,7 @@ A Google começa todos os projetos com **0 pedidos por minuto** nas APIs do Busi
 3. Indica o n.º do projeto, o email da conta que gere os perfis (Proprietária/Gestora em business.google.com), o site (multipark.pt) e a utilização: "gestão interna dos perfis dos nossos parques (críticas, horários, publicações e estatísticas)".
 4. A Google responde por email (normalmente em poucos dias). Depois da aprovação a quota passa a **300 pedidos por minuto** (vê em Google Cloud → APIs e serviços → "My Business Account Management API" → Quotas: deixa de estar a 0).
 
-**2. Ativar as APIs no mesmo projeto** (Google Cloud → APIs e serviços → Biblioteca)
+### 2. Ativar as APIs no mesmo projeto (Google Cloud → APIs e serviços → Biblioteca)
 - **My Business Account Management API** — lista as contas.
 - **My Business Business Information API** — lista os perfis, horários e estado.
 - **Business Profile Performance API** — impressões, chamadas, direções, cliques e pesquisas.

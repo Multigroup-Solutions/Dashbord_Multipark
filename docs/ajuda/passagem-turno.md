@@ -1,5 +1,7 @@
 ---
 modulo: passagem_turno
+grupo: Operações
+pagina: passagem-turno
 titulo: Passagem de turno
 rotas: /passagem-turno
 palavras: na fila há, em entrega há, em recolha há, cronómetro, cor da meta, sem passagem de turno, resumir agora, resumo desatualizado, resumo ia, resumo da ia, entregar a passagem, mal arrumado, garagens, pendentes que se arrastam, resumo da semana, tipo de lugar, toldo, toldos, coberto, descoberto, interior, vip, passagem de turno, passagem, fim de turno, checklist, caixa, fecho de caixa, cofre, bolsa, terminal, rolos mb, fardamento, fardas, pendentes, observações, recebi, resumo do dia, estado do parque, ao vivo, carros no parque, garagem, ocorrências, bloqueios, caixa por fechar, pendentes do turno anterior, por gravar, por confirmar, 24 horas
@@ -10,7 +12,7 @@ Checklist de fim de turno dos team leaders e o histórico das passagens.
 
 **O Resumo do dia mudou de sítio** (12 out 2026): está agora em **Operações → Actividade Diária → Resumo do dia**, com tudo o que tinha (quem trabalhou, entregas lentas, passagens por chefe de turno). Quem o via aqui vê-o lá, com a mesma permissão. Na Passagem de turno fica uma ligação para lá.
 
-**Preencher** (Team Leader)
+## Preencher (Team Leader)
 1. Menu **Operações → Passagem de Turno**. Escolhe a cidade e o turno (manhã/noite). O dia operacional vai das 03:00 às 03:00 do dia seguinte.
 2. Preenche a caixa (caixa de check-out, fecho de caixa no cofre, valores das bolsas front/terminal, tickets/despesas pagos), o material (canetas, rolos MB, bateria), o fardamento e os **Pendentes para o turno seguinte**.
 3. Escreve observações e carrega em **Guardar passagem de turno**. Grava logo. O resumo IA, o aviso e o email ao team leader do turno seguinte seguem dentro de momentos, e o histórico atualiza-se sozinho.
@@ -33,7 +35,7 @@ Checklist de fim de turno dos team leaders e o histórico das passagens.
 - A lista leva até **60** pendentes; o contador mostra quantos tens. No limite ficam primeiro as notas e os herdados.
 - Num turno antigo (nem o atual nem o que acabou agora), a passagem nova herda só os pendentes da anterior: o "ao vivo" é de agora, não desse turno.
 
-**Resumo automático** (no topo de **Preencher**)
+## Resumo automático (no topo de **Preencher**)
 - As recolhas e entregas do próximo turno (com voo e valor a pagar), as entregas pendentes e os carros p/ toldo vêm **ao vivo da BD da Multipark**. Reclamações, perdidos e ocorrências já não aparecem aqui. As compras online ainda por pagar também contam: vão ser recolhidas na mesma.
 - A equipa mostra **(por confirmar)** em quem ainda está só proposto na escala.
 - Se a BD da Multipark não responder, aparece um aviso a laranja e o resumo usa as cópias do dashboard. O resto da passagem funciona igual.
@@ -46,6 +48,7 @@ Separador com o estado atual dos parques da cidade, lido diretamente da BD da Mu
   - Se a garagem não bate com o tipo, o carro está **mal arrumado** e a garagem aparece **a vermelho com ⚠**. As garagens são: **PD**, **PD FORA** e **CENTRAL** para descobertos; **COBERTO** e **CENTRAL COBERTO** para indoor e toldos.
     - **Vermelho**: indoor (ou VIP) fora de uma garagem coberta, ou descoberto numa garagem coberta.
     - **Amarelo**: toldo numa garagem descoberta. Passa para a coberta quando houver lugar ("se der").
+    - **Toldo no PD: amarelo aqui, mas "parque certo" nos tempos.** São duas perguntas diferentes: aqui é "onde devia estar, se houver lugar" (o toldo fica melhor na coberta); nos **tempos das recolhas** (Definições → Parâmetros → **Papéis das garagens**) o PD é **parque certo** para descobertos **e toldos**, por isso a recolha conta como arrumada quando o toldo chega ao PD. Mudá-lo depois para a coberta é arrumação, não atrasa a recolha.
     - Garagem com outro nome, ou carro sem tipo: fica sem cor (não se adivinha).
   - **Mal arrumados** (por baixo): em cima, quantos estão mal arrumados e quantos toldos estão numa descoberta. Por baixo, **uma linha por tipo**, com quantos carros: por exemplo "Descoberto em COBERTO · 11 carros", "Interior em PD · 6 carros", "Toldo em PD (se der, coberta) · 8 carros". Primeiro os mal arrumados (a vermelho, com ⚠), depois os "se der" (a amarelo).
     - Carrega numa linha para ver os carros dela (matrícula, lugar e parque) e ires buscá-los; carrega outra vez para fechar. Ao entrar estão todas fechadas.

@@ -14,7 +14,8 @@
 import { can, type AccessOverrides } from "./access";
 
 export const CONDUTORES_MODULE = "condutores_agentes" as const;
-export type CondutoresTab = "drivers" | "agents" | "performance";
+export const CONDUTORES_TABS = ["drivers", "agents", "performance"] as const;
+export type CondutoresTab = (typeof CONDUTORES_TABS)[number];
 
 type UserLike = { role: string | null | undefined; accessOverrides?: AccessOverrides | null } | null | undefined;
 

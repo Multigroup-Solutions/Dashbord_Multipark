@@ -95,3 +95,28 @@ describe('33a — publicar pela Windsor quando a Google não está ligada direta
     expect(updates).toEqual([]);
   });
 });
+
+describe('plano MPV F7 — caminho automático (5★): nunca por cima de uma resposta', () => {
+  it('com onlyIfNoReply, uma crítica que já tem resposta cá não sai (nem chama a Google)', async () => {
+    row.googleReply = 'Obrigado, Ana! (escrita por uma pessoa)';
+    await expect(publishReply(5, 'Obrigado!', 42, { onlyIfNoReply: true })).rejects.toThrow(/já tem resposta/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+  });
+  it('com onlyIfNoReply e sem resposta: publica e grava só se continuar sem resposta (compare-and-set)', async () => {
+    let whereArg: any = null;
+    const db: any = {
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [row] }) }) }),
+      update: () => ({ set: (data: any) => ({ where: async (w: any) => { whereArg = w; updates.push(data); return [{ affectedRows: 1 }]; } }) }),
+    };
+    vi.mocked(database).mockResolvedValue(db);
+    await publishReply(5, 'Obrigado!', 42, { onlyIfNoReply: true });
+    const { MySqlDialect } = await import('drizzle-orm/mysql-core');
+    expect(new MySqlDialect().sqlToQuery(whereArg).sql).toMatch(/`googleReply` is null/);
+  });
+  it('sem a opção (o "Aprovar e publicar" de uma pessoa): fica como sempre foi', async () => {
+    row.googleReply = 'Resposta antiga';
+    await publishReply(5, 'Nova resposta', 42);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
