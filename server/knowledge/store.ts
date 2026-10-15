@@ -173,11 +173,16 @@ export async function pendingDocIds(d: Db, limit: number, _now: Date = new Date(
   return rows.map((r) => Number(r.id));
 }
 
-/** Sincronizados sem vetores (para completar quando os embeddings ficam disponíveis). */
-export async function unembeddedDocIds(d: Db, limit: number): Promise<number[]> {
-  // As secções da ajuda (MPV, "help_sec") ficam sem vetores enquanto ninguém as ler (F5).
+/**
+ * Sincronizados sem vetores (para completar quando os embeddings ficam disponíveis).
+ * Omisso: os documentos de sempre (Drive, carregados, ajuda por ficheiro) — SEM
+ * as secções da ajuda. `helpSections: true` (plano MPV F5): só as secções
+ * ("help_sec"), que têm a sua própria quota por corrida e nunca tiram lugar ao Drive.
+ */
+export async function unembeddedDocIds(d: Db, limit: number, opts: { helpSections?: boolean } = {}): Promise<number[]> {
+  const which = opts.helpSections ? sql`d.source = 'help_sec'` : sql`d.source <> 'help_sec'`;
   const rows = rowsOf(await d.execute(sql`SELECT d.id FROM kb_documents d WHERE d.deletedAt IS NULL AND d.status = 'synced'
-    AND d.embedded = 0 AND d.chunkCount > 0 AND d.source <> 'help_sec' ORDER BY d.updatedAt LIMIT ${limit}`));
+    AND d.embedded = 0 AND d.chunkCount > 0 AND ${which} ORDER BY d.updatedAt LIMIT ${limit}`));
   return rows.map((r) => Number(r.id));
 }
 
@@ -198,9 +203,46 @@ export async function chunksOf(d: Db, docId: number): Promise<Array<{ id: number
     .map((r) => ({ id: Number(r.id), ord: Number(r.ord), section: s(r.section), text: String(r.text ?? ""), hasEmbedding: Number(r.hasEmb ?? 0) === 1 }));
 }
 
-export async function saveEmbeddings(d: Db, docId: number, items: Array<{ chunkId: number; vector: string }>, model: string): Promise<void> {
+/** Trechos ainda sem vetor de vários documentos (com o título), numa só consulta (lote das secções, MPV F5). */
+export async function chunksToEmbed(d: Db, docIds: readonly number[]): Promise<Array<{ id: number; docId: number; section: string | null; text: string; title: string }>> {
+  if (!docIds.length) return [];
+  return rowsOf(await d.execute(sql`SELECT c.id, c.docId, c.section, c.text, d.title FROM kb_chunks c JOIN kb_documents d ON d.id = c.docId
+    WHERE c.docId IN (${sql.join(docIds.map((x) => sql`${x}`), sql`, `)}) AND c.embedding IS NULL ORDER BY c.docId, c.ord`))
+    .map((r) => ({ id: Number(r.id), docId: Number(r.docId), section: s(r.section), text: String(r.text ?? ""), title: String(r.title ?? "") }));
+}
+
+export async function saveEmbeddings(d: Db, docId: number, items: Array<{ chunkId: number; vector: string }>, model: string,
+  /** false: quem chama marca a versão dos vetores uma vez no fim (lote). */
+  opts: { bumpVersion?: boolean } = {}): Promise<void> {
   for (const it of items) await d.execute(sql`UPDATE kb_chunks SET embedding = ${it.vector} WHERE id = ${it.chunkId} AND docId = ${docId}`);
-  await d.execute(sql`UPDATE kb_documents SET embedded = 1, embedModel = ${model} WHERE id = ${docId}`);
+  // Só fica "com vetores" se não sobrar nenhum trecho sem vetor: se outra corrida refez os
+  // trechos entre a leitura e a gravação (ids novos, sem vetor), o documento continua por vetorizar.
+  await d.execute(sql`UPDATE kb_documents SET embedded = 1, embedModel = ${model} WHERE id = ${docId}
+    AND NOT EXISTS (SELECT 1 FROM kb_chunks k WHERE k.docId = ${docId} AND k.embedding IS NULL)`);
+  if (opts.bumpVersion !== false) await bumpVectorsVersionSafe(d);
+}
+
+/** Muda a versão dos vetores; uma falha só se regista (os vetores já estão gravados). Nunca lança. */
+export async function bumpVectorsVersionSafe(d: Db): Promise<boolean> {
+  try {
+    await bumpVectorsVersion(d);
+    return true;
+  } catch (err) {
+    console.warn(`[knowledge] versão dos vetores por gravar: ${String((err as any)?.code ?? (err as any)?.name ?? "erro")}`);
+    return false;
+  }
+}
+
+/**
+ * Versão dos vetores (plano MPV F5): muda sempre que há vetores novos. Cada
+ * instância guarda os vetores em memória (vectorIndex.ts) e só os volta a ler
+ * quando esta versão muda (lida no máx. a cada 60 s). Vetores que saíram (trechos
+ * refeitos, documentos retirados ou restringidos) não precisam de mudar a versão:
+ * os candidatos são sempre confirmados na BD com a visibilidade de quem pergunta.
+ */
+export const VECTORS_VERSION_KEY = "vectors:version";
+export async function bumpVectorsVersion(d: Db): Promise<void> {
+  await setState(d, VECTORS_VERSION_KEY, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 }
 
 /**

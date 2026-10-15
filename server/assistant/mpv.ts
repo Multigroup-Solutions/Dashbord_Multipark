@@ -10,7 +10,8 @@
  *  - Por pergunta (fora do sistema): <pagina_atual> com o perfil da página
  *    (shared/multisProfiles.ts) e, em <ajuda>, SEMPRE a secção do separador
  *    aberto (ou a introdução da página, sem separador) + até 2 secções da
- *    pesquisa lexical por secção; teto de 5 000 caracteres no total, com
+ *    pesquisa por secção (lexical; com vetores, também pelo significado — F5,
+ *    helpSearch.ts); teto de 5 000 caracteres no total, com
  *    recorte (excerptSection → excerptHelp) nas secções grandes.
  *  - Ferramentas: `ajuda_abrir` e `ajuda_procurar` em vez do `abrir_ajuda`.
  */
@@ -18,7 +19,7 @@ import { assistantMpvSystemPrompt } from "../_core/ai/prompts/assistant";
 import type { ChatTool } from "../_core/ai/chat/tools";
 import { DEFAULT_MULTIS_PROFILE, multisProfileFor, profileQuestions, type MultisProfile } from "../../shared/multisProfiles";
 import type { HelpTreePage, HelpTreeSection } from "../../shared/helpTree";
-import { canSeeHelpPage, excerptSection, searchHelpSections, sectionFullText, sectionSubtreeIds } from "./helpTools";
+import { canSeeHelpPage, excerptSection, searchHelpSections, sectionFullText, sectionSubtreeIds, type HelpSectionHit, type SectionSearchFn } from "./helpTools";
 import { KNOWLEDGE_INDEX, knowledgeForPage, knowledgeTree } from "./knowledgeTree";
 import { MPV_STAFF_TOOLS, type StaffToolCtx } from "./tools";
 
@@ -95,11 +96,45 @@ const attr = (s: string) => s.replace(/"/g, "'").replace(/[<>]/g, "");
  * O bloco POR PERGUNTA do MPV: <pagina_atual> (perfil) + <ajuda> (secções).
  * `refs` = ids das secções (ficam guardados com a resposta, como os ficheiros
  * do v1). Ferramentas preferidas: só as que existem e a pessoa pode usar.
+ * As 2 secções a mais vêm da pesquisa lexical (este) ou da do piloto com
+ * vetores (`mpvTurnKnowledgeAsync`, F5).
  */
-export function mpvTurnKnowledge(p: {
-  path?: string | null; tab?: string | null; question: string; ctx: StaffToolCtx; maxChars?: number;
-}): { block: string; refs: string[]; profile: MultisProfile } {
-  const tree = knowledgeTree();
+type TurnKnowledgeInput = { path?: string | null; tab?: string | null; question: string; ctx: StaffToolCtx; maxChars?: number };
+type TurnKnowledge = { block: string; refs: string[]; profile: MultisProfile };
+type Item = { page: HelpTreePage; section: HelpTreeSection; cap?: number };
+
+export function mpvTurnKnowledge(p: TurnKnowledgeInput): TurnKnowledge {
+  const anchor = turnAnchor(p);
+  return turnFinish(p, anchor, searchHelpSections(knowledgeTree(), p.question, anchor.searchOpts));
+}
+
+/**
+ * O mesmo bloco, com as 2 secções a mais pela pesquisa do piloto (plano MPV
+ * F5: lexical ∪ FULLTEXT ∪ vizinhos por vetor, corte aos 3 s —
+ * helpSearch.ts), com os MESMOS filtros (módulos sem acesso, a secção do
+ * separador já incluída). Sem `search`, igual ao `mpvTurnKnowledge`; se a
+ * pesquisa falhar, a lexical. Nunca lança.
+ */
+export async function mpvTurnKnowledgeAsync(p: TurnKnowledgeInput, search?: SectionSearchFn | null): Promise<TurnKnowledge> {
+  const anchor = turnAnchor(p);
+  let hits: HelpSectionHit[];
+  try {
+    hits = search ? await search(p.question, anchor.searchOpts) : searchHelpSections(knowledgeTree(), p.question, anchor.searchOpts);
+  } catch {
+    hits = searchHelpSections(knowledgeTree(), p.question, anchor.searchOpts);
+  }
+  return turnFinish(p, anchor, hits);
+}
+
+interface TurnAnchor {
+  profile: MultisProfile;
+  pageBlock: string;
+  items: Item[];
+  exclude: Set<string>;
+  searchOpts: { canSee: (pg: HelpTreePage) => boolean; currentPage: string | null; exclude: ReadonlySet<string>; max: number };
+}
+
+function turnAnchor(p: TurnKnowledgeInput): TurnAnchor {
   const { page, tabSection, profile } = mpvPageProfile(p.path, p.tab);
   const canSee = (pg: HelpTreePage) => canSeeHelpPage(p.ctx.user, pg);
   const allowed = new Set(mpvAllowedToolNames(p.ctx));
@@ -113,7 +148,6 @@ export function mpvTurnKnowledge(p: {
   const pageBlock = `<pagina_atual>\n${head}\n</pagina_atual>`;
 
   // Âncora: a secção do separador aberto; sem separador, a introdução da página.
-  type Item = { page: HelpTreePage; section: HelpTreeSection; cap?: number };
   const items: Item[] = [];
   const exclude = new Set<string>();
   if (page && canSee(page)) {
@@ -123,9 +157,19 @@ export function mpvTurnKnowledge(p: {
       for (const id of sectionSubtreeIds(page, anchor)) exclude.add(id);
     }
   }
+  return {
+    profile, pageBlock, items, exclude,
+    searchOpts: { canSee, currentPage: page?.id ?? null, exclude: new Set(exclude), max: MPV_SEARCH_SECTIONS * 3 },
+  };
+}
+
+function turnFinish(p: TurnKnowledgeInput, a: TurnAnchor, hits: readonly HelpSectionHit[]): TurnKnowledge {
+  const { items, exclude } = a;
   let found = 0;
-  for (const h of searchHelpSections(tree, p.question, { canSee, currentPage: page?.id ?? null, exclude, max: MPV_SEARCH_SECTIONS * 3 })) {
+  for (const h of hits) {
     if (found >= MPV_SEARCH_SECTIONS) break;
+    // Defesa: a pesquisa já filtra, mas uma secção de um módulo sem acesso nunca entra.
+    if (!a.searchOpts.canSee(h.page)) continue;
     // Uma secção dentro de outra já escolhida não se repete; uma que contenha
     // uma já escolhida também não (ficava o texto duas vezes).
     const sub = sectionSubtreeIds(h.page, h.section);
@@ -153,5 +197,5 @@ export function mpvTurnKnowledge(p: {
     refs.push(it.section.id);
     left -= wrap + chunk.length;
   });
-  return { block: [pageBlock, ...out].join("\n\n"), refs, profile };
+  return { block: [a.pageBlock, ...out].join("\n\n"), refs, profile: a.profile };
 }

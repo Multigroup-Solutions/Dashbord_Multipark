@@ -611,6 +611,17 @@ export const MANUAL_EDIT_AT_CONFIRM_MODES: readonly ManualEditAtConfirm[] = ["co
 export const MANUAL_EDIT_AT_CONFIRM_DEFAULT: ManualEditAtConfirm = "confirm";
 /** "skip_notify": se o dia continuar por confirmar, o aviso repete-se a esta hora (Lisboa, min). */
 export const MANUAL_HOLD_REPEAT_AT_MIN = 18 * 60;
+/** A repetição das 18:00 só sai se o 1.º aviso tiver sido há pelo menos isto (min). */
+export const MANUAL_HOLD_REPEAT_MIN_GAP_MIN = 60;
+
+/**
+ * A opção em vigor de facto: "não confirma e avisa" com os avisos da escala
+ * desligados (EXTRAS_SCHEDULE_ALERTS) deixaria o dia por confirmar sem
+ * ninguém saber — então confirma na mesma. PURA.
+ */
+export function effectiveManualEditMode(mode: ManualEditAtConfirm, alertsOn: boolean): ManualEditAtConfirm {
+  return mode === "skip_notify" && !alertsOn ? "confirm" : mode;
+}
 /** Última corrida do agendador da escala no dia (Lisboa, min): a janela é 08h–23h, de 15 em 15 min. */
 export const SCHEDULE_LAST_RUN_MIN = 23 * 60 + 45;
 export const MANUAL_EDIT_AT_CONFIRM_LABELS: Record<ManualEditAtConfirm, string> = {

@@ -63,6 +63,7 @@ O **Multis** é o assistente de IA da Multipark dentro da aplicação. Apresenta
 
 **Multis por página (piloto)**
 - No piloto, o Multis sabe em que página e em que separador estás: junta à pergunta a parte da ajuda desse separador (por exemplo, a do separador **Pressão** do Extras Dia) e as duas partes da ajuda mais próximas do que perguntaste. Se precisar de mais, abre ele próprio a página ou a secção certa da ajuda.
+- Essas partes (e os manuais) encontra-as pelas palavras e também **pelo significado**, mesmo que uses outras palavras. Se essa pesquisa demorar ou não estiver disponível, fica a das palavras.
 - Em cada página tem um papel: nos Dashboards explica de onde vem cada número; nas Despesas e na Faturação ajuda a lançar e explica noções simples (sem aconselhamento fiscal — para isso, a contabilista); no Operacional, no Extras Dia e na Passagem de turno propõe e quem decide és tu; na Formação faz de tutor; na Avaliação explica os teus pontos; nas Críticas ajuda a responder no tom aprovado.
 - As **perguntas sugeridas** do painel mudam com a página e o separador. Só aparecem as que fazem sentido para o teu acesso (as que precisam de dados só aparecem se o Multis os conseguir ler para ti).
 - O índice da ajuda que o Multis conhece (os títulos das páginas e das secções) é igual para toda a gente; o que fica de fora é o **conteúdo** das secções de módulos a que não tens acesso.
@@ -77,3 +78,4 @@ No piloto, o Multis lê também estes dados, sempre como tu (as tuas cidades e p
 - **Críticas por responder**: quantas faltam e as 10 mais recentes, com o texto curto (sem as que não são críticas nem as repetidas).
 - **Formação**: o que te falta acabar e, a quem acompanha a equipa, quem está mais atrasado.
 - **Situação do Extras Dia**: cobertura face à previsão, faltas, sobras, horas apertadas, quem respondeu disponível e ainda não está escalado, e quantos não responderam (os mesmos números do ecrã).
+Quando uma leitura demora, o Multis guarda o resultado até 5 min e diz a hora em que o leu («lido às HH:MM»). Só as alterações que tu fazes limpam essa leitura guardada: as que outra pessoa ou um trabalho automático façam entretanto não, por isso podes ver dados com até 5 min.
