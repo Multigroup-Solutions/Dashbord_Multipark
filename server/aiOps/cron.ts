@@ -4,7 +4,8 @@
  * /api/cron/ops-briefing). O módulo só corre a partir das 07h de Lisboa e
  * tudo é idempotente:
  *
- *   1. anomalias do dia anterior (OPS_ANOMALIES) + explicações (1 chamada);
+ *   1. anomalias do dia anterior (OPS_ANOMALIES) + explicação das novas
+ *      (1 chamada; as repetições vão no fim, passo 4);
  *   2. briefing por cidade (OPS_BRIEFING): guarda em ops_briefings e envia o
  *      email UMA vez (emailedAt) a cada TL/supervisor com acesso à cidade;
  *   3. à segunda (WEEKLY_REPORTS): relatórios de direção, marketing,
@@ -92,9 +93,11 @@ export async function runOpsBriefingCron(deps: OpsCronDeps): Promise<OpsCronRepo
   // 1. Anomalias (ontem = último dia completo)
   if (isFeatureEnabled("OPS_ANOMALIES")) {
     await step("anomalies", async () => {
-      const { runAnomalyDetection } = await import("./anomalies");
-      const r = await runAnomalyDetection(addDays(clock.date, -1), cap);
-      if (r.aiSkipped) report.warnings.push(`anomalias: IA saltada (${r.aiSkipped})`);
+      const { runAnomalyDetection, anomalyExplainWarning } = await import("./anomalies");
+      // Só as NOVAS aqui (1 chamada); as repetições vão no fim (passo 4).
+      const r = await runAnomalyDetection(addDays(clock.date, -1), cap, { deadlineAt: deps.deadlineAt });
+      const w = anomalyExplainWarning("anomalias", { explained: r.explained, skipped: r.aiSkipped });
+      if (w) report.warnings.push(w);
       return r;
     });
   } else report.warnings.push("anomalias desligadas (OPS_ANOMALIES)");
@@ -113,6 +116,18 @@ export async function runOpsBriefingCron(deps: OpsCronDeps): Promise<OpsCronRepo
       for (const kind of WEEKLY_KINDS) await step(`weekly:${kind}`, () => weeklyReport(kind, clock.date, cap, report));
       for (const tree of trees) await step(`handover-week:${tree.city}`, () => handoverWeek(tree.city, clock.date, cap, report));
     } else report.warnings.push("relatórios semanais desligados (WEEKLY_REPORTS)");
+  }
+
+  // 4. Repetições das explicações das anomalias (MPV A1): no FIM, só com o
+  // teto e o tempo que sobrarem — nunca tiram chamadas aos briefings/semanais.
+  if (isFeatureEnabled("OPS_ANOMALIES") && cap.remaining > 0) {
+    await step("anomalies-retries", async () => {
+      const { explainPendingAnomalies, anomalyExplainWarning } = await import("./anomalies");
+      const r = await explainPendingAnomalies(addDays(clock.date, -1), cap, 20, { phase: "retries", deadlineAt: deps.deadlineAt });
+      const w = anomalyExplainWarning("anomalias (repetições)", r);
+      if (w && r.skipped !== "deadline") report.warnings.push(w);
+      return r;
+    });
   }
 
   report.aiCalls = cap.used;

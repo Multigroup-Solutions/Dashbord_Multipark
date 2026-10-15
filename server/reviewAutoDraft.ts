@@ -73,7 +73,7 @@ export async function autoDraftReview(reviewId: number, opts: { timeoutMs?: numb
 /**
  * Crítica que chegou pelo leitor de email (alias criticas): a mesma regra dos
  * 14 dias, com a data do EMAIL (`emailAt`; sem ela, agora). Uma crítica antiga
- * (email antigo relido, reencaminhamento de histórico) nunca tem rascunho
+ * (email antigo relido numa nova sincronização) nunca tem rascunho
  * automático e fica marcada como já tentada — senão o cron, que olha para
  * `createdAt` (= hoje), apanhava-a depois. "Gerar" à mão continua a funcionar.
  */
@@ -102,8 +102,8 @@ export async function autoDraftEmailReview(
 }
 
 /**
- * Críticas novas (escritas nos últimos 14 dias — data da PRÓPRIA crítica, não
- * da importação; MPV R1) sem resposta nem rascunho → rascunho, no máximo
+ * Críticas novas (escritas nos últimos 14 dias — data da PRÓPRIA crítica; sem
+ * ela, a do email que a trouxe; só sem as duas a da entrada cá; MPV R1) sem resposta nem rascunho → rascunho, no máximo
  * `limit` por corrida e dentro do prazo. Chamado no fim do sync do Google
  * Business Profile (cron a cada 10 min) e do leitor de email. As críticas
  * ANTIGAS entradas numa 1.ª importação de um perfil já vêm marcadas
@@ -120,16 +120,19 @@ export async function draftPendingReviewReplies(opts: { limit?: number; deadline
   const limit = Math.max(1, Math.min(10, opts.limit ?? 5));
   const deadlineAt = opts.deadlineAt ?? Date.now() + 30_000;
   const cutoff = sql`DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${REVIEW_AUTO_DRAFT_MAX_AGE_DAYS} DAY)`;
-  const rows = await db.select({ id: googleReviews.id, reviewDate: googleReviews.reviewDate, createdAt: googleReviews.createdAt })
+  const rows = await db.select({ id: googleReviews.id, reviewDate: googleReviews.reviewDate, sourceEmailDate: googleReviews.sourceEmailDate, createdAt: googleReviews.createdAt })
     .from(googleReviews).where(and(
       isNull(googleReviews.aiResponse),
       isNull(googleReviews.googleReply),
       isNull(googleReviews.aiDraftAttemptedAt),
       sql`${googleReviews.status} IN ('pending_response', 'converted_complaint')`,
-      // = COALESCE(reviewDate, createdAt) >= corte, sem a função à volta das
-      // colunas (forma pronta para índices; hoje não há índice nestas colunas e
-      // a tabela é pequena, por isso é uma leitura da tabela inteira).
-      sql`(${googleReviews.reviewDate} >= ${cutoff} OR (${googleReviews.reviewDate} IS NULL AND ${googleReviews.createdAt} >= ${cutoff}))`,
+      // = COALESCE(reviewDate, sourceEmailDate, createdAt) >= corte, sem a
+      // função à volta das colunas (forma pronta para índices; hoje não há
+      // índice nestas colunas e a tabela é pequena, por isso é uma leitura da
+      // tabela inteira).
+      sql`(${googleReviews.reviewDate} >= ${cutoff}
+        OR (${googleReviews.reviewDate} IS NULL AND ${googleReviews.sourceEmailDate} >= ${cutoff})
+        OR (${googleReviews.reviewDate} IS NULL AND ${googleReviews.sourceEmailDate} IS NULL AND ${googleReviews.createdAt} >= ${cutoff}))`,
     )).orderBy(sql`${googleReviews.id} DESC`).limit(limit);
   // Segunda verificação (a mesma regra, pura): nunca um rascunho automático
   // para uma crítica antiga, mesmo que o SQL mude.

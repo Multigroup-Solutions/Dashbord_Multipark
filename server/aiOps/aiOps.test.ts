@@ -38,6 +38,7 @@ import {
   anomalyExplainBatches,
   anomalyExplainBatchSize,
   anomalyExplainDue,
+  anomalyExplainWarning,
   anomalyExplainMaxTokens,
   anomalyPrompt,
   bookingSeries,
@@ -328,14 +329,14 @@ describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
     await explainPendingAnomalies("2026-10-14", cap(), 20, { nowMs: NOW + 3_600_000 });
     expect(h.runAi).toHaveBeenCalledTimes(1);
     // 2.ª e 3.ª tentativas, um dia de intervalo cada.
-    // (a 3.ª — a última — vai uma a uma: 3 anomalias → 3 chamadas)
+    // (a 3.ª — a última — vai em lotes de ceil(20/4) = 5: as 3 num lote)
     await explainPendingAnomalies("2026-10-15", cap(), 20, { nowMs: NOW + 86_400_000 });
     await explainPendingAnomalies("2026-10-16", cap(), 20, { nowMs: NOW + 2 * 86_400_000 });
-    expect(h.runAi).toHaveBeenCalledTimes(1 + 1 + 3);
+    expect(h.runAi).toHaveBeenCalledTimes(3);
     expect(JSON.parse(state!)["2"].n).toBe(3);
     // Esgotada: não volta a ser enviada.
     expect(await explainPendingAnomalies("2026-10-17", cap(), 20, { nowMs: NOW + 3 * 86_400_000 })).toEqual({ explained: 0 });
-    expect(h.runAi).toHaveBeenCalledTimes(5);
+    expect(h.runAi).toHaveBeenCalledTimes(3);
   });
 
   it("a que o modelo omite conta como tentativa; as explicadas saem do estado; nova anomalia segue logo", async () => {
@@ -376,20 +377,68 @@ describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
     expect(JSON.parse(state!)).toEqual({ 1: { n: 2, at: NOW + 86_400_000 } });
   });
 
-  it("seguimento: com max = 20, a 2.ª tentativa vai em lotes de 10 e a 3.ª uma a uma (no máximo 3 chamadas por corrida)", () => {
+  it("seguimento: com max = 20, a 2.ª tentativa vai em lotes de 10 e a 3.ª de 5 (uma a uma só com ≤ 2); no máximo 3 chamadas", () => {
     expect(anomalyExplainBatchSize(0, 20)).toBe(20);
     expect(anomalyExplainBatchSize(1, 20)).toBe(10);
-    expect(anomalyExplainBatchSize(2, 20)).toBe(1);
+    expect(anomalyExplainBatchSize(2, 20)).toBe(5);
+    expect(anomalyExplainBatchSize(2, 20, 2)).toBe(1);
+    expect(anomalyExplainBatchSize(2, 20, 3)).toBe(5);
     expect(anomalyExplainBatchSize(1, 3)).toBe(2);
     const due = Array.from({ length: 25 }, (_, i) => ({ id: i + 1 }));
     const att: Record<string, { n: number; at: number }> = {};
     for (let id = 1; id <= 25; id++) att[id] = { n: 1, at: 0 };
     expect(anomalyExplainBatches(due, att, 20).map((b) => b.length)).toEqual([10, 10, 5]);
     for (let id = 1; id <= 25; id++) att[id] = { n: 2, at: 0 };
-    expect(anomalyExplainBatches(due, att, 20).map((b) => b.map((x) => x.id))).toEqual([[1], [2], [3]]);
-    // Novas primeiro, num só lote; depois as repetições.
+    expect(anomalyExplainBatches(due, att, 20).map((b) => b.length)).toEqual([5, 5, 5]);
+    expect(anomalyExplainBatches([{ id: 1 }, { id: 2 }], att, 20).map((b) => b.map((x) => x.id))).toEqual([[1], [2]]);
+    // Novas primeiro, num só lote; nas repetições, prioridade às da última tentativa (n = 2).
     const mixed = { 3: { n: 1, at: 0 }, 4: { n: 2, at: 0 } };
-    expect(anomalyExplainBatches([{ id: 4 }, { id: 3 }, { id: 1 }, { id: 2 }], mixed, 20).map((b) => b.map((x) => x.id))).toEqual([[1, 2], [3], [4]]);
+    expect(anomalyExplainBatches([{ id: 3 }, { id: 4 }, { id: 1 }, { id: 2 }], mixed, 20).map((b) => b.map((x) => x.id))).toEqual([[1, 2], [4], [3]]);
+    // Fases: "new" só as novas; "retries" só as repetições.
+    expect(anomalyExplainBatches([{ id: 3 }, { id: 4 }, { id: 1 }, { id: 2 }], mixed, 20, 3, "new").map((b) => b.map((x) => x.id))).toEqual([[1, 2]]);
+    expect(anomalyExplainBatches([{ id: 3 }, { id: 4 }, { id: 1 }, { id: 2 }], mixed, 20, 3, "retries").map((b) => b.map((x) => x.id))).toEqual([[4], [3]]);
+  });
+
+  it("seguimento: prazo — a partir do 2.º lote pára se faltarem < 25 s (não conta como tentativa); o 1.º lote fica gravado", async () => {
+    pending = [1, 2, 3, 4].map((id) => ({ id, domain: "bookings", detail: `Anomalia ${id}` }));
+    // Todas na 2.ª tentativa, max 2 → lotes [1], [2], [3] (+ a 4 fica para depois).
+    state = JSON.stringify(Object.fromEntries([1, 2, 3, 4].map((id) => [id, { n: 1, at: NOW - 86_400_000 }])));
+    h.runAi.mockRejectedValue(new Error("truncado"));
+    const r = await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 2, { nowMs: NOW, deadlineAt: Date.now() + 20_000 });
+    expect(h.runAi).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ explained: 0, skipped: "error" });
+    expect(stateWrites).toBe(1);
+    const st = JSON.parse(state!);
+    expect(st["1"].n).toBe(2);
+    expect(st["2"]).toEqual({ n: 1, at: NOW - 86_400_000 });
+    // Nas repetições do fim do cron o prazo vale logo para o 1.º lote.
+    h.runAi.mockClear();
+    const r2 = await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 2, { nowMs: NOW, deadlineAt: Date.now() + 20_000, phase: "retries" });
+    expect(h.runAi).not.toHaveBeenCalled();
+    expect(r2).toEqual({ explained: 0, skipped: "deadline" });
+  });
+
+  it("seguimento: disjuntor (2 erros seguidos → pára), repetições com 12 s e estado gravado depois de cada lote", async () => {
+    pending = [1, 2, 3].map((id) => ({ id, domain: "bookings", detail: `Anomalia ${id}` }));
+    state = JSON.stringify(Object.fromEntries([1, 2, 3].map((id) => [id, { n: 1, at: NOW - 86_400_000 }])));
+    h.runAi.mockRejectedValue(new Error("truncado"));
+    await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 2, { nowMs: NOW, deadlineAt: Date.now() + 120_000, phase: "retries" });
+    expect(h.runAi).toHaveBeenCalledTimes(2);
+    expect(h.runAi.mock.calls.every((c: any) => c[0].timeoutMs === 12_000)).toBe(true);
+    expect(stateWrites).toBe(2);
+    expect(JSON.parse(state!)["3"].n).toBe(1); // a 3.ª nem foi enviada
+    // As novas usam o prazo normal.
+    pending = [{ id: 9, domain: "bookings", detail: "Nova" }];
+    h.runAi.mockReset();
+    h.runAi.mockResolvedValue({ output: { lines: [{ n: 1, text: "ok" }] } });
+    await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW, phase: "new" });
+    expect(h.runAi.mock.calls[0][0].timeoutMs).toBe(20_000);
+  });
+
+  it("seguimento: aviso do cron — 'saltada' só se nada foi explicado, senão 'parcial'", () => {
+    expect(anomalyExplainWarning("anomalias", { explained: 0, skipped: "error" })).toBe("anomalias: IA saltada (error)");
+    expect(anomalyExplainWarning("anomalias", { explained: 2, skipped: "error" })).toBe("anomalias: IA parcial (error)");
+    expect(anomalyExplainWarning("anomalias", { explained: 2 })).toBeNull();
   });
 
   it("seguimento: se a leitura do estado falhar, não grava (os contadores não se apagam)", async () => {

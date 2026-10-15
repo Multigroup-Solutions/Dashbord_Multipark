@@ -443,7 +443,8 @@ describe("rascunho automático das críticas", () => {
     // O SQL filtra pela data da própria crítica (reviewDate), com createdAt só sem ela.
     const where = dialect.sqlToQuery(h.db.log.wheres.find((w: any) => w.table === "google_reviews").cond);
     expect(where.sql).toMatch(/`reviewDate` >= DATE_SUB\(UTC_TIMESTAMP\(\), INTERVAL \? DAY\)/);
-    expect(where.sql).toMatch(/`reviewDate` IS NULL AND `google_reviews`\.`createdAt` >=/);
+    expect(where.sql).toMatch(/`reviewDate` IS NULL AND `google_reviews`\.`sourceEmailDate` >=/);
+    expect(where.sql).toMatch(/`sourceEmailDate` IS NULL AND `google_reviews`\.`createdAt` >=/);
     expect(where.params).toContain(14);
   });
 
@@ -484,6 +485,26 @@ describe("rascunho automático das críticas", () => {
     const marks = h.db.log.updates.filter((u: any) => u.table === "google_reviews");
     expect(marks).toHaveLength(1);
     expect(marks[0].data.aiDraftAttemptedAt).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+  });
+
+  it("MPV R1 (seguimento): crítica por email com a IA desligada → nada é marcado (fica para o cron quando ligar)", async () => {
+    process.env.AI_REVIEW_AUTO_DRAFTS = "off";
+    h.selectRows = (t) => (t === "google_reviews" ? [review] : []);
+    const r = await autoDraftEmailReview(5, "2026-09-25 09:00:00", { nowMs: NOW_MS });
+    expect(r).toEqual({ drafted: false, skipped: "disabled" });
+    expect(h.runAi).not.toHaveBeenCalled();
+    expect(h.db.log.updates.filter((u: any) => u.table === "google_reviews")).toHaveLength(0);
+  });
+
+  it("MPV R1 (seguimento): cron — sem reviewDate conta a data do email (antes do createdAt)", async () => {
+    const { reviewAutoDraftEligible } = await import("../shared/reviewRules");
+    expect(reviewAutoDraftEligible({ reviewDate: null, sourceEmailDate: "2026-08-01 10:00:00", createdAt: "2026-09-25 11:00:00" }, NOW_MS)).toBe(false);
+    expect(reviewAutoDraftEligible({ reviewDate: null, sourceEmailDate: "2026-09-24 10:00:00", createdAt: "2026-09-25 11:00:00" }, NOW_MS)).toBe(true);
+    const viaEmail = { ...review, reviewDate: null, sourceEmailDate: "2026-08-01 10:00:00", createdAt: "2026-09-25 11:00:00" };
+    h.selectRows = (t) => (t === "google_reviews" ? [viaEmail] : []);
+    const r = await draftPendingReviewReplies({ limit: 3, nowMs: NOW_MS });
+    expect(r.drafted).toBe(0);
+    expect(h.runAi).not.toHaveBeenCalled();
   });
 
   it("MPV R1 (seguimento): crítica por email recente (ou sem data → agora) → rascunho", async () => {
