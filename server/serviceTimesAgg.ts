@@ -414,8 +414,9 @@ export interface DriverDeliveryTime {
   transitMs: number | null;
   customerMs: number | null;
   ourMs: number | null;
-  /** O estado do Trânsito (o motivo, quando não há medição) — só com o portão aberto. */
+  /** O estado do Trânsito e o do Cliente (o motivo, quando não há medição) — só com o portão aberto. */
   transitStatus: string | null;
+  customerStatus: string | null;
   /** A janela do Trânsito (para a velocidade máxima "no Trânsito"), só com o portão aberto. */
   transitWindow: { startMs: number; endMs: number } | null;
   totalMs: number | null;
@@ -456,6 +457,7 @@ export function driverDayTimes(dayRows: readonly ServiceRow[], employeeId: numbe
         customerMs: vC.cities.has(c) ? metricValue(r, "cliente") : null,
         ourMs: vO.cities.has(c) ? metricValue(r, "nosso") : null,
         transitStatus: tOpen ? r.transitStatus ?? null : null,
+        customerStatus: vC.cities.has(c) ? r.customerStatus ?? null : null,
         transitWindow: tOpen && r.transitStatus === "medido" && r.startedAt != null && r.arrivedAt != null && r.arrivedAt > r.startedAt ? { startMs: r.startedAt, endMs: r.arrivedAt } : null,
         totalMs: metricValue(r, "total", { totalMaxMin: DAY_TOTAL_MAX_MIN }),
       };

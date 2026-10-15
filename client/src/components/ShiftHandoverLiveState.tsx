@@ -31,6 +31,8 @@ const QUEUE_TONE: Record<Exclude<QueueTone, null>, string> = {
   warn: "border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300",
   late: "border-red-400 bg-red-50 text-red-800 dark:bg-red-950/30 dark:text-red-300",
 };
+/** Na fila, ainda dentro da meta: sem cor de alerta (o vermelho de antes era para qualquer pendente). */
+const QUEUE_OK = "border-slate-300 text-slate-700 dark:text-slate-300";
 const APPLIES_LABELS: Record<string, string> = { CHECK_IN: "recolhas", CHECK_OUT: "entregas", BOTH: "recolhas e entregas" };
 const eur = (n: number | null) => (n == null ? "" : `${n.toFixed(2).replace(".", ",")} €`);
 const place = (c: { garage: string | null; spot: string | null }) => [c.garage, c.spot].filter(Boolean).join(" · ");
@@ -210,7 +212,7 @@ function LiveBody({ d, hours }: { d: ShiftState & { targetMinutes?: number }; ho
             const t = liveTimer(c.phase, c.phaseSince, now, target);
             return (
             <div key={c.id} className="flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className={`text-[11px] tabular-nums ${t?.tone ? QUEUE_TONE[t.tone] : PHASE_TONE[c.phase] ?? ""}`} title={`${LIVE_PHASE_LABELS[c.phase]}${c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}`}>
+              <Badge variant="outline" className={`text-[11px] tabular-nums ${t?.tone ? QUEUE_TONE[t.tone] : t && c.phase === "pending_checkout" ? QUEUE_OK : PHASE_TONE[c.phase] ?? ""}`} title={`${LIVE_PHASE_LABELS[c.phase]}${c.phaseSince ? ` desde ${fmtPTTime(c.phaseSince)}` : ""}`}>
                 {t ? t.text : LIVE_PHASE_LABELS[c.phase]}{c.phaseSince ? <span className="opacity-70"> · {fmtPTTime(c.phaseSince)}</span> : null}
               </Badge>
               {c.baggageWaiting && <Badge variant="outline" className="text-[11px] border-amber-300 text-amber-700">{BAGGAGE_WAITING_LABEL}</Badge>}

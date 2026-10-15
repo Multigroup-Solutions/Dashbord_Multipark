@@ -2,7 +2,7 @@
  * Resumo do dia → os tempos de entrega (tarde) e de recolha (manhã), 15 out
  * 2026. Entregas: Fila, Trânsito, Nosso (Fila + Trânsito) com a % na meta,
  * Cliente e Total; as mais lentas com as três partes numa barra e o condutor
- * do Trânsito. Recolhas: no terminal ★, no P2 ★, o cliente, até arrumado e as
+ * do Trânsito. Recolhas: no terminal e no P2 (os principais), o cliente, até arrumado e as
  * atrasadas no T2; as que ficaram mais tempo no terminal ou no P2.
  * A cobertura vê-se sempre. Os números com GPS chegam já filtrados pelo
  * portão (servidor): aqui só se mostra o que veio.
@@ -66,7 +66,7 @@ export function DayTimesSection({ t, driverNames, onOpenSlow }: { t: DayTimes; d
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-semibold">Mais lentas {d.slowestBy === "nosso" ? "pelo nosso tempo" : "pela Fila (os tempos com GPS estão em calibração)"}</p>
-                <DeliveryBarLegend />
+                <DeliveryBarLegend queueOnly={d.slowestBy !== "nosso"} />
               </div>
               <ul className="space-y-1">
                 {d.slowest.map((x) => {

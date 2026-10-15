@@ -177,9 +177,13 @@ describe("P8 — portão dos tempos com GPS (§8.1), aplicado no servidor", () =
     const d = driverDayTimes(rows, 1, { gate: CLOSED });
     expect(d.gpsHidden).toBe("Em calibração");
     expect(d.deliveries.every((x) => x.transitMs == null && x.customerMs == null && x.ourMs == null && x.transitWindow == null)).toBe(true);
+    expect(d.deliveries.every((x) => x.transitStatus == null && x.customerStatus == null)).toBe(true);
     expect(d.deliveries.some((x) => x.queueMs != null)).toBe(true);
     const s = driverDayTimes(rows, 1, { gate: SUPER_CLOSED });
     expect(s.deliveries.filter((x) => x.transitWindow).length).toBe(30);
+    // o "—" do Cliente diz o motivo do Cliente (não o do Trânsito)
+    expect(s.deliveries.filter((x) => x.customerStatus === "medido")).toHaveLength(30);
+    expect(s.deliveries.filter((x) => x.customerMs == null).every((x) => x.customerStatus === "sem_pontos")).toBe(true);
   });
   it("recolhas: No terminal e Atrasadas no T2 atrás do portão; No P2 e Até arrumado sempre", () => {
     const p = [...Array.from({ length: 25 }, () => pick({ p2: 90, terminalClass: "t2", late: 2 }))];

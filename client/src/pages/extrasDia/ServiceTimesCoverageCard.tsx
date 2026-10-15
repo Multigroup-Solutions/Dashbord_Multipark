@@ -64,15 +64,15 @@ export function ServiceTimesCoverageCard() {
                         <td className="p-1.5 tabular-nums whitespace-nowrap">{ddmm(w.week)}</td>
                         <td className="p-1.5">{CITY[w.city] ?? w.city}</td>
                         <td className="p-1.5 text-right tabular-nums">{w.deliveries}</td>
-                        <td className="p-1.5 text-right"><Pct a={w.withCall} b={w.deliveries} /></td>
-                        <td className="p-1.5 text-right"><Pct a={w.gps} b={w.deliveries} good /></td>
-                        <td className="p-1.5 text-right"><Pct a={w.button} b={w.deliveries} /></td>
+                        <td className="p-1.5 text-right whitespace-nowrap"><Pct a={w.withCall} b={w.deliveries} /></td>
+                        <td className="p-1.5 text-right whitespace-nowrap"><Pct a={w.gps} b={w.deliveries} good /></td>
+                        <td className="p-1.5 text-right whitespace-nowrap"><Pct a={w.button} b={w.deliveries} /></td>
                         <td className="p-1.5 text-right tabular-nums">{w.pickups}</td>
-                        <td className="p-1.5 text-right"><Pct a={w.terminalGps} b={w.pickups} good /></td>
-                        <td className="p-1.5 text-right"><Pct a={w.terminalApp} b={w.pickups} /></td>
+                        <td className="p-1.5 text-right whitespace-nowrap"><Pct a={w.terminalGps} b={w.pickups} good /></td>
+                        <td className="p-1.5 text-right whitespace-nowrap"><Pct a={w.terminalApp} b={w.pickups} /></td>
                         <td className="p-1.5 text-right tabular-nums">{w.noZello || "·"}</td>
                         <td className="p-1.5 text-right tabular-nums">{w.missingZones || "·"}</td>
-                        <td className="p-1.5 text-muted-foreground">{Object.entries(w.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${statusLabel(k)} ${v}`).join(" · ") || "—"}</td>
+                        <td className="p-1.5 text-muted-foreground min-w-[14rem]">{Object.entries(w.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${statusLabel(k)} ${v}`).join(" · ") || "—"}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -177,7 +177,7 @@ type DriverTimes = {
   gpsHidden: string | null;
   gpsNote: string | null;
   maxInTransit: Record<string, number | null>;
-  deliveries: Array<{ bookingId: string; bookingCode: string | null; requestAt: number | null; startedAt: number | null; deliveredAt: number | null; queueMs: number | null; queueStatus: string | null; transitMs: number | null; customerMs: number | null; ourMs: number | null; transitStatus: string | null; totalMs: number | null }>;
+  deliveries: Array<{ bookingId: string; bookingCode: string | null; requestAt: number | null; startedAt: number | null; deliveredAt: number | null; queueMs: number | null; queueStatus: string | null; transitMs: number | null; customerMs: number | null; ourMs: number | null; transitStatus: string | null; customerStatus?: string | null; totalMs: number | null }>;
   pickups: Array<{ bookingId: string; bookingCode: string | null; checkInAt: number | null; terminalMs: number | null; terminalStatus: string | null; firstGarage: string | null; p2Ms: number | null; p2Status: string | null; parkedGarage: string | null }>;
 };
 
@@ -205,7 +205,7 @@ function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number 
                 <th className="p-1 text-right" title="Da chamada (ou do pendente) até pegar no carro">Fila</th>
                 <th className="p-1 text-right" title="De pegar no carro até chegar ao terminal (GPS)">Trânsito</th>
                 <th className="p-1 text-right" title="Do terminal à assinatura do cliente">Cliente</th>
-                <th className="p-1 text-right" title="Velocidade máxima entre pegar no carro e chegar ao terminal">Máx. no Trânsito</th>
+                <th className="p-1 text-right" title="Velocidade máxima entre pegar no carro e chegar ao terminal">Vel. máx.</th>
               </tr>
             </thead>
             <tbody>
@@ -217,7 +217,7 @@ function DriverTimesBlock({ t, threshold }: { t: DriverTimes; threshold: number 
                     <td className="p-1"><BookingLink code={x.bookingCode} id={x.bookingId} /></td>
                     <td className="p-1 text-right tabular-nums">{x.queueMs != null ? fmtDur(x.queueMs) : <span className="text-muted-foreground" title={statusLabel(x.queueStatus)}>—</span>}</td>
                     <td className="p-1 text-right tabular-nums">{gpsCell(x.transitMs, x.transitStatus)}</td>
-                    <td className="p-1 text-right tabular-nums">{gpsCell(x.customerMs, x.transitStatus)}</td>
+                    <td className="p-1 text-right tabular-nums">{gpsCell(x.customerMs, x.customerStatus ?? x.transitStatus)}</td>
                     <td className={`p-1 text-right tabular-nums ${max != null && threshold != null && max > threshold ? "text-red-700 font-semibold" : ""}`}>{t.gpsHidden ? gpsCell(null) : max != null ? `${max} km/h` : <span className="text-muted-foreground">—</span>}</td>
                   </tr>
                 );

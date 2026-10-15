@@ -7,7 +7,7 @@
  * Paleta: .times-viz (client/src/index.css), validada para os dois modos.
  */
 import { Badge } from "@/components/ui/badge";
-import { Info, Lock } from "lucide-react";
+import { Info, Lock, Star } from "lucide-react";
 import { SERVICE_STATUS_LABELS } from "@shared/serviceTimes";
 import type { DeliveryCoverage, MetricView, PickupCoverage } from "../../../../server/serviceTimesAgg";
 
@@ -24,7 +24,7 @@ const pct = (a: number, b: number) => (b > 0 ? `${Math.round((a / b) * 100)} %` 
 /** Etiqueta "em calibração" (super admin com o portão fechado: números provisórios). */
 export function CalibrationBadge({ note }: { note: string | null | undefined }) {
   if (!note) return null;
-  return <Badge variant="outline" className="h-5 px-1.5 text-[10px] border-amber-300 text-amber-800 dark:text-amber-300" title="Só tu (super admin) vês este tempo: depende do GPS e o portão ainda está fechado. Provisório.">provisório · {note}</Badge>;
+  return <Badge variant="outline" className="h-auto min-h-5 w-fit max-w-full whitespace-normal text-left leading-tight px-1.5 py-0.5 text-[10px] border-amber-300 text-amber-800 dark:text-amber-300" title="Só tu (super admin) vês este tempo: depende do GPS e o portão ainda está fechado. Provisório.">provisório · {note}</Badge>;
 }
 
 /**
@@ -37,7 +37,8 @@ export function MetricTile({ m, star, hint }: { m: MetricView; star?: boolean; h
   return (
     <div className="rounded-[14px] border bg-card p-3 min-w-0 flex flex-col gap-0.5" title={`${m.label}: ${m.short}${hint ? `. ${hint}` : ""}`}>
       <p className="text-xs text-muted-foreground flex items-center gap-1 min-w-0">
-        <span className="truncate">{m.label}{star ? " ★" : ""}</span>
+        <span className="truncate">{m.label}</span>
+        {star && <Star className="w-3 h-3 shrink-0" aria-label="tempo principal" />}
         {m.gps && <span className="text-[10px] text-muted-foreground/80 shrink-0">GPS</span>}
       </p>
       {m.hidden ? (
@@ -149,10 +150,11 @@ export function DeliveryBar({ queueMs, transitMs, customerMs, max }: { queueMs: 
 }
 
 /** A legenda da barra (sempre que há barras). */
-export function DeliveryBarLegend() {
+export function DeliveryBarLegend({ queueOnly }: { queueOnly?: boolean } = {}) {
+  const parts = [["Fila", "var(--times-queue)"], ["Trânsito", "var(--times-transit)"], ["Cliente", "var(--times-customer)"]];
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-      {[["Fila", "var(--times-queue)"], ["Trânsito", "var(--times-transit)"], ["Cliente", "var(--times-customer)"]].map(([k, c]) => (
+      {(queueOnly ? parts.slice(0, 1) : parts).map(([k, c]) => (
         <span key={k} className="flex items-center gap-1"><span className="inline-block h-2.5 w-4 rounded-[3px]" style={{ backgroundColor: c }} />{k}</span>
       ))}
     </div>

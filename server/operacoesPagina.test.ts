@@ -175,10 +175,10 @@ describe("erro ≠ zero", () => {
 
   it("Ficha da reserva: cada secção mostra o erro com 'Tentar de novo' (nunca 'A carregar…' para sempre)", () => {
     const page = src("client/src/pages/BookingFilePage.tsx");
-    // main, anexos, assinaturas, linha do tempo, contas, extras, comunicação, ocorrências, os nossos casos
-    expect(page.match(/<QueryErrorNote error=/g)?.length).toBe(9);
+    // main, anexos, assinaturas, linha do tempo, contas, extras, comunicação, ocorrências, os nossos casos, tempos
+    expect(page.match(/<QueryErrorNote error=/g)?.length).toBe(10);
     // As secções que abrem ao clicar verificam o erro ANTES do "a carregar".
-    expect(page.match(/\{q\.error \? <QueryErrorNote[^\n]*: q\.isLoading \|\| \(!d && enabled\) \? <Loading \/>/g)?.length).toBe(2);
+    expect(page.match(/\{q\.error \? <QueryErrorNote[^\n]*: q\.isLoading \|\| \(!d && enabled\) \? <Loading \/>/g)?.length).toBe(3);
     expect(page).not.toMatch(/\{q\.isLoading \|\| \(!d && enabled\) \? <Loading \/>/);
   });
 });

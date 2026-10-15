@@ -39,6 +39,9 @@ function Delta({ ms }: { ms: number | null }) {
 
 type Point = { period: string; n: number; p50Ms: number | null; meanMs: number | null; peersN: number; peersP50Ms: number | null; gpsHidden: string | null };
 
+/** Minutos com vírgula ("7,4 min"); null → "—". */
+const minTxt = (v: number | null | undefined) => (v == null ? "—" : `${String(v).replace(".", ",")} min`);
+
 /** Tooltip: o valor primeiro, a série a seguir, com a linha da cor da série. */
 function ChartTip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
@@ -47,8 +50,8 @@ function ChartTip({ active, payload, label }: any) {
   return (
     <div className="rounded-[10px] border bg-popover px-3 py-2 text-xs shadow-sm">
       <p className="font-medium mb-1">{periodTick(String(label))}</p>
-      <p className="flex items-center gap-2"><span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--times-me)" }} /><b className="tabular-nums">{p.me == null ? "sem dados suficientes" : `${p.me} min`}</b><span className="text-muted-foreground">ele (n={p.n})</span></p>
-      <p className="flex items-center gap-2"><span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--times-peers)" }} /><b className="tabular-nums">{p.peers == null ? "sem dados suficientes" : `${p.peers} min`}</b><span className="text-muted-foreground">colegas (n={p.peersN})</span></p>
+      <p className="flex items-center gap-2"><span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--times-me)" }} /><b className="tabular-nums">{p.me == null ? "sem dados suficientes" : minTxt(p.me)}</b><span className="text-muted-foreground">ele (n={p.n})</span></p>
+      <p className="flex items-center gap-2"><span className="inline-block h-0.5 w-4 rounded" style={{ background: "var(--times-peers)" }} /><b className="tabular-nums">{p.peers == null ? "sem dados suficientes" : minTxt(p.peers)}</b><span className="text-muted-foreground">colegas (n={p.peersN})</span></p>
     </div>
   );
 }
@@ -91,38 +94,41 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
             <CalibrationBadge note={gpsNote} />
 
             <div className="overflow-x-auto -mx-1">
-              <table className="w-full text-xs min-w-[34rem]">
+              <table className="w-full text-xs sm:min-w-[30rem]">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
-                    <th className="p-1.5">Período</th><th className="p-1.5">Onde</th>
-                    <th className="p-1.5 text-right">n</th><th className="p-1.5 text-right">Média</th><th className="p-1.5 text-right">Mediana</th><th className="p-1.5 text-right">p75</th>
-                    <th className="p-1.5 text-right">Colegas (mediana)</th><th className="p-1.5 text-right">Diferença</th>
+                    <th className="p-1.5">Onde</th>
+                    <th className="p-1.5 text-right">n</th><th className="p-1.5 text-right hidden sm:table-cell">Média</th><th className="p-1.5 text-right">Mediana</th><th className="p-1.5 text-right hidden sm:table-cell">p75</th>
+                    <th className="p-1.5 text-right" title="Mediana dos colegas">Colegas</th><th className="p-1.5 text-right">Diferença</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(["semana", "mes", "6meses"] as const).map((p) => {
                     const list = m.periods[p];
-                    if (!list.length) return <tr key={p} className="border-b"><td className="p-1.5 font-medium whitespace-nowrap">{PERIOD_LABEL[p]}</td><td className="p-1.5 text-muted-foreground" colSpan={7}>sem casos neste período</td></tr>;
-                    return list.map((s, i) => (
+                    const head = (
+                      <tr key={`${p}-h`} className="border-b bg-muted/40">
+                        <td className="p-1.5 font-medium" colSpan={7}>{PERIOD_LABEL[p]}{list.length ? null : <span className="font-normal text-muted-foreground"> · sem casos neste período</span>}</td>
+                      </tr>
+                    );
+                    return [head, ...list.map((s) => (
                       <tr key={`${p}-${s.cityKey}-${s.serviceType}`} className="border-b align-top">
-                        <td className="p-1.5 font-medium whitespace-nowrap">{i === 0 ? PERIOD_LABEL[p] : ""}</td>
                         <td className="p-1.5 whitespace-nowrap">{CITY_LABEL[s.cityKey ?? ""] ?? s.cityKey ?? "—"} · {SERVICE_LABEL[s.serviceType] ?? s.serviceType}</td>
                         <td className="p-1.5 text-right tabular-nums">{s.n}</td>
                         {s.gpsHidden ? (
-                          <td className="p-1.5 text-muted-foreground" colSpan={5}><span className="inline-flex items-center gap-1"><Lock className="w-3 h-3" />{s.gpsHidden}</span></td>
+                          <td className="p-1.5 text-muted-foreground" colSpan={5}><span className="inline-flex items-center gap-1"><Lock className="w-3 h-3 shrink-0" />{s.gpsHidden}</span></td>
                         ) : !s.enough ? (
                           <td className="p-1.5 text-muted-foreground" colSpan={5}>sem dados suficientes (n = {s.n}, mínimo {d.minN})</td>
                         ) : (
                           <>
-                            <td className="p-1.5 text-right tabular-nums">{fmtDur(s.meanMs)}</td>
-                            <td className="p-1.5 text-right tabular-nums font-semibold">{fmtDur(s.p50Ms)}</td>
-                            <td className="p-1.5 text-right tabular-nums">{fmtDur(s.p75Ms)}</td>
-                            <td className="p-1.5 text-right tabular-nums">{s.peers.p50Ms != null ? <>{fmtDur(s.peers.p50Ms)} <span className="text-muted-foreground">({s.peers.drivers} cond.)</span></> : <span className="text-muted-foreground">sem dados suficientes</span>}</td>
-                            <td className="p-1.5 text-right"><Delta ms={s.deltaP50Ms} /></td>
+                            <td className="p-1.5 text-right tabular-nums hidden sm:table-cell">{fmtDur(s.meanMs)}</td>
+                            <td className="p-1.5 text-right tabular-nums font-semibold whitespace-nowrap">{fmtDur(s.p50Ms)}</td>
+                            <td className="p-1.5 text-right tabular-nums hidden sm:table-cell whitespace-nowrap">{fmtDur(s.p75Ms)}</td>
+                            <td className="p-1.5 text-right tabular-nums whitespace-nowrap">{s.peers.p50Ms != null ? <>{fmtDur(s.peers.p50Ms)}<span className="text-muted-foreground hidden sm:inline"> ({s.peers.drivers} cond.)</span></> : <span className="text-muted-foreground">sem dados suficientes</span>}</td>
+                            <td className="p-1.5 text-right whitespace-nowrap"><Delta ms={s.deltaP50Ms} /></td>
                           </>
                         )}
                       </tr>
-                    ));
+                    ))];
                   })}
                 </tbody>
               </table>
@@ -134,7 +140,7 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
                 <div className="inline-flex rounded-[10px] border p-0.5" role="radiogroup" aria-label="Por semana ou por mês">
                   {([["monthly", "Por mês"], ["weekly", "Por semana"]] as const).map(([k, l]) => (
                     <button key={k} type="button" role="radio" aria-checked={bucket === k} onClick={() => setBucket(k)}
-                      className={`h-7 rounded-[8px] px-2.5 text-xs ${bucket === k ? "bg-[#0E2957] text-white" : "hover:bg-muted/60"}`}>{l}</button>
+                      className={`h-7 rounded-[8px] px-2.5 text-xs ${bucket === k ? "bg-[#0E2957] dark:bg-[#0055D2] text-white" : "hover:bg-muted/60"}`}>{l}</button>
                   ))}
                 </div>
               </div>
@@ -146,10 +152,10 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
                 <>
                   <div className="h-[220px] w-full" role="img" aria-label={`Mediana de ${m.label} por ${bucket === "monthly" ? "mês" : "semana"}: ele e os colegas`}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={data} margin={{ top: 12, right: 40, left: -8, bottom: 0 }}>
+                      <LineChart data={data} margin={{ top: 12, right: 24, left: 0, bottom: 0 }}>
                         <CartesianGrid vertical={false} stroke="var(--border)" strokeWidth={1} />
                         <XAxis dataKey="period" tickFormatter={periodTick} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} stroke="var(--border)" interval="preserveStartEnd" />
-                        <YAxis tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} stroke="var(--border)" width={40} allowDecimals={false} unit=" min" />
+                        <YAxis tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} stroke="var(--border)" width={56} allowDecimals={false} unit=" min" />
                         <Tooltip content={<ChartTip />} cursor={{ stroke: "var(--muted-foreground)", strokeWidth: 1 }} />
                         <Legend wrapperStyle={{ fontSize: 12 }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                         <Line type="monotone" dataKey="peers" name="Colegas" stroke="var(--times-peers)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "var(--card)", fill: "var(--times-peers)" }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive={false} />
@@ -157,14 +163,14 @@ export function DriverTimesCard({ employeeId, name, compact }: { employeeId: num
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                  {last && <p className="text-[11px] text-muted-foreground">Último {bucket === "monthly" ? "mês" : "semana"} com dados ({periodTick(last.period)}): ele <b className="text-foreground">{last.me} min</b>{last.peers != null ? <> · colegas <b className="text-foreground">{last.peers} min</b></> : null}. Pontos em falta = menos medições do que o mínimo.</p>}
+                  {last && <p className="text-[11px] text-muted-foreground">{bucket === "monthly" ? "Último mês" : "Última semana"} com dados ({periodTick(last.period)}): ele <b className="text-foreground">{minTxt(last.me)}</b>{last.peers != null ? <> · colegas <b className="text-foreground">{minTxt(last.peers)}</b></> : null}. Pontos em falta = menos medições do que o mínimo.</p>}
                   <button type="button" className="text-xs text-primary underline underline-offset-2" onClick={() => setTable((t) => !t)}>{table ? "Esconder a tabela" : "Ver em tabela"}</button>
                   {table && (
                     <div className="overflow-x-auto -mx-1">
                       <table className="w-full text-xs min-w-[22rem]">
                         <thead><tr className="border-b text-left text-muted-foreground"><th className="p-1">{bucket === "monthly" ? "Mês" : "Semana"}</th><th className="p-1 text-right">Ele (mediana)</th><th className="p-1 text-right">n</th><th className="p-1 text-right">Colegas (mediana)</th><th className="p-1 text-right">n</th></tr></thead>
                         <tbody>{data.map((p) => (
-                          <tr key={p.period} className="border-b"><td className="p-1">{periodTick(p.period)}</td><td className="p-1 text-right tabular-nums">{p.me == null ? "—" : `${p.me} min`}</td><td className="p-1 text-right tabular-nums">{p.n}</td><td className="p-1 text-right tabular-nums">{p.peers == null ? "—" : `${p.peers} min`}</td><td className="p-1 text-right tabular-nums">{p.peersN}</td></tr>
+                          <tr key={p.period} className="border-b"><td className="p-1">{periodTick(p.period)}</td><td className="p-1 text-right tabular-nums">{minTxt(p.me)}</td><td className="p-1 text-right tabular-nums">{p.n}</td><td className="p-1 text-right tabular-nums">{minTxt(p.peers)}</td><td className="p-1 text-right tabular-nums">{p.peersN}</td></tr>
                         ))}</tbody>
                       </table>
                     </div>

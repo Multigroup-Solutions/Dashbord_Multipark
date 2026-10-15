@@ -42,6 +42,9 @@ describe("P10 — cronómetros do Ao vivo", () => {
     const ui = src("client/src/components/ShiftHandoverLiveState.tsx");
     expect(ui).toContain("liveTimer(c.phase, c.phaseSince, now, target)");
     expect(ui).toContain("useNow(30_000)");
+    // na fila ainda dentro da meta: sem a cor de alerta (antes qualquer pendente ficava a vermelho)
+    expect(ui).toContain('t && c.phase === "pending_checkout" ? QUEUE_OK');
+    expect(ui).toMatch(/const QUEUE_OK = "border-slate-300/);
     expect(src("server/routers.ts")).toContain('return { available: true as const, ...r.data, targetMinutes };');
   });
 });

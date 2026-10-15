@@ -157,7 +157,7 @@ describe("leitura (mock do multiparkDbQuery)", () => {
 
     // O rascunho da passagem usa estas partes
     const parts = draftPartsFromLive(r.data);
-    expect(parts.pendingDeliveries).toEqual([{ externalId: "b2", bookingNumber: null, plate: null, clientName: "Rui", since: "10:40" }]);
+    expect(parts.pendingDeliveries).toEqual([{ externalId: "b2", bookingNumber: null, plate: null, clientName: "Rui", since: "10:40", sinceAt: "2026-09-27T09:40:00.000Z" }]);
     expect(parts.ciRows[0].row).toMatchObject({ externalId: "b7", time: "13:00" });
     expect(parts.incidents[0]).toMatchObject({ id: "o1", severity: "high", plate: "AA-00-BB" });
     expect(parts.covered.find((c) => c.externalId === "b1")?.spotType).toBe("covered");

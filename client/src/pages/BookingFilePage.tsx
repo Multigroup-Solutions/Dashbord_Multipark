@@ -462,7 +462,7 @@ function TimelineSection({ id, scope }: { id: string; scope: { projectId?: numbe
  * a fonte e o motivo (da tabela dos tempos; sem ela, calculado agora sem GPS).
  * Os tempos com GPS chegam já filtrados pelo portão (servidor).
  */
-function TimesSection({ id, scope }: { id: string; scope: { projectId?: number } }) {
+export function TimesSection({ id, scope }: { id: string; scope: { projectId?: number } }) {
   const [enabled, setEnabled] = useState(false);
   const q = trpc.bookingFile.times.useQuery({ id, ...scope }, { enabled, staleTime: 60_000, retry: false });
   const d = q.data;
