@@ -1,8 +1,9 @@
 /**
  * MPV A1 (seguimento, auditoria A2): à segunda-feira o teto de chamadas à IA
  * do cron (12) é apertado — anomalias + 3 briefings + 4 semanais + 3
- * passagens semanais. As REPETIÇÕES das explicações das anomalias correm no
- * fim, só com o que sobrar, e nunca tiram a IA a um semanal ou a uma passagem.
+ * passagens semanais. As REPETIÇÕES das explicações das anomalias têm
+ * trabalho próprio (ops-anomaly-retries) e nunca tiram a IA a um semanal ou a
+ * uma passagem.
  * Tudo simulado: cada narrativa "gasta" uma chamada do teto.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,7 +108,7 @@ beforeEach(() => {
 });
 
 describe("cron de segunda-feira com repetições de anomalias pendentes", () => {
-  it("todos os semanais e passagens com IA; as repetições só ficam com o que sobra, no fim", async () => {
+  it("todos os semanais e passagens com IA; as repetições não correm aqui (trabalho próprio, ops-anomaly-retries)", async () => {
     // Segunda, 12 out 2026, 08h de Lisboa.
     const r = await runOpsBriefingCron({ now: new Date("2026-10-12T07:00:00Z"), deadlineAt: Date.now() + 60_000 });
     expect(r.clock.dow).toBe(1);
@@ -116,11 +117,9 @@ describe("cron de segunda-feira com repetições de anomalias pendentes", () => 
     expect(weekly).toHaveLength(WEEKLY_KINDS.length + OPS_CITIES.length);
     expect(weekly.every((x) => x.ai === 1)).toBe(true);
     expect(h.inserts.filter((x) => x.table === "ops_briefings").every((x) => x.ai === 1)).toBe(true);
-    // As repetições vêm depois de tudo, e com o que sobra do teto.
-    expect(h.retriesCalls).toBe(1);
-    const firstRetry = h.order.findIndex((x) => x.startsWith("anomalias-repeticao"));
-    const lastOther = Math.max(...h.order.map((x, i) => (x.startsWith("passagem") || x.startsWith("semanal") || x.startsWith("briefing") ? i : -1)));
-    expect(firstRetry).toBeGreaterThan(lastOther);
+    // As repetições não gastam teto nem tempo do briefing.
+    expect(h.retriesCalls).toBe(0);
+    expect(h.order.some((x) => x.startsWith("anomalias-repeticao"))).toBe(false);
     expect(r.aiCalls).toBeLessThanOrEqual(MAX_AI_CALLS_PER_RUN);
     expect(h.order.filter((x) => x.endsWith(":sem"))).toEqual([]);
   });

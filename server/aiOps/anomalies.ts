@@ -347,10 +347,10 @@ export function anomalyExplainBatches<T extends { id: number }>(due: T[], attemp
   return out.slice(0, Math.max(1, maxCalls));
 }
 
-/** Margem antes do prazo para mandar mais um lote (o pedido leva até ~20 s). */
-export const ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS = 25_000;
 /** Teto de tempo de cada pedido nas repetições (as novas usam o normal, 20 s). */
 export const ANOMALY_EXPLAIN_RETRY_TIMEOUT_MS = 12_000;
+/** Margem antes do prazo para mandar mais um lote: o tempo de uma repetição + 3 s de folga. */
+export const ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS = ANOMALY_EXPLAIN_RETRY_TIMEOUT_MS + 3_000;
 
 /** Esta anomalia (ainda sem explicação) pode ir no pedido agora? PURA. */
 export function anomalyExplainDue(a: { n: number; at: number } | undefined, nowMs: number): boolean {
@@ -403,14 +403,15 @@ async function saveExplainAttempts(db: any, s: AnomalyExplainAttempts): Promise<
  * (1 chamada lite), repetições em lotes mais pequenos (ver
  * `anomalyExplainBatches`), no máximo `ANOMALY_EXPLAIN_MAX_CALLS` chamadas.
  * Com prazo (`deadlineAt`): antes de cada lote — a partir do 2.º, ou logo no
- * 1.º nas repetições — pára se faltarem menos de 25 s (não conta como
- * tentativa). Disjuntor: 2 erros seguidos → pára. O estado das tentativas é
+ * 1.º nas repetições — pára se faltar menos do que uma repetição + 3 s (não
+ * conta como tentativa; devolve `stoppedAtDeadline`). Disjuntor: 2 erros seguidos → pára. O estado das tentativas é
  * gravado depois de CADA lote (um tick cortado a meio não as perde).
  */
 export async function explainPendingAnomalies(
   day: string, cap: AiCallCap, max = 20,
-  opts: { nowMs?: number; deadlineAt?: number; phase?: AnomalyExplainPhase } = {},
-): Promise<{ explained: number; skipped?: string }> {
+  opts: { nowMs?: number; deadlineAt?: number; phase?: AnomalyExplainPhase; clock?: () => number } = {},
+): Promise<{ explained: number; skipped?: string; stoppedAtDeadline?: boolean; batchesLeft?: number }> {
+  const clock = opts.clock ?? Date.now;
   const db = await getDb();
   if (!db) return { explained: 0 };
   const nowMs = opts.nowMs ?? Date.now();
@@ -437,9 +438,11 @@ export async function explainPendingAnomalies(
   const explainedIds: number[] = [];
   let skipped: string | undefined;
   let errorsInRow = 0;
+  let stoppedAtDeadline = false;
+  let sentBatches = 0;
   for (const [i, batch] of batches.entries()) {
-    if (opts.deadlineAt != null && (i > 0 || phase === "retries") && Date.now() + ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS > opts.deadlineAt) {
-      skipped = skipped ?? "deadline";
+    if (opts.deadlineAt != null && (i > 0 || phase === "retries") && clock() + ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS > opts.deadlineAt) {
+      stoppedAtDeadline = true;
       break;
     }
     const retry = batch.some((r) => (attempts[String(r.id)]?.n ?? 0) > 0);
@@ -451,6 +454,7 @@ export async function explainPendingAnomalies(
     });
     // Desligada / orçamento / teto da corrida: este lote não foi enviado → não conta; pára.
     if (!res.ok && res.skipped !== "error") { skipped = res.skipped; break; }
+    sentBatches++;
     const batchExplained: number[] = [];
     if (res.ok) {
       errorsInRow = 0;
@@ -473,13 +477,18 @@ export async function explainPendingAnomalies(
     // Disjuntor: a IA está a falhar agora — não insistir nesta corrida.
     if (errorsInRow >= 2) break;
   }
-  return { explained: explainedIds.length, ...(skipped ? { skipped } : {}) };
+  return {
+    explained: explainedIds.length,
+    ...(skipped ? { skipped } : {}),
+    ...(stoppedAtDeadline ? { stoppedAtDeadline: true, batchesLeft: batches.length - sentBatches } : {}),
+  };
 }
 
 /**
  * Deteta e grava as anomalias do dia e explica só as NOVAS (1 chamada); as
- * repetições correm no fim do cron (`explainPendingAnomalies` com
- * `phase: "retries"`), para não tirarem chamadas aos briefings/semanais.
+ * repetições têm trabalho próprio no agendador (`ops-anomaly-retries`, ver
+ * `runAnomalyRetriesCron`), para não tirarem chamadas nem tempo aos
+ * briefings/semanais.
  */
 export async function runAnomalyDetection(day: string, cap: AiCallCap, opts: { deadlineAt?: number } = {}): Promise<{ found: number; inserted: number; explained: number; aiSkipped?: string }> {
   const trees = await loadCityTrees();

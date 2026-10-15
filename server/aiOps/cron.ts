@@ -5,7 +5,8 @@
  * tudo é idempotente:
  *
  *   1. anomalias do dia anterior (OPS_ANOMALIES) + explicação das novas
- *      (1 chamada; as repetições vão no fim, passo 4);
+ *      (1 chamada; as repetições têm trabalho próprio, `ops-anomaly-retries`
+ *      às 09:00 — `runAnomalyRetriesCron`);
  *   2. briefing por cidade (OPS_BRIEFING): guarda em ops_briefings e envia o
  *      email UMA vez (emailedAt) a cada TL/supervisor com acesso à cidade;
  *   3. à segunda (WEEKLY_REPORTS): relatórios de direção, marketing,
@@ -118,21 +119,51 @@ export async function runOpsBriefingCron(deps: OpsCronDeps): Promise<OpsCronRepo
     } else report.warnings.push("relatórios semanais desligados (WEEKLY_REPORTS)");
   }
 
-  // 4. Repetições das explicações das anomalias (MPV A1): no FIM, só com o
-  // teto e o tempo que sobrarem — nunca tiram chamadas aos briefings/semanais.
-  if (isFeatureEnabled("OPS_ANOMALIES") && cap.remaining > 0) {
-    await step("anomalies-retries", async () => {
-      const { explainPendingAnomalies, anomalyExplainWarning } = await import("./anomalies");
-      const r = await explainPendingAnomalies(addDays(clock.date, -1), cap, 20, { phase: "retries", deadlineAt: deps.deadlineAt });
-      const w = anomalyExplainWarning("anomalias (repetições)", r);
-      if (w && r.skipped !== "deadline") report.warnings.push(w);
-      return r;
-    });
-  }
-
   report.aiCalls = cap.used;
   const o = opsCronOutcome({ stepErrors: report.stepErrors, outOfTime });
   return { ...report, ...o };
+}
+
+// ─── Repetições das explicações das anomalias ───────────────────────────────
+
+/** Teto de pedidos à IA de cada corrida das repetições. */
+export const ANOMALY_RETRIES_MAX_CALLS = 3;
+
+export interface AnomalyRetriesReport {
+  ok: boolean;
+  done: boolean;
+  skipped?: string;
+  warnings: string[];
+  details: Record<string, unknown>;
+  aiCalls: number;
+}
+
+/**
+ * MPV A1 (ronda 2): trabalho próprio do agendador (`ops-anomaly-retries`,
+ * 1×/dia a partir das 09:00), separado do briefing — as explicações que
+ * falharam voltam a ser pedidas em lotes mais pequenos, no máximo 3 pedidos
+ * por corrida. Se o prazo cortar e ficarem repetições por fazer → done:false
+ * (o tick seguinte retoma; as já tentadas esperam as 12 h e não se repetem).
+ */
+export async function runAnomalyRetriesCron(deps: { now?: Date; deadlineAt: number; clock?: () => number }): Promise<AnomalyRetriesReport> {
+  const report: AnomalyRetriesReport = { ok: true, done: true, warnings: [], details: {}, aiCalls: 0 };
+  if (!isFeatureEnabled("OPS_ANOMALIES")) return { ...report, skipped: "anomalias desligadas (OPS_ANOMALIES)" };
+  const now = deps.now ?? new Date();
+  const clock = lisbonClockOf(now);
+  const cap = new AiCallCap(ANOMALY_RETRIES_MAX_CALLS);
+  const { explainPendingAnomalies, anomalyExplainWarning } = await import("./anomalies");
+  const r = await explainPendingAnomalies(addDays(clock.date, -1), cap, 20, {
+    phase: "retries", deadlineAt: deps.deadlineAt, nowMs: now.getTime(), ...(deps.clock ? { clock: deps.clock } : {}),
+  });
+  const w = anomalyExplainWarning("anomalias (repetições)", r);
+  if (w) report.warnings.push(w);
+  report.details = {
+    ...r,
+    ...(r.stoppedAtDeadline ? { pendente: `${r.batchesLeft ?? 0} lote(s) por fazer (prazo) — continua no tick seguinte` } : {}),
+  };
+  report.aiCalls = cap.used;
+  report.done = !r.stoppedAtDeadline;
+  return report;
 }
 
 // ─── Briefing ───────────────────────────────────────────────────────────────

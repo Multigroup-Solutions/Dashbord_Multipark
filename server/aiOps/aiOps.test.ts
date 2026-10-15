@@ -37,6 +37,7 @@ import {
   ANOMALY_EXPLAIN_RETRY_MS,
   anomalyExplainBatches,
   anomalyExplainBatchSize,
+  ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS,
   anomalyExplainDue,
   anomalyExplainWarning,
   anomalyExplainMaxTokens,
@@ -399,23 +400,24 @@ describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
     expect(anomalyExplainBatches([{ id: 3 }, { id: 4 }, { id: 1 }, { id: 2 }], mixed, 20, 3, "retries").map((b) => b.map((x) => x.id))).toEqual([[4], [3]]);
   });
 
-  it("seguimento: prazo — a partir do 2.º lote pára se faltarem < 25 s (não conta como tentativa); o 1.º lote fica gravado", async () => {
+  it("seguimento: prazo — a partir do 2.º lote pára se faltar menos de 12 + 3 s (não conta como tentativa); o 1.º lote fica gravado", async () => {
     pending = [1, 2, 3, 4].map((id) => ({ id, domain: "bookings", detail: `Anomalia ${id}` }));
     // Todas na 2.ª tentativa, max 2 → lotes [1], [2], [3] (+ a 4 fica para depois).
     state = JSON.stringify(Object.fromEntries([1, 2, 3, 4].map((id) => [id, { n: 1, at: NOW - 86_400_000 }])));
     h.runAi.mockRejectedValue(new Error("truncado"));
-    const r = await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 2, { nowMs: NOW, deadlineAt: Date.now() + 20_000 });
+    expect(ANOMALY_EXPLAIN_DEADLINE_MARGIN_MS).toBe(15_000);
+    const r = await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 2, { nowMs: NOW, deadlineAt: Date.now() + 10_000 });
     expect(h.runAi).toHaveBeenCalledTimes(1);
-    expect(r).toEqual({ explained: 0, skipped: "error" });
+    expect(r).toEqual({ explained: 0, skipped: "error", stoppedAtDeadline: true, batchesLeft: 2 });
     expect(stateWrites).toBe(1);
     const st = JSON.parse(state!);
     expect(st["1"].n).toBe(2);
     expect(st["2"]).toEqual({ n: 1, at: NOW - 86_400_000 });
     // Nas repetições do fim do cron o prazo vale logo para o 1.º lote.
     h.runAi.mockClear();
-    const r2 = await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 2, { nowMs: NOW, deadlineAt: Date.now() + 20_000, phase: "retries" });
+    const r2 = await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 2, { nowMs: NOW, deadlineAt: Date.now() + 10_000, phase: "retries" });
     expect(h.runAi).not.toHaveBeenCalled();
-    expect(r2).toEqual({ explained: 0, skipped: "deadline" });
+    expect(r2).toEqual({ explained: 0, stoppedAtDeadline: true, batchesLeft: 3 });
   });
 
   it("seguimento: disjuntor (2 erros seguidos → pára), repetições com 12 s e estado gravado depois de cada lote", async () => {
@@ -433,6 +435,49 @@ describe("explicação das anomalias — teto e repetições (MPV A1)", () => {
     h.runAi.mockResolvedValue({ output: { lines: [{ n: 1, text: "ok" }] } });
     await explainPendingAnomalies("2026-10-14", new AiCallCap(5), 20, { nowMs: NOW, phase: "new" });
     expect(h.runAi.mock.calls[0][0].timeoutMs).toBe(20_000);
+  });
+
+  it("ronda 2: trabalho ops-anomaly-retries com relógio falso — os lotes respeitam o prazo; done:false quando ficam por fazer, e retoma", async () => {
+    const { runAnomalyRetriesCron, ANOMALY_RETRIES_MAX_CALLS } = await import("./cron");
+    expect(ANOMALY_RETRIES_MAX_CALLS).toBe(3);
+    pending = [1, 2, 3, 4, 5].map((id) => ({ id, domain: "bookings", detail: `Anomalia ${id}` }));
+    // 1 e 2 na última tentativa (≤ 2 → uma a uma, primeiro); 3–5 na 2.ª (lote de 10).
+    state = JSON.stringify({ 1: { n: 2, at: NOW - 86_400_000 }, 2: { n: 2, at: NOW - 86_400_000 }, 3: { n: 1, at: NOW - 86_400_000 }, 4: { n: 1, at: NOW - 86_400_000 }, 5: { n: 1, at: NOW - 86_400_000 } });
+    let t = 0;
+    const sentAt: number[] = [];
+    h.runAi.mockImplementation(async (o: any) => {
+      sentAt.push(t);
+      expect(o.timeoutMs).toBe(12_000);
+      t += 12_000; // cada pedido leva o teto das repetições
+      return { output: { lines: [] } }; // omite → conta como tentativa
+    });
+    const now = new Date(NOW);
+    const r1 = await runAnomalyRetriesCron({ now, deadlineAt: 37_000, clock: () => t });
+    // Lotes em 0 s e 12 s; o 3.º (às 24 s) já não cabia (24 + 15 > 37).
+    expect(sentAt).toEqual([0, 12_000]);
+    for (const at of sentAt) expect(at + 15_000).toBeLessThanOrEqual(37_000);
+    expect(r1).toMatchObject({ ok: true, done: false, aiCalls: 2 });
+    expect(String(r1.details.pendente)).toMatch(/1 lote\(s\) por fazer \(prazo\)/);
+    // Tick seguinte: as já tentadas esperam as 12 h; só vai o lote que faltou.
+    t = 100_000;
+    const r2 = await runAnomalyRetriesCron({ now, deadlineAt: 137_000, clock: () => t });
+    expect(r2).toMatchObject({ done: true, aiCalls: 1 });
+    expect(h.runAi.mock.calls[2][0].input).toBe("1. [bookings] Anomalia 3\n2. [bookings] Anomalia 4\n3. [bookings] Anomalia 5");
+    expect(JSON.parse(state!)).toMatchObject({ 1: { n: 3 }, 2: { n: 3 }, 3: { n: 2 }, 4: { n: 2 }, 5: { n: 2 } });
+  });
+
+  it("ronda 2: o ops-briefing já não faz as repetições (trabalho próprio no agendador)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const cron = readFileSync(resolve(__dirname, "cron.ts"), "utf8");
+    const briefing = cron.split("export async function runOpsBriefingCron")[1].split("// ─── Repetições")[0];
+    expect(briefing).not.toMatch(/phase: "retries"/);
+    const { TICK_JOBS } = await import("../cronSchedule");
+    const job = TICK_JOBS.find((j) => j.key === "ops-anomaly-retries")!;
+    expect(job).toMatchObject({ runName: "ops-anomaly-retries", cadence: { kind: "daily", from: "09:00" }, maxMs: 45_000 });
+    const { CRON_JOBS } = await import("../../shared/appSettings");
+    expect(CRON_JOBS.find((j) => j.name === "ops-anomaly-retries")?.intervalMinutes).toBe(1440);
+    expect(readFileSync(resolve(__dirname, "../../docs/ajuda/agendador.md"), "utf8")).toContain("ops-anomaly-retries");
   });
 
   it("seguimento: aviso do cron — 'saltada' só se nada foi explicado, senão 'parcial'", () => {
