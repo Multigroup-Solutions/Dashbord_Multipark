@@ -129,3 +129,6 @@ uploads/
 # Eval do Multis (plano MPV F8): relatórios das corridas e rascunhos do conjunto A (perguntas reais, por rever)
 /eval-multis/
 server/fixtures/multisEval/rascunhoA/
+
+# worktrees das sessões do Claude Code
+.claude/worktrees/
