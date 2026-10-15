@@ -29,7 +29,7 @@ vi.mock("../db", () => ({
 import type { CityAccess } from "../cityAccess";
 import { setAiProvidersForTests } from "../_core/ai/client";
 import { resetContextCacheForTests } from "../_core/ai/contextCache";
-import { runAi } from "../_core/ai/run";
+import { TOOLS_FALLBACK_TEXT, runAi } from "../_core/ai/run";
 import { resetRateLimitMemoryForTests } from "../_core/ai/rateLimit";
 import { resetAiUsageCachesForTests } from "../_core/ai/usage";
 import { createFakeProvider, okResponse } from "../_core/ai/testUtils";
@@ -115,12 +115,14 @@ describe("runAi com ferramentas (Gemini function calling)", () => {
     expect(provider.calls[1].toolRounds?.[0].results[0].response).toEqual({ error: "Não foi possível obter estes dados." });
   });
 
-  it("para ao fim do máximo de voltas", async () => {
+  it("para ao fim do máximo de voltas: chamada final sem ferramentas e, se insistir, texto de recurso (sem erro)", async () => {
     const provider = createFakeProvider("gemini", [{ ...okResponse(""), toolCalls: [{ name: "x", args: {} }] }]);
     setAiProvidersForTests({ gemini: provider });
-    await expect(runAi({ feature: "assistant", input: "?", tools: { declarations: [{ name: "x", description: "x" }], execute: async () => ({}), maxRounds: 2 } }))
-      .rejects.toMatchObject({ code: "invalid_output" });
-    expect(provider.calls).toHaveLength(3);
+    const r = await runAi({ feature: "assistant", input: "?", tools: { declarations: [{ name: "x", description: "x" }], execute: async () => ({}), maxRounds: 2 } });
+    expect(r).toMatchObject({ fallback: true, forcedFinal: true, rounds: 2, output: TOOLS_FALLBACK_TEXT });
+    // 2 voltas + a que pediu a 3.ª (não corre) + a final sem ferramentas
+    expect(provider.calls).toHaveLength(4);
+    expect(provider.calls[3].tools).toBeUndefined();
   });
 });
 
@@ -305,7 +307,7 @@ describe("ajuda: escolha do ficheiro", () => {
 
   it("tem um ficheiro por módulo pedido", () => {
     expect(docs.map((d) => d.file).sort()).toEqual([
-      "agendador.md", "api-keys.md", "atividade-diaria.md", "avaliacao.md", "caixa.md", "central.md", "clientes.md", "comunicacao.md", "condutores-agentes.md", "contactos.md", "criticas.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "email-aliases.md", "entrada.md", "extras-dia.md", "faturacao.md", "ficha-reserva.md", "formacao.md", "google-business.md", "google-tempo-real.md", "ia-no-dashboard.md", "integracoes-google-ads.md", "integracoes.md", "leads-extras.md", "logs.md", "marketing.md", "multis.md",
+      "agendador.md", "api-keys.md", "atividade-diaria.md", "avaliacao.md", "caixa.md", "central.md", "clientes.md", "comunicacao.md", "condutores-agentes.md", "contactos.md", "criticas.md", "dashboards.md", "definicoes.md", "despesas.md", "disponibilidade.md", "drive.md", "email-aliases.md", "entrada.md", "extras-dia.md", "faturacao.md", "ficha-reserva.md", "formacao.md", "google-business.md", "google-tempo-real.md", "ia-no-dashboard.md", "integracoes-google-ads.md", "integracoes.md", "leads-extras.md", "logs.md", "marketing.md", "multis.md",
       "ocorrencias.md", "operacoes-listas.md", "parcerias.md", "passagem-turno.md", "perdidos.md", "perfil.md", "permissoes.md", "pesquisa-e-conhecimento.md", "projetos.md", "radio.md", "reclamacoes.md", "reservas-do-dia.md", "rh-ponto.md", "servicos.md", "tarefas.md", "web-analytics.md", "whatsapp-chamadas.md", "whatsapp.md",
     ]);
   });

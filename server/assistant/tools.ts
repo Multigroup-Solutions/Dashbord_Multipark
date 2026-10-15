@@ -7,13 +7,19 @@
  *  - só é declarada ao modelo se a pessoa tiver o módulo (`available`);
  *  - valida a cidade pedida contra as cidades da pessoa ANTES de chamar;
  *  - devolve só agregados ou listas curtas (≤ 20 linhas), sem emails,
- *    telefones, matrículas nem nomes completos de clientes.
+ *    telefones, matrículas nem nomes completos de clientes; os nomes de
+ *    colegas e o texto livre declaram-se em `pii` (plano MPV F0b) e passam
+ *    pela redação única do turno ([NOME_n] repostos no fim).
  */
 import { can, roleRank, ROLE_RANK, seesBeyondOwn, type AccessOverrides } from "../../shared/access";
 import type { CityAccess } from "../cityAccess";
 import { capRows, MAX_TOOL_ROWS, ToolUserError, type ChatTool } from "../_core/ai/chat/tools";
 import { excerptHelp, type HelpDoc } from "../_core/ai/chat/retrieval";
 import { lateArrivalsOf } from "../../shared/evaluationRules";
+import { RULES_IN_FORCE_TOOL } from "./rulesTool";
+import { HELP_NAV_TOOLS } from "./helpTools";
+import { CITY_NAMES, addDays, dayArg, extrasCityArg, num, rangeArgs, resolveCityArg } from "./toolArgs";
+import { MPV_DATA_TOOLS } from "./mpvDataTools";
 
 export interface StaffUser {
   id: number;
@@ -32,76 +38,13 @@ export interface StaffToolCtx {
   /** Pode ver totais financeiros (financeiro/faturação + finance.view_totals). */
   financeAllowed: boolean;
   helpDocs: HelpDoc[];
+  /** Prazo das leituras lentas das ferramentas do piloto (ms; omissão SLOW_CALL_MS em ./mpvDataTools.ts). Injetável (testes). */
+  slowCallMs?: number;
 }
 
-// ─── Cidades ────────────────────────────────────────────────────────────────
+// ─── Cidades e datas (./toolArgs.ts, partilhadas com as do piloto) ──────────
 
-export const CITY_NAMES = ["Lisboa", "Porto", "Faro"] as const;
-const CITY_ALIASES: Record<string, string> = { lisbon: "lisboa", lisboa: "lisboa", oporto: "porto", porto: "porto", faro: "faro" };
-const normCity = (s: string) => {
-  const k = s.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-  return CITY_ALIASES[k] ?? k;
-};
-const EXTRAS_CITY: Record<string, "lisbon" | "porto" | "faro"> = { lisboa: "lisbon", porto: "porto", faro: "faro" };
-
-/**
- * Cidade pedida → id do projeto (cidade) SE a pessoa tiver acesso a ela.
- * Sem cidade → undefined (as consultas já ficam nas cidades da pessoa).
- * Cidade desconhecida ou fora das cidades da pessoa → ToolUserError. PURA.
- */
-export function resolveCityArg(access: CityAccess | undefined, cidade: unknown): { projectId: number; name: string } | undefined {
-  if (!access || access.missingCostCenter) throw new ToolUserError("Sem cidade atribuída (centro de custos): não consigo consultar dados.");
-  if (cidade == null || String(cidade).trim() === "") return undefined;
-  const wanted = normCity(String(cidade));
-  const names = access.cityNames ?? (access.cityName ? [access.cityName] : []);
-  const ids = access.cityNames ? access.cityIds : access.defaultCityId != null ? [access.defaultCityId] : [];
-  const i = names.findIndex((n) => normCity(n) === wanted);
-  if (i < 0 || ids[i] == null) {
-    const known = (CITY_NAMES as readonly string[]).map(normCity).includes(wanted);
-    throw new ToolUserError(known ? `Não tens acesso aos dados de ${String(cidade).trim()}.` : `Cidade desconhecida: ${String(cidade).trim()}.`);
-  }
-  return { projectId: ids[i], name: names[i] };
-}
-
-/** Cidade das páginas de extras ("lisbon" | "porto" | "faro"). Sem cidade: a única da pessoa. */
-export function extrasCityArg(access: CityAccess | undefined, cidade: unknown): { id: "lisbon" | "porto" | "faro"; name: string } {
-  const r = resolveCityArg(access, cidade);
-  const names = access?.cityNames ?? (access?.cityName ? [access.cityName] : []);
-  const name = r?.name ?? (names.length === 1 ? names[0] : null);
-  if (!name) throw new ToolUserError("Indica a cidade (Lisboa, Porto ou Faro).");
-  const id = EXTRAS_CITY[normCity(name)];
-  if (!id) throw new ToolUserError(`Sem Extras-Dia para ${name}.`);
-  return { id, name };
-}
-
-// ─── Datas ──────────────────────────────────────────────────────────────────
-
-const ISO = /^\d{4}-\d{2}-\d{2}$/;
-export function addDays(day: string, n: number): string {
-  const d = new Date(`${day}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-function dayArg(v: unknown, fallback: string, label: string): string {
-  if (v == null || v === "") return fallback;
-  const s = String(v).trim();
-  if (!ISO.test(s) || Number.isNaN(Date.parse(`${s}T00:00:00Z`))) throw new ToolUserError(`${label} inválida (usa AAAA-MM-DD).`);
-  return s;
-}
-/** Intervalo [de, até] com teto de dias. PURA. */
-export function rangeArgs(args: Record<string, unknown>, today: string, opts: { defaultFrom?: string; maxDays?: number } = {}): { from: string; to: string } {
-  const from = dayArg(args.de, opts.defaultFrom ?? today, "Data inicial");
-  const to = dayArg(args.ate, from, "Data final");
-  if (to < from) throw new ToolUserError("A data final é anterior à inicial.");
-  const max = opts.maxDays ?? 93;
-  if ((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 >= max) {
-    throw new ToolUserError(`Intervalo demasiado grande (máximo ${max} dias).`);
-  }
-  return { from, to };
-}
-
-const firstName = (s: unknown) => String(s ?? "").trim().split(/\s+/)[0] || null;
-const num = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0)) || 0;
+export { CITY_NAMES, addDays, extrasCityArg, rangeArgs, resolveCityArg } from "./toolArgs";
 
 const cityParam = { type: "string", enum: [...CITY_NAMES], description: "Cidade (opcional). Omite para todas as cidades a que a pessoa tem acesso." };
 const rangeParams = {
@@ -113,6 +56,29 @@ const rangeParams = {
 
 const OPEN_COMPLAINT = ["new", "analyzing", "waiting_client"];
 const OPEN_LOST = ["new", "investigating", "found"];
+
+/**
+ * A ajuda pedida pelo modelo (`abrir_ajuda`): primeiro pelo FICHEIRO
+ * ("google-tempo-real", "google-tempo-real.md"), depois pelo módulo só se for
+ * o único com esse módulo, depois pelo título. Módulo com várias ajudas →
+ * a lista dos candidatos (antes devolvia sempre a 1.ª: definicoes.md,
+ * marketing.md, integracoes.md…). PURA.
+ */
+export function findHelpDoc(docs: HelpDoc[], query: unknown): { doc: HelpDoc } | { candidates: HelpDoc[] } | null {
+  const q = String(query ?? "").trim().toLowerCase().replace(/\.md$/, "");
+  if (!q) return null;
+  const byFile = docs.find((d) => d.file === `${q}.md` || d.file === `${q.replace(/_/g, "-")}.md`);
+  if (byFile) return { doc: byFile };
+  const byModule = docs.filter((d) => d.module === q || d.module === q.replace(/-/g, "_"));
+  if (byModule.length === 1) return { doc: byModule[0] };
+  if (byModule.length > 1) return { candidates: byModule };
+  const byTitle = docs.filter((d) => d.title.toLowerCase() === q);
+  if (byTitle.length === 1) return { doc: byTitle[0] };
+  if (byTitle.length > 1) return { candidates: byTitle };
+  return null;
+}
+
+const helpId = (d: HelpDoc) => d.file.replace(/\.md$/, "");
 
 function countBy<T>(rows: T[], key: (r: T) => string): Record<string, number> {
   const out: Record<string, number> = {};
@@ -130,17 +96,23 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     parameters: {
       type: "object",
       properties: {
-        modulo: { type: "string", description: "Módulo, como aparece entre parênteses no índice da ajuda (ex.: extras_dia, tarefas)." },
+        modulo: { type: "string", description: "A ajuda, como aparece entre parênteses no índice: o módulo (ex.: extras_dia, tarefas) ou, quando o índice o mostra, o ficheiro (ex.: google-tempo-real)." },
         tema: { type: "string", description: "O que procuras dentro dessa ajuda (palavras da pergunta) — traz a parte certa de uma ajuda longa." },
       },
       required: ["modulo"],
     },
     available: () => true,
     async run(args, ctx) {
-      const m = String(args.modulo ?? "").trim().toLowerCase();
-      const doc = ctx.helpDocs.find((d) => d.module === m || d.file === `${m}.md` || d.title.toLowerCase() === m);
-      if (!doc) return { error: "Não há ajuda para esse módulo.", modulos: ctx.helpDocs.map((d) => d.module) };
-      return { titulo: doc.title, ajuda: excerptHelp(doc.body, 3500, String(args.tema ?? "").slice(0, 300)) };
+      const hit = findHelpDoc(ctx.helpDocs, args.modulo);
+      if (!hit) return { error: "Não há ajuda para esse módulo.", ajudas: ctx.helpDocs.map(helpId) };
+      if ("candidates" in hit) {
+        return {
+          error: "Há várias ajudas com esse nome: chama outra vez com o ficheiro certo.",
+          candidatos: hit.candidates.map((d) => ({ ficheiro: helpId(d), titulo: d.title, resumo: d.summary.slice(0, 160) })),
+        };
+      }
+      const doc = hit.doc;
+      return { ficheiro: helpId(doc), titulo: doc.title, ajuda: excerptHelp(doc.body, 3500, String(args.tema ?? "").slice(0, 300)) };
     },
   },
   {
@@ -175,6 +147,8 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
       properties: { data: { type: "string", description: "Dia (AAAA-MM-DD). Omissão: amanhã." }, cidade: cityParam },
     },
     available: (ctx) => can(ctx.user, "extras_dia", "view"),
+    // Colaboradores: o fornecedor vê [NOME_n]; a pessoa vê o nome completo (dois "João" não se confundem).
+    pii: { people: ["nome"] },
     async run(args, ctx) {
       const date = dayArg(args.data, addDays(ctx.today, 1), "Data");
       const city = extrasCityArg(ctx.access, args.cidade);
@@ -190,7 +164,7 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
         data: date, cidade: city.name,
         escalados: { total: list.length, condutores: drivers.length, teamLeaders: list.length - drivers.length,
           manha: list.filter((x) => x.shift === "morning").length, noite: list.filter((x) => x.shift === "night").length },
-        pessoas: capRows(list.map((x) => ({ nome: firstName(x.personName), turno: x.shift, inicio: hour(num(x.startHour)), fim: hour(num(x.endHour)), tl: !!x.isTeamLeader }))).rows,
+        pessoas: capRows(list.map((x) => ({ nome: String(x.personName ?? "").trim() || null, turno: x.shift, inicio: hour(num(x.startHour)), fim: hour(num(x.endHour)), tl: !!x.isTeamLeader }))).rows,
         faltas: gaps == null ? "indisponível" : capRows(gapRows.map((g) => ({ hora: hour(num(g.hour)), precisos: num(g.needed), escalados: num(g.have) }))).rows,
         horasComFalta: gapRows.length,
       };
@@ -204,6 +178,8 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
       properties: { tipo: { type: "string", enum: ["reclamacoes", "ocorrencias", "perdidos", "todos"], description: "Omissão: todos." }, cidade: cityParam },
     },
     available: (ctx) => can(ctx.user, "reclamacoes", "view") || can(ctx.user, "ocorrencias", "view") || can(ctx.user, "perdidos", "view"),
+    // Títulos e tipos são texto livre escrito à mão (podem ter emails, telefones, matrículas).
+    pii: { text: ["titulo", "tipo", "objeto"] },
     async run(args, ctx) {
       const tipo = String(args.tipo ?? "todos");
       const city = resolveCityArg(ctx.access, args.cidade);
@@ -281,6 +257,8 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     description: "As tarefas atribuídas à PRÓPRIA pessoa: contagens por estado, em atraso, e a lista (máx. 20).",
     parameters: { type: "object", properties: {} },
     available: (ctx) => can(ctx.user, "tarefas", "view"),
+    // Títulos escritos à mão (podem ter emails, telefones, matrículas).
+    pii: { text: ["titulo"] },
     async run(_args, ctx) {
       const [rows, stats] = await Promise.all([
         ctx.call("tasks.list", { mine: true }) as Promise<any[]>,
@@ -315,3 +293,19 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
     },
   },
 ];
+
+/**
+ * Plano MPV (F2/F3): no modo MPV (piloto) o Multis tem também `regras_em_vigor`
+ * (./rulesTool.ts) e navega na árvore da ajuda com `ajuda_abrir`/`ajuda_procurar`
+ * em vez do `abrir_ajuda`; fora dele, o conjunto de sempre (princípio 1: o Multis não
+ * muda para quem não está no piloto).
+ */
+// F3: ajuda_abrir/ajuda_procurar (./helpTools.ts) no lugar do abrir_ajuda; a ordem é a mesma para toda a gente (uma cache por modelo).
+// F4: as ferramentas de dados do piloto (./mpvDataTools.ts) no fim; a `avaliacao_minha` alarga (e substitui) a `minha_avaliacao`.
+export const MPV_REPLACED_TOOLS: readonly string[] = ["abrir_ajuda", "minha_avaliacao"];
+export const MPV_STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
+  ...HELP_NAV_TOOLS, ...STAFF_TOOLS.filter((t) => !MPV_REPLACED_TOOLS.includes(t.name)), RULES_IN_FORCE_TOOL, ...MPV_DATA_TOOLS,
+];
+export function staffToolsFor(mode: { pilot: boolean }): ChatTool<StaffToolCtx>[] {
+  return mode.pilot ? MPV_STAFF_TOOLS : STAFF_TOOLS;
+}

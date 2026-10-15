@@ -1333,6 +1333,8 @@ export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
 	city: varchar({ length: 16 }).notNull(),
 	status: varchar({ length: 12 }).notNull(),
 	attempts: int().default(0).notNull(),
+	// 0705 (plano MPV F7): teto de tentativas desta linha (as de antes ficam com 3).
+	maxAttempts: int().default(3).notNull(),
 	detail: varchar({ length: 300 }),
 	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
@@ -1340,6 +1342,24 @@ export const extrasDiaNotifications = mysqlTable("extras_dia_notifications", {
 (table) => [
 	uniqueIndex("uq_edn_version").on(table.assignmentId, table.version, table.kind, table.channel),
 	index("idx_edn_date_city").on(table.assignmentDate, table.city),
+]);
+
+// 0705 (plano MPV F7) — avisos da escala que só saem uma vez (lembretes das
+// 10:30/14:30, "mexido à mão", "ficaram por avisar", cobertura baixa, completado).
+export const extrasDiaAlerts = mysqlTable("extras_dia_alerts", {
+	id: int().autoincrement().primaryKey(),
+	assignmentDate: varchar({ length: 10 }).notNull(),
+	city: varchar({ length: 16 }).notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	alertKey: varchar({ length: 64 }).default('').notNull(),
+	detail: varchar({ length: 1000 }),
+	recipients: int(),
+	attempts: int().default(1).notNull(),
+	released: tinyint().default(0).notNull(),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_eda_alert").on(table.assignmentDate, table.city, table.kind, table.alertKey),
 ]);
 
 // 0540 — notas internas do dia de trabalho (Extras-dia → Pressão): várias por
@@ -1514,7 +1534,50 @@ export const googleReviews = mysqlTable("google_reviews", {
 	// 0123 — sentimento (positivo/neutro/negativo) e rascunho automático já tentado
 	aiSentiment: varchar({ length: 10 }),
 	aiDraftAttemptedAt: timestamp({ mode: 'string' }),
-});
+	// 0700 (plano MPV F6b) — marcas reversíveis: não é crítica / repetida de outra (nunca se apaga).
+	notAReview: tinyint().default(0).notNull(),
+	duplicateOf: int(),
+	reviewMarkedAt: datetime({ mode: 'string' }),
+	reviewMarkedById: int(),
+	reviewMarkUndoneAt: datetime({ mode: 'string' }),
+	reviewMarkBackup: text(),
+},
+(table) => [
+	// 0700 — "repetidas desta" sem ler a tabela toda.
+	index("idx_google_reviews_duplicate_of").on(table.duplicateOf),
+]);
+
+/**
+ * 0705 (plano MPV F7, §6.2) — fila das respostas automáticas às críticas de 5★
+ * (interruptor REVIEW_AUTO_PUBLISH_5STAR). Uma linha por crítica; nada se apaga.
+ */
+export const reviewAutoPublish = mysqlTable("review_auto_publish", {
+	id: int().autoincrement().primaryKey(),
+	reviewId: int().notNull(),
+	googleLocationId: int(),
+	projectId: int(),
+	status: varchar({ length: 16 }).notNull(),
+	replyText: text(),
+	reviewTextAtPrepare: text(),
+	reason: varchar({ length: 300 }),
+	scheduledFor: datetime({ mode: 'string' }),
+	attempts: int().default(0).notNull(),
+	lastAttemptAt: datetime({ mode: 'string' }),
+	publishedAt: datetime({ mode: 'string' }),
+	channel: varchar({ length: 12 }),
+	cancelledById: int(),
+	cancelledAt: datetime({ mode: 'string' }),
+	verifiedAt: datetime({ mode: 'string' }),
+	verifyFailures: int().default(0).notNull(),
+	alertedAt: datetime({ mode: 'string' }),
+	createdAt: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp({ mode: 'string' }).defaultNow().onUpdateNow().notNull(),
+},
+(table) => [
+	uniqueIndex("uq_rap_review").on(table.reviewId),
+	index("idx_rap_status_when").on(table.status, table.scheduledFor),
+	index("idx_rap_location_published").on(table.googleLocationId, table.publishedAt),
+]);
 
 /** 0285 — alertas "a trabalhar sem PDA ou Zello ligado" (shared/opsPresence.ts). */
 export const opsPresenceAlerts = mysqlTable("ops_presence_alerts", {
@@ -3579,10 +3642,17 @@ export const aiUsageLog = mysqlTable("ai_usage_log", {
 	latencyMs: int().default(0).notNull(),
 	status: varchar({ length: 16 }).notNull(),
 	errorCode: varchar({ length: 40 }),
+	// 0690 (plano MPV §8.3): finishReason da última resposta, voltas de
+	// ferramentas, versão do chamador e chamada final sem ferramentas.
+	finishReason: varchar({ length: 32 }),
+	rounds: tinyint(),
+	variant: varchar({ length: 16 }),
+	forcedFinal: tinyint(),
 },
 (table) => [
 	index("idx_ai_usage_created").on(table.createdAt),
 	index("idx_ai_usage_feature_created").on(table.feature, table.createdAt),
+	index("idx_ai_usage_feature_user_created").on(table.feature, table.userId, table.createdAt),
 ]);
 
 // Mês (AAAA-MM) em que o orçamento da IA foi excedido — o aviso sai uma vez.
@@ -3716,6 +3786,12 @@ export const aiChatMessages = mysqlTable("ai_chat_messages", {
 	helpFiles: varchar({ length: 255 }),
 	path: varchar({ length: 200 }),
 	createdAt: datetime({ mode: 'string', fsp: 3 }).notNull(),
+	// 0690: versão ("v1" | "mpv") e nível (lite/fast/smart) da resposta — para o 👍/👎.
+	variant: varchar({ length: 16 }),
+	tier: varchar({ length: 16 }),
+	// 0695: a resposta com os nomes dos colegas como [NOME_n] + o mapa (o histórico do turno seguinte não leva os nomes).
+	contentMasked: mediumtext(),
+	maskedNames: text(),
 },
 (table) => [
 	index("idx_ai_chat_msg_conv").on(table.conversationId, table.id),

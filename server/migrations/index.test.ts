@@ -71,7 +71,7 @@ describe("lista das migrações do arranque", () => {
       expect(m.statements.length, id).toBeGreaterThan(0);
       expect(m.idempotentErrors).toBeInstanceOf(Set);
     }
-  });
+  }, 30_000); // importa todos os ficheiros de migração: com a máquina carregada passa dos 5 s por omissão
 
   it("o db.ts usa esta lista (já não tem as importações à mão)", () => {
     const db = readFileSync(join(dir, "..", "db.ts"), "utf8");

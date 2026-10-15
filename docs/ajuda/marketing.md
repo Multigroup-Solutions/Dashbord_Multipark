@@ -1,5 +1,7 @@
 ---
 modulo: marketing
+grupo: Financeiro
+pagina: marketing
 titulo: Marketing
 rotas: /marketing, /marketing/google-ads, /marketing/canais, /marketing/orcamentos, /marketing/web
 palavras: reservas do marketplace, todas as reservas do marketplace, marketplace sem cidade, parque sem cidade, operado por nós, não operado, prior velho, maia, moscavide, marketplace a zero, multipark.pt, parques de terceiros, alertas de lado, tirar alerta, tirados, repor alerta, ao vivo, base da multipark, atribuição, marketing, anúncios, google ads, meta, facebook, campanha, campanhas, roas, gasto, canais, clientes, orçamento, orçamentos, custo total de marketing, faturas google, despesas de marketing, comissões, email semanal, reservas indisponíveis, arquivar orçamento, regra 20 %, orçamento automático, reservas via net, ligadas, com link, gclid, conversões meta, custo por conversão, via net por campanha, via net repartido, repartição pelas conversões, pendentes, clientes pro, avenças, comissão do marketplace, valor via net, roas via net, campanha sem resultados
@@ -64,7 +66,7 @@ Na **Faturação** os anúncios entram como despesa de marketing por projeto: o 
 
 **Aviso vermelho no topo**: a recolha do Google Ads ou da Meta falhou, pede nova autorização ou está parada há mais de 26 h — abre **Integrações → Google Ads** (o link só aparece a quem pode abrir as Integrações; os outros avisam o administrador). Se o próprio aviso não se conseguir ler, aparece um erro com "Tentar de novo" (nunca fica tudo "verde" por engano).
 
-**Conversões e reservas, lado a lado** (Dashboard, Anúncios por marca e por marca/cidade):
+## Conversões e reservas, lado a lado (Dashboard, Anúncios por marca e por marca/cidade)
 - **Conversões (Google + Meta)**: o que cada plataforma conta (Google à parte, Meta à parte). **Custo por conversão** = gasto ÷ essas conversões.
 - **Reservas via net**: reservas reais da Multipark que **não são de parceiros** (site, telefone, Marketplace) — é o que os anúncios podem trazer. **Não contam** (8 out 2026) as **pendentes** (compra online por acabar), as de **clientes Pro** e as de **avenças** — o Painel diz quantas ficaram de fora. Não contam as de parceiros (com parceiro na reserva, origem de parceiro ou cobradas por um agregador como Parkos/Parkvia). Ao lado: o valor e o custo por reserva via net.
 - **Marketplace** (marca das contas Multipark.pt/Multipark SA): **todas as reservas do Marketplace, de qualquer parque** (Jorge, 8 out 2026) contam em **Marketplace <cidade>**, onde estão as campanhas "Multipark - <Cidade> - PT":

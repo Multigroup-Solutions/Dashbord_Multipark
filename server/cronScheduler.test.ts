@@ -42,7 +42,7 @@ describe("intervalos", () => {
     expect(isDue(spec("extras-auto"), hourly, at("2026-09-26T11:00:30Z")).due).toBe(true);
     expect(isDue(spec("extras-auto"), hourly, at("2026-09-26T10:59:50Z")).due).toBe(false);
   });
-  it("extras-schedule: de hora a hora só entre as 08h e as 23h de Lisboa (verão e inverno)", () => {
+  it("extras-schedule: de 15 em 15 min só entre as 08h e as 23h de Lisboa (verão e inverno) — plano MPV F7", () => {
     const s = spec("extras-schedule");
     expect(isDue(s, null, at("2026-09-26T06:59:00Z")).due).toBe(false); // 07:59 Lisboa
     expect(isDue(s, null, at("2026-09-26T07:01:00Z")).due).toBe(true);  // 08:01 Lisboa
@@ -50,10 +50,10 @@ describe("intervalos", () => {
     expect(isDue(s, null, at("2026-09-26T23:05:00Z")).due).toBe(false); // 00:05 Lisboa
     expect(isDue(s, null, at("2026-12-01T07:59:00Z")).due).toBe(false); // 07:59 Lisboa (inverno)
     expect(isDue(s, null, at("2026-12-01T08:01:00Z")).due).toBe(true);
-    // 14h (propor) e 18h (confirmar) caem no 1.º tick de cada hora
-    const at13 = st("extras-schedule", { lastStartedAt: at("2026-09-26T12:00:10Z"), lastStatus: "ok" });
-    expect(isDue(s, at13, at("2026-09-26T13:00:10Z")).due).toBe(true); // 14:00 Lisboa
-    expect(isDue(s, at13, at("2026-09-26T12:55:00Z")).due).toBe(false);
+    // 11h (propor) e 15h (confirmar) caem no 1.º tick de cada fatia de 15 min
+    const at1345 = st("extras-schedule", { lastStartedAt: at("2026-09-26T12:45:10Z"), lastStatus: "ok" });
+    expect(isDue(s, at1345, at("2026-09-26T13:00:10Z")).due).toBe(true); // 14:00 Lisboa
+    expect(isDue(s, at1345, at("2026-09-26T12:55:00Z")).due).toBe(false);
   });
   it("retoma logo quando ficou a meio", () => {
     const partial = st("mail-sync", { lastStartedAt: at("2026-09-26T10:00:05Z"), lastStatus: "partial", resumeCursor: wrapCursor(null, "") });
@@ -291,8 +291,8 @@ describe("registo dos trabalhos", () => {
       "extras-auto": "de hora a hora", "identity-sweep": "de hora a hora",
       "crm-sync": "diário a partir das 04:00", "crm-auto-merge": "diário a partir das 05:15 (depois de crm-suggestions; o mais tardar 06:00)", "services-tomorrow": "diário a partir das 18:00",
       "services-tasks": "diário a partir das 18:00", "cash-sweep": "a cada 3 h", "cash-close": "diário a partir das 06:15", "crm-suggestions": "diário a partir das 05:15", "crm-pro-sync": "a cada 30 min",
-      "extras-schedule": "de hora a hora (08h–23h)",
-      "daily-ops": "diário a partir das 04:30", "zello-sameday": "diário das 23:15 às 23:55", "rh-docs-weekly": "semanal, segunda a partir das 04:45", "extras-pressure": "diário a partir das 04:45", "ops-briefing": "diário a partir das 07:30", "web-analytics": "diário a partir das 09:00",
+      "extras-schedule": "a cada 15 min (08h–23h)", "extras-reminders": "a cada 15 min (08h–23h)", "reviews-5star": "a cada 30 min (08h–23h)",
+      "daily-ops": "diário a partir das 04:30", "zello-sameday": "diário das 23:15 às 23:55", "rh-docs-weekly": "semanal, segunda a partir das 04:45", "extras-pressure": "diário a partir das 04:45", "ops-briefing": "diário a partir das 07:30", "ops-anomaly-retries": "diário a partir das 09:00", "web-analytics": "diário a partir das 09:00",
       "google-ads": "diário a partir das 05:45", "meta-ads": "diário a partir das 05:45",
       "google-ads-monthly": "mensal, dia 2 a partir das 05:45", "meta-ads-monthly": "mensal, dia 2 a partir das 05:45",
     });

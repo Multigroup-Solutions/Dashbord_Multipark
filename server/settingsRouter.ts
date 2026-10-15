@@ -29,6 +29,14 @@ const adminOnly = protectedProcedure.use(({ ctx, next }) => {
 });
 const canEdit = (user: unknown) => requireAccess(user as any, "definicoes", "edit");
 
+/** Só admin e super admin (além da matriz) — o uso da IA por pessoa/entidade. */
+function requireAdminRole(role: string) {
+  if ((RANK[role] ?? 0) < RANK.admin) throw new TRPCError({ code: "FORBIDDEN", message: "Só os administradores veem o uso da IA." });
+}
+
+/** Filtro por funcionalidade (ids do registo: minúsculas, algarismos e _). */
+const aiFeatureFilter = z.string().trim().regex(/^[a-z0-9_]{1,40}$/, "Funcionalidade inválida.").nullish();
+
 /** Valor curto para os logs (os valores completos ficam no histórico das Definições). */
 function shortValue(v: unknown): string {
   const t = v == null ? "omissão" : typeof v === "string" ? v : JSON.stringify(v);
@@ -121,6 +129,28 @@ export const settingsRouter = router({
     const st = aiStatus();
     return { ...(await aiUsageSummary()), provider: st.provider, mode: st.mode, models: st.models, warnings: st.warnings };
   }),
+
+  /**
+   * Plano MPV (F0a): uso da IA por dia × funcionalidade (chamadas, erros,
+   * bloqueadas — incl. "só UE" —, tokens, custo, primeira/última). Só leitura,
+   * só admin/super admin. Confirma, p. ex., quando correram as do RH.
+   */
+  aiUsageDaily: adminOnly
+    .input(z.object({ days: z.number().int().min(1).max(62).default(14), feature: aiFeatureFilter }).optional())
+    .query(async ({ ctx, input }) => {
+      requireAdminRole(ctx.user.role);
+      const { aiUsageDaily } = await import("./_core/ai/usage");
+      return aiUsageDaily(input?.days ?? 14, input?.feature ?? null);
+    }),
+
+  /** Leituras repetidas da IA (mesma funcionalidade + entidade + id, > 1 vez): top 100. Só leitura, só admin/super admin. */
+  aiUsageRepeats: adminOnly
+    .input(z.object({ days: z.number().int().min(1).max(31).default(7), feature: aiFeatureFilter }).optional())
+    .query(async ({ ctx, input }) => {
+      requireAdminRole(ctx.user.role);
+      const { aiUsageRepeats } = await import("./_core/ai/usage");
+      return aiUsageRepeats(input?.days ?? 7, input?.feature ?? null);
+    }),
 
   /**
    * "Serviços → tarefas": tipos de serviço do catálogo Multipark (ExtraService

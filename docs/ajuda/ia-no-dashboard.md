@@ -1,8 +1,10 @@
 ---
 modulo: ia
+grupo: Sistema
+pagina: definicoes.ia
 titulo: Onde é que a IA trabalha no dashboard
 rotas: /definicoes
-palavras: resumir agora, resumo desatualizado, vertex ai, vertex ai na ue, gemini na ue, rgpd, ia na ue, só corre com a ia em vertex, quem pede o resumo ia, condutor não vê a explicação, onde corre a ia, onde está a ia, o que faz a ia, ia automática, ia sozinha, resumo da ia, resumos da ia, resumo ia, rascunho ia, rascunho com ia, gerar com ia, interruptores da ia, desligar a ia, ligar a ia, dados pessoais na ia, quem vê o resumo, inteligência artificial
+palavras: teto do piloto, gasto do piloto, orçamento do piloto, uso da ia por dia, leituras repetidas, custo da ia, gasto da ia, só ue bloqueada, raciocínio da ia, resumir agora, resumo desatualizado, vertex ai, vertex ai na ue, gemini na ue, rgpd, ia na ue, só corre com a ia em vertex, quem pede o resumo ia, condutor não vê a explicação, onde corre a ia, onde está a ia, o que faz a ia, ia automática, ia sozinha, resumo da ia, resumos da ia, resumo ia, rascunho ia, rascunho com ia, gerar com ia, interruptores da ia, desligar a ia, ligar a ia, dados pessoais na ia, quem vê o resumo, inteligência artificial
 ---
 # Onde é que a IA trabalha no dashboard
 
@@ -28,9 +30,9 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 1. **Passagem de turno:** resumo para o turno seguinte **quando entregas** a passagem (a 1.ª vez que a guardas); à segunda-feira, o resumo da semana.
    - Se a alterares depois, a IA não volta a correr sozinha: aparece **resumo desatualizado** e carregas em **Resumir agora**.
 2. **Briefing do dia** (Dashboard e Tarefas): um parágrafo por cidade a partir das 07:30, também por email às chefias.
-3. **Alertas** em Operações, Despesas e Marketing: uma linha a explicar cada anomalia (feita uma vez por dia). Condutores e extras veem o alerta, mas não a linha da IA. Nas Reservas ficam ao lado do Dashboard (no telemóvel, por cima). Carrega no título para os encolher. O **✕** tira um alerta da lista para toda a gente; nada se apaga, e em **Tirados** dá para o **Repor**.
+3. **Alertas** em Operações, Despesas e Marketing: uma linha a explicar cada anomalia (feita uma vez por dia; se a IA falhar, tenta no máximo mais 2 vezes, com pelo menos 12 h de intervalo, em grupos mais pequenos e num trabalho à parte, a partir das 09:00 (depois dos briefings e relatórios), e depois o alerta fica só com a frase dos números). Condutores e extras veem o alerta, mas não a linha da IA. Nas Reservas ficam ao lado do Dashboard (no telemóvel, por cima). Carrega no título para os encolher. O **✕** tira um alerta da lista para toda a gente; nada se apaga, e em **Tirados** dá para o **Repor**.
 4. **Avaliação:** a explicação aparece ao abrir. Só se refaz quando os números mudam.
-5. **Críticas:** rascunho automático para as críticas novas, que fica por aprovar.
+5. **Críticas:** rascunho automático para as críticas novas (escritas nos últimos 14 dias; numa 1.ª importação de um perfil, só as desses 14 dias), que fica por aprovar.
 6. **Reclamações:** sugestões de tipo, prioridade, SLA e reserva, com um rascunho de resposta.
    - Com confiança alta, preenche sozinha os campos vazios. Há sempre **Desfazer**.
 7. **WhatsApp:** etiqueta a intenção e a urgência; uma conversa **nova** vai para a caixa do tema (a que já tem caixa fica onde está).
@@ -44,7 +46,7 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 11. **Base de conhecimento:** sincroniza sozinha quando há alterações nas pastas do Drive.
 12. **FAQs da formação** (se ligares o interruptor semanal): à segunda-feira, até 3 FAQs novas a partir da base de conhecimento, publicadas e marcadas "IA". Arquivar uma é dizer "esta não": não volta.
 
-**Começam desligadas** (só um administrador as liga):
+## Começam desligadas (só um administrador as liga)
 - ler os documentos do RH para preencher a ficha (o IBAN fica sempre como pedido ao RH, exceto para quem o pode mudar na hora);
 - ler os CV dos emails do RH;
   - estas duas mandam o ficheiro inteiro, por isso **só correm com a IA em Vertex AI na UE**. Sem isso não correm, mesmo ligadas. Em **Definições → Automações**, ao lado do interruptor, aparece "Só corre com a IA em Vertex AI na UE (hoje: …)". O sítio onde a IA está vê-se também no cartão **IA — custo do mês** ("Gemini (Vertex AI)" ou "Gemini");
@@ -56,3 +58,16 @@ A IA **escreve textos e sugere**. Os números (reservas, extras, avaliação, po
 - Os ficheiros vão inteiros: faturas, áudio do rádio, documentos e CV do RH, e PDFs dos manuais. Os documentos e CV do RH só com a IA em Vertex AI na UE.
 
 **Nunca, sem uma pessoa:** emails ou respostas a clientes e publicações no Google.
+
+**Quanto a IA usa (administradores)**
+- Em **Definições → Estado**, o cartão **IA — custo do mês** mostra o gasto por funcionalidade.
+- Logo abaixo, **IA — uso por dia**: carrega em **Ver o uso por dia** e escolhe os dias (7 a 62) e, se quiseres, uma funcionalidade. Por dia vês as chamadas, os erros, as **bloqueadas** (orçamento ou "só UE" dos documentos do RH), os tokens, o custo e a hora da primeira e da última chamada (UTC).
+- Por baixo, **Leituras repetidas**: a mesma coisa (por exemplo, a mesma crítica) lida pela IA mais de uma vez, as 100 com mais vezes. As conversas do Multis não contam.
+- Na tabela do uso por dia vês também as respostas em que a IA **não conseguiu juntar tudo** (texto de recurso, contam como erro), as que tiveram de **acabar sem ferramentas** e as **cortadas por tamanho** (MAX_TOKENS).
+- Só leitura: nada muda ao abrir. O raciocínio de cada funcionalidade muda-se em **Definições → Parâmetros → Raciocínio da IA por funcionalidade** (o "minimal" não vale no modelo smart).
+- **"minimal" só com avaliação**: vem vazio (como sempre). O valor sugerido é `{"mail_routing": "minimal", "whatsapp_triage": "minimal", "complaint_triage": "minimal"}`, mas cada linha só se põe depois de a avaliação dessa funcionalidade passar com o "minimal" (email: `scripts/eval-mail-triage.ts --thinking minimal`; WhatsApp: `scripts/eval-whatsapp-triage.ts --compare`; reclamações: `scripts/eval-complaint-triage.ts --compare`). Desfazer = tirar a linha.
+
+**Multis do piloto e o orçamento**
+- O **Multis do piloto** (modelo smart) tem **teto próprio** em **Definições → Parâmetros → IA → Multis do piloto: teto de gasto** (omissão: 10 € por dia, 150 € por mês, 3 € por pessoa por dia; o dia é o de Lisboa; os três têm de ser maiores que 0). Ao chegar lá, a pessoa fica com o Multis de sempre, com a nota **Modo económico**.
+- Esse gasto **não conta** para o **Orçamento mensal da IA** que pára as outras funcionalidades: o cartão **IA — custo do mês** mostra-o na lista (com "teto próprio"), mas a barra e o "Orçamento atingido" só contam o resto.
+- A cache de contexto também custa (por hora guardada): aparece no registo da funcionalidade que a criou e, no cartão, à parte ("armazenamento da cache").

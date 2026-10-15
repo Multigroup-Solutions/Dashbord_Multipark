@@ -1,5 +1,7 @@
 ---
 modulo: logs
+grupo: Sistema
+pagina: logs
 titulo: Logs (registo de atividade)
 rotas: /logs
 palavras: separador caixa, logs da caixa, talões, contagens, viva wallet, logs, registo, registo de atividade, quem fez, quem mudou, histórico, auditoria, sistema, automático, origem, api key, agendador, retenção, 24 meses, csv, exportar, apagou, arquivou, máscara, nif, iban, telefone

@@ -760,12 +760,52 @@ export async function opsBriefingCron(o: { deadlineAt: number; force?: boolean }
   } catch (err) { return fail(err); }
 }
 
+/**
+ * MPV A1: repetições das explicações das anomalias que falharam (trabalho
+ * próprio, separado do briefing; no máximo 3 pedidos à IA). done:false se o
+ * prazo cortar com repetições por fazer → o tick seguinte retoma.
+ */
+export async function opsAnomalyRetriesCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runAnomalyRetriesCron } = await import("./aiOps/cron");
+    const report = await runAnomalyRetriesCron({ deadlineAt: o.deadlineAt - 3_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...report }, done: report.done };
+  } catch (err) { return fail(err); }
+}
+
 /** Escala automática dos extras (propor/confirmar/avisar). Idempotente. */
 export async function extrasScheduleCron(): Promise<CronJobRun> {
   try {
     const { runScheduleAutomation } = await import("./extrasSchedule");
     const report = await runScheduleAutomation();
     return { httpStatus: 200, body: { ranAt: ranAt(), ...report }, done: true };
+  } catch (err) { return fail(err); }
+}
+
+/**
+ * Plano MPV F7: lembretes 30 min antes da proposta e da confirmação da escala
+ * (interruptor EXTRAS_REMINDERS, desligado por omissão). Idempotente: um
+ * lembrete por dia, cidade e hora (extras_dia_alerts).
+ */
+export async function extrasRemindersCron(): Promise<CronJobRun> {
+  try {
+    const { runExtrasReminders } = await import("./extrasReminders");
+    const report = await runExtrasReminders();
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...report }, done: true };
+  } catch (err) { return fail(err); }
+}
+
+/**
+ * Plano MPV F7 (§6.2): críticas 5★ respondidas sozinhas — prepara a resposta,
+ * deixa-a 6 h à vista, relê a crítica na fonte e publica (interruptor
+ * REVIEW_AUTO_PUBLISH_5STAR, desligado por omissão: desligado não lê nem
+ * escreve nada). done:false se o prazo cortar com trabalho por fazer.
+ */
+export async function reviewsFiveStarCron(o: { deadlineAt: number }): Promise<CronJobRun> {
+  try {
+    const { runReviewAutoPublish } = await import("./reviewAutoPublish");
+    const report = await runReviewAutoPublish({ deadlineAt: o.deadlineAt - 3_000 });
+    return { httpStatus: 200, body: { ranAt: ranAt(), ...report }, done: report.done };
   } catch (err) { return fail(err); }
 }
 

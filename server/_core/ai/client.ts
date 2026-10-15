@@ -16,6 +16,7 @@ import { parseSwitch } from "../featureFlags";
 import { AiNotConfiguredError, AiUnsupportedInputError } from "./errors";
 import { supportsThinkingLevel, type Env } from "./models";
 import type { TokenUsage } from "./pricing";
+import type { AiThinkingLevel } from "../../../shared/aiFeatures";
 
 export type AiProviderId = "gemini" | "legacy";
 
@@ -78,6 +79,17 @@ export interface ProviderRequest {
   timeoutMs: number;
   /** Nome de uma cache de contexto (Gemini) com o `system` já lá dentro. */
   cachedContent?: string;
+  /**
+   * Raciocínio pedido para esta chamada (Definições `ai.thinkingLevels` ou o
+   * ponto de chamada). Omisso = a env AI_THINKING_LEVEL (como até aqui);
+   * "default" = não manda o nível. Só nos modelos que o aceitam.
+   */
+  thinkingLevel?: AiThinkingLevel;
+  /**
+   * Texto do utilizador acrescentado DEPOIS das voltas de ferramentas (a
+   * chamada final sem ferramentas: "responde com o que tens").
+   */
+  trailingText?: string;
 }
 
 export interface ProviderResponse {
@@ -94,6 +106,8 @@ export interface ProviderResponse {
 export interface ContextCacheHandle {
   name: string;
   expiresAt: number;
+  /** Tokens guardados na cache (usageMetadata.totalTokenCount), quando a API os dá. */
+  tokens?: number;
 }
 
 /** Pedido de embeddings (só Gemini). */
@@ -195,9 +209,16 @@ export function geminiClientOptions(cfg: GeminiConfig): Record<string, unknown> 
   };
 }
 
-/** Nível de raciocínio (Gemini 3.x). AI_THINKING_LEVEL=off omite-o. PURA. */
-export function thinkingLevelFor(model: string, env: Env = process.env): string | null {
+/**
+ * Nível de raciocínio (Gemini 3.x); null = não se manda (fica o do modelo).
+ * Ordem: o pedido (`requested`, de `ai.thinkingLevels` ou do ponto de
+ * chamada; "default" = null) → env AI_THINKING_LEVEL (off/default = null) →
+ * "low". PURA.
+ */
+export function thinkingLevelFor(model: string, env: Env = process.env, requested?: AiThinkingLevel | null): string | null {
   if (!supportsThinkingLevel(model)) return null;
+  if (requested === "default") return null;
+  if (requested && ["minimal", "low", "medium", "high"].includes(requested)) return requested;
   const v = clean(env.AI_THINKING_LEVEL).toLowerCase();
   if (v === "off" || v === "default") return null;
   return ["minimal", "low", "medium", "high"].includes(v) ? v : "low";
@@ -227,8 +248,8 @@ export function toGeminiTools(tools: AiToolDeclaration[]): any[] {
   }];
 }
 
-/** Conversa → `Content[]` do Gemini: histórico, pergunta, voltas de ferramentas. PURA. */
-export function toGeminiContents(req: Pick<ProviderRequest, "history" | "parts" | "toolRounds">): any[] {
+/** Conversa → `Content[]` do Gemini: histórico, pergunta, voltas de ferramentas (+ texto final). PURA. */
+export function toGeminiContents(req: Pick<ProviderRequest, "history" | "parts" | "toolRounds" | "trailingText">): any[] {
   const contents: any[] = (req.history ?? [])
     .filter((t) => t.text.trim())
     .map((t) => ({ role: t.role, parts: [{ text: t.text }] }));
@@ -239,6 +260,13 @@ export function toGeminiContents(req: Pick<ProviderRequest, "history" | "parts" 
       role: "user",
       parts: r.results.map((x) => ({ functionResponse: { ...(x.call.id ? { id: x.call.id } : {}), name: x.call.name, response: x.response } })),
     });
+  }
+  const trailing = req.trailingText?.trim();
+  if (trailing) {
+    const last = contents[contents.length - 1];
+    // Junta-se ao último turno do utilizador (as respostas das ferramentas ou a pergunta).
+    if (last?.role === "user") last.parts = [...last.parts, { text: trailing }];
+    else contents.push({ role: "user", parts: [{ text: trailing }] });
   }
   return contents;
 }
@@ -304,14 +332,16 @@ export function createGeminiProvider(env: Env = process.env): AiProvider {
         config.responseJsonSchema = req.jsonSchema;
       }
       if (req.temperature != null) config.temperature = req.temperature;
-      const level = thinkingLevelFor(req.model, env);
+      const level = thinkingLevelFor(req.model, env, req.thinkingLevel);
       if (level) config.thinkingConfig = { thinkingLevel: level };
       const res = await ai.models.generateContent({
         model: req.model,
         contents: toGeminiContents(req),
         config,
       });
-      const toolCalls = req.tools?.length ? geminiToolCalls(res) : [];
+      // Também sem ferramentas declaradas (chamada final): um functionCall que
+      // venha na mesma é visto (o runAi responde então com o texto de recurso).
+      const toolCalls = req.tools?.length || req.toolRounds?.length ? geminiToolCalls(res) : [];
       // Com chamadas de ferramentas, o texto sai só das partes de texto (o
       // getter `text` do SDK avisa quando há partes que não são texto).
       const text = toolCalls.length
@@ -352,7 +382,8 @@ export function createGeminiProvider(env: Env = process.env): AiProvider {
       });
       if (!c?.name) throw new Error("cache sem nome");
       const exp = c.expireTime ? Date.parse(c.expireTime) : NaN;
-      return { name: String(c.name), expiresAt: Number.isFinite(exp) ? exp : Date.now() + ttlSeconds * 1000 };
+      const tokens = Number((c as any)?.usageMetadata?.totalTokenCount);
+      return { name: String(c.name), expiresAt: Number.isFinite(exp) ? exp : Date.now() + ttlSeconds * 1000, ...(Number.isFinite(tokens) && tokens > 0 ? { tokens } : {}) };
     },
   };
 }

@@ -77,7 +77,15 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // dos canais de notificação (expiram em ≤ 7 dias).
   { key: "google-pending", runName: "google-pending", label: "Google: alterações por enviar/receber (repetição)", cadence: { kind: "interval", minutes: 60 }, priority: 38, minMs: 10 * S, maxMs: 25 * S },
   { key: "google-sync", runName: "google-sync", label: "Google Tarefas, Calendário, Contactos e Drive (rede de segurança)", cadence: { kind: "interval", minutes: 240 }, priority: 40, minMs: 12 * S, maxMs: 25 * S },
-  { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 60, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
+  // Plano MPV F7 (§6.1): de 15 em 15 min (era de hora a hora) — proposta às 11:00 e confirmação às 15:00 saem
+  // logo; tudo idempotente. As novas tentativas dos avisos têm espera própria (30/60/90 min, extrasSchedule).
+  { key: "extras-schedule", runName: "extras-schedule", label: "Escala automática dos extras (propor/confirmar/avisar)", cadence: { kind: "interval", minutes: 15, window: { fromHour: 8, toHour: 23 } }, priority: 45, minMs: 15 * S, maxMs: 45 * S },
+  // Plano MPV F7: lembretes 30 min antes da proposta e da confirmação (interruptor EXTRAS_REMINDERS, desligado).
+  // Depois da escala no mesmo tick (o "completar" das 14:30 já entrou quando sai o lembrete).
+  { key: "extras-reminders", runName: "extras-reminders", label: "Extras-dia: lembretes antes da proposta e da confirmação", cadence: { kind: "interval", minutes: 15, window: { fromHour: 8, toHour: 23 } }, priority: 46, minMs: 10 * S, maxMs: 30 * S },
+  // Plano MPV F7 (§6.2): críticas 5★ — preparar a resposta, 6 h à vista, ler na fonte e publicar (REVIEW_AUTO_PUBLISH_5STAR, desligado).
+  // Só de dia: quem pode cancelar está a trabalhar.
+  { key: "reviews-5star", runName: "reviews-5star", label: "Críticas 5★: responder sozinho (6 h depois, desligado por omissão)", cadence: { kind: "interval", minutes: 30, window: { fromHour: 8, toHour: 23 } }, priority: 115, minMs: 20 * S, maxMs: 40 * S },
   { key: "extras-auto", runName: "extras-auto", label: "Automação dos extras", cadence: { kind: "interval", minutes: 60 }, priority: 70, minMs: 12 * S, maxMs: 40 * S },
   { key: "identity-sweep", runName: "identity-sweep", label: "Ligações funcionário ↔ utilizador", cadence: { kind: "interval", minutes: 60 }, priority: 80, minMs: 10 * S, maxMs: 30 * S },
   { key: "crm-sync", runName: "crm-sync", label: "CRM: fichas de cliente a partir das reservas (volta diária; no dia-a-dia é o webhook)", cadence: { kind: "daily", from: "04:00" }, priority: 82, minMs: 20 * S, maxMs: 45 * S },
@@ -118,6 +126,8 @@ export const TICK_JOBS: readonly TickJobSpec[] = [
   // Jorge (14 out 2026): FAQs novas da base de conhecimento, 1×/semana (interruptor KB_FAQ_WEEKLY, desligado por omissão).
   { key: "kb-faq-weekly", runName: "kb-faq-weekly", label: "Formação: FAQs novas da base de conhecimento (semanal)", cadence: { kind: "weekly", dow: 1, from: "09:30" }, priority: 107, minMs: 30 * S, maxMs: 45 * S },
   { key: "ops-briefing", runName: "ops-briefing", label: "Briefing diário, anomalias e relatórios semanais", cadence: { kind: "daily", from: "07:30" }, priority: 105, minMs: 20 * S, maxMs: 45 * S },
+  // MPV A1: repetições das explicações das anomalias que falharam (separado do briefing; ≤ 3 pedidos à IA; retoma se o prazo cortar).
+  { key: "ops-anomaly-retries", runName: "ops-anomaly-retries", label: "Anomalias: repetir as explicações que falharam", cadence: { kind: "daily", from: "09:00" }, priority: 114, minMs: 20 * S, maxMs: 45 * S },
   // Plano 62 (P7): tempos de entrega e de recolha (D-3…D-1 + preenchimento para trás; interruptor SERVICE_TIMES, desligado).
   { key: "service-times", runName: "service-times", label: "Tempos de entrega e de recolha (BD Multipark, chamadas e GPS)", cadence: { kind: "daily", from: "05:30", after: { job: "daily-ops", fallbackFrom: "07:00" } }, priority: 112, minMs: 30 * S, maxMs: 45 * S },
   { key: "evaluation-recompute", runName: "evaluation-recompute", label: "Avaliação (recálculo do último mês)", cadence: { kind: "daily", from: "04:30", after: { job: "daily-ops", fallbackFrom: "06:00" } }, priority: 110, minMs: 15 * S, maxMs: 45 * S },

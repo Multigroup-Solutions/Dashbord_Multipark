@@ -156,7 +156,7 @@ export async function reviewsLite(locs: readonly ResolvedLocation[], from: strin
   const rows = rowsOf(await d.execute(sql`SELECT r.rating, DATE_FORMAT(r.reviewDate, '%Y-%m-%d %H:%i:%s') AS reviewDate,
       DATE_FORMAT(r.respondedAt, '%Y-%m-%d %H:%i:%s') AS respondedAt, (r.googleReply IS NOT NULL AND r.googleReply <> '') AS hasReply,
       r.googleLocationId AS locationId, r.projectId AS projectId
-    FROM google_reviews r WHERE ${reviewScope(locs)} AND ${inLisbonDaysSql(sql`r.reviewDate`, from, to)} AND r.status <> 'dismissed' LIMIT 20000`));
+    FROM google_reviews r WHERE ${reviewScope(locs)} AND ${inLisbonDaysSql(sql`r.reviewDate`, from, to)} AND r.status <> 'dismissed' AND r.notAReview = 0 AND r.duplicateOf IS NULL LIMIT 20000`));
   return rows.map((r) => ({
     rating: n(r.rating), reviewDate: r.reviewDate ? String(r.reviewDate) : null, respondedAt: r.respondedAt ? String(r.respondedAt) : null,
     hasReply: Number(r.hasReply) === 1, locationId: r.locationId == null ? null : n(r.locationId), projectId: r.projectId == null ? null : n(r.projectId),
@@ -170,7 +170,7 @@ export async function unansweredByLocation(ids: readonly number[], maxAgeDays = 
   const d = await db();
   const rows = rowsOf(await d.execute(sql`SELECT googleLocationId AS id, COUNT(*) AS c, TIMESTAMPDIFF(HOUR, MIN(reviewDate), UTC_TIMESTAMP()) AS h
     FROM google_reviews WHERE ${inIds("googleLocationId", ids)} AND (googleReply IS NULL OR googleReply = '') AND respondedAt IS NULL
-      AND status IN ('pending_response', 'ai_responded', 'converted_complaint') AND reviewDate >= UTC_TIMESTAMP() - INTERVAL ${maxAgeDays} DAY
+      AND status IN ('pending_response', 'ai_responded', 'converted_complaint') AND notAReview = 0 AND duplicateOf IS NULL AND reviewDate >= UTC_TIMESTAMP() - INTERVAL ${maxAgeDays} DAY
     GROUP BY googleLocationId`));
   for (const r of rows) out.set(n(r.id), { count: n(r.c), oldestHours: n(r.h) });
   return out;

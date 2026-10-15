@@ -39,6 +39,7 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 ### Em todas as páginas — Multis
 | O quê | Quando | Quem vê | Dados que vão à IA | Guardado / age sozinha? |
 |---|---|---|---|---|
+| Multis do piloto — `AI_ASSISTANT_SMART` (+ `MPV`, desligados por omissão) | Pedido (10/min, 80/dia por pessoa, `ai.assistantSmartLimits`) | Só as pessoas em `ai.assistantPilot` | O mesmo que o Multis de sempre, no modelo smart (`AI_MODEL_SMART`, ex.: `gemini-4-argon`); teto € próprio por dia, mês e pessoa (`ai.assistantSmartBudget`) — ao chegar lá responde o Multis de sempre ("modo económico") | Igual ao Multis (conversas 30 dias; nível e versão guardados em cada resposta) |
 | Multis (chat) — `AI_ASSISTANT` | Pedido (20/min, 200/dia por pessoa) | Qualquer pessoa com sessão; as ferramentas exigem o módulo e correm como a própria pessoa | Pergunta, 6 últimas trocas, ajuda (palavras-chave + significado, até 3 páginas) e base de conhecimento, notas da memória (`<memoria>`), com `redactPii`; resultados das ferramentas (totais e listas curtas) | Conversas 30 dias; ferramentas usadas ficam na Atividade. 👍/👎 e respostas que não responderam (marcadas sozinhas) em "Perguntas que falharam" (só admins; sem purga) |
 | Memória do Multis — `AI_ASSISTANT_MEMORY` (sem IA) | "Lembra-te…" no chat (grava sem IA) ou à mão em Memória | A própria pessoa (as suas); notas da empresa: todos leem, só admins escrevem | O texto da nota (até 300 car.) | `assistant_memories`; arquivar não apaga. Ligado por omissão |
 

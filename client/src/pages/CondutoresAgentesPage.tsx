@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart3, Car, Users } from "lucide-react";
 import { PeoplePerformancePanel } from "@/components/people/PeoplePerformancePanel";
 import { MovementPeoplePanel, type DetailTarget } from "@/components/people/MovementPeoplePanel";
+import { useMultisPage } from "@/components/assistant/useMultisPage";
 
 /** 41a: a ficha pedida no URL (?ficha=123), ou "". */
 function fichaFromUrl(): string {
@@ -36,6 +37,8 @@ export default function CondutoresAgentesPage() {
   const [initialFicha] = useState(fichaFromUrl);
   const tabs = condutoresTabs(user as any);
   const [tab, setTab] = useState<CondutoresTab | null>(null);
+  // Plano MPV §3.1: o Multis sabe o separador aberto.
+  useMultisPage({ tab: tabs.length ? (tab && tabs.includes(tab) ? tab : initialCondutoresTab(tabs, initialFicha ? "agents" : "drivers")) : null });
   if (!user) return null;
   // 14 out 2026: só supervisor, back office, admin e super admin (o servidor também confirma)
   if (!tabs.length) return <div className="p-6 text-sm text-muted-foreground">Sem acesso a esta página.</div>;

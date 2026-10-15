@@ -399,13 +399,37 @@ app.get("/api/cron/ops-briefing", async (req, res) => {
   sendCronRun(res, await opsBriefingCron({ deadlineAt: manualDeadline(), force: req.query?.force === "1" }));
 });
 
-// Escala automática dos extras (propor às 14h, confirmar e avisar às 18h, por
-// omissão — Definições → Parâmetros → Extras-dia). Tick: de hora a hora das
-// 08h às 23h de Lisboa; tudo idempotente. ok:false só com erros.
+// MPV A1: repetições das explicações das anomalias que falharam (≤ 3 pedidos
+// à IA; done:false → repetir). Trabalho `ops-anomaly-retries` do agendador.
+app.get("/api/cron/ops-anomaly-retries", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { opsAnomalyRetriesCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await opsAnomalyRetriesCron({ deadlineAt: manualDeadline() }));
+});
+
+// Escala automática dos extras (propor às 11h, confirmar e avisar às 15h, por
+// omissão — Definições → Parâmetros → Extras-dia). Tick: de 15 em 15 min das
+// 08h às 23h de Lisboa (plano MPV F7); tudo idempotente. ok:false só com erros.
 app.get("/api/cron/extras-schedule", async (req, res) => {
   if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
   const { extrasScheduleCron, sendCronRun } = await import("../cronJobs");
   sendCronRun(res, await extrasScheduleCron());
+});
+
+// Plano MPV F7: lembretes 30 min antes da proposta e da confirmação (interruptor
+// EXTRAS_REMINDERS). Um por dia, cidade e hora. Trabalho `extras-reminders`.
+app.get("/api/cron/extras-reminders", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { extrasRemindersCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await extrasRemindersCron());
+});
+
+// Plano MPV F7 (§6.2): críticas 5★ respondidas sozinhas (interruptor
+// REVIEW_AUTO_PUBLISH_5STAR, desligado; desligado não faz nada). Trabalho `reviews-5star`.
+app.get("/api/cron/reviews-5star", async (req, res) => {
+  if (!cronAuthOk(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { reviewsFiveStarCron, sendCronRun } = await import("../cronJobs");
+  sendCronRun(res, await reviewsFiveStarCron({ deadlineAt: manualDeadline() }));
 });
 
 // IA na comunicação com clientes: triagem do WhatsApp, reclamações por

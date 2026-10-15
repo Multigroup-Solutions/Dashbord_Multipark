@@ -397,6 +397,6 @@ describe("API do Google e ligações", () => {
     expect(p).toContain("Abrir no Google Calendar");
     const help = src("docs/ajuda/comunicacao.md");
     expect(help).toMatch(/rotas: \/comunicacao, \/comunicacao\/meu-email, \/calendario/);
-    expect(help).toContain("**Calendário** (menu **Comunicação → Calendário**, em /calendario)");
+    expect(help).toContain("## Calendário (menu **Comunicação → Calendário**, em /calendario)");
   });
 });

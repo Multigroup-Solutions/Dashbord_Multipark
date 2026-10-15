@@ -5,6 +5,7 @@
  * os contactos para a ficha, e o email de balcão troca-se numa só vez.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sql } from "drizzle-orm";
 
 vi.mock("./sync", () => ({ recomputeMetrics: vi.fn(async () => {}) }));
 const logged = vi.hoisted(() => ({ calls: [] as any[] }));
@@ -18,7 +19,7 @@ import {
   type Candidate, type IdentitySide, type Observation,
 } from "../../shared/crmIdentity";
 import { MiniDb, ficha } from "./miniDb.testutil";
-import { autoMergeConfident, mergeClients, splitMerge } from "./merge";
+import { AI_OMITTED_REASON, AI_PAIRS_PER_CALL, autoMergeConfident, mergeClients, splitMerge, suggestionUpsertSql } from "./merge";
 import { dismissSuggestion, replaceGenericEmail, undismissSuggestion } from "./edit";
 import { planBatch, type BookingRow } from "./plan";
 import { clampOffset } from "./review";
@@ -226,6 +227,71 @@ describe("21c — junção automática: regras e IA", () => {
     const merges = logged.calls.filter((c) => c.action === "crm_merge" || c.action === "crm_merged_into");
     expect(merges).toHaveLength(4);
     expect(merges.every((c) => c.source === "cron" && c.userId === 0)).toBe(true);
+  });
+  it("MPV K1: par que a IA omite fica \"não sei\" (com aiAt) e não volta a ser pedido", async () => {
+    const db = pairs();
+    ai.output = { results: [] }; // a IA não devolveu o 602
+    const r = await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+    expect(r).toMatchObject({ mergedByAi: 0, aiChecked: 0, aiOmitted: 1 });
+    const s = db.rows("crm_merge_suggestions", (x) => x.id === 602)[0];
+    expect(s).toMatchObject({ status: "pending", aiVerdict: "unsure", aiConfidence: null, aiReason: AI_OMITTED_REASON });
+    expect(s.aiAt).toBeTruthy();
+    ai.calls = [];
+    await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+    expect(ai.calls).toHaveLength(0);
+  });
+  it("MPV K1 (seguimento): erro da IA ou JSON inválido NÃO marca o par — volta a ser pedido na corrida seguinte", async () => {
+    const { runAi } = await import("../_core/ai/run");
+    for (const err of [Object.assign(new Error("timeout"), { code: "timeout" }), Object.assign(new Error("JSON inválido"), { code: "invalid_json" })]) {
+      const db = pairs();
+      vi.mocked(runAi).mockImplementationOnce(async (o: any) => { ai.calls.push(o); throw err; });
+      const r = await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+      expect(r.aiError).toBeTruthy();
+      expect(r.aiOmitted ?? 0).toBe(0);
+      const s = db.rows("crm_merge_suggestions", (x) => x.id === 602)[0];
+      expect(s.aiAt ?? null).toBeNull();
+      expect(s.aiVerdict ?? null).toBeNull();
+      ai.calls = [];
+      await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+      expect(ai.calls).toHaveLength(1);
+      expect(ai.calls[0].input).toContain("Par 602:");
+      ai.calls = [];
+    }
+  });
+  it("MPV K1 (seguimento): um \"não sei\" por omissão volta à IA quando os motivos da sugestão mudam (e só então)", async () => {
+    const db = pairs();
+    ai.output = { results: [] }; // omite o 602 → "não sei" com aiAt
+    await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+    const row = () => db.rows("crm_merge_suggestions", (x) => x.id === 602)[0];
+    expect(row()).toMatchObject({ aiVerdict: "unsure", aiReason: AI_OMITTED_REASON });
+    // Corrida da madrugada com os MESMOS motivos/avisos → o parecer fica, a IA não é chamada.
+    await db.execute(suggestionUpsertSql([sql`(${3}, ${4}, ${50}, ${"same_phone"}, ${"doubt"}, ${null}, UTC_TIMESTAMP())`]));
+    expect(row().aiAt).toBeTruthy();
+    ai.calls = [];
+    await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+    expect(ai.calls).toHaveLength(0);
+    // Motivos mudaram (agora também nome parecido) → aiAt e parecer limpos → volta à IA.
+    await db.execute(suggestionUpsertSql([sql`(${3}, ${4}, ${55}, ${"same_phone,similar_name"}, ${"doubt"}, ${null}, UTC_TIMESTAMP())`]));
+    expect(row()).toMatchObject({ aiAt: null, aiVerdict: null, aiReason: null, reasons: "same_phone,similar_name" });
+    await autoMergeConfident(db as any, { deadlineAt: Date.now() + 60_000, userId: 0 });
+    expect(ai.calls).toHaveLength(1);
+    expect(ai.calls[0].input).toContain("Par 602:");
+  });
+  it("MPV K1: no máximo 10 pares por chamada", async () => {
+    expect(AI_PAIRS_PER_CALL).toBe(10);
+    const db = new MiniDb();
+    for (let i = 0; i < 12; i++) {
+      const a = 100 + 2 * i, b = a + 1;
+      ficha(db, a, { displayName: `Alice${String.fromCharCode(65 + i)} Ferreira`, bookings: 2 });
+      ficha(db, b, { displayName: `Alice${String.fromCharCode(65 + i)} F.`, bookings: 1 });
+      db.insert("crm_client_phones", { clientId: a, phone: `+3519120001${String(i).padStart(2, "0")}` });
+      db.insert("crm_client_phones", { clientId: b, phone: `+3519120001${String(i).padStart(2, "0")}` });
+      db.insert("crm_merge_suggestions", { id: 700 + i, clientA: a, clientB: b, score: 50, reasons: "same_phone", status: "pending" });
+    }
+    await autoMergeConfident(db as any, { deadlineAt: Date.now() + 120_000, userId: 0 });
+    expect(ai.calls.map((c) => (c.input.match(/Par \d+:/g) ?? []).length)).toEqual([10, 2]);
+    // todos omitidos → todos "não sei"; nenhum fica por pedir
+    expect(db.rows("crm_merge_suggestions").every((s) => s.aiVerdict === "unsure" && s.aiAt)).toBe(true);
   });
   it("IA pouco certa ou desligada → fica em Rever (com o parecer à vista)", async () => {
     const db = pairs();

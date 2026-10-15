@@ -24,6 +24,9 @@
  *   …
  */
 
+import { pagesForPath } from "../../../../shared/helpTree";
+import { KNOWLEDGE_OUTLINE } from "../../../assistant/knowledgeTree.generated";
+
 export interface HelpDoc {
   /** Nome do ficheiro (ex.: "extras-dia.md"). */
   file: string;
@@ -95,6 +98,21 @@ export function docMatchesPath(doc: HelpDoc, path: string | null | undefined): b
   return doc.routes.some((r) => r !== "/" && (p === r || p.startsWith(`${r}/`)));
 }
 
+/**
+ * O ficheiro da página aberta: a página mais específica da árvore da ajuda
+ * (shared/helpTree.ts → pagesForPath: /formacao/conhecimento →
+ * pesquisa-e-conhecimento.md, /marketing/web → web-analytics.md…); se a
+ * árvore não tiver o ficheiro (ex.: ajuda de teste), o 1.º que serve a rota.
+ */
+export function docForPath(docs: HelpDoc[], path: string | null | undefined): HelpDoc | undefined {
+  if (!path) return undefined;
+  for (const p of pagesForPath(KNOWLEDGE_OUTLINE, path)) {
+    const d = docs.find((x) => x.file === p.file);
+    if (d) return d;
+  }
+  return docs.find((d) => docMatchesPath(d, path));
+}
+
 export interface ScoredDoc { doc: HelpDoc; score: number }
 
 /**
@@ -147,7 +165,7 @@ export function pickHelpDocs(docs: HelpDoc[], question: string, opts: { path?: s
     return scored.filter((s) => s.score * 2 >= best).slice(0, max).map((s) => s.doc);
   }
   if (howTo) {
-    const here = docs.find((d) => docMatchesPath(d, opts.path));
+    const here = docForPath(docs, opts.path);
     if (here) return [here];
   }
   return [];
@@ -161,7 +179,11 @@ export function looksLikeHowTo(question: string): boolean {
 
 /** Índice curto (para o prompt estável): uma linha por ficheiro. */
 export function helpIndex(docs: HelpDoc[]): string {
-  return docs.map((d) => `- ${d.title} (${d.module})${d.routes.length ? ` [${d.routes.join(", ")}]` : ""}: ${d.summary}`).join("\n");
+  // Módulo com várias ajudas → mostra também o ficheiro (é por ele que o abrir_ajuda as distingue).
+  const perModule = new Map<string, number>();
+  for (const d of docs) perModule.set(d.module, (perModule.get(d.module) ?? 0) + 1);
+  const id = (d: HelpDoc) => ((perModule.get(d.module) ?? 0) > 1 ? `${d.module}; ficheiro ${d.file.replace(/\.md$/, "")}` : d.module);
+  return docs.map((d) => `- ${d.title} (${id(d)})${d.routes.length ? ` [${d.routes.join(", ")}]` : ""}: ${d.summary}`).join("\n");
 }
 
 // ─── Ajuda pelo significado (base de conhecimento) ──────────────────────────

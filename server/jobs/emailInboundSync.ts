@@ -26,7 +26,6 @@ import {
 import { matchBookingForComplaint, autoLinkComplaintBooking, autoLinkLostFoundBooking } from "../complaintDossier";
 import {
   createGoogleReview,
-  updateGoogleReview,
   createComplaint,
   createLostFoundItem,
   claimInboundEmail,
@@ -56,6 +55,7 @@ import {
   COMPLAINT_DEFAULT_SLA_HOURS,
 } from "../complaintEmail";
 import { aiMergeConflict, aiMergeSameClient, lostFoundMergeRecent, partnerSafeClientEmail } from "../../shared/complaintIntake";
+import { sqlUtcOrNull } from "../../shared/reviewRules";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
 
@@ -71,6 +71,8 @@ async function routeToModule(
     messageId: string;
     gmThreadId?: string | null;
     refs?: string[];
+    /** Data do email (para a regra dos 14 dias do rascunho automático das críticas). */
+    receivedAt?: string | null;
     /** Lote 57: email de OUTRA caixa que a IA viu como reclamação (ver InboundEmailInput.aiIntake). */
     aiIntake?: AiComplaintIntake | null;
   },
@@ -94,7 +96,25 @@ async function routeToModule(
     // Notificação do Google Business Profile: extrai estrelas + nome real do
     // avaliador + texto limpo (sem links de tracking/rodapé).
     const { parseGoogleReviewNotification } = await import("../emailParse");
-    const g = parseGoogleReviewNotification(ctx.bodyText);
+    // Plano MPV F6b: interruptores das críticas por email (desligados por omissão).
+    const { reviewFlagOn } = await import("../reviewCleanup");
+    const strict = await reviewFlagOn("REVIEWS_EMAIL_STRICT");
+    const dedup = await reviewFlagOn("REVIEWS_DEDUP");
+    // R3: com o REVIEWS_DEDUP lê também o ASSUNTO (o nome e o perfil podem vir só lá).
+    const g = parseGoogleReviewNotification(ctx.bodyText, dedup ? ctx.subject : "");
+    // R2/R3: resumos ("recebeu N críticas") nunca viram crítica; com o
+    // REVIEWS_EMAIL_STRICT só o aviso de avaliação (ou um email com estrelas).
+    // O resto segue para a triagem normal das caixas (server/mail/service.ts) —
+    // nunca fica "ignored".
+    const { emailReviewVerdict, reviewCommentFromEmail } = await import("../../shared/reviewDedup");
+    // O texto da crítica tira-se pela positiva (entre o nome/estrelas e o "Responder").
+    const comment = reviewCommentFromEmail(ctx.bodyText, g.reviewerName);
+    const verdict = emailReviewVerdict({
+      fromEmail: ctx.fromEmail, rating: g.rating, subject: ctx.subject, body: ctx.bodyText, strict, dedup,
+      reviewerWithText: !!g.reviewerName && !!comment,
+    });
+    if (verdict === "summary") return { targetModule: "review_summary" };
+    if (verdict === "not_review") return { targetModule: "not_review" };
     // O GBP manda também notificações ADMINISTRATIVAS (recursos recusados,
     // mudanças de proprietário do perfil, verificações…) — não são críticas e
     // poluíam a lista com rating 0. Sem padrão de crítica + com padrão admin
@@ -124,6 +144,26 @@ async function routeToModule(
     // correspondência exata fica "Sem parque" (nunca adivinha).
     const { projectIdForReviewPark } = await import("../reviewOps");
     const projectId = await projectIdForReviewPark(g.parkName);
+    const sourceEmailDate = sqlUtcOrNull(ctx.receivedAt);
+    // R3: a mesma crítica (a Google manda 2 emails; a Windsor pode já a ter
+    // trazido) fica marcada como repetida da primeira — guarda-se, não se
+    // apaga, e sai das listas e dos rascunhos automáticos.
+    let duplicateOf: number | null = null;
+    let entryDuplicateBackup: () => string = () => "";
+    if (dedup) {
+      const { findEmailReviewDuplicate } = await import("../reviewCleanup");
+      ({ entryDuplicateBackup } = await import("../reviewCleanup"));
+      const { reviewDateMs, reviewTextKeyFromEmail, reviewerNameKey } = await import("../../shared/reviewDedup");
+      duplicateOf = await findEmailReviewDuplicate({
+        parkKey: projectId != null ? `p${projectId}` : null,
+        rating: g.rating,
+        textKey: reviewTextKeyFromEmail(ctx.bodyText, reviewer),
+        name: reviewerNameKey(reviewer),
+        atMs: reviewDateMs(sourceEmailDate) ?? Date.now(),
+        apiKey: false,
+      });
+    }
+    const markedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
     const id = await createGoogleReview({
       reviewerName: reviewer,
       reviewerEmail: parsed.clientEmail,
@@ -133,21 +173,23 @@ async function routeToModule(
       projectId,
       status: "pending_response",
       sourceEmailId: ctx.messageId,
+      sourceEmailDate,
       importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+      // A cópia diz que a tentativa de rascunho é da marca (desfazer volta a pô-la a NULL).
+      ...(duplicateOf ? { duplicateOf, reviewMarkedAt: markedAt, aiDraftAttemptedAt: markedAt, reviewMarkBackup: entryDuplicateBackup() } : {}),
     } as any);
     // rascunho de resposta por IA (prompt central + sentimento/contexto),
     // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
-    if (id) {
+    // MPV R1: só para críticas recentes (14 dias, pela data do email; sem ela, agora).
+    // R3: a repetida nunca tem rascunho (a original já tem).
+    if (id && !duplicateOf) {
       try {
-        const { autoDraftReview } = await import("../reviewAutoDraft");
-        const { aiFeatureAvailableFresh } = await import("../_core/ai/status");
-        if (await aiFeatureAvailableFresh("review_auto_draft")) {
-          await updateGoogleReview(id, { aiDraftAttemptedAt: new Date().toISOString().slice(0, 19).replace("T", " ") } as any);
-          await autoDraftReview(id, { timeoutMs: 15_000 });
-        }
+        const { autoDraftEmailReview } = await import("../reviewAutoDraft");
+        await autoDraftEmailReview(id, sourceEmailDate, { timeoutMs: 15_000 });
       } catch { /* IA opcional */ }
     }
-    return { targetModule: "review", targetId: id };
+    // A repetida: a conversa liga-se à ORIGINAL (é essa que se trata).
+    return { targetModule: "review", targetId: duplicateOf ?? id };
   }
 
   // Faturação automática de parceiros (ex.: "Auto-fatura" mensal do
@@ -681,7 +723,7 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
     const attachmentsJson = attachments.length ? JSON.stringify(attachments) : null;
 
     const routed = await routeToModule(alias, parsed, {
-      subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs,
+      subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs, receivedAt,
       aiIntake: alias === "reclamacoes" || alias === "perdidos" ? input.aiIntake ?? null : null,
     });
     routedOk = true;
@@ -728,4 +770,3 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
 function now(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
-

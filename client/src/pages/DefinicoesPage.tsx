@@ -46,6 +46,9 @@ import { isMultisAdmin } from "@shared/assistantMemory";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NotificationRoutingCard } from "@/components/NotificationRoutingCard";
 import { ServiceTasksSettings } from "@/components/ServiceTasksSettings";
+import { AiUsageDailyCard } from "@/components/settings/AiUsageDailyCard";
+import { DEFAULT_REMINDER_RECIPIENTS, ISO_WEEKDAYS, REMINDER_ROLES, REMINDER_ROLE_LABELS, WEEKDAY_SHORT_PT, describeReminderRule, type ReminderRecipients } from "@shared/extrasReminders";
+import { MANUAL_EDIT_AT_CONFIRM_LABELS, MANUAL_EDIT_AT_CONFIRM_MODES } from "@shared/extrasSchedule";
 
 const TABS = ["estado", "automacoes", "integracoes", "comunicacao", "parametros", "notificacoes", "seguranca"] as const;
 type Tab = (typeof TABS)[number];
@@ -94,7 +97,7 @@ export default function DefinicoesPage() {
             <TabsTrigger value="seguranca"><ShieldCheck className="h-4 w-4 mr-1" />Segurança</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard /></TabsContent>
+        <TabsContent value="estado" className="space-y-4"><SystemStatusCard />{user.role === "super_admin" && <SchedulerCard />}<AiUsageCard />{isMultisAdmin(user.role) && <AiUsageDailyCard />}</TabsContent>
         <TabsContent value="automacoes"><AutomationsCard /></TabsContent>
         <TabsContent value="integracoes" className="space-y-4"><IntegrationsCard /><WebAnalyticsSettings /></TabsContent>
         <TabsContent value="comunicacao" className="space-y-4"><MailboxesSettings />{user.role === "super_admin" && <MailTriageEvalCard />}<SharedCalendarsSettings /><GooglePushSettings /><GoogleContactsSettings /><GoogleDriveSettings /></TabsContent>
@@ -346,6 +349,11 @@ function AiUsageCard() {
                 <span className="font-semibold text-lg">{eur(d.spentEur)}</span>
                 <span className="text-muted-foreground">{d.budgetEur > 0 ? `de ${eur(d.budgetEur)} (${String(pct ?? 0).replace(".", ",")}%)` : "sem limite mensal"}</span>
               </div>
+              {d.ownBudgetSpentEur > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  Inclui {eur(d.ownBudgetSpentEur)} com teto próprio (Multis do piloto), que não conta para o orçamento: a barra mostra {eur(d.gateSpentEur)}.
+                </p>
+              )}
               {d.budgetEur > 0 && (
                 <div className="h-2 w-full rounded bg-muted overflow-hidden" aria-hidden>
                   <div className={`h-full ${barCls}`} style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
@@ -378,6 +386,8 @@ function AiUsageCard() {
                       <tr key={f.feature} className="border-b last:border-0">
                         <td className="py-1 px-1">
                           {f.label}
+                          {f.ownBudget && <span className="text-muted-foreground"> (teto próprio)</span>}
+                          {f.storageEur > 0 && <span className="text-muted-foreground"> · armazenamento da cache {eur(f.storageEur)}</span>}
                           {(f.errors > 0 || f.blocked > 0) && (
                             <span className="text-muted-foreground"> · {f.errors ? `${f.errors} erro(s)` : ""}{f.errors && f.blocked ? ", " : ""}{f.blocked ? `${f.blocked} bloqueada(s)` : ""}</span>
                           )}
@@ -660,10 +670,13 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
   // Plano 62 (P5): zonas da operação (por cidade, com mapa e "Sugerir") e papéis das garagens
   const isParkZones = item.key === PARK_ZONES_SETTING_KEY;
   const isGarageRoles = item.key === GARAGE_ROLES_SETTING_KEY;
+  // Plano MPV F7: dia mexido à mão na confirmação (D4b, três opções) e a quem vão os lembretes (D4c, por cidade).
+  const isManualEditMode = item.key === "extras.manualEditAtConfirm";
+  const isReminderRecipients = item.key === "extras.reminderRecipients";
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
-  const isCityMap = !isPhones && !isAirports && !isParkZones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
+  const isCityMap = !isPhones && !isAirports && !isParkZones && !isReminderRecipients && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue)
     && CITY_FIELDS.every((c) => c.id in (item.defaultValue as Record<string, unknown>));
   const cityMapNumeric = isCityMap && typeof (item.defaultValue as Record<string, unknown>).lisbon === "number";
   // 38a: ligado/desligado por cidade → interruptores (antes eram caixas de texto e "true" escrito não gravava)
@@ -672,7 +685,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
   // Tarefa 62 (P2d): o fecho mensal (uma data, vazio = nada fechado) e quem fecha (contas escolhidas na lista)
   const isDate = item.key === EVALUATION_CLOSED_UNTIL_KEY;
   const isUserList = item.key === EVALUATION_CLOSERS_KEY;
-  const isJson = !isPhones && !isAirports && !isSpeedRule && !isParkZones && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
+  const isJson = !isPhones && !isAirports && !isSpeedRule && !isParkZones && !isReminderRecipients && !!item.defaultValue && typeof item.defaultValue === "object" && !Array.isArray(item.defaultValue) && !isRate && !isEmails && !isCityMap;
 
   const [rates, setRates] = useState<{ pct: string; from: string }[]>([]);
   const [cityMap, setCityMap] = useState<Record<string, string>>({});
@@ -692,7 +705,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
   const [text, setText] = useState("");
   const [parkSel, setParkSel] = useState<string[]>([]);
   const [userSel, setUserSel] = useState<number[]>([]);
-  const usersQ = trpc.users.list.useQuery(undefined, { enabled: isUserList, staleTime: 5 * 60_000, retry: false });
+  const usersQ = trpc.users.list.useQuery(undefined, { enabled: isUserList || isReminderRecipients, staleTime: 5 * 60_000, retry: false });
+  const [reminders, setReminders] = useState<ReminderRecipients>(DEFAULT_REMINDER_RECIPIENTS);
   const userById = useMemo(() => new Map(((usersQ.data ?? []) as Array<{ id: number; name?: string | null; email?: string | null }>).map((u) => [Number(u.id), u])), [usersQ.data]);
   const [speed, setSpeed] = useState<{ limitKmh: string; tolerancePercent: string; minPoints: string }>({ limitKmh: "", tolerancePercent: "", minPoints: "" });
   const [zonesDraft, setZonesDraft] = useState<ParkZonesDraft>(() => parkZonesToDraft(null));
@@ -726,6 +740,14 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
     else if (isEmails) setText(((current as string[]) ?? []).join("\n"));
     else if (isParkList) setParkSel([...((current as string[]) ?? [])]);
     else if (isUserList) setUserSel([...((current as number[]) ?? [])].map(Number));
+    else if (isReminderRecipients) {
+      const cur = (current ?? {}) as Partial<ReminderRecipients>;
+      setReminders(Object.fromEntries(CITY_FIELDS.map((c) => {
+        const r = cur[c.id] ?? DEFAULT_REMINDER_RECIPIENTS[c.id];
+        return [c.id, { roles: [...(r.roles ?? [])], days: [...(r.days ?? [])], userIds: [...(r.userIds ?? [])].map(Number) }];
+      })) as ReminderRecipients);
+    }
+    else if (isManualEditMode) setText(String(current ?? "skip_notify"));
     else if (isSpeedRule) {
       const c = (current ?? {}) as Record<string, unknown>;
       const txt = (v: unknown) => (v == null ? "" : String(v).replace(".", ","));
@@ -751,6 +773,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
     if (isEmails) return text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean);
     if (isParkList) return parkSel;
     if (isUserList) return userSel;
+    if (isReminderRecipients) return reminders;
     if (isDate) return text.trim() === "" ? null : text.trim();
     if (isSpeedRule) {
       const n = (v: string) => { const t = v.trim().replace(",", "."); return t === "" ? NaN : Number(t); };
@@ -1020,6 +1043,67 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
             placeholder={usersQ.isLoading ? "A carregar as contas…" : usersQ.isError ? "Não deu para ler as contas" : "+ Juntar conta"} searchPlaceholder="Procurar pelo nome ou email…" emptyText="Nenhuma conta"
             onChange={(v) => { const id = Number(v); if (id) setUserSel((prev) => [...prev.filter((x) => x !== id), id]); }} />
         </div>
+      ) : isReminderRecipients ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 max-w-4xl">
+          {CITY_FIELDS.map((c) => {
+            const r = reminders[c.id];
+            const set = (patch: Partial<ReminderRecipients["lisbon"]>) => setReminders((p) => ({ ...p, [c.id]: { ...p[c.id], ...patch } }));
+            return (
+              <div key={c.id} className="rounded-md border p-2 space-y-2 min-w-0">
+                <div className="text-sm font-medium">{c.label}</div>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {REMINDER_ROLES.map((role) => (
+                    <label key={role} className="flex items-center gap-1.5 text-xs">
+                      <Checkbox checked={r.roles.includes(role)} disabled={locked} aria-label={`${REMINDER_ROLE_LABELS[role]} — ${c.label}`}
+                        onCheckedChange={(v) => set({ roles: v === true ? [...r.roles.filter((x) => x !== role), role] : r.roles.filter((x) => x !== role) })} />
+                      {REMINDER_ROLE_LABELS[role]}
+                    </label>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-1" role="group" aria-label={`Dias — ${c.label}`}>
+                  {ISO_WEEKDAYS.map((d) => {
+                    const on = r.days.includes(d);
+                    return (
+                      <button key={d} type="button" disabled={locked} aria-pressed={on}
+                        className={`rounded-full border px-2 py-0.5 text-xs ${on ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground"}`}
+                        onClick={() => set({ days: on ? r.days.filter((x) => x !== d) : [...r.days, d].sort((a, b) => a - b) })}>
+                        {WEEKDAY_SHORT_PT[d]}
+                      </button>
+                    );
+                  })}
+                </div>
+                {r.userIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {r.userIds.map((id) => {
+                      const u = userById.get(id);
+                      const label = u?.name || u?.email || `Conta ${id}`;
+                      return (
+                        <span key={id} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs">
+                          {label}
+                          <button type="button" className="ml-0.5 rounded hover:bg-muted" aria-label={`Tirar ${label}`} disabled={locked}
+                            onClick={() => set({ userIds: r.userIds.filter((x) => x !== id) })}><X className="h-3 w-3" /></button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+                <SearchableSelect value="" disabled={locked || usersQ.isLoading} className="w-full h-8 text-xs"
+                  options={((usersQ.data ?? []) as Array<{ id: number; name?: string | null; email?: string | null }>).filter((u) => !r.userIds.includes(Number(u.id)))
+                    .map((u) => ({ value: String(u.id), label: `${u.name || "—"}${u.email ? ` · ${u.email}` : ""}` }))}
+                  placeholder={usersQ.isLoading ? "A carregar as contas…" : "+ Juntar uma conta"} searchPlaceholder="Procurar pelo nome ou email…" emptyText="Nenhuma conta"
+                  onChange={(v) => { const id = Number(v); if (id) set({ userIds: [...r.userIds.filter((x) => x !== id), id] }); }} />
+                <p className="text-[11px] text-muted-foreground">{describeReminderRule(r)}</p>
+              </div>
+            );
+          })}
+        </div>
+      ) : isManualEditMode ? (
+        <Select value={text || "skip_notify"} onValueChange={setText} disabled={locked}>
+          <SelectTrigger className="w-full max-w-md min-w-0 *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate" aria-label={item.label}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {MANUAL_EDIT_AT_CONFIRM_MODES.map((m) => <SelectItem key={m} value={m}>{MANUAL_EDIT_AT_CONFIRM_LABELS[m]}</SelectItem>)}
+          </SelectContent>
+        </Select>
       ) : isParkList ? (
         <ParkPicker selected={parkSel} onChange={setParkSel} />
       ) : isSpeedRule ? (

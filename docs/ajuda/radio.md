@@ -1,5 +1,7 @@
 ---
 modulo: radio
+grupo: Operações
+pagina: radio
 titulo: Rádio (gravações do Zello e transcrições)
 rotas: /radio, /operacional
 palavras: prova, provas, guardar como prova, provas do rádio, selo, arquivar prova, rádio, radio, transcrição, transcrições, áudio, zello, comunicações, resumo, condutor, viatura, transcrever, transcrição automática, mais antigas, gravações, gravação, ouvir, mensagens de voz, intervalo, hora, utilizador do zello, canal, gps, velocidade, posição, mapa, cruzar, movimentos da multipark, check-in, check-out, pda
@@ -26,7 +28,7 @@ Cada mensagem mostra:
 
 Quem só vê a sua cidade só vê as mensagens de pessoas dessa cidade. As de outras cidades, ou de quem não se sabe quem é, ficam de fora e aparece um aviso.
 
-**Guardar como prova** (supervisores, backoffice e administração)
+### Guardar como prova (supervisores, backoffice e administração)
 - Numa mensagem, **Guardar como prova**. Para guardar várias juntas, marca o quadrado de cada uma (até 10) e carrega em **Guardar como prova** na barra de cima.
 - Diz a **situação** (obrigatória, ex.: "dano no carro da reserva X"). Podes juntar uma **referência** (reserva, matrícula, ocorrência) e **notas**.
 - Fica guardado como estava nesse momento: quem falou, a hora, a transcrição, a posição e a velocidade, e o que fez na Multipark à volta da hora. A app volta a ler a mensagem no Zello (não se guarda o que está no ecrã) e põe-lhe um **selo** para se ver que não mudou.
@@ -51,7 +53,7 @@ As comunicações de rádio passadas a texto a partir de um ficheiro de áudio, 
 - Cada transcrição diz quando foi feita, o **condutor** (se foi indicado), a **viatura** (se foi indicada), a duração do áudio e **quem a fez**: o nome de quem a pediu ou **Transcrição automática (API)** quando veio de outro sistema.
 - **Áudio** abre a gravação.
 
-**Nova transcrição** (team leaders, supervisores e administração)
+### Nova transcrição (team leaders, supervisores e administração)
 1. Escolhe o ficheiro de áudio (até 4 MB).
 2. Indica o condutor, se quiseres (só aparecem colaboradores ativos). A viatura só aparece quando há viaturas registadas.
 3. Carrega em **Transcrever**. A transcrição usa IA, que tem custo, e a duração do áudio é lida do ficheiro.
