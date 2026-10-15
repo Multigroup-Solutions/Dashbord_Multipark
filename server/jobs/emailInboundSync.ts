@@ -154,7 +154,8 @@ export async function reviewFromEmail(
     ? `${ctx.subject}\n\n${g.cleanText}`.trim().slice(0, 5000)
     : desc;
   // Parque: o "sobre Y" do email é o título do perfil Google (16d). Sem
-  // correspondência exata fica "Sem parque" (nunca adivinha).
+  // correspondência exata fica "Sem parque" (nunca adivinha) — à mão, por quem
+  // só vê as suas cidades, fica na cidade da conversa (`fallbackProjectId`).
   const { projectIdForReviewPark } = await import("../reviewOps");
   const projectId = (await projectIdForReviewPark(g.parkName)) ?? (manual ? opts.fallbackProjectId ?? null : null);
   const sourceEmailDate = sqlUtcOrNull(ctx.receivedAt);
