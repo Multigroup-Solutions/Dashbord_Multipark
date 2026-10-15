@@ -17,9 +17,9 @@ const MAIL_READ_CACHE = new Map<string, { at: number; value: { output: MailRouti
 export const MAIL_READ_CACHE_TTL_MS = 30 * 60_000;
 const MAIL_READ_CACHE_MAX = 300;
 
-/** Chave da leitura: sha256 do pedido exato (sistema + texto já tapado). */
-export function mailReadCacheKey(system: string, input: string): string {
-  return createHash("sha256").update(system).update("\u0000").update(input).digest("hex");
+/** Chave da leitura: sha256 do pedido exato (sistema + texto já tapado) e de quem lê (fornecedor|modelo|raciocínio). */
+export function mailReadCacheKey(system: string, input: string, reader: string): string {
+  return createHash("sha256").update(reader).update("\u0000").update(system).update("\u0000").update(input).digest("hex");
 }
 
 export function mailReadCacheGet(key: string, nowMs = Date.now()): { output: MailRoutingOutput; model?: string } | null {

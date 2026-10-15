@@ -408,8 +408,11 @@ async function triageNewMessage(
   const t = rowsOf(await d.execute(sql`SELECT projectId FROM mail_threads WHERE id = ${e.result.threadId} LIMIT 1`))[0];
   const { dbEmailRoutingDeps, routeEmailMessage, applyRuleTriage } = await import("../commsRouting");
   // O caso que a IA vir aqui nasce com o email já lido (anexos incluídos) — sem voltar ao Gmail.
+  const { classifyEmailWithAi } = await import("../commsRouting");
   const deps = {
     ...dbEmailRoutingDeps,
+    // Seguimento F6b: só a sincronização reaproveita a leitura de uma cópia do mesmo email (outra conta).
+    classify: (m: Parameters<typeof classifyEmailWithAi>[0], l: string) => classifyEmailWithAi(m, l, { reuseRead: true }),
     async caseIntake(msg: Parameters<NonNullable<typeof dbEmailRoutingDeps.caseIntake>>[0], verdict: Parameters<NonNullable<typeof dbEmailRoutingDeps.caseIntake>>[1]) {
       const { intakeFromRouting, dbIntakeDeps } = await import("../complaintMailIntake");
       const r = await intakeFromRouting(msg, verdict, dbIntakeDeps({ parsed: p, api: ctx.api }));

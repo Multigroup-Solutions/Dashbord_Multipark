@@ -375,16 +375,29 @@ const QUOTED_SEP = "§§§CITADO§§§";
 export async function classifyEmailWithAi(
   msg: EmailRoutingMessage,
   fromLabel: string,
-  // Plano MPV F6b (T1): só a avaliação (scripts/eval-mail-triage.ts --thinking) compara os níveis.
-  opts: { thinkingLevel?: import("../shared/aiFeatures").AiThinkingLevel; thinkingFromCaller?: boolean } = {},
+  opts: {
+    // Plano MPV F6b (T1): só a avaliação (scripts/eval-mail-triage.ts --thinking) compara os níveis.
+    thinkingLevel?: import("../shared/aiFeatures").AiThinkingLevel;
+    thinkingFromCaller?: boolean;
+    /**
+     * Seguimento F6b: reaproveitar a leitura de um pedido igual (o MESMO email
+     * sincronizado por duas contas — info@ por 2, jorgetabuada@ por 3). Só a
+     * sincronização da caixa passa isto (server/mail/service.ts); a avaliação,
+     * o "Testar" e o filtro de ruído da reclamacoes@/perdidos@ leem sempre.
+     */
+    reuseRead?: boolean;
+  } = {},
 ): Promise<ClassifiedEmail> {
-  const { runAi } = await import("./_core/ai/run");
+  const { runAi, resolvedAiCall } = await import("./_core/ai/run");
   const { mailRoutingSchema } = await import("./_core/ai/prompts/comms");
   const req = await mailRoutingRequest(msg, fromLabel);
-  // Seguimento F6b: o MESMO email sincronizado por duas contas (info@ por 2,
-  // jorgetabuada@ por 3) dava duas leituras. O pedido igual (sistema + texto,
-  // já tapado) reaproveita a 1.ª leitura deste processo. A avaliação nunca usa a cache.
-  const cacheKey = opts.thinkingFromCaller ? null : mailReadCacheKey(req.system, req.input);
+  // A chave leva o fornecedor, o modelo e o raciocínio já resolvidos: mudar o
+  // ai.thinkingLevels, o ai.featureTiers ou o modelo dá uma leitura nova.
+  let call: Awaited<ReturnType<typeof resolvedAiCall>> = null;
+  if (opts.reuseRead && !opts.thinkingFromCaller) {
+    try { call = await resolvedAiCall("mail_routing"); } catch { call = null; /* sem chave = sem cache (lê) */ }
+  }
+  const cacheKey = call ? mailReadCacheKey(req.system, req.input, `${call.provider}|${call.model}|${call.thinking ?? "-"}`) : null;
   const hit = cacheKey ? mailReadCacheGet(cacheKey) : null;
   if (hit) return { output: hit.output, restore: req.restore, model: hit.model };
   const r = await runAi({

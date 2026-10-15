@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   rows: [] as any[],
   sets: [] as any[],
   runAi: vi.fn(async (_o: any) => ({ output: { box: "info", confidence: 0.9, reason: "x" }, model: "m-1" })),
+  reader: { provider: "gemini", model: "m-1", thinking: "low" as string | null },
 }));
 
 vi.mock("./db", async (orig) => {
@@ -23,7 +24,7 @@ vi.mock("./db", async (orig) => {
     }),
   };
 });
-vi.mock("./_core/ai/run", () => ({ runAi: h.runAi }));
+vi.mock("./_core/ai/run", () => ({ runAi: h.runAi, resolvedAiCall: async () => ({ ...h.reader }) }));
 
 import { entryDuplicateBackup, parseMarkBackup, rawEmailNeeded, undoReviewCleanup } from "./reviewCleanup";
 import { whatsappTriageGate, whatsappUrgentByWords } from "../shared/commsAi";
@@ -34,6 +35,7 @@ beforeEach(() => {
   h.rows = [];
   h.sets = [];
   h.runAi.mockClear();
+  h.reader = { provider: "gemini", model: "m-1", thinking: "low" };
   clearMailReadCache();
 });
 
@@ -99,26 +101,54 @@ describe("3 — memória da limpeza", () => {
   });
 });
 
-describe("4 — duas cópias do mesmo email: uma só leitura de IA", () => {
+describe("4 — duas cópias do mesmo email: uma só leitura de IA (só na sincronização)", () => {
   const msg = (messageId: number) => ({
     threadId: messageId, messageId, fromBoxKey: "info", subject: "Reserva de novembro", text: "Queria reservar de 3 a 9 de novembro.",
     fromName: "Ana", fromEmail: "ana@gmail.com", attachmentNames: [], projectId: null, senderKind: "external" as const,
   });
-  it("a 2.ª cópia (outra conta, mesmo pedido) reaproveita a 1.ª leitura", async () => {
-    const a = await classifyEmailWithAi(msg(1), "Info");
-    const b = await classifyEmailWithAi(msg(2), "Info");
+  it("a sincronização com 2 cópias (outra conta, mesmo pedido) → 1 leitura", async () => {
+    const a = await classifyEmailWithAi(msg(1), "Info", { reuseRead: true });
+    const b = await classifyEmailWithAi(msg(2), "Info", { reuseRead: true });
     expect(h.runAi).toHaveBeenCalledTimes(1);
     expect(b.output).toEqual(a.output);
+    // Só a sincronização da caixa passa a opção; o filtro de ruído da reclamacoes@/perdidos@ lê sempre.
+    const svc = readFileSync("server/mail/service.ts", "utf8");
+    expect(svc).toContain("classifyEmailWithAi(m, l, { reuseRead: true })");
+    expect(svc).toContain("const c = await classifyEmailWithAi(msg, from.label);");
   });
-  it("outro texto ou outra caixa → outra leitura; a avaliação nunca usa a cache", async () => {
+  it("sem a opção (varrimento, filtro de ruído, Testar) → lê sempre", async () => {
     await classifyEmailWithAi(msg(1), "Info");
-    await classifyEmailWithAi({ ...msg(2), text: "Queria cancelar." }, "Info");
-    await classifyEmailWithAi(msg(3), "Reservas");
-    await classifyEmailWithAi(msg(4), "Info", { thinkingFromCaller: true });
+    await classifyEmailWithAi(msg(2), "Info");
+    expect(h.runAi).toHaveBeenCalledTimes(2);
+  });
+  it("mudar o raciocínio (ai.thinkingLevels) ou o modelo → nova leitura", async () => {
+    await classifyEmailWithAi(msg(1), "Info", { reuseRead: true });
+    h.reader = { ...h.reader, thinking: "minimal" };
+    await classifyEmailWithAi(msg(2), "Info", { reuseRead: true });
+    h.reader = { ...h.reader, model: "m-2" };
+    await classifyEmailWithAi(msg(3), "Info", { reuseRead: true });
+    expect(h.runAi).toHaveBeenCalledTimes(3);
+  });
+  it("outro texto, outra caixa ou a avaliação com nível → outra leitura", async () => {
+    await classifyEmailWithAi(msg(1), "Info", { reuseRead: true });
+    await classifyEmailWithAi({ ...msg(2), text: "Queria cancelar." }, "Info", { reuseRead: true });
+    await classifyEmailWithAi(msg(3), "Reservas", { reuseRead: true });
+    await classifyEmailWithAi(msg(4), "Info", { reuseRead: true, thinkingFromCaller: true });
     expect(h.runAi).toHaveBeenCalledTimes(4);
   });
-  it("a leitura guardada expira (30 min)", () => {
-    const k = mailReadCacheKey("s", "i");
+  it("o evalTriageSlice (Testar a triagem, na app) sem nível não usa a cache", async () => {
+    const { TRIAGE_CORPUS } = await import("./fixtures/mailTriageCorpus");
+    const { corpusFacts, evalTriageSlice } = await import("./mailTriageEval");
+    const { preTriageMail } = await import("../shared/mailTriage");
+    const item = TRIAGE_CORPUS.find((c) => preTriageMail(corpusFacts(c).pre).action === "ai")!;
+    const t = { minConfidence: 0.6, createMinConfidence: 0.8, suggestMinConfidence: 0.5 } as any;
+    await evalTriageSlice({ offset: 0, limit: 1 }, { corpus: [item], thresholds: t });
+    await evalTriageSlice({ offset: 0, limit: 1 }, { corpus: [item], thresholds: t });
+    expect(h.runAi).toHaveBeenCalledTimes(2);
+  });
+  it("a leitura guardada expira (30 min) e a chave leva quem lê", () => {
+    const k = mailReadCacheKey("s", "i", "gemini|m|low");
+    expect(k).not.toBe(mailReadCacheKey("s", "i", "gemini|m|minimal"));
     mailReadCacheSet(k, { output: { box: "info" } as any, model: "m" }, 0);
     expect(mailReadCacheGet(k, 1000)).toBeTruthy();
     expect(mailReadCacheGet(k, MAIL_READ_CACHE_TTL_MS + 1)).toBeNull();
