@@ -198,13 +198,22 @@ export function inTargetView(rows: readonly ServiceRow[], targetMinutes: number,
   return { measured, within, pct: measured ? Math.round((within / measured) * 1000) / 10 : null, hidden: null, note: vis.note };
 }
 
-/** Atrasadas no T2 (só recolhas T2 com a chegada medida); atrás do portão. PURA. */
-export function t2View(rows: readonly ServiceRow[], g: GateCtx): { n: number; measured: number; late: number | null; hidden: string | null; note: string | null } {
-  const t2 = rows.filter((r) => rowCounts(r, "recolha") && r.terminalClass === "t2");
-  const isMeasured = (r: ServiceRow) => r.t2Status === "medido" && r.t2LateMs != null;
-  const measured = t2.filter(isMeasured).length;
+const isT2Measured = (r: ServiceRow) => r.t2Status === "medido" && r.t2LateMs != null;
+
+/**
+ * As cidades em que as "atrasadas no T2" podem ir para o ecrã: em cada cidade,
+ * cobertura = % das recolhas T2 com a chegada ao T2 medida. Uma cidade fechada
+ * nunca entra, mesmo que outra esteja aberta (auditoria do #389). PURA.
+ */
+export function t2OpenCities(rows: readonly ServiceRow[], g: GateCtx): { open: Set<string>; hidden: string | null; note: string | null } {
   const byCity = new Map<string, { total: number; n: number }>();
-  for (const r of t2) { const c = byCity.get(r.cityKey ?? "") ?? { total: 0, n: 0 }; c.total++; if (isMeasured(r)) c.n++; byCity.set(r.cityKey ?? "", c); }
+  for (const r of rows) {
+    if (!rowCounts(r, "recolha") || r.terminalClass !== "t2") continue;
+    const c = byCity.get(r.cityKey ?? "") ?? { total: 0, n: 0 };
+    c.total++;
+    if (isT2Measured(r)) c.n++;
+    byCity.set(r.cityKey ?? "", c);
+  }
   let hidden: string | null = null, note: string | null = null;
   const open = new Set<string>();
   for (const [city, c] of byCity) {
@@ -213,8 +222,16 @@ export function t2View(rows: readonly ServiceRow[], g: GateCtx): { n: number; me
   }
   if (open.size) hidden = null;
   else if (!byCity.size) ({ hidden, note } = emptyGate(g));
+  return { open, hidden, note };
+}
+
+/** Atrasadas no T2 (só recolhas T2 com a chegada medida, nas cidades abertas); atrás do portão. PURA. */
+export function t2View(rows: readonly ServiceRow[], g: GateCtx): { n: number; measured: number; late: number | null; hidden: string | null; note: string | null } {
+  const t2 = rows.filter((r) => rowCounts(r, "recolha") && r.terminalClass === "t2");
+  const measured = t2.filter(isT2Measured).length;
+  const { open, hidden, note } = t2OpenCities(t2, g);
   if (hidden) return { n: t2.length, measured, late: null, hidden, note: null };
-  const late = t2.filter((r) => open.has(r.cityKey ?? "") && isMeasured(r) && (r.t2LateMs ?? 0) > 0).length;
+  const late = t2.filter((r) => open.has(r.cityKey ?? "") && isT2Measured(r) && (r.t2LateMs ?? 0) > 0).length;
   return { n: t2.length, measured, late, hidden: null, note };
 }
 
@@ -381,9 +398,8 @@ export function teamActs(rows: readonly ServiceRow[], o: { targetMinutes: number
   const del = rows.filter((r) => rowCounts(r, "entrega"));
   const pick = rows.filter((r) => rowCounts(r, "recolha"));
   const visOur = visibleCities(del, "nosso", o.gate);
-  const t2 = t2View(pick, o.gate);
-  const t2Open = new Set<string>();
-  if (!t2.hidden) for (const r of pick) if (r.terminalClass === "t2") t2Open.add(r.cityKey ?? "");
+  // por cidade: uma cidade fechada não leva atrasadas para as equipas, mesmo com outra aberta
+  const t2Open = t2OpenCities(pick, o.gate).open;
   return {
     deliveries: del.map((r) => ({
       employeeId: r.startEmployeeId ?? null,
@@ -440,7 +456,16 @@ export interface DriverPickupTime {
  * Condutores e agentes). O portão aplica-se pela cobertura da cidade no dia
  * (`dayRows` = todas as linhas do dia no âmbito). PURA.
  */
-export function driverDayTimes(dayRows: readonly ServiceRow[], employeeId: number, o: { gate: GateCtx }): { deliveries: DriverDeliveryTime[]; pickups: DriverPickupTime[]; gpsHidden: string | null; gpsNote: string | null } {
+export function driverDayTimes(dayRows: readonly ServiceRow[], employeeId: number, o: { gate: GateCtx }): {
+  deliveries: DriverDeliveryTime[];
+  pickups: DriverPickupTime[];
+  /** O texto do portão: o das entregas (Trânsito, Cliente, máxima no Trânsito) e o das recolhas (No terminal), cada um pela sua cobertura. */
+  gpsHiddenDeliveries: string | null;
+  gpsHiddenPickups: string | null;
+  /** Um dos dois (compatibilidade: o primeiro que estiver fechado). */
+  gpsHidden: string | null;
+  gpsNote: string | null;
+} {
   const del = dayRows.filter((r) => rowCounts(r, "entrega"));
   const pick = dayRows.filter((r) => rowCounts(r, "recolha"));
   const vT = visibleCities(del, "transito", o.gate), vC = visibleCities(del, "cliente", o.gate), vO = visibleCities(del, "nosso", o.gate), vX = visibleCities(pick, "terminal", o.gate);
@@ -472,8 +497,10 @@ export function driverDayTimes(dayRows: readonly ServiceRow[], employeeId: numbe
         firstGarage: r.firstGarage ?? null, p2Ms: metricValue(r, "p2"), p2Status: r.p2Status ?? null, parkedGarage: r.parkedGarage ?? null,
       };
     });
-  const hidden = vT.hidden ?? vX.hidden;
-  return { deliveries, pickups, gpsHidden: deliveries.length || pickups.length ? hidden : null, gpsNote: vT.note ?? vX.note };
+  // cada tabela com o seu portão: as entregas pela cobertura do Trânsito, as recolhas pela do terminal
+  const gpsHiddenDeliveries = deliveries.length ? vT.hidden : null;
+  const gpsHiddenPickups = pickups.length ? vX.hidden : null;
+  return { deliveries, pickups, gpsHiddenDeliveries, gpsHiddenPickups, gpsHidden: gpsHiddenDeliveries ?? gpsHiddenPickups, gpsNote: vT.note ?? vX.note };
 }
 
 // ─── Grelhas (P9): Pressão (dia da semana × hora) e Semana (dia × hora) ─────
@@ -526,7 +553,7 @@ export function timesGrid(rows: readonly ServiceRow[], keyOf: (r: ServiceRow) =>
   const meta = inTargetView(rows, o.targetMinutes, o.gate);
   if (meta.hidden) hidden.meta = meta.hidden;
   if (meta.note) notes.meta = meta.note;
-  const t2 = t2View(rows, o.gate);
+  const t2 = t2OpenCities(rows, o.gate);
   if (t2.hidden) hidden.t2 = t2.hidden;
   if (t2.note) notes.t2 = t2.note;
   const nossoOpen = vis.get("nosso")?.cities ?? visibleCities(rows, "nosso", o.gate).cities;
@@ -556,7 +583,7 @@ export function timesGrid(rows: readonly ServiceRow[], keyOf: (r: ServiceRow) =>
       const w = withinTarget({ ourMs: r.ourMs ?? null, ourStatus: r.ourStatus ?? "" }, o.targetMinutes);
       if (w != null) { a.meta.n++; if (w) a.meta.ok++; }
     }
-    if (isP && !t2.hidden && r.terminalClass === "t2" && r.t2Status === "medido" && r.t2LateMs != null) { a.t2.n++; if (r.t2LateMs > 0) a.t2.late++; }
+    if (isP && t2.open.has(city) && r.terminalClass === "t2" && isT2Measured(r)) { a.t2.n++; if ((r.t2LateMs ?? 0) > 0) a.t2.late++; }
   }
   const cells: Record<string, GridCell> = {};
   for (const [k, a] of acc) {

@@ -86,34 +86,71 @@ export function serviceRowFromJob(r: ServiceTimesRow): ServiceRow {
   return serviceRowFromDb({ ...r } as unknown as Record<string, unknown>);
 }
 
+/** Teto de uma leitura da tabela (linhas). */
+export const SERVICE_ROWS_LIMIT = 250_000;
+
+/** As colunas que as contas por condutor usam (DriverRowLike): nada de instantes, garagens nem notas. */
+export const DRIVER_ROW_COLUMNS = [
+  "kind", "cityKey", "terminalClass", "outcome",
+  "startEmployeeId", "deliverEmployeeId", "driverEmployeeId", "checkInEmployeeId", "p2EmployeeId", "parkedEmployeeId",
+  "queueMs", "queueStatus", "transitMs", "transitStatus", "ourMs", "ourStatus", "customerMs", "customerStatus",
+  "terminalMs", "terminalStatus", "toFirstGarageMs", "p2Ms", "p2Status", "toParkedMs", "parkedStatus", "t2LateMs", "t2Status",
+] as const;
+/** As colunas das grelhas da Pressão e da Semana (sem as fichas). */
+export const GRID_ROW_COLUMNS = [
+  "kind", "cityKey", "terminalClass", "outcome", "refHour", "totalMs",
+  "queueMs", "queueStatus", "transitMs", "transitStatus", "ourMs", "ourStatus", "customerMs", "customerStatus",
+  "terminalMs", "terminalStatus", "toFirstGarageMs", "p2Ms", "p2Status", "toParkedMs", "parkedStatus", "t2LateMs", "t2Status",
+] as const;
+
+export interface ServiceRowsRead { rows: ServiceRow[]; truncated: boolean }
+
 /**
  * Linhas não anuladas da tabela nos dias operacionais [fromDay, toDay], nas
- * cidades pedidas (null = todas). Só as colunas dos ecrãs (nada pessoal).
+ * cidades pedidas (null = todas). Só as colunas dos ecrãs (nada pessoal) — ou
+ * só as `columns` pedidas (as outras vêm null).
+ *
+ * Auditoria do #389: lê-se dos dias MAIS RECENTES para trás (ORDER BY opDay
+ * DESC), para que, se o teto cortar, se percam os dias mais antigos e nunca os
+ * de hoje; as linhas voltam por ordem crescente e `truncated` diz se cortou
+ * (o ecrã avisa).
  */
-export async function loadServiceRows(o: { fromDay: string; toDay: string; cityKeys: readonly string[] | null; kind?: "entrega" | "recolha"; bookingId?: string; limit?: number }): Promise<ServiceRow[]> {
+export async function loadServiceRowsInfo(o: { fromDay: string; toDay: string; cityKeys: readonly string[] | null; kind?: "entrega" | "recolha"; bookingId?: string; limit?: number; columns?: readonly string[] }): Promise<ServiceRowsRead> {
   const db = await getDb();
-  if (!db) return [];
-  if (o.cityKeys && !o.cityKeys.length) return [];
+  if (!db) return { rows: [], truncated: false };
+  if (o.cityKeys && !o.cityKeys.length) return { rows: [], truncated: false };
+  const want = o.columns ? new Set(o.columns) : null;
   const cols = sql.raw([
-    ...PLAIN_COLUMNS.map((c) => `\`${c}\``),
-    ...TS_COLUMNS.map((c) => `DATE_FORMAT(\`${c}\`, '%Y-%m-%d %H:%i:%s.%f') AS \`${c}\``),
-    "DATE_FORMAT(`opDay`, '%Y-%m-%d') AS `opDay`", "DATE_FORMAT(`computedAt`, '%Y-%m-%d %H:%i:%s') AS `computedAt`",
+    ...PLAIN_COLUMNS.filter((c) => !want || want.has(c)).map((c) => `\`${c}\``),
+    ...TS_COLUMNS.filter((c) => !want || want.has(c)).map((c) => `DATE_FORMAT(\`${c}\`, '%Y-%m-%d %H:%i:%s.%f') AS \`${c}\``),
+    "DATE_FORMAT(`opDay`, '%Y-%m-%d') AS `opDay`",
+    ...(!want || want.has("computedAt") ? ["DATE_FORMAT(`computedAt`, '%Y-%m-%d %H:%i:%s') AS `computedAt`"] : []),
   ].join(", "));
   const cities = o.cityKeys ? sql`AND cityKey IN (${sql.join(o.cityKeys.map((c) => sql`${c}`), sql`, `)})` : sql``;
   // o índice (kind, opDay, cityKey) começa pelo tipo
   const kind = o.kind ? sql`AND kind = ${o.kind}` : sql`AND kind IN ('entrega', 'recolha')`;
   const booking = o.bookingId ? sql`AND bookingId = ${o.bookingId}` : sql``;
-  const limit = Math.max(1, Math.min(o.limit ?? 250_000, 250_000));
+  const limit = Math.max(1, Math.min(o.limit ?? SERVICE_ROWS_LIMIT, SERVICE_ROWS_LIMIT));
   try {
+    // uma a mais para saber se cortou
     const res = await db.execute(sql`SELECT ${cols} FROM service_times
       WHERE opDay >= ${o.fromDay} AND opDay <= ${o.toDay} AND voidedAt IS NULL ${cities} ${kind} ${booking}
-      ORDER BY opDay, id LIMIT ${sql.raw(String(limit))}`);
-    return rowsOf(res).map(serviceRowFromDb);
+      ORDER BY opDay DESC, id DESC LIMIT ${sql.raw(String(limit + 1))}`);
+    const raw = rowsOf(res);
+    const truncated = raw.length > limit;
+    const rows = raw.slice(0, limit).map(serviceRowFromDb).reverse();
+    if (truncated) console.warn(`[tempos] leitura da tabela cortada em ${limit} linhas (${o.fromDay}…${o.toDay}): ficam os dias mais recentes`);
+    return { rows, truncated };
   } catch (err: any) {
     // tabela ainda por criar (arranque a meio da migração 0685): como se estivesse vazia
     console.warn("[tempos] leitura da tabela:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
-    return [];
+    return { rows: [], truncated: false };
   }
+}
+
+/** As linhas (sem o aviso do corte) — ver loadServiceRowsInfo. */
+export async function loadServiceRows(o: Parameters<typeof loadServiceRowsInfo>[0]): Promise<ServiceRow[]> {
+  return (await loadServiceRowsInfo(o)).rows;
 }
 
 /** Linhas de uma reserva (todas as cidades: quem chama já confirmou o acesso à reserva). */
@@ -268,11 +305,17 @@ const utcText = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace(
  * Nunca lança.
  */
 export async function dayServiceRows(date: string, o: { cityKeys: readonly string[] | null; nowMs?: number; deadlineMs?: number; compute?: LiveCompute }): Promise<DayServiceRows> {
+  // auditoria do #389: sem cidades no âmbito, ou um dia que ainda não começou, não há nada a ler
+  // nem a calcular (nem a tabela, nem a Multipark)
+  const nothing = (reason: string): DayServiceRows => ({ source: "tabela", rows: [], computedAt: null, truncated: false, reason });
+  if (o.cityKeys && !o.cityKeys.length) return nothing("sem cidades no teu acesso");
+  if (date > operationalDayOf(o.nowMs ?? Date.now())) return nothing("o dia ainda não começou");
   const inScope = (r: ServiceRow) => !o.cityKeys || o.cityKeys.includes(r.cityKey ?? "");
-  const stored = (await loadServiceRows({ fromDay: date, toDay: date, cityKeys: o.cityKeys })).filter(inScope);
+  const read = await loadServiceRowsInfo({ fromDay: date, toDay: date, cityKeys: o.cityKeys });
+  const stored = read.rows.filter(inScope);
   if (stored.length) {
     const computedAt = stored.reduce<string | null>((m, r) => (r.computedAt && (!m || r.computedAt > m) ? r.computedAt : m), null);
-    return { source: "tabela", rows: stored, computedAt, truncated: false, reason: null };
+    return { source: "tabela", rows: stored, computedAt, truncated: read.truncated, reason: null };
   }
   const unavailable = (reason: string): DayServiceRows => ({ source: "indisponivel", rows: [], computedAt: null, truncated: false, reason });
   const now = o.nowMs ?? Date.now();

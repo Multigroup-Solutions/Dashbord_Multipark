@@ -29,7 +29,7 @@ import {
   TIMING_MAX_MIN, deliveryContext, deliveryPairs, shiftWindowsFor,
   type DeliveryPair, type PontoMark, type RosterSpan, type ShiftWindowSource, type TimeWindow,
 } from "../shared/shiftDayReview";
-import { daysOfWindows, heldPointsFor, heldStats, scopedEmployeeIds } from "./shiftGps";
+import { daysOfWindows, heldPointsFor, heldStats, scopedEmployeeIds, type HeldPointsResult } from "./shiftGps";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
 const mysqlTs = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
@@ -38,6 +38,20 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
 const GPS_DEADLINE_MS = 25_000;
 /** Até aqui (desde o início do pedido) para as leituras à Multipark do dia do condutor; depois vem o GPS. */
 const DRIVER_DAY_LIVE_BUDGET_MS = 32_000;
+/** Teto do pedido inteiro do dia do condutor (a função morre aos 60 s; fica folga para responder). */
+export const DRIVER_DAY_TOTAL_MS = 55_000;
+/** Com menos do que isto para o GPS, não se começa a lê-lo (fica "GPS indisponível neste pedido"). */
+export const DRIVER_DAY_GPS_MIN_MS = 3_000;
+
+/**
+ * O prazo do GPS do dia do condutor (auditoria do #389): no máximo 25 s, e
+ * nunca para lá dos 55 s do pedido (a leitura da History e os tempos ao vivo
+ * já gastaram parte). null = não sobra tempo: não se lê. PURA.
+ */
+export function driverDayGpsBudgetMs(elapsedMs: number): number | null {
+  const left = Math.min(GPS_DEADLINE_MS, DRIVER_DAY_TOTAL_MS - elapsedMs);
+  return left >= DRIVER_DAY_GPS_MIN_MS ? left : null;
+}
 const HIST_LIMIT = 5000;
 
 // ─── Turno de cada pessoa (picagens / escala) ───────────────────────────────
@@ -249,7 +263,12 @@ export async function getDriverShiftDay(date: string, key: string, nowMs: number
       const transitWindows = (times?.deliveries ?? []).map((d) => d.transitWindow).filter((x): x is TimeWindow => !!x);
       const days = daysOfWindows([...s.windows, ...deliveryWindows, ...transitWindows]);
       const { threshold, minPoints } = await speedRule();
-      const held = await heldPointsFor(new Map([[empId, days]]), { deadlineAt: Date.now() + GPS_DEADLINE_MS });
+      // o GPS com o prazo que sobra do pedido (até 25 s); sem tempo, não se lê e o ecrã diz "parcial"
+      const gpsBudget = driverDayGpsBudgetMs(Date.now() - t0);
+      const held: HeldPointsResult = gpsBudget != null
+        ? await heldPointsFor(new Map([[empId, days]]), { deadlineAt: Date.now() + gpsBudget })
+        : { byEmp: new Map(), failed: new Map([[empId, 1]]), collectedDays: new Set<string>() };
+      if (gpsBudget == null) console.warn(`[dia-condutor] sem tempo para o GPS (${Date.now() - t0} ms gastos)`);
       const files = held.byEmp.get(empId);
       const failed = held.failed.get(empId) ?? 0;
       if (files?.length) {

@@ -80,6 +80,7 @@ export function ServiceTimesCoverageCard() {
               </div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span>Garagens sem papel: {d.garagesWithoutRole.length ? <b className="text-foreground">{d.garagesWithoutRole.join(", ")}</b> : "nenhuma"} (Definições → Papéis das garagens)</span>
+                {d.truncated && <span className="text-amber-700">Leitura cortada no limite: só as semanas mais recentes.</span>}
                 <span>Linhas dos últimos 14 dias com outra versão do cálculo ou outras zonas: <b className="text-foreground tabular-nums">{d.staleRows}</b> (refazem-se sozinhas nas noites seguintes)</span>
               </div>
             </>

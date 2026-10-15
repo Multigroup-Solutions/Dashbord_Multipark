@@ -114,8 +114,7 @@ describe("carga — falhas", () => {
 
 describe("carga — quem lê a Multipark", () => {
   it("só o Resumo do dia, o dia do condutor e a Ficha calculam ao vivo; com o prazo do pedido", () => {
-    const db = src("server/db.ts");
-    const dash = db.slice(db.indexOf("export async function getSupervisorDayDashboard"), db.indexOf("// ─── LIGAÇÃO AGENTE→PARCEIRO"));
+    const dash = src("server/supervisorDay.ts");
     expect(dash).toContain("deadlineMs: SUPERVISOR_DAY_BUDGET_MS - (Date.now() - t0)");
     // a leitura das reclamações dos carros que saíram: só os CHECK_OUT do dia
     expect(dash).toContain('readLiveHistory({ changeTypes: ["CHECK_OUT"], from: start, to: end');

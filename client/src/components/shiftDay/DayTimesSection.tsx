@@ -21,6 +21,8 @@ const TERMINAL_LABEL: Record<string, string> = { t1: "T1", t2: "T2", vip: "VIP",
 
 function SourceLine({ t }: { t: DayTimes }) {
   if (t.source === "indisponivel") return <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-[10px] px-2 py-1">Sem tempos deste dia: {t.reason ?? "a BD da Multipark não respondeu"}. Tenta outra vez daqui a pouco.</p>;
+  // nada a ler (dia ainda por começar, sem cidades): o motivo, sem "tenta outra vez"
+  if (t.source === "tabela" && t.reason) return <p className="text-[11px] text-muted-foreground">Sem tempos deste dia: {t.reason}.</p>;
   return (
     <p className="text-[11px] text-muted-foreground">
       {t.source === "tabela"
