@@ -27,8 +27,15 @@ import type { GpsFile } from "./serviceTimesJob";
 
 /** Prazo do relatório (a função da Vercel corta aos 60 s): no total fica abaixo de 50 s. */
 export const VERIFY_DEADLINE_MS = 42_000;
-/** Prazo próprio das leituras da nossa tabela (cobertura e amostra, ao mesmo tempo). */
+/**
+ * Prazo próprio das leituras da nossa tabela (cobertura e amostra, ao mesmo
+ * tempo). O MySQL CANCELA a consulta que passe dele (dica MAX_EXECUTION_TIME
+ * no SELECT — a mesma da pesquisa global; não se usa KILL QUERY porque a
+ * ligação vem de uma pool partilhada e o id podia já ser de outra consulta).
+ * O relatório espera ainda VERIFY_TABLE_GRACE_MS pela resposta do cancelamento.
+ */
 export const VERIFY_TABLE_TIMEOUT_MS = 12_000;
+export const VERIFY_TABLE_GRACE_MS = 1_500;
 
 /** Corre `p` com prazo: passado `ms`, devolve `fallback` e escreve a nota (a leitura não fica à espera). */
 export async function withDeadline<T>(p: Promise<T>, ms: number, fallback: T, onLate: () => void): Promise<T> {
@@ -82,7 +89,8 @@ export interface VerifyDeps {
   /** O portão e os papéis das garagens. */
   settings: () => Promise<{ gate: GpsGate; roles: GarageRoleEntry[] }>;
   /** As entregas candidatas à amostra (com o Zello e o GPS guardados). */
-  sampleRows: (o: { fromDay: string; toDay: string; cityKeys: readonly string[] | null }) => Promise<TvSampleSource[]>;
+  /** Lança se a leitura falhar (com `maxExecutionMs`, o MySQL cancela a consulta que passar do prazo). */
+  sampleRows: (o: { fromDay: string; toDay: string; cityKeys: readonly string[] | null; maxExecutionMs?: number }) => Promise<TvSampleSource[]>;
   /** A History das reservas (Multipark, só leitura) → eventos; lança se falhar. */
   history: (ids: string[], o: { fromUtc: string; toUtc: string; timeoutMs: number }) => Promise<ServiceEvent[]>;
   /** Os ficheiros do GPS (Zello, dia de Lisboa). */
@@ -116,7 +124,7 @@ export async function defaultVerifyDeps(): Promise<VerifyDeps> {
       const cities = o.cityKeys ? sql`AND cityKey IN (${sql.join(o.cityKeys.map((c) => sql`${c}`), sql`, `)})` : sql``;
       const ts = (c: string) => sql.raw(`DATE_FORMAT(\`${c}\`, '%Y-%m-%d %H:%i:%s.%f') AS \`${c}\``);
       try {
-        const res = await db.execute(sql`SELECT bookingId, anchorHistoryId, bookingCode, cityKey, DATE_FORMAT(opDay, '%Y-%m-%d') AS opDay, terminalClass, startSource,
+        const res = await db.execute(sql`SELECT ${read.maxExecutionHint(o.maxExecutionMs)}bookingId, anchorHistoryId, bookingCode, cityKey, DATE_FORMAT(opDay, '%Y-%m-%d') AS opDay, terminalClass, startSource,
             ${ts("requestAt")}, ${ts("startedAt")}, ${ts("arrivedAt")}, arrivedSource, ${ts("deliveredAt")},
             queueMs, queueStatus, transitMs, transitStatus, customerMs, customerStatus, totalMs, startEmployeeId, zelloUsername, gpsPoints, gpsMaxGapS, gpsPass
           FROM service_times
@@ -125,7 +133,7 @@ export async function defaultVerifyDeps(): Promise<VerifyDeps> {
         return rowsOf(res).map((r) => sampleSourceFromDb(r, utcTextMs));
       } catch (err: any) {
         console.warn("[verificação dos tempos] amostra:", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
-        return [];
+        throw read.isQueryTimeoutError(err) ? new Error("prazo") : err;
       }
     },
     history: async (ids, o) => {
@@ -172,11 +180,31 @@ export async function runTimesVerification(
   const size = Math.max(1, Math.min(60, o.sampleSize ?? VERIFY_SAMPLE_SIZE));
   const sTo = addDays(o.today, -VERIFY_SAMPLE_END_OFFSET_DAYS);
   const sFrom = addDays(sTo, -(sampleDays - 1));
+  // Um aviso por leitura (o prazo do MySQL e o do relatório podem chegar os dois).
+  const noted = new Set<string>();
+  const note = (k: string, text: string) => { if (!noted.has(k)) { noted.add(k); notes.push(text); } };
+  const lateCov = () => note("cov", `A leitura da tabela dos tempos (8 semanas) passou de ${secs(tableMs)} e foi cancelada: a cobertura e as medianas ficam vazias. Tenta outra vez daqui a pouco.`);
+  const lateSample = () => note("sample", `A leitura das entregas da amostra passou de ${secs(tableMs)} e foi cancelada: a amostra fica vazia. Tenta outra vez daqui a pouco.`);
   const [cov, candidates] = await Promise.all([
-    withDeadline(deps.serviceRows({ fromDay: covFrom, toDay: o.today, cityKeys: o.cityKeys }).catch(() => { notes.push("Não deu para ler a tabela dos tempos (cobertura e medianas)."); return { rows: [], truncated: false }; }),
-      tableMs, { rows: [], truncated: false }, () => notes.push(`A leitura da tabela dos tempos (8 semanas) passou de ${secs(tableMs)}: a cobertura e as medianas ficam vazias. Tenta outra vez daqui a pouco.`)),
-    withDeadline(deps.sampleRows({ fromDay: sFrom, toDay: sTo, cityKeys: o.cityKeys }).catch(() => { notes.push("Não deu para ler as entregas da amostra."); return [] as TvSampleSource[]; }),
-      tableMs, [] as TvSampleSource[], () => notes.push(`A leitura das entregas da amostra passou de ${secs(tableMs)}: a amostra fica vazia. Tenta outra vez daqui a pouco.`)),
+    withDeadline(
+      deps.serviceRows({ fromDay: covFrom, toDay: o.today, cityKeys: o.cityKeys, maxExecutionMs: tableMs })
+        .then((r) => {
+          if (r.error) {
+            if (r.error === "prazo") lateCov();
+            else note("cov", "Não deu para ler a tabela dos tempos (cobertura e medianas).");
+          }
+          return r;
+        })
+        .catch(() => { note("cov", "Não deu para ler a tabela dos tempos (cobertura e medianas)."); return { rows: [], truncated: false }; }),
+      tableMs + VERIFY_TABLE_GRACE_MS, { rows: [], truncated: false }, lateCov),
+    withDeadline(
+      deps.sampleRows({ fromDay: sFrom, toDay: sTo, cityKeys: o.cityKeys, maxExecutionMs: tableMs })
+        .catch((err: any) => {
+          if (String(err?.message) === "prazo") lateSample();
+          else note("sample", "Não deu para ler as entregas da amostra.");
+          return [] as TvSampleSource[];
+        }),
+      tableMs + VERIFY_TABLE_GRACE_MS, [] as TvSampleSource[], lateSample),
   ]);
   const card = coverageCardFrom(cov.rows, { roles, today: o.today, truncated: cov.truncated });
 
