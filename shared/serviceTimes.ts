@@ -25,9 +25,11 @@
  * mês, 6 meses, comparadas com os colegas da mesma cidade e do mesmo tipo de
  * serviço — driverTimeStats/driverTimeSeries, no fim). Só informação: não dá
  * pontos; os que dependem do GPS continuam atrás do portão (§8.1).
- * Os PARÂMETROS são provisórios até a P0 (diagnóstico na app) correr em
- * produção — ficam aqui como constantes com nome, para o PR dos parâmetros
- * os trocar (e subir SERVICE_TIMES_CALC_VERSION).
+ * PARÂMETROS: a P0 (diagnóstico na app, 14 dias de 29 set a 12 out 2026,
+ * Lisboa + Porto + Faro) fechou os que os números deixaram fechar (PR dos
+ * parâmetros, P3b; cada constante diz o que se mediu). Os que ficaram sem
+ * dados (janela das chamadas: quase não há chamadas registadas) continuam
+ * provisórios e dizem-no. Mudar um parâmetro sobe SERVICE_TIMES_CALC_VERSION.
  */
 import { MOVEMENT_GARAGE_KEYS, MOVEMENT_PATTERNS, classifyMovement, posixToJs, type MovementKind } from "./multiparkMovements";
 import { garageFit } from "./garageFit";
@@ -36,12 +38,20 @@ import { zelloKey } from "./zelloKey";
 import { last9 } from "./centralXsi";
 import { lisbonHourOf, operationalDayOf } from "./lisbonDay";
 
-// ─── Parâmetros (provisórios até à P0, §11.1) ───────────────────────────────
+// ─── Parâmetros (§11.1; P0 de 29 set–12 out 2026) ───────────────────────────
 
-/** Versão do cálculo: mudar regras ou parâmetros sobe-a (o trabalho recomeça o preenchimento para trás). */
-export const SERVICE_TIMES_CALC_VERSION = 1;
+/**
+ * Versão do cálculo: mudar regras ou parâmetros sobe-a (o trabalho recomeça o
+ * preenchimento para trás). 2 = parâmetros da P0 (DISPATCH_MIN_MINUTES 8 → 2).
+ */
+export const SERVICE_TIMES_CALC_VERSION = 2;
 
-/** Janela da chamada à volta do pendente / do "em recolha" (P0, item 5). */
+/**
+ * Janela da chamada à volta do pendente / do "em recolha" (P0, item 5).
+ * AINDA PROVISÓRIA: na P0 a consola registou 38 chamadas recebidas em 14 dias
+ * (e o WhatsApp 12) — 0 % das entregas com chamada na janela; sem chamadas a
+ * Fila conta do pendente (critério do §11.0), por isso a janela não se mexe.
+ */
 export const CALL_WINDOW_BEFORE_MIN = 60;
 export const CALL_WINDOW_AFTER_MIN = 5;
 /** "Chamada fora da janela" só se conta até isto antes da janela (para calibrar). */
@@ -52,8 +62,15 @@ export const SHARED_PHONE_MIN_BOOKINGS = 3;
 export const REQUEST_BEFORE_CALL_MIN = 15;
 /** Dois pendentes com mais do que isto entre eles = "pedido repetido". */
 export const REPEATED_REQUEST_GAP_MIN = 30;
-/** Dois inícios do mesmo agente a menos disto = quem despacha, não quem conduz (P0, itens 7–8). */
-export const DISPATCH_MIN_MINUTES = 8;
+/**
+ * Dois inícios do mesmo agente a menos disto = quem despacha, não quem conduz
+ * (P0, itens 7–8). Medido: quem despacha marca os "em entrega" quase seguidos
+ * (Lisboa: 8 dos 10 inícios a < 8 min estão a < 2 min; nenhum entre 2 e 5);
+ * em Faro as viagens são curtas (em entrega → assinatura p50 5 min, 91 % dos
+ * "em entrega" do próprio condutor) e 14,5 % dos inícios seguidos de um
+ * condutor ficam abaixo de 8 min, sem corte. Era 8 (provisório) → 2.
+ */
+export const DISPATCH_MIN_MINUTES = 2;
 /** Papéis de chefia na Multipark (Agent.role): quem marca o "em entrega" a despachar. */
 export const MANAGER_AGENT_ROLES: readonly string[] = ["LEADER", "SUPERVISOR", "ADMIN", "ACCOUNTANT"];
 
@@ -67,15 +84,19 @@ export const MAX_TERMINAL_MIN = 120;
 export const MAX_TO_FIRST_GARAGE_MIN = 120;
 /** Chegada até isto depois da assinatura = a própria assinatura ("chegada_ajustada"). */
 export const ARRIVAL_ADJUST_S = 60;
-/** Os MOVEMENT contam até isto depois do check-in (depois: "por_arrumar"; P0, item 9). */
+/** Os MOVEMENT contam até isto depois do check-in (depois: "por_arrumar"; P0, item 9: só 2 de 1 395 recolhas sem movimento em 48 h). */
 export const PICKUP_TRACK_MAX_HOURS = 48;
-/** "Em recolha" → check-in abaixo disto: pode ter sido marcado já no terminal. */
+/**
+ * "Em recolha" → check-in abaixo disto: pode ter sido marcado já no terminal.
+ * P0 (item 9): 0,2 % das recolhas abaixo de 2 min — o "em recolha" (CHECKING_IN)
+ * é marcado longe do terminal (Lisboa e Faro pelo escritório/TL), por isso é K.
+ */
 export const LATE_PICKUP_MARK_MIN = 2;
 /** T2: procura-se a chegada do condutor desde isto antes de K0. */
 export const T2_LOOKBACK_MIN = 30;
 /** Um check-in de PDA aberto conta no máximo isto. */
 export const PDA_OPEN_CHECKIN_MAX_HOURS = 16;
-/** O "Cheguei" só conta como recurso se carregado mais disto depois do início. */
+/** O "Cheguei" só conta como recurso se carregado mais disto depois do início (P0, item 6: 0 de 1 344 entregas com "Cheguei"). */
 export const BUTTON_MIN_AFTER_START_S = 120;
 
 /** Definições (omissões; os valores vivem em Definições → Parâmetros → Operação). */
@@ -573,7 +594,8 @@ export function agentRoleIn(rows: ReadonlyArray<{ userId: string; parkId: string
 
 /**
  * Inícios de quem DESPACHA: dois CHECKING_OUT do mesmo agente a menos de
- * DISPATCH_MIN_MINUTES (um condutor não começa duas entregas em 8 min). PURA.
+ * DISPATCH_MIN_MINUTES (um condutor não começa duas entregas em 2 min; em
+ * Faro, com o carro já perto do terminal, começa duas em 5). PURA.
  */
 export function dispatchStartIds(starts: ReadonlyArray<{ id: string; agentUserId: string | null; at: number }>, minMinutes = DISPATCH_MIN_MINUTES): Set<string> {
   const out = new Set<string>();

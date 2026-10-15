@@ -16,32 +16,53 @@
  * Zello). Não se subtrai a imprecisão (ao contrário do `gpsInAirport` do
  * ponto): isso adiantava a chegada.
  *
- * Os PARÂMETROS são provisórios até a P0 correr em produção (§11.1): ficam
- * em constantes com nome para o PR dos parâmetros os trocar.
+ * PARÂMETROS (§11.1): a P0 (29 set–12 out 2026; o GPS só existia em Lisboa:
+ * 85 entregas e 98 recolhas com pontos) fechou os da paragem, do intervalo e
+ * da saída — cada constante diz o que se mediu. O raio das zonas T1/T2 e a
+ * coerência com o parque (D_PARK_OK/D_MISMATCH) continuam provisórios: não há
+ * zonas T1/T2 definidas e o Park.lat/lng da Multipark não é a garagem (fica
+ * junto ao aeroporto; o GPS no "em entrega" está a ~3,9 km dele em Lisboa).
  */
 import { distanceMeters, type AirportFence } from "./pontoTerminal";
 import { matchKey } from "./textKey";
 
-// ─── Parâmetros (provisórios até à P0) ──────────────────────────────────────
+// ─── Parâmetros (§11.1; P0 de 29 set–12 out 2026) ───────────────────────────
 
-/** Parado (km/h). */
+/**
+ * Parado (km/h). Só marca a chegada "a pé" (flag `chegada_a_pe`): quem decide
+ * é o V_WALK. P0 (item 3): parado a ≤ 3 km/h só apanha 39 % das entregas.
+ */
 export const V_STOP_KMH = 3;
-/** A pé (km/h): até aqui conta como "parou ou anda a pé". */
+/**
+ * A pé (km/h): até aqui conta como "parou ou anda a pé". P0 (item 3): é a
+ * melhor velocidade (7 > 5 > 3 > 2 km/h: 66 / 58 / 39 / 31 % das entregas com
+ * paragem de 60 s); com a regra completa (§4.4) 79 % das entregas com GPS têm
+ * chegada, p50 5,1 min antes da assinatura. Fecha.
+ */
 export const V_WALK_KMH = 7;
-/** De carro (km/h): acima disto é uma saída de carro. */
+/** De carro (km/h): acima disto é uma saída de carro. P0 (item 11): 5, 10 ou 15 dão o mesmo (93 % com saída). Fecha. */
 export const V_CAR_KMH = 10;
-/** Pontos densos: parado/a pé dentro da zona durante isto confirma a chegada. */
+/** Pontos densos: parado/a pé dentro da zona durante isto confirma a chegada. P0 (item 3): 60 s é a melhor (120 s cai de 66 % para 51 %). Fecha. */
 export const T_STOP_MIN_S = 60;
-/** O ponto seguinte até isto confirma a chegada (pontos espaçados). */
+/** O ponto seguinte até isto confirma a chegada (pontos espaçados). P0: 60 % das chegadas vêm por aqui. Fecha. */
 export const T_CONFIRM_S = 6 * 60;
-/** Intervalo normal entre pontos; até G_WEAK fica "precisão fraca"; acima, "buraco no GPS". */
+/**
+ * Intervalo normal entre pontos; até G_WEAK fica "precisão fraca"; acima,
+ * "buraco no GPS". P0 (item 1): dentro das entregas p50 7 s, p90 26 s, p99
+ * 1,2 min, só 0,2 % acima de 6 min → "como propostos" (critério do §11.0). Fecha.
+ */
 export const G_GOOD_S = 6 * 60;
 export const G_WEAK_S = 15 * 60;
-/** Raio à volta do ponto da assinatura (estações, hotéis). */
+/** Raio à volta do ponto da assinatura (estações, hotéis). P0 (item 3): 150, 200 e 300 m dão o mesmo; fica o mais pequeno. Fecha. */
 export const R_SIGNATURE_M = 150;
-/** Raio proposto para as zonas T1/T2 (só sugestão no editor). */
+/** Raio proposto para as zonas T1/T2 (só sugestão no editor). AINDA PROVISÓRIO: não há zonas T1/T2 definidas em nenhuma cidade. */
 export const TERMINAL_ZONE_RADIUS_HINT_M = 200;
-/** Posição no início: até isto do parque está bem; a mais de D_MISMATCH do parque e da linha = não bate. */
+/**
+ * Posição no início: até isto do parque está bem; a mais de D_MISMATCH do
+ * parque e da linha = não bate. AINDA PROVISÓRIOS (P0, item 8): o
+ * Park.lat/lng da Multipark fica junto ao aeroporto, não na garagem — volta ao
+ * auditor (usar as zonas das garagens em vez do Park).
+ */
 export const D_PARK_OK_M = 500;
 export const D_START_ROW_OK_M = 300;
 export const D_MISMATCH_M = 1000;
@@ -53,7 +74,7 @@ export const D_MISMATCH_M = 1000;
 export const COHERENCE_SLACK_MPS = 15;
 /** "Em entrega" marcado no terminal sem GPS: a linha a ≥ isto do parque. */
 export const D_START_FAR_FROM_PARK_M = 1000;
-/** Saída de carro: a mais de raio + isto do centro (mesmo devagar). */
+/** Saída de carro: a mais de raio + isto do centro (mesmo devagar). P0 (item 11): 150 e 300 m dão o mesmo. Fecha. */
 export const D_EXIT_MARGIN_M = 300;
 /** Zona "parque" à volta do Park (ou da garagem de origem) para a saída do parque. */
 export const PARK_EXIT_RADIUS_M = 300;

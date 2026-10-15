@@ -109,6 +109,16 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
 - Se uma leitura falhar (BD da Multipark, chamadas, GPS), aparece no quadro amarelo **O que falhou**, com o motivo, e o resto aparece na mesma. Um dia com ficheiros do GPS por ler (prazo ou mais de 60 ficheiros) fica como **leitura parcial**.
 - O que dependia de uma leitura que falhou **não entra nas contas desse dia** (não conta como zero). Em cima, a **Leitura rápida** diz quantos dias têm dados e que leituras falharam.
 
+**O que deu a 1.ª calibração (29 set – 12 out 2026, 14 dias, as três cidades)**
+- **O GPS do Zello, quando existe, é bom:** um ponto a cada 7 s (metade dos casos) e a cada 26 s (9 em cada 10) durante as entregas. A regra da paragem no terminal (carro parado ou condutor a pé, até 7 km/h) encontra a chegada em 79 % das entregas com GPS, uns 5 min antes da assinatura. Esses parâmetros ficaram como estavam.
+- **Quase não há GPS:** 14 % das entregas em Lisboa e 0 % no Porto e em Faro. Na maior parte dos casos a pessoa não tem linha do Zello nesse dia, ou a linha não tem ficheiro. Por isso o **portão dos tempos com GPS continua fechado** em todas as cidades: primeiro é preciso ligar os PDAs e os Zellos às fichas.
+- **Chamadas:** a consola registou muito poucas chamadas nesses dias. A **Fila conta desde o pendente** (como antes).
+- **Quem despacha:** dois "em entrega" do mesmo agente com **menos de 2 min** entre eles contam como quem despachou, não como quem conduziu (era 8 min; em Faro um condutor começa duas entregas em 5 min).
+- **Ainda por fazer** (fora da app):
+  - as zonas **T1/T2** em Definições → Parâmetros → Extras-dia → **Aeroportos (terminal no ponto)**. Sem a zona T2 não se mede a recolha atrasada no T2;
+  - as **coordenadas das garagens**: nenhuma garagem tem coordenadas na Multipark, por isso as zonas dos parques põem-se à mão em Definições → Parâmetros → **Zonas da operação (GPS)**;
+  - o **P2**: existe em Lisboa, mas nenhum movimento acaba lá.
+
 **Recolha pelo meio de uma entrega**
 1. Quem leva um carro ao aeroporto volta ao parque com o carro de uma recolha, se houver uma aí: essa recolha não lhe custa um carro a mais.
 2. Conta como "pelo meio" a recolha no **mesmo terminal**, entre **10 min antes e 30 min depois** da hora da entrega, e só uma recolha por entrega. As entregas fora do aeroporto (as estações) nunca contam.

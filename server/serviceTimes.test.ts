@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  CALL_WINDOW_BEFORE_MIN, DEFAULT_GARAGE_ROLES, DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DRIVER_METRICS, DRIVER_STATS_MIN_N, SERVICE_TIMES_CALC_VERSION,
+  CALL_WINDOW_AFTER_MIN, CALL_WINDOW_BEFORE_MIN, DEFAULT_GARAGE_ROLES, DEFAULT_GPS_GATE, DEFAULT_PICKUP_T2_TARGET_MINUTES, DEFAULT_SERVICE_TARGET_MINUTES, DISPATCH_MIN_MINUTES,
+  DRIVER_METRICS, DRIVER_STATS_MIN_N, LATE_PICKUP_MARK_MIN, PICKUP_TRACK_MAX_HOURS, SERVICE_TIMES_CALC_VERSION,
   driverPeriodRange, driverTimeSeries, driverTimeStats, type DriverRowLike,
   agentRoleIn, appTerminalExit, buildDeliveryCycles, buildPickupCycles, buttonCoherent, crmIdOfContactRef, deliveryTimes,
   dispatchStartIds, driverBlockOf, garageRoleOf, gpsTimesVisible, matchCallToBooking, movementGarages, pickupTimes,
@@ -349,9 +350,13 @@ describe("condutor (§2.4, §4.2)", () => {
     expect(agentRoleIn(rows, "u9", "pA")).toEqual({ role: null, otherPark: false });
   });
 
-  it("despachante: chefia, ou dois inícios do mesmo agente a < 8 min", () => {
-    const ids = dispatchStartIds([{ id: "a", agentUserId: "tl", at: T("16:00") }, { id: "b", agentUserId: "tl", at: T("16:05") }, { id: "c", agentUserId: "x", at: T("16:00") }, { id: "d", agentUserId: "x", at: T("16:20") }]);
+  it("despachante: chefia, ou dois inícios do mesmo agente a < 2 min (P0: era 8)", () => {
+    const ids = dispatchStartIds([{ id: "a", agentUserId: "tl", at: T("16:00") }, { id: "b", agentUserId: "tl", at: T("16:01") }, { id: "c", agentUserId: "x", at: T("16:00") }, { id: "d", agentUserId: "x", at: T("16:20") }]);
     expect([...ids].sort()).toEqual(["a", "b"]);
+    // Faro (P0): o carro já está perto do terminal e o condutor começa a 2.ª entrega 5 min depois da 1.ª — é condutor, não despachante
+    expect(dispatchStartIds([{ id: "f1", agentUserId: "faro", at: T("16:00") }, { id: "f2", agentUserId: "faro", at: T("16:05") }]).size).toBe(0);
+    // exatamente 2 min já não é despacho (o corte é "menos de")
+    expect(dispatchStartIds([{ id: "g1", agentUserId: "g", at: T("16:00") }, { id: "g2", agentUserId: "g", at: T("16:02") }]).size).toBe(0);
     expect(driverBlockOf({ kind: "colaborador", role: "LEADER", dispatch: false })).toBe("condutor_por_confirmar");
     expect(driverBlockOf({ kind: "colaborador", role: "DRIVER", dispatch: true })).toBe("condutor_por_confirmar");
     expect(driverBlockOf({ kind: "colaborador", role: "DRIVER", dispatch: false })).toBeNull();
@@ -562,6 +567,24 @@ describe("portão dos tempos com GPS (§8.1)", () => {
     expect(gpsTimesVisible({ coveragePct: 59, n: 50, gate: open, isSuperAdmin: false })).toEqual({ visible: false, label: "Sem dados suficientes (cobertura 59 %, n = 50)" });
     expect(gpsTimesVisible({ coveragePct: 60, n: 19, gate: open, isSuperAdmin: false }).visible).toBe(false);
     expect(gpsTimesVisible({ coveragePct: 60, n: 20, gate: open, isSuperAdmin: false })).toEqual({ visible: true, label: null });
+  });
+});
+
+describe("parâmetros fechados pela P0 (29 set–12 out 2026, PR dos parâmetros)", () => {
+  it("valores medidos e versão do cálculo", () => {
+    // mudou: o despachante marca os "em entrega" a < 2 min (em Faro um condutor começa duas em 5 min)
+    expect(DISPATCH_MIN_MINUTES).toBe(2);
+    // ficam (medidos): só 2 de 1 395 recolhas sem movimento em 48 h; "em recolha" < 2 min em 0,2 %
+    expect(PICKUP_TRACK_MAX_HOURS).toBe(48);
+    expect(LATE_PICKUP_MARK_MIN).toBe(2);
+    // ainda provisória (quase não há chamadas registadas): não mexe
+    expect([CALL_WINDOW_BEFORE_MIN, CALL_WINDOW_AFTER_MIN]).toEqual([60, 5]);
+    // omissões das definições: decisões do Jorge e portão fechado (nenhuma cidade com ≥ 60 % de GPS)
+    expect(DEFAULT_SERVICE_TARGET_MINUTES).toBe(15);
+    expect(DEFAULT_PICKUP_T2_TARGET_MINUTES).toBe(15);
+    expect(DEFAULT_GPS_GATE).toEqual({ visible: false, minCoveragePct: 60, minN: 20 });
+    // mudar parâmetros sobe a versão (o trabalho recalcula as linhas antigas)
+    expect(SERVICE_TIMES_CALC_VERSION).toBe(2);
   });
 });
 

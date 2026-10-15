@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_GARAGE_ZONE_RADIUS_M, G_GOOD_S, G_WEAK_S, R_SIGNATURE_M, V_WALK_KMH, effectiveParkZones, kindOfGarageName,
+  DEFAULT_GARAGE_ZONE_RADIUS_M, D_EXIT_MARGIN_M, G_GOOD_S, G_WEAK_S, R_SIGNATURE_M, T_CONFIRM_S, T_STOP_MIN_S, V_CAR_KMH, V_STOP_KMH, V_WALK_KMH, effectiveParkZones, kindOfGarageName,
   arrivalZoneFor, detectExit, detectStop, insideZone, lastZoneArrival, mapLinkCoords, mapLinkKind, median, p2TerminalConflicts, p2ZoneOf,
   parkZoneOverlaps, positionAt, startCoherence, terminalLabelOf, terminalZoneFor, unlabeledTerminalZones,
   type GpsFix, type ParkZonesMap, type Zone,
@@ -33,6 +33,27 @@ function trip(startMs: number, arriveMs: number, endMs: number, stepS: number): 
   return out;
 }
 const S = T("16:10"), E = T("16:40");
+
+describe("parâmetros fechados pela P0 (29 set–12 out 2026, PR dos parâmetros)", () => {
+  it("paragem, intervalo e saída: os valores medidos", () => {
+    // item 3: a melhor combinação é ≤ 7 km/h durante 60 s; o raio à volta da assinatura é indiferente (fica 150 m)
+    expect([V_STOP_KMH, V_WALK_KMH, T_STOP_MIN_S, T_CONFIRM_S, R_SIGNATURE_M]).toEqual([3, 7, 60, 360, 150]);
+    // item 1: p90 do intervalo dentro das entregas 26 s (≤ 6 min) → G_GOOD/G_WEAK como propostos
+    expect([G_GOOD_S, G_WEAK_S]).toEqual([360, 900]);
+    // item 11: 5/10/15 km/h e 150/300 m dão o mesmo
+    expect([V_CAR_KMH, D_EXIT_MARGIN_M]).toEqual([10, 300]);
+  });
+
+  it("com pontos a cada 7 s (o p50 medido) a chegada fica ao segundo e sem precisão fraca", () => {
+    const pts = trip(S, T("16:25"), E, 7);
+    const r = detectStop({ points: pts, startAt: S, endAt: E, zone: T2, park: PARK });
+    expect(r.kind).toBe("chegada");
+    if (r.kind !== "chegada") return;
+    expect(Math.abs(r.at - T("16:25"))).toBeLessThanOrEqual(7_000);
+    expect(r.precisionS).toBeLessThanOrEqual(4);
+    expect(r.flags).not.toContain("precisao_fraca");
+  });
+});
 
 describe("detectStop — paragem no destino (§4.4)", () => {
   it("pontos de 30 s: chegada perto do instante real, precisão de segundos", () => {
