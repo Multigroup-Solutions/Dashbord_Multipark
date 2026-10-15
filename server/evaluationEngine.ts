@@ -169,7 +169,12 @@ export async function computeRange(startDay: string, endDay: string, readLive: L
     leaveRows = rowsOf(await db.execute(sql`
       SELECT employeeId, fromDate, toDate FROM employee_leaves
        WHERE fromDate <= ${addDays(endDay, 1)} AND toDate >= ${addDays(startDay, -1)} AND ${approvedLeaveSql()}`));
-  } catch { /* sem horários: só a escala (como antes) */ }
+  } catch (err: any) {
+    // Sem horários: só a escala (como antes). Plano 63 (auditoria): se os horários vieram mas as ausências
+    // falharam, larga-se também os horários — senão quem está de férias levava −5 de atraso.
+    fixedSchedules = []; leaveRows = [];
+    console.warn("[avaliação] horários fixos/ausências não lidos (conta só a escala):", String(err?.cause?.message ?? err?.message ?? err).slice(0, 160));
+  }
   const cityOfProjectId: (projectId: number | null) => string | null = fixedSchedules.length
     ? await (await import("./aiOps/cities")).projectCityResolver(db)
     : () => null;
