@@ -40,4 +40,12 @@ describe("Avaliação: ausências por ler → sem atraso pelo horário fixo (nun
     expect(block).toContain("AND ${approvedLeaveSql()}");
     expect(block).toMatch(/catch \(err: any\) \{[\s\S]*fixedSchedules = \[\]; leaveRows = \[\];/);
   });
+  it("com as exceções por data (10b): sem as ausências lidas também não se leem as exceções (uma \"trabalha\" num dia de férias dava −5)", () => {
+    const eng = readFileSync(resolve(__dirname, "evaluationEngine.ts"), "utf8");
+    const block = eng.slice(eng.indexOf("let fixedSchedules: any[] = [], leaveRows: any[] = [];"), eng.indexOf("const cityOfProjectId"));
+    // só fica true depois de as ausências (aprovadas) virem
+    expect(block.indexOf("leavesRead = true;")).toBeGreaterThan(block.indexOf("AND ${approvedLeaveSql()}"));
+    expect(block.indexOf("leavesRead = true;")).toBeLessThan(block.indexOf("} catch (err: any) {"));
+    expect(block).toMatch(/const scheduleOverrides = leavesRead\s*\?\s*await \(await import\("\.\/scheduleOverrides"\)\)\.loadActiveOverridesForReaders\(db, addDays\(startDay, -1\), addDays\(endDay, 1\)\)\s*:\s*\[\];/);
+  });
 });

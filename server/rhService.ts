@@ -464,6 +464,16 @@ export async function reviewPenalty(id: number, decision: "confirmed" | "dismiss
  * com uma gravação condicional (só se ainda estiver por validar — duas pessoas
  * ao mesmo tempo não criam duas ausências) e só depois se lança a ausência,
  * se nenhuma cobrir já esse dia (relida nesse momento).
+ *
+ * Plano 63 (11, mapa de férias): a ausência passa pelas guardas de quem a
+ * lança (`launchLeave`): parceiros-empresa fora, as próprias férias não (salvo
+ * o super admin), mês fechado → recusa (e se não der para o confirmar, também:
+ * falha fechado), e nunca por cima de outra ausência ATIVA desse dia (pedida,
+ * de parte do dia, indisponível) — só uma aprovada de dia inteiro já o
+ * justifica. Entra APROVADA em nome de quem dispensou (`decidedById`). As
+ * guardas correm antes de fechar a possível falta (nada muda se recusarem) e
+ * outra vez antes de gravar a ausência (se mudou entretanto, a possível falta
+ * volta a "por validar").
  */
 export async function dismissFixedNoShow(id: number, reason: import("../shared/scheduleReview").FixedNoShowDismissReason, reviewer: { id: number; role: string }, note?: string | null): Promise<{ points: number; blocked: boolean; day: string | null; leaveId: number | null; leaveType: string | null; leaveAlready: boolean }> {
   const db = await getDb();
@@ -475,35 +485,70 @@ export async function dismissFixedNoShow(id: number, reason: import("../shared/s
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const { assertEmployeeAccess } = await import("./cityScope");
   await assertEmployeeAccess(p.employeeId);
-  const { FIXED_NO_SHOW_DISMISS_LEAVE, fixedNoShowDismissPlan } = await import("../shared/scheduleReview");
-  const existingLeaves = FIXED_NO_SHOW_DISMISS_LEAVE[reason]
-    ? await db.select({ fromDate: employeeLeaves.fromDate, toDate: employeeLeaves.toDate }).from(employeeLeaves).where(eq(employeeLeaves.employeeId, p.employeeId))
-    : [];
+  const { FIXED_NO_SHOW_DISMISS_LEAVE, dismissClashMessage, dismissDayLeaveCoverage, fixedNoShowDay, fixedNoShowDismissPlan } = await import("../shared/scheduleReview");
+  // Plano 63 (11): as ausências ATIVAS (pedidas ou aprovadas) que tocam esse dia — a aprovada de dia inteiro já o
+  // justifica, outra ativa recusa. É uma guarda (não conta dias), por isso lê as pedidas também.
+  const activeLeavesOn = async (day: string) => db.select({ fromDate: employeeLeaves.fromDate, toDate: employeeLeaves.toDate, status: employeeLeaves.status, leaveType: employeeLeaves.leaveType, hours: employeeLeaves.hours })
+    .from(employeeLeaves)
+    .where(and(eq(employeeLeaves.employeeId, p.employeeId), lte(employeeLeaves.fromDate, day), gte(employeeLeaves.toDate, day), inArray(employeeLeaves.status, ["requested", "approved"])));
+  const leaveDay = FIXED_NO_SHOW_DISMISS_LEAVE[reason] ? fixedNoShowDay(p as any) : null;
+  const existingLeaves = leaveDay ? await activeLeavesOn(leaveDay) : [];
   const plan = fixedNoShowDismissPlan(p as any, reason, { notePrefix: FIXED_NO_SHOW_NOTE_PREFIX, existingLeaves, extraNote: note });
-  if (!plan.ok) throw new TRPCError({ code: "BAD_REQUEST", message: plan.error });
+  if (!plan.ok) throw new TRPCError({ code: plan.conflict ? "CONFLICT" : "BAD_REQUEST", message: plan.error });
+  // as guardas de quem lança a ausência, ANTES de mexer na possível falta
+  if (plan.leave) await assertDismissLeaveAllowed(db, p.employeeId, plan.leave, reviewer);
   // 1.º a possível falta (condicional: se outra pessoa já a reviu, CONFLICT e nada se cria)
   const r = await reviewPenalty(id, "dismissed", reviewer, plan.reviewNote, { onlyIfPending: true });
+  // a possível falta volta a "por validar" como estava (nunca dispensada sem a ausência)
+  const restore = () => db.update(employeePenalties).set({ status: "pending", reviewedById: p.reviewedById ?? null, reviewedAt: p.reviewedAt ?? null, notes: p.notes, clearedAt: p.clearedAt ?? null, clearedById: p.clearedById ?? null })
+    .where(and(eq(employeePenalties.id, id), eq(employeePenalties.status, "dismissed")));
   // 2.º a ausência desse dia, se nenhuma o cobrir (relida agora)
   let leaveId: number | null = null;
   let leaveAlready = plan.leaveAlready;
   if (plan.leave) {
     const day = plan.leave.fromDate;
-    const [covering] = await db.select({ fromDate: employeeLeaves.fromDate }).from(employeeLeaves)
-      .where(and(eq(employeeLeaves.employeeId, p.employeeId), lte(employeeLeaves.fromDate, day), gte(employeeLeaves.toDate, day))).limit(1);
-    if (covering) leaveAlready = true;
-    else {
-      try {
-        const ins = await db.insert(employeeLeaves).values({ employeeId: p.employeeId, ...plan.leave, createdById: reviewer.id });
+    try {
+      const cover = dismissDayLeaveCoverage(day, await activeLeavesOn(day));
+      if (cover.kind === "clash") throw new TRPCError({ code: "CONFLICT", message: dismissClashMessage(cover.leave) });
+      if (cover.kind === "covered") leaveAlready = true;
+      else {
+        await assertDismissLeaveAllowed(db, p.employeeId, plan.leave, reviewer);
+        const now = nowMysql();
+        const ins = await db.insert(employeeLeaves).values({
+          employeeId: p.employeeId, ...plan.leave, createdById: reviewer.id,
+          // Plano 63 (11): aprovada, por quem dispensou (como quem lança na ficha)
+          status: "approved", requestedById: reviewer.id, requestedAt: now, decidedById: reviewer.id, decidedAt: now,
+        });
         leaveId = Number((ins as any)?.[0]?.insertId ?? 0) || null;
-      } catch (err) {
-        // a ausência não ficou: a possível falta volta a "por validar" como estava (nunca dispensada sem a ausência)
-        await db.update(employeePenalties).set({ status: "pending", reviewedById: p.reviewedById ?? null, reviewedAt: p.reviewedAt ?? null, notes: p.notes, clearedAt: p.clearedAt ?? null, clearedById: p.clearedById ?? null })
-          .where(and(eq(employeePenalties.id, id), eq(employeePenalties.status, "dismissed")));
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `A ausência não ficou gravada, por isso a possível falta continua por validar. Tenta de novo. (${String((err as Error)?.message ?? err).slice(0, 120)})` });
       }
+    } catch (err) {
+      await restore();
+      if (err instanceof TRPCError) throw new TRPCError({ code: err.code, message: /continua por validar/.test(err.message) ? err.message : `${err.message} A possível falta continua por validar.` });
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `A ausência não ficou gravada, por isso a possível falta continua por validar. Tenta de novo. (${String((err as Error)?.message ?? err).slice(0, 120)})` });
     }
   }
   return { ...r, day: plan.day, leaveId, leaveType: leaveId != null ? plan.leave?.leaveType ?? null : null, leaveAlready };
+}
+
+/**
+ * Plano 63 (11): as guardas de `launchLeave` (server/leaves.ts) para a
+ * ausência que a dispensa com motivo lança: parceiros-empresa fora; as
+ * próprias férias não (ninguém aprova as suas, salvo o super admin); mês
+ * fechado → recusa (falha fechado: sem confirmar, também recusa).
+ */
+async function assertDismissLeaveAllowed(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, employeeId: number, leave: { leaveType: string; fromDate: string; toDate: string }, reviewer: { id: number; role: string }): Promise<void> {
+  const [emp] = await db.select({ userId: employees.userId, contractType: employees.contractType }).from(employees).where(eq(employees.id, employeeId)).limit(1);
+  const { PARTNER_COMPANY_CONTRACT } = await import("../shared/leaves");
+  if (emp?.contractType === PARTNER_COMPANY_CONTRACT) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Os parceiros-empresa ficam fora do mapa de férias e da folha: dispensa sem motivo." });
+  const leaves = await import("./leaves");
+  if (leave.leaveType === "vacation" && reviewer.role !== "super_admin") {
+    const { getEmployeeByUserId } = await import("./db");
+    const own = (emp?.userId != null && Number(emp.userId) === reviewer.id)
+      || (await leaves.employeeLogins(employeeId)).includes(reviewer.id)
+      || (await getEmployeeByUserId(reviewer.id))?.employee?.id === employeeId;
+    if (own) throw new TRPCError({ code: "FORBIDDEN", message: "As tuas férias pedem-se no Mapa de férias: ninguém aprova as suas." });
+  }
+  await leaves.assertPeriodOpen(leave);
 }
 
 // ─── Ponto: revisão de registos suspeitos ───────────────────────────────────

@@ -15,7 +15,19 @@ const state = vi.hoisted(() => ({
   people: new Map<number, { position: string; contractType: string | null }>(),
   inserted: [] as any[],
   blocked: new Map<number, number>(),
+  /** plano 63 (11): o mapa de férias (FERIAS_MAPA) e as ausências aprovadas lidas para os avisos */
+  feriasOn: false,
+  leaves: [] as any[],
 }));
+
+vi.mock("./_core/featureFlags", async (original) => {
+  const orig = await original<typeof import("./_core/featureFlags")>();
+  return {
+    ...orig,
+    ensureFeatureFlagOverrides: async () => undefined,
+    isFeatureEnabled: (name: string, opts?: any) => (name === "FERIAS_MAPA" ? state.feriasOn : orig.isFeatureEnabled(name, opts)),
+  };
+});
 
 vi.mock("./db", async (original) => {
   const { extrasDiaAssignments, timeRecords, employeePenalties, employees } = await import("../drizzle/schema");
@@ -40,7 +52,7 @@ vi.mock("./db", async (original) => {
     return [];
   };
   const db = {
-    execute: async () => [[]],
+    execute: async (q: any) => (dialect.sqlToQuery(q).sql.includes("FROM employee_leaves") ? [state.leaves] : [[]]),
     select: (cols?: any) => ({
       from: (table: any) => ({
         where: (cond: any) => {
@@ -79,7 +91,7 @@ const line = (id: number, employeeId: number, personName: string) => ({ id, empl
 const reviewer = { id: 9, role: "supervisor" };
 
 beforeEach(() => {
-  state.rows = []; state.people = new Map(); state.inserted = []; state.blocked = new Map();
+  state.rows = []; state.people = new Map(); state.inserted = []; state.blocked = new Map(); state.feriasOn = false; state.leaves = [];
 });
 
 describe("pontos de uma possível falta ao Extras-Dia (tabela do plano)", () => {
@@ -125,5 +137,65 @@ describe("pontos de uma possível falta ao Extras-Dia (tabela do plano)", () => 
     expect(state.inserted.filter((x) => x.employeeId === 2).map((x) => x.points)).toEqual([0, 0, 0]);
     expect(state.blocked.get(2)).toBe(0);
     expect(state.blocked.get(1)).toBe(1);
+  });
+});
+
+// ─── 2b + 11: o aviso antes de ser escalado ganha aos pontos ────────────────
+describe("2b + mapa de férias (11): avisou antes de ser escalado → 0 pontos; senão funcionário 0, extra 1", () => {
+  const escalado = (id: number, employeeId: number, personName: string) => ({ ...line(id, employeeId, personName), createdAt: "2026-11-01 12:00:00" });
+  const aviso = (employeeId: number, requestedAt: string, leaveType = "unavailable") =>
+    ({ employeeId, leaveType, status: "approved", fromDate: "2026-11-02", toDate: "2026-11-02", hours: null, requestedAt, createdAt: requestedAt });
+
+  it("extra que avisou ANTES → 0 pontos com a nota de quando avisou (não a do funcionário)", async () => {
+    state.feriasOn = true;
+    state.rows = [escalado(11, 1, "Ana Extra")];
+    state.people.set(1, { position: "extra", contractType: "extra" });
+    state.leaves = [aviso(1, "2026-10-30 09:00:00")];
+    await detectExtraDiaNoShows("2026-11-02");
+    expect(state.inserted[0]).toMatchObject({ employeeId: 1, points: 0 });
+    expect(state.inserted[0].notes).toContain("tinha avisado a 30/10");
+    expect(state.inserted[0].notes).not.toContain("funcionário: sem pontos");
+  });
+  it("extra que avisou DEPOIS de escalado → falta normal (1 ponto)", async () => {
+    state.feriasOn = true;
+    state.rows = [escalado(11, 1, "Ana Extra")];
+    state.people.set(1, { position: "extra", contractType: "extra" });
+    state.leaves = [aviso(1, "2026-11-01 18:00:00")];
+    await detectExtraDiaNoShows("2026-11-02");
+    expect(state.inserted[0]).toMatchObject({ employeeId: 1, points: 1 });
+    expect(state.inserted[0].notes).not.toContain("sem pontos");
+  });
+  it("funcionário: sem aviso → 0 (\"funcionário: sem pontos\"); com férias aprovadas antes → 0 com a nota do aviso", async () => {
+    state.feriasOn = true;
+    state.rows = [escalado(12, 2, "Rui Condutor"), escalado(13, 3, "Rita Back Office")];
+    state.people.set(2, { position: "driver", contractType: "permanent" });
+    state.people.set(3, { position: "backoffice", contractType: "permanent" });
+    state.leaves = [aviso(3, "2026-10-20 10:00:00", "vacation")];
+    await detectExtraDiaNoShows("2026-11-02");
+    const byEmp = new Map(state.inserted.map((x) => [x.employeeId, x]));
+    expect(byEmp.get(2)).toMatchObject({ points: 0 });
+    expect(byEmp.get(2).notes).toContain("funcionário: sem pontos");
+    expect(byEmp.get(3)).toMatchObject({ points: 0 });
+    expect(byEmp.get(3).notes).toContain("tinha avisado a 20/10");
+    expect(byEmp.get(3).notes).not.toContain("funcionário: sem pontos");
+  });
+  it("um pedido de férias por aprovar não é aviso: o extra leva 1 ponto", async () => {
+    state.feriasOn = true;
+    state.rows = [escalado(11, 1, "Ana Extra")];
+    state.people.set(1, { position: "extra", contractType: "extra" });
+    state.leaves = [{ ...aviso(1, "2026-10-30 09:00:00", "vacation"), status: "requested" }];
+    await detectExtraDiaNoShows("2026-11-02");
+    expect(state.inserted[0]).toMatchObject({ employeeId: 1, points: 1 });
+  });
+  it("com o mapa de férias desligado o aviso não conta: fica a regra do 2b (extra 1, funcionário 0)", async () => {
+    state.rows = [escalado(11, 1, "Ana Extra"), escalado(12, 2, "Rui Condutor")];
+    state.people.set(1, { position: "extra", contractType: "extra" });
+    state.people.set(2, { position: "driver", contractType: "permanent" });
+    state.leaves = [aviso(1, "2026-10-30 09:00:00"), aviso(2, "2026-10-30 09:00:00", "vacation")];
+    await detectExtraDiaNoShows("2026-11-02");
+    const byEmp = new Map(state.inserted.map((x) => [x.employeeId, x]));
+    expect(byEmp.get(1)).toMatchObject({ points: 1 });
+    expect(byEmp.get(2)).toMatchObject({ points: 0 });
+    expect(byEmp.get(2).notes).toContain("funcionário: sem pontos");
   });
 });

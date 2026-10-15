@@ -18,6 +18,7 @@
  */
 import { z } from "zod";
 import { addDays } from "./lisbonDay";
+import { LEAVE_STATUS_LABELS, LEAVE_TYPE_LABELS } from "./leaves";
 
 // ─── Horas do horário ────────────────────────────────────────────────────────
 
@@ -231,16 +232,47 @@ export function fixedNoShowDay(p: { notes?: string | null; relatedId?: number | 
   return null;
 }
 
+/** Uma ausência da pessoa que toca o dia da possível falta (sem `status` = linha antiga = aprovada). */
+export interface DismissDayLeave { fromDate: string; toDate: string; status?: string | null; leaveType?: string | null; hours?: string | number | null }
+
+/**
+ * Plano 63 (10a + 11): o que as ausências que já tocam o dia fazem à dispensa
+ * com Férias/Baixa/Justificada. PURA.
+ *  - uma APROVADA de dia inteiro (fora a indisponibilidade dos extras) já
+ *    justifica o dia → "covered": não se cria outra;
+ *  - outra ATIVA (pedida, aprovada de parte do dia, indisponibilidade) →
+ *    "clash": o mesmo dia nunca fica com duas ausências ativas (a regra de
+ *    quem lança no mapa de férias) — decide-se ou cancela-se essa primeiro;
+ *  - as recusadas e as canceladas não contam (nem justificam, nem bloqueiam).
+ */
+export function dismissDayLeaveCoverage(day: string, leaves: ReadonlyArray<DismissDayLeave>): { kind: "covered" } | { kind: "clash"; leave: DismissDayLeave } | { kind: "free" } {
+  const onDay = leaves.filter((l) => String(l.fromDate).slice(0, 10) <= day && String(l.toDate).slice(0, 10) >= day);
+  const status = (l: DismissDayLeave) => l.status ?? "approved";
+  const fullDay = (l: DismissDayLeave) => l.hours == null || l.hours === "";
+  if (onDay.some((l) => status(l) === "approved" && l.leaveType !== "unavailable" && fullDay(l))) return { kind: "covered" };
+  const clash = onDay.find((l) => status(l) === "approved" || status(l) === "requested");
+  return clash ? { kind: "clash", leave: clash } : { kind: "free" };
+}
+
+/** "Férias (por aprovar)" / "Ausência justificada, 2 h (aprovado)" — a ausência que já ocupa o dia. PURA. */
+export function dismissClashText(l: DismissDayLeave): string {
+  const type = LEAVE_TYPE_LABELS[(l.leaveType ?? "other") as keyof typeof LEAVE_TYPE_LABELS] ?? String(l.leaveType ?? "Ausência");
+  const st = LEAVE_STATUS_LABELS[(l.status ?? "approved") as keyof typeof LEAVE_STATUS_LABELS] ?? String(l.status);
+  const hours = l.hours != null && l.hours !== "" ? `, ${Number(l.hours).toLocaleString("pt-PT")} h` : "";
+  return `${type}${hours} (${st.toLowerCase()})`;
+}
+
 /**
  * O que a dispensa faz: a nota da revisão e, para Férias/Baixa/Justificada,
- * a ausência aprovada desse dia (se ainda não houver uma que o cubra). Só
- * para possíveis faltas do horário fixo ainda por validar. PURA.
+ * a ausência aprovada desse dia (se ainda não houver uma aprovada de dia
+ * inteiro que o cubra; outra ativa nesse dia → recusa, `conflict`). Só para
+ * possíveis faltas do horário fixo ainda por validar. PURA.
  */
 export function fixedNoShowDismissPlan(
   p: { id: number; employeeId: number; reason: string; status: string; notes?: string | null; relatedId?: number | null },
   reason: FixedNoShowDismissReason,
-  opts: { notePrefix: string; existingLeaves?: ReadonlyArray<{ fromDate: string; toDate: string }>; extraNote?: string | null },
-): { ok: false; error: string } | { ok: true; day: string | null; reviewNote: string; leave: { leaveType: "vacation" | "sick" | "other"; fromDate: string; toDate: string; notes: string } | null; leaveAlready: boolean } {
+  opts: { notePrefix: string; existingLeaves?: ReadonlyArray<DismissDayLeave>; extraNote?: string | null },
+): { ok: false; error: string; conflict?: boolean } | { ok: true; day: string | null; reviewNote: string; leave: { leaveType: "vacation" | "sick" | "other"; fromDate: string; toDate: string; notes: string } | null; leaveAlready: boolean } {
   if (p.reason !== "other" || !String(p.notes ?? "").startsWith(opts.notePrefix)) return { ok: false, error: "Só as possíveis faltas do horário fixo se dispensam com motivo." };
   if (p.status !== "pending") return { ok: false, error: "Esta possível falta já foi revista." };
   const label = FIXED_NO_SHOW_DISMISS_LABELS[reason];
@@ -251,9 +283,15 @@ export function fixedNoShowDismissPlan(
   const tag = reason === "lost_punch" ? `${LOST_PUNCH_TAG} ` : "";
   const reviewNote = `${tag}Dispensada: ${label}${extra}`;
   if (!leaveType || !day) return { ok: true, day, reviewNote, leave: null, leaveAlready: false };
-  const covered = (opts.existingLeaves ?? []).some((l) => String(l.fromDate).slice(0, 10) <= day && String(l.toDate).slice(0, 10) >= day);
+  const cover = dismissDayLeaveCoverage(day, opts.existingLeaves ?? []);
+  if (cover.kind === "clash") return { ok: false, conflict: true, error: dismissClashMessage(cover.leave) };
+  const covered = cover.kind === "covered";
   return {
     ok: true, day, reviewNote, leaveAlready: covered,
     leave: covered ? null : { leaveType, fromDate: day, toDate: day, notes: `Dispensa da possível falta #${p.id} (${label})${extra}`.slice(0, 255) },
   };
 }
+
+/** A recusa quando o dia já tem outra ausência ativa. PURA. */
+export const dismissClashMessage = (l: DismissDayLeave): string =>
+  `Essa pessoa já tem nesse dia: ${dismissClashText(l)}. Decide ou cancela essa primeiro (fica no histórico), ou dispensa com outro motivo. A possível falta continua por validar.`;
