@@ -54,7 +54,7 @@ As ocorrências registadas pelos agentes na **app Multipark** (vidro aberto, aci
 - Um colaborador que relata uma ocorrência por email (sem a registar na app) vai para a caixa **Ocorrências** **por ler**, com a linha da IA a dizer porquê: **regista-a na app Multipark** — o dashboard não cria ocorrências (a app é a fonte única).
 
 **Ocorrências antigas do dashboard**
-- As ocorrências registadas no dashboard antes da ligação à app Multipark ficam guardadas, mas já não entram nos números nem nos lembretes.
+- As ocorrências registadas no dashboard antes da ligação à app Multipark ficam guardadas, mas já não entram nos números nem nos lembretes. Só contam como histórico em dois sítios: na **Avaliação**, nos dias antes de 2 de março de 2026, e na coluna Ocorrências do **Cruzamento de condutores** dos Perdidos.
 - As ligações antigas (num email ou num perdido convertido) abrem-nas só para leitura.
 
 Só a partir de team leader se tem acesso a esta página: condutores e extras não a veem — nem as ocorrências em que estão envolvidos, nem na ficha da reserva. Cada um vê as ocorrências dos parques das suas cidades.

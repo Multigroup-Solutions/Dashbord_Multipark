@@ -217,3 +217,14 @@ describe("penalização que aponta para uma reclamação/alerta de outra fatia",
     expect(out.rows[0].metrics.complaints).toBe(1);
   });
 });
+
+describe("plano 64 (F3): a tabela antiga das ocorrências só antes de 2 mar 2026", () => {
+  it("um intervalo todo depois do corte não lê `incidents`", async () => {
+    await computeRange("2026-09-24", "2026-09-24", liveOk);
+    expect(state.executed.some((t) => /FROM incidents\b/.test(t))).toBe(false);
+  });
+  it("um intervalo que começa antes do corte lê-a (o corte por dia é no evaluationCore)", async () => {
+    await computeRange("2026-02-28", "2026-03-03", liveOk);
+    expect(state.executed.some((t) => /FROM incidents\b/.test(t))).toBe(true);
+  });
+});

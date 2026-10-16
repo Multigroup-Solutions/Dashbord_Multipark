@@ -3,7 +3,7 @@ import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import { toCsv } from "@shared/csv";
 import { can, roleRank, seesBeyondOwn } from "@shared/access";
-import { isMarkedPublished } from "@shared/reviewRules";
+import { isEmailOnlyReview, isMarkedPublished } from "@shared/reviewRules";
 import { AUTO_PUBLISH_STATUS_LABELS } from "@shared/reviewAutoPublish";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { useConfirm } from "./training/shared";
@@ -92,7 +92,8 @@ export default function GoogleReviewsPage() {
       <div className="space-y-6">
         {/* Jorge, 3 out 2026: a ligação ao Google Business Profile passou para Integrações.
             Lote 45 (Jorge, 7 out 2026): sem "Sincronizar Gmail" nem "Importar Review" no topo — não faziam nada
-            (as críticas entram sozinhas pela API do Google, pela Windsor e por email). */}
+            (as críticas entram sozinhas pela API do Google e pela Windsor; 15 out 2026: um email só entra quando
+            uma pessoa o importa na caixa Críticas da Comunicação). */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <p className="text-muted-foreground">Avaliações do Google e respostas (a IA só prepara; publica sempre uma pessoa)</p>
@@ -271,6 +272,9 @@ function ReviewsDashboard() {
 function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
   const { user } = useAuth();
   const canExport = can(user as any, "criticas", "export");
+  // 15 out 2026: as que entraram sozinhas por email ficam fora das Críticas; o super admin vê-as (só consulta).
+  const isSuper = (user as any)?.role === "super_admin";
+  const [fromEmail, setFromEmail] = useState(false);
   const globalFilters = useGlobalFilters();
   const [filterRating, setFilterRating] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -282,6 +286,7 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
     ...(filterRating !== "all" ? { rating: Number(filterRating) } : {}),
     ...(filterStatus !== "all" ? { status: filterStatus } : {}),
     ...(globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {}),
+    ...(isSuper && fromEmail ? { fromEmail: true } : {}),
   };
   const listQ = trpc.reviews.list.useQuery(
     Object.keys(queryInput).length > 0 ? queryInput : undefined
@@ -290,7 +295,7 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
   const isLoading = listQ.isLoading;
   const projsQ = trpc.projects.list.useQuery();
   const projs = projsQ.data ?? [];
-  const filtered = filterRating !== "all" || filterStatus !== "all";
+  const filtered = filterRating !== "all" || filterStatus !== "all" || (isSuper && fromEmail);
   const groups = useMemo(() => groupReviewsByPark(reviews as any[], projs as any[]), [reviews, projs]);
   const parkName = useMemo(() => new Map(groups.flatMap(g => g.reviews.map((r: any) => [r.id, g.name] as const))), [groups]);
   const park = pickedPark && (pickedPark === "all" || groups.some(g => g.key === pickedPark)) ? pickedPark : groups.find(g => !g.trash)?.key ?? "all";
@@ -328,6 +333,9 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
           </button>
         </div>
       )}
+      {isSuper && fromEmail && (
+        <p className="text-xs text-muted-foreground">Só as críticas que entraram sozinhas por email (antes de 15 out 2026, ou com a importação por email ligada sem ninguém as importar): estão fora das Críticas e de todos os números, e não se apagaram. Só para consulta — para pôr um email nas Críticas, importa-o na caixa Críticas da Comunicação.</p>
+      )}
       {park === TRASH_KEY && (
         <p className="text-xs text-muted-foreground">Críticas sem parque e sem marca reconhecível (no perfil Google nem no texto). Ficam aqui, não se apagam, e não contam nos números. Se alguma for nossa, abre-a e escolhe o parque.</p>
       )}
@@ -358,6 +366,12 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
             </SelectContent>
           </Select>
         </div>
+        {isSuper && (
+          <Button size="sm" variant={fromEmail ? "selected" : "outline"} onClick={() => setFromEmail((x) => !x)}
+            title="As críticas que entraram sozinhas por email (repetiam as da API). Estão fora das Críticas e dos números; não se apagaram. Só para consulta.">
+            <Mail className="w-4 h-4 mr-1" /> {fromEmail ? "A ver as que vieram por email" : "Mostrar as que vieram por email"}
+          </Button>
+        )}
         {canExport && (
         <Button
           variant="outline"
@@ -438,6 +452,7 @@ function ReviewsList({ onSelect }: { onSelect: (id: number) => void }) {
                               <AlertTriangle className="w-3 h-3 mr-1" /> Reclamação #{r.complaintId}
                             </Badge>
                           )}
+                          {isEmailOnlyReview(r) && <Badge variant="outline" className="text-[11px]"><Mail className="w-3 h-3 mr-1" />veio por email — fora das Críticas</Badge>}
                         </div>
                         {r.reviewText && <p className="text-sm text-muted-foreground line-clamp-2 mt-1 break-words">"{r.reviewText}"</p>}
                         <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground flex-wrap">
@@ -555,7 +570,7 @@ function AutoPublishPausedNote() {
 
 function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
   const { user } = useAuth();
-  const canEdit = can(user as any, "criticas", "edit");
+  const canEditModule = can(user as any, "criticas", "edit");
   // D19: condutores e extras não abrem reclamações — veem só o número.
   const canOpenComplaint = seesBeyondOwn(user as any, "reclamacoes");
   const [, navigate] = useLocation();
@@ -572,6 +587,9 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
   const generateMut = trpc.reviews.generateResponse.useMutation({ onError: onError("A IA não conseguiu gerar a resposta") });
   const approveMut = trpc.reviews.approveResponse.useMutation({ onError: onError("Não foi possível aprovar") });
   const updateMut = trpc.reviews.update.useMutation({ onError: onError("Não foi possível guardar") });
+  // 15 out 2026: a que ficou só na caixa de correio (entrou sozinha por email) é só para consulta.
+  const emailOnly = !!review && isEmailOnlyReview(review);
+  const canEdit = canEditModule && !emailOnly;
   // 44c: escolher o parque (tirar do lixo / corrigir).
   const projsQ = trpc.projects.list.useQuery(undefined, { enabled: canEdit });
   const parkOptions = useMemo(() => ((projsQ.data ?? []) as any[]).filter(p => p.level === "park" || p.level === "brand").sort((a, b) => String(a.name).localeCompare(String(b.name), "pt")), [projsQ.data]);
@@ -682,6 +700,12 @@ function ReviewDetailDialog({ id, onClose }: { id: number; onClose: () => void }
         </DialogHeader>
 
         <div className="space-y-4">
+          {emailOnly && (
+            <div className="rounded-md border border-slate-300 bg-slate-50 dark:bg-slate-900/40 p-3 text-xs text-muted-foreground flex items-start gap-1.5">
+              <Mail className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>Esta crítica entrou sozinha por email: está fora das Críticas e dos números (as críticas vêm pela API do Google) e não se apagou. Só para consulta. Se for mesmo uma crítica, importa o email na caixa Críticas da Comunicação («Importar para as Críticas»).</span>
+            </div>
+          )}
           {/* Review text */}
           {review.reviewText && (
             <Card>
