@@ -66,6 +66,19 @@ function SyncHealthBanner() {
   );
 }
 
+/**
+ * Avisos do topo do Marketing: o vermelho das recolhas e as anomalias. Plano 64 (F7): o separador
+ * Dashboards → Marketing mostra os mesmos que /marketing (antes só lá apareciam).
+ */
+export function MarketingTopAlerts() {
+  return (
+    <>
+      <SyncHealthBanner />
+      <AnomalyAlerts domain="marketing" />
+    </>
+  );
+}
+
 export default function MarketingPage() {
   const [location, navigate] = useLocation();
   const tabFromPath = (p: string) => (p.startsWith(ADS_PATH) ? "ads" : p.startsWith(CHANNELS_PATH) ? "channels" : p.startsWith(BUDGETS_PATH) ? "budgets" : p.startsWith(WEB_PATH) ? "web" : "dashboard");
@@ -83,8 +96,7 @@ export default function MarketingPage() {
         <h1 className="text-xl sm:text-2xl font-bold">Marketing</h1>
         <p className="text-muted-foreground">Dashboard, canais e clientes, anúncios (Google Ads e Meta), orçamentos e Web & SEO</p>
       </div>
-      <SyncHealthBanner />
-      <AnomalyAlerts domain="marketing" />
+      <MarketingTopAlerts />
       <Tabs value={tab} onValueChange={onTab}>
         <TabsList className={TABS_SCROLL}>
           <TabsTrigger value="dashboard"><BarChart3 className="w-4 h-4 mr-1" />Dashboard</TabsTrigger>

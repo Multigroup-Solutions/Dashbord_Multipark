@@ -3,8 +3,8 @@
  *
  * Modelo (Jorge, 24 set 2026): nos canais PRÓPRIOS — Marketplace (multipark),
  * site das marcas e telefone — a reserva de um CLIENTE NOVO (primeira reserva
- * daquele email, ou sem email) conta como ANÚNCIOS (custo = gasto do Google
- * Ads); a de quem JÁ ERA CLIENTE conta como ORGÂNICO (voltou por si). O gclid
+ * daquele email, ou sem email) conta como ANÚNCIOS (custo = gasto em anúncios:
+ * Google Ads + Meta); a de quem JÁ ERA CLIENTE conta como ORGÂNICO (voltou por si). O gclid
  * é só prova de clique (informação), não decide nada. Parceiros (campanha →
  * parceria, com comissão) e campanhas sem parceiro ficam à parte.
  */
