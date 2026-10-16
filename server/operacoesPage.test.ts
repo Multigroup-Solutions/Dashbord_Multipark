@@ -166,8 +166,10 @@ describe("custo dos extras (fonte única com o motor)", () => {
 describe("âmbito de cidade", () => {
   it("as novas consultas e os Serviços recebem a cidade do utilizador", () => {
     const access = { all: false, defaultCityId: 7, cityIds: [7], projectIds: [7, 8], missingCostCenter: false, cityName: "Porto" };
-    for (const path of ["multipark.operationsSummary", "services.multiparkExtras"]) {
+    for (const path of ["services.multiparkExtras"]) {
       expect((scopeCityQuery(path, access, { startDate: "2026-09-01" }) as any).projectId).toBe(7);
     }
+    // Plano 64 (B14): o Resumo de /operacoes tem o âmbito das listas da mesma página (as cidades todas da pessoa).
+    expect((scopeCityQuery("multipark.operationsSummary", access, { startDate: "2026-09-01" }) as any).projectId).toBeUndefined();
   });
 });

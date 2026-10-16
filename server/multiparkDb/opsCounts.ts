@@ -12,13 +12,16 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList } from "./read";
+import { opsEventParts, opsEventStatuses, statusSqlLiteral } from "./opsEvents";
 
 type Query = <T = Record<string, unknown>>(sql: string, params?: SqlParam[]) => Promise<T[]>;
 
 /**
  * created: criadas não canceladas · createdAll: todas as criadas ·
  * checkin / checkout: com entrada / saída no período, não canceladas ·
- * cancelled: canceladas no período (data do cancelamento mais recente).
+ * cancelled: canceladas no período (data do cancelamento mais recente; sem
+ * nenhum, a última alteração da reserva — plano 64, B3).
+ * Os predicados e os estados são os das listas das Operações (opsEvents.ts).
  */
 export type OpsEvent = "created" | "createdAll" | "checkin" | "checkout" | "cancelled";
 export const OPS_EVENTS: readonly OpsEvent[] = ["created", "createdAll", "checkin", "checkout", "cancelled"];
@@ -28,22 +31,17 @@ export interface OpsCountRow { event: OpsEvent; day: string; parkId: string; cou
 
 const lisbonDay = (col: string) => `to_char((${col} AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Lisbon', 'YYYY-MM-DD')`;
 
-/** Um acontecimento: SELECT de (event, id, day, park_id, price). PURA. */
+/**
+ * Um acontecimento: SELECT de (event, id, day, park_id, price) — o predicado
+ * e os estados vêm de opsEvents.ts (a mesma regra das listas); os
+ * cancelados são duas partes (com e sem a linha "Cancellation"). PURA.
+ */
 function eventSelect(e: OpsEvent, p: ParamList, start: string, end: string, parks: string, includePending = false): string {
-  const range = (col: string) => `${col} >= ${p.add(start)}::timestamp AND ${col} < ${p.add(end)}::timestamp`;
-  const notPending = includePending ? `TRUE` : `b."status"::text <> 'PENDING'`;
-  const notCancelled = includePending ? `b."status"::text <> 'CANCELLED'` : `b."status"::text NOT IN ('CANCELLED', 'PENDING')`;
-  const sel = (col: string) => `SELECT '${e}'::text AS event, b."id" AS id, ${lisbonDay(col)} AS day, b."parkId" AS park_id, b."bookingPrice" AS price FROM "Booking" b`;
-  switch (e) {
-    case "created": return `${sel(`b."createdAt"`)} WHERE ${parks} AND ${notCancelled} AND ${range(`b."createdAt"`)}`;
-    case "createdAll": return `${sel(`b."createdAt"`)} WHERE ${parks} AND ${notPending} AND ${range(`b."createdAt"`)}`;
-    case "checkin": return `${sel(`b."checkIn"`)} WHERE ${parks} AND ${notCancelled} AND ${range(`b."checkIn"`)}`;
-    case "checkout": return `${sel(`b."checkOut"`)} WHERE ${parks} AND ${notCancelled} AND ${range(`b."checkOut"`)}`;
-    case "cancelled":
-      return `SELECT 'cancelled'::text AS event, b."id" AS id, ${lisbonDay("cx.at")} AS day, b."parkId" AS park_id, b."bookingPrice" AS price FROM "Booking" b`
-        + ` JOIN LATERAL (SELECT x."createdAt" AS at FROM "Cancellation" x WHERE x."bookingId" = b."id" ORDER BY x."createdAt" DESC LIMIT 1) cx ON TRUE`
-        + ` WHERE ${parks} AND b."status"::text = 'CANCELLED' AND ${range("cx.at")}`;
-  }
+  const id = e === "createdAll" ? "created" : e;
+  const status = statusSqlLiteral(opsEventStatuses(id, { includePending, withCancelled: e === "createdAll" }));
+  return opsEventParts(id, p, start, end)
+    .map((part) => `SELECT '${e}'::text AS event, b."id" AS id, ${lisbonDay(part.at)} AS day, b."parkId" AS park_id, b."bookingPrice" AS price FROM ${part.from.join(" ")} WHERE ${parks} AND ${status} AND ${part.where}`)
+    .join("\n  UNION ALL\n  ");
 }
 
 /** Contagens por acontecimento × dia × parque em [start, end) UTC. PURA. */

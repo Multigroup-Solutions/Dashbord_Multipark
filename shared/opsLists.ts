@@ -226,8 +226,9 @@ export interface OpsListSummary {
   refunded: number;
   /**
    * Quantas são de parques NOSSOS e, dessas, quantas têm data aproximada (só
-   * nos cancelados). O Dashboard das Operações conta `ours - oursApprox`: só
-   * parques nossos e só cancelamentos com registo na Multipark.
+   * nos cancelados). Plano 64: o Geral e o Dashboard das Operações contam
+   * TODOS os parques, como esta lista (o `total`); `ours` dá a divisão
+   * "parques nossos · Marketplace".
    */
   ours: number;
   oursApprox: number;

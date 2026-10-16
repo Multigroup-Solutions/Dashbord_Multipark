@@ -102,7 +102,9 @@ export function scopeCityQuery(path: string, access: CityAccess, input: unknown)
     return { ...raw, city: raw.city ?? (name === 'lisboa' ? 'lisbon' : name) };
   }
   // Plano 64 (D1): o rh.stats tem o mesmo âmbito por omissão que a lista do RH (rh.list).
-  if (['multipark.bookingStats', 'multipark.operationsSummary', 'services.multiparkExtras', 'rh.list', 'rh.stats'].includes(path)) {
+  // Plano 64 (B14): o Resumo de /operacoes (multipark.operationsSummary) saiu daqui —
+  // tem o âmbito por omissão das listas da mesma página (as cidades todas da pessoa).
+  if (['multipark.bookingStats', 'services.multiparkExtras', 'rh.list', 'rh.stats'].includes(path)) {
     return { ...raw, projectId: raw.projectId ?? access.defaultCityId };
   }
   return input;

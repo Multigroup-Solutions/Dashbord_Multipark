@@ -45,11 +45,15 @@ function BriefingBlock({ b }: { b: any }) {
         </p>
       )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Stat label="Entradas / saídas" value={`${d.bookings.checkins} / ${d.bookings.checkouts}`} />
+        <Stat label="Entradas / saídas previstas" value={`${d.bookings.checkins} / ${d.bookings.checkouts}`} />
         <Stat label="Pico" value={d.bookings.peak ? `${d.bookings.peak.label} (${d.bookings.peak.total})` : "—"} />
         <Stat label="Extras escalados / necessários" value={d.extras ? `${d.extras.scheduled} / ${d.extras.neededPeak}` : "—"} tone={d.extras?.gap ? "bad" : d.extras ? "ok" : undefined} />
         <Stat label="Prazos hoje (em atraso)" value={`${slaDue} (${slaLate})`} tone={slaLate ? "bad" : undefined} />
       </div>
+      {/* Plano 64 (B9): o briefing é a previsão da escala; os cartões do Geral contam outra coisa. */}
+      <p className="text-[11px] text-muted-foreground leading-snug">
+        Entradas/saídas: previsão para a escala · dia operacional (03h–03h) · parques que operamos (os cartões do Geral contam 00h–24h · todos os parques).
+      </p>
       <Button variant="ghost" size="sm" className="h-8 px-2" onClick={() => setOpen((v) => !v)}>
         {open ? <ChevronUp className="h-4 w-4 mr-1" /> : <ChevronDown className="h-4 w-4 mr-1" />}
         {open ? "Esconder detalhe" : "Ver detalhe"}

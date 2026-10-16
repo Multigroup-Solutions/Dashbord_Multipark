@@ -3938,6 +3938,16 @@ export const appRouter = router({
       };
     }),
 
+    // Plano 64 (B4): "Entregas hoje / este mês" do Geral — a MESMA leitura de
+    // "entregues" da Faturação (CHECKED_OUT pelo dia de Lisboa da saída), mas
+    // COM IVA e nos parques que OPERAMOS (nossos + Marketplace operado). Não
+    // passa pelo motor: a Faturação não muda. Porta do Financeiro + totais.
+    deliveries: protectedProcedure.input(z.object({ projectId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+      await requireFinanceTotals(ctx.user, "financeiro", "view");
+      const { liveDeliveries } = await import("./finance/deliveries");
+      return liveDeliveries({ projectId: input?.projectId });
+    }),
+
     // Exportação CSV/XLSX (Faturação: cartões, série e detalhe; Anual: meses).
     // Porta: ação export da Faturação + totais financeiros.
     export: protectedProcedure.input(z.discriminatedUnion("kind", [
@@ -4809,8 +4819,10 @@ export const appRouter = router({
         return getMultiparkBookingStats(input ?? undefined);
       }),
 
-    // Painel de Operações (22a, D5): SÓ contagens — basta o módulo dos painéis,
-    // sem a permissão dos totais financeiros. Com as compras por pagar (D6).
+    // Geral e Dashboard das Operações (22a, D5): SÓ contagens — basta o módulo
+    // dos painéis, sem a permissão dos totais financeiros. Plano 64 (B1–B3):
+    // TODOS os parques (nossos + todo o Marketplace), como as listas das
+    // Operações, com as compras por pagar (D6).
     opsBookingCounts: protectedProcedure
       .input(z.object({
         from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -4821,6 +4833,21 @@ export const appRouter = router({
         requireAccess(ctx.user, "dashboards", "view");
         const { liveOpsBookingCounts } = await import("./opsStatsLive");
         return liveOpsBookingCounts(input ?? undefined);
+      }),
+
+    // Plano 64 (B10/B11): a MESMA conta do opsBookingCounts com o valor (c/ IVA)
+    // das reservas criadas por cidade (resolvida) e por marca (classificada) —
+    // só com a permissão dos totais, como o bookingStats. Os donuts do Financeiro.
+    opsBookingValues: protectedProcedure
+      .input(z.object({
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        projectId: z.number().optional(),
+      }).optional())
+      .query(async ({ ctx, input }) => {
+        await requireFinanceTotals(ctx.user, "financeiro", "view");
+        const { liveOpsBookingValues } = await import("./opsStatsLive");
+        return liveOpsBookingValues(input ?? undefined);
       }),
 
     // "Reservas do dia" (operacional): entradas e saídas de UM dia de Lisboa,
@@ -4845,8 +4872,11 @@ export const appRouter = router({
     // lidas AO VIVO da BD da Multipark: contadores agregados no SQL (com o
     // período anterior para comparar) + uma página da lista. Máx. 62 dias.
     // Só os parques das cidades do utilizador; nunca lança por falta de BD.
+    // Plano 64 (B16): `projectId` = a cidade/marca do topo, como o Resumo e o
+    // Geral (o middleware estreita as cidades; a marca pelos parques dela).
     opsList: protectedProcedure
       .input(z.object({
+        projectId: z.number().optional(),
         kind: z.enum(["reservas", "entradas", "saidas", "cancelados"]),
         from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -4869,7 +4899,16 @@ export const appRouter = router({
         // 8 out 2026: os excluídos nas Definições só dão a etiqueta "não operado" (a lista não muda)
         const { getSetting } = await import("./appSettings");
         const excluded = ((await getSetting("operations.excludedParks").catch(() => null)) as string[] | null) ?? [];
-        const r = await getMultiparkOpsList({ ...input, state, includePending: true }, scopedCityNames(), undefined, excluded);
+        // B16: com uma marca no topo, só os parques dela (a mesma regra das contagens).
+        const { brandScopeParkIds } = await import("./opsStatsLive");
+        let onlyParkIds: Set<string> | undefined;
+        try {
+          onlyParkIds = await brandScopeParkIds(input.projectId);
+        } catch (err) {
+          console.warn("[multipark.opsList] parques da marca:", (err as Error)?.message);
+          return { available: false as const, reason: "Não foi possível ler os parques da marca escolhida (BD da Multipark sem resposta).", code: "QUERY_FAILED" as const };
+        }
+        const r = await getMultiparkOpsList({ ...input, state, includePending: true }, scopedCityNames(), undefined, excluded, onlyParkIds);
         if (!r.available) return { available: false as const, reason: r.reason, code: r.code };
         return { available: true as const, ...r.data };
       }),
@@ -5198,8 +5237,9 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         requireAccess(ctx.user, "reservas_operacoes", "view");
         const { getOperationsSummary } = await import("./db");
-        // D6: contas operacionais — as compras por pagar entram (até serem recolhidas/canceladas)
-        return getOperationsSummary(input, { includePending: true });
+        // D6: contas operacionais — as compras por pagar entram (até serem recolhidas/canceladas).
+        // Plano 64 (B14): todos os parques, os mesmos das listas da mesma página.
+        return getOperationsSummary(input, { includePending: true, parks: "all" });
       }),
   }),
 

@@ -257,7 +257,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string, range: { from: s
       )}
 
       {!summaryQ.error || ready ? (<>
-      {/* KPIs clicáveis — só parques NOSSOS, sem compras online por acabar */}
+      {/* KPIs clicáveis — todos os parques (nossos + Marketplace), com as compras por pagar: as listas (plano 64, B14) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           icon={<CalendarCheck className="w-5 h-5 text-blue-600" />}
@@ -298,7 +298,8 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string, range: { from: s
       <div className="grid grid-cols-2 gap-3">
         <Card className="py-0 gap-0 min-w-0">
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Receita média / entrega (c/ IVA)</p>
+            {/* Plano 64 (B14): todos os parques — o valor das reservas do Marketplace não é a nossa receita. */}
+            <p className="text-xs text-muted-foreground">Valor médio / entrega (c/ IVA)</p>
             <p className="text-xl font-bold text-emerald-700 tabular-nums truncate">
               {stats.entregas > 0 ? fmtEur(stats.entregasReceita / stats.entregas) : "—"}
             </p>
@@ -348,7 +349,7 @@ function OperacoesDashboard({ onJump }: { onJump: (tab: string, range: { from: s
 
       <p className="text-xs text-muted-foreground flex items-center gap-1">
         <Activity className="w-3 h-3" />
-        Só parques nossos e sem as compras online por acabar. Clica num cartão para abrir a lista no mesmo período (até {OPS_LIST_MAX_DAYS} dias); a lista mostra também os parques Marketplace e diz quantas são dos nossos.
+        Todos os parques das tuas cidades (nossos + Marketplace), com as compras online por pagar — o mesmo que as listas. Clica num cartão para abrir a lista no mesmo período (até {OPS_LIST_MAX_DAYS} dias).
       </p>
     </div>
   );

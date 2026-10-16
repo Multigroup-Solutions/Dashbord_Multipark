@@ -118,7 +118,8 @@ export default function OperacoesDashboard() {
 
   // ── Queries ──
 
-  // 22a (D5): só contagens — basta o módulo dos painéis, sem os totais financeiros
+  // 22a (D5): só contagens — basta o módulo dos painéis, sem os totais financeiros.
+  // Plano 64 (B1–B3): a mesma função do Geral — todos os parques, como as listas de /operacoes.
   const bk = trpc.multipark.opsBookingCounts.useQuery(
     { from: filters.from, to: filters.to, projectId: filters.projectId },
     { retry: retryTransient },
@@ -209,7 +210,7 @@ export default function OperacoesDashboard() {
               {isForbidden(bkError) ? (
                 <>
                   <p className="font-medium">Sem acesso aos números das reservas.</p>
-                  <p className="text-muted-foreground">Estes cartões pedem a permissão de ver os totais do Financeiro. As listas das Operações (/operacoes) mostram as reservas a quem vê Reservas &amp; Operações.</p>
+                  <p className="text-muted-foreground">Estes cartões pedem a permissão Dashboards. As listas das Operações (/operacoes) mostram as reservas a quem vê Reservas &amp; Operações.</p>
                 </>
               ) : (
                 <>
@@ -227,24 +228,27 @@ export default function OperacoesDashboard() {
         </Card>
       )}
 
-      {/* KPIs (reservas: parques nossos, sem compras online por acabar) */}
+      {/* KPIs das reservas: todos os parques (nossos + Marketplace), com as compras por pagar — as listas de /operacoes */}
+      <p className="text-xs text-muted-foreground -mb-3">
+        Reservas, entradas, saídas e cancelados: hoje (00h–24h) · todos os parques (nossos + Marketplace), com as compras por pagar — os mesmos números das listas de Operações.
+      </p>
       <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3 sm:gap-4">
         <KPICard
           icon={CalendarCheck}
-          label="Reservas hoje"
+          label="Reservas criadas hoje"
           value={bkValue(bookingStats?.reservasHoje)}
           loading={bkLoading}
         />
         <KPICard
           icon={ArrowDownToLine}
-          label="Check-ins hoje"
+          label="Entradas hoje"
           value={bkValue(bookingStats?.checkinHoje)}
           loading={bkLoading}
           color="text-green-600"
         />
         <KPICard
           icon={ArrowUpFromLine}
-          label="Check-outs hoje"
+          label="Saídas hoje"
           value={bkValue(bookingStats?.checkoutHoje)}
           loading={bkLoading}
           color="text-blue-600"

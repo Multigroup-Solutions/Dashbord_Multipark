@@ -17,10 +17,12 @@ import {
   type OpsAggRow, type OpsListKind, type OpsParkInfo,
 } from "../../shared/opsLists";
 import { classifyPark } from "../../shared/multiparkParks";
+import { resetScopeParksCache } from "./opsEvents";
 
 const ENV = "DATABASE_URL_MULTIPARK";
 let savedEnv: string | undefined;
-beforeEach(() => { savedEnv = process.env[ENV]; queryMock.mockReset(); });
+// Plano 64 (B0): os parques ficam 5 min em memória — cada teste lê os seus.
+beforeEach(() => { savedEnv = process.env[ENV]; queryMock.mockReset(); resetScopeParksCache(); });
 afterEach(() => { if (savedEnv === undefined) delete process.env[ENV]; else process.env[ENV] = savedEnv; });
 
 /** Maior `$n` usado no SQL (tem de bater com o n.º de parâmetros). */
@@ -94,7 +96,8 @@ describe("SQL (só leitura, parametrizado, com índices)", () => {
     expect(s).toContain(`b."checkOutDate" >= `);
 
     const c = buildSource(spec("cancelados"), new ParamList(), bounds.start, bounds.end, true);
-    expect(c).toContain(`"Cancellation" cx`);
+    // Plano 64 (B3): a linha Cancellation MAIS RECENTE (LATERAL, alias x lá dentro), como as contagens.
+    expect(c).toContain(`"Cancellation" x`);
     expect(c).toContain(`cx."createdAt" >= `);
     expect(c).toContain("UNION ALL");
     expect(c).toContain(`b."updatedAt" >= `);

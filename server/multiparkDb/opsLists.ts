@@ -17,14 +17,18 @@
  *   - Recolhas:   Booking.checkIn, pré-filtro em checkInDate com 1 dia de
  *                 folga (índice parkId+checkInDate); sem as canceladas
  *   - Entregas:   Booking.checkOut / checkOutDate (idem)
- *   - Cancelados: Cancellation.createdAt (índice createdAt), estado CANCELLED;
- *                 as canceladas SEM linha na Cancellation entram pela última
- *                 alteração (Booking.updatedAt, índice parkId+updatedAt) e
- *                 ficam marcadas como data aproximada.
+ *   - Cancelados: a linha Cancellation MAIS RECENTE da reserva (uma linha
+ *                 por reserva, com o motivo e o reembolso dessa linha),
+ *                 estado CANCELLED; as canceladas SEM linha na Cancellation
+ *                 entram pela última alteração (Booking.updatedAt, índice
+ *                 parkId+updatedAt) e ficam marcadas como data aproximada —
+ *                 só se essa alteração for até 2 dias depois da saída
+ *                 prevista (opsEvents.ts, APPROX_CANCEL_GRACE_DAYS).
  *
- * As compras online por acabar (PENDING) não entram em nenhuma lista — a
- * mesma regra do Dashboard das Operações (opsCounts.ts), da Faturação, do CRM
- * e dos Serviços.
+ * Plano 64 (B0): os predicados de cada lista, os estados e os parques são os
+ * de opsEvents.ts — a MESMA regra das contagens (opsCounts.ts) que o Geral,
+ * o Dashboard das Operações e o Resumo mostram. As compras online por pagar
+ * (PENDING) só entram nas contas operacionais (`includePending`, D6).
  *
  * Colunas usadas (docs/multipark-db/schema.md):
  *   Park: id, name, city, firebaseBrand, listingType, status
@@ -45,7 +49,8 @@
  */
 import { multiparkDbQuery, type SqlParam } from "./client";
 import { ParamList, likeContains, normalizePlate, safeMultiparkRead, toIsoUtc, type MultiparkRead } from "./read";
-import { buildParksSql, mapParks, type DayPark } from "./dayBookings";
+import type { DayPark } from "./dayBookings";
+import { opsEventParts, opsEventStatuses, readScopeParks, statusConds, type OpsEventId } from "./opsEvents";
 import { AGGREGATOR_PAYMENT_SOURCES, PARTNER_ORIGINS, classifyBookingChannel, classifyPark, marketplaceOperated, type BookingChannel } from "../../shared/multiparkParks";
 import { marketplaceBookingSql } from "./marketplaceSql";
 import {
@@ -99,9 +104,6 @@ export function opsBounds(from: string, to: string): OpsBounds {
   const prev = previousRange(from, to);
   return { from, to, days, start: cur.start, end: cur.end, prevFrom: prev.from, prevTo: prev.to, prevStart: lisbonDayRangeUtc(prev.from, prev.to).start };
 }
-
-const shiftTs = (ts: string, days: number) =>
-  new Date(Date.parse(`${ts.replace(" ", "T")}Z`) + days * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
 
 // ─── Predicados (SQL escrito aqui; valores sempre como parâmetros) ─────────
 
@@ -170,59 +172,41 @@ export function searchPredicate(search: string, p: ParamList): string {
   return `(${parts.join(" OR ")})`;
 }
 
+/** O acontecimento de cada lista (opsEvents.ts). */
+export const OPS_LIST_EVENT: Record<OpsListKind, OpsEventId> = {
+  reservas: "created",
+  entradas: "checkin",
+  saidas: "checkout",
+  cancelados: "cancelled",
+};
+
 /**
  * Reservas da lista no intervalo [startTs, endTs): colunas id, park_id, ev
- * (a data da lista), approx. Cancelados: duas partes (UNION ALL). PURA.
+ * (a data da lista), approx e, nos cancelados, cx_id (a linha Cancellation
+ * mais recente; NULL sem nenhuma). Predicado e estados de opsEvents.ts (os
+ * mesmos das contagens). Cancelados: duas partes (UNION ALL). PURA.
  */
 export function buildSource(spec: SourceSpec, p: ParamList, startTs: string, endTs: string, withChannel: boolean): string {
   if (!spec.parkIds.length) throw new Error("Sem parques.");
   const q = spec.search?.trim() ?? "";
-  const joinsFor = () => (q ? [
+  const event = OPS_LIST_EVENT[spec.kind];
+  const cancelled = spec.kind === "cancelados";
+  // Reservas: TODAS as criadas (o estado "não canceladas" / "canceladas" filtra).
+  const rule = opsEventStatuses(event, { includePending: spec.includePending, withCancelled: spec.kind === "reservas" });
+  const joins = q ? [
     `LEFT JOIN "Client" c0 ON c0."id" = COALESCE(b."customerId", b."clientId")`,
     `LEFT JOIN "BookingVehicle" v0 ON v0."id" = b."vehicleId"`,
-  ] : []);
-  const common = (hasCx: boolean): string[] => {
-    const out = [`b."parkId" IN (${inList(p, spec.parkIds)})`];
-    // Compras online por acabar: fora, salvo nas contas operacionais (D6, Jorge 3 out) — nos cancelados o estado já é CANCELLED.
-    if (spec.kind !== "cancelados" && !spec.includePending) out.push(`b."status"::text <> ${p.add("PENDING")}`);
-    const st = statePredicate(spec.kind, spec.state, p, hasCx);
-    if (st) out.push(st);
-    if (withChannel && spec.channel) out.push(channelPredicate(spec.channel, spec.ourParkIds, p));
-    if (q) out.push(searchPredicate(q, p));
-    return out;
-  };
-  const s = () => `${p.add(startTs)}::timestamp`;
-  const e = () => `${p.add(endTs)}::timestamp`;
-  const part = (select: string, from: string[], where: string[]) =>
-    [`SELECT ${select}`, `FROM ${from.join("\n  ")}`, `WHERE ${where.join("\n  AND ")}`].join("\n");
-
-  if (spec.kind === "reservas") {
-    return part(`b."id" AS id, b."parkId" AS park_id, b."createdAt" AS ev, FALSE AS approx`, [`"Booking" b`, ...joinsFor()],
-      [`b."createdAt" >= ${s()}`, `b."createdAt" < ${e()}`, ...common(false)]);
-  }
-  if (spec.kind === "entradas" || spec.kind === "saidas") {
-    const col = spec.kind === "entradas" ? "checkIn" : "checkOut";
-    return part(`b."id" AS id, b."parkId" AS park_id, b."${col}" AS ev, FALSE AS approx`, [`"Booking" b`, ...joinsFor()], [
-      `b."${col}Date" >= ${p.add(shiftTs(startTs, -1))}::timestamp`,
-      `b."${col}Date" < ${p.add(shiftTs(endTs, 1))}::timestamp`,
-      `b."${col}" >= ${s()}`,
-      `b."${col}" < ${e()}`,
-      `b."status"::text <> ${p.add("CANCELLED")}`,
-      ...common(false),
-    ]);
-  }
-  // Cancelados
-  const withCx = part(`b."id" AS id, b."parkId" AS park_id, cx."createdAt" AS ev, FALSE AS approx`,
-    [`"Cancellation" cx`, `JOIN "Booking" b ON b."id" = cx."bookingId"`, ...joinsFor()],
-    [`cx."createdAt" >= ${s()}`, `cx."createdAt" < ${e()}`, `b."status"::text = ${p.add("CANCELLED")}`, ...common(true)]);
-  const noCx = part(`b."id" AS id, b."parkId" AS park_id, b."updatedAt" AS ev, TRUE AS approx`, [`"Booking" b`, ...joinsFor()], [
-    `b."status"::text = ${p.add("CANCELLED")}`,
-    `b."updatedAt" >= ${s()}`,
-    `b."updatedAt" < ${e()}`,
-    `NOT EXISTS (SELECT 1 FROM "Cancellation" c2 WHERE c2."bookingId" = b."id")`,
-    ...common(false),
-  ]);
-  return `${withCx}\nUNION ALL\n${noCx}`;
+  ] : [];
+  return opsEventParts(event, p, startTs, endTs).map((part) => {
+    const where = [part.where, ...statusConds(rule, p), `b."parkId" IN (${inList(p, spec.parkIds)})`];
+    const st = statePredicate(spec.kind, spec.state, p, part.hasCx);
+    if (st) where.push(st);
+    if (withChannel && spec.channel) where.push(channelPredicate(spec.channel, spec.ourParkIds, p));
+    if (q) where.push(searchPredicate(q, p));
+    const cols = [`b."id" AS id`, `b."parkId" AS park_id`, `${part.at} AS ev`, `${part.approx ? "TRUE" : "FALSE"} AS approx`];
+    if (cancelled) cols.push(`${part.hasCx ? `cx."id"` : "NULL::text"} AS cx_id`);
+    return [`SELECT ${cols.join(", ")}`, `FROM ${[...part.from, ...joins].join("\n  ")}`, `WHERE ${where.join("\n  AND ")}`].join("\n");
+  }).join("\nUNION ALL\n");
 }
 
 // ─── Contadores ─────────────────────────────────────────────────────────────
@@ -260,7 +244,8 @@ export function buildOpsAggSql(spec: SourceSpec, bounds: OpsBounds): { sql: stri
     `FROM d`,
     `JOIN "Booking" b ON b."id" = d."id"`,
     `LEFT JOIN bp ON bp.booking_id = d."id"`,
-    ...(cx ? [`LEFT JOIN "Cancellation" cx ON cx."bookingId" = d."id"`] : []),
+    // Só a linha Cancellation mais recente (a da fonte): uma reserva conta uma vez.
+    ...(cx ? [`LEFT JOIN "Cancellation" cx ON cx."id" = d.cx_id`] : []),
     `GROUP BY 1, 2, 3, 4, 5, 6, 7`,
     `LIMIT ${p.add(OPS_AGG_LIMIT)}`,
   ].join("\n");
@@ -363,7 +348,7 @@ export function buildOpsListSql(spec: SourceSpec, bounds: OpsBounds, limit: numb
     `LEFT JOIN "Partner" pa ON pa."id" = b."partnerId"`,
     `LEFT JOIN bp ON bp.booking_id = b."id"`,
     ...(cx ? [
-      `LEFT JOIN "Cancellation" cx ON cx."bookingId" = b."id"`,
+      `LEFT JOIN "Cancellation" cx ON cx."id" = d.cx_id`,
       `LEFT JOIN hc ON hc.booking_id = b."id"`,
       `LEFT JOIN LATERAL (SELECT a."name" FROM "Agent" a WHERE a."userId" = hc.user_id AND a."parkId" = b."parkId" LIMIT 1) ag ON TRUE`,
     ] : []),
@@ -459,16 +444,19 @@ export interface OpsListResult {
 
 /**
  * Uma lista das Operações, só dos parques das cidades `cities` (undefined =
- * todas). `excludedParkIds` (Definições → "Parques que a operação não faz") só
+ * todas) — os parques de readScopeParks, os mesmos das contagens (plano 64,
+ * B0). `excludedParkIds` (Definições → "Parques que a operação não faz") só
  * serve a etiqueta "operado por nós / não operado" — não tira nada da lista.
+ * `onlyParkIds`: a marca escolhida no topo (B16; brandScopeParkIds, a mesma
+ * regra das contagens) — sem ela, todos os parques das cidades.
  */
-export async function getMultiparkOpsList(input: OpsListInput, cities?: string[], query: Query = multiparkDbQuery, excludedParkIds: readonly string[] = []): Promise<MultiparkRead<OpsListResult>> {
+export async function getMultiparkOpsList(input: OpsListInput, cities?: string[], query: Query = multiparkDbQuery, excludedParkIds: readonly string[] = [], onlyParkIds?: ReadonlySet<string> | null): Promise<MultiparkRead<OpsListResult>> {
   return safeMultiparkRead(`lista ${input.kind}`, async () => {
     const bounds = opsBounds(input.from, input.to);
     const limit = Math.min(Math.max(Math.floor(input.limit ?? OPS_LIST_PAGE_DEFAULT), 1), OPS_LIST_PAGE_MAX);
     const offset = Math.min(Math.max(Math.floor(input.offset ?? 0), 0), OPS_LIST_MAX_OFFSET);
-    const ps = buildParksSql();
-    const allParks = mapParks(await query(ps.sql, ps.params), cities);
+    const scoped = await readScopeParks(cities, query);
+    const allParks = onlyParkIds ? scoped.filter((p) => onlyParkIds.has(p.id)) : scoped;
     const parksOut: OpsParkInfo[] = allParks.map((p) => ({ id: p.id, name: p.name, cityName: p.cityName, key: p.key, label: p.label, ours: p.ours }));
     const parks = input.parkId ? allParks.filter((p) => p.id === input.parkId) : allParks;
     const base = { kind: input.kind, from: bounds.from, to: bounds.to, prevFrom: bounds.prevFrom, prevTo: bounds.prevTo, parks: parksOut, offset, limit };

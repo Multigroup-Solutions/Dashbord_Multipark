@@ -1780,10 +1780,13 @@ export async function getPontoMonthTotals(employeeIds: number[], year: number, m
  *  - "Horas este mês" (mês de Lisboa): as fichas do âmbito com picagens,
  *    ATIVAS OU NÃO e sem os parceiros-empresa — o conjunto da folha. Leitura
  *    falhada → `monthlyHours: null` e o erro (o ecrã mostra "—", nunca 0).
+ *    `skipHours` (plano 64, B8 — o Geral, que não as mostra): não as lê
+ *    (`monthlyHours` e o erro a null); o RH e o Pessoas continuam a lê-las.
  */
 export async function getHRStats(
   fichas: ReadonlyArray<{ employee: { id: number; isActive: number | null; position: string | null; contractType: string | null } }>,
   nowMs: number = Date.now(),
+  o: { skipHours?: boolean } = {},
 ) {
   const { hrCounts } = await import("../shared/employeeKind");
   const { lisbonDayOf } = await import("../shared/lisbonDay");
@@ -1792,7 +1795,7 @@ export async function getHRStats(
   const year = Number(today.slice(0, 4)), month = Number(today.slice(5, 7));
   let hours: Awaited<ReturnType<typeof getPontoMonthTotals>> = null;
   let hoursError: string | null = null;
-  try {
+  if (!o.skipHours) try {
     hours = await getPontoMonthTotals(fichas.filter((r) => r.employee.contractType !== "partner_company").map((r) => r.employee.id), year, month);
     if (!hours) hoursError = "BD indisponível";
   } catch (err) {
@@ -4736,7 +4739,7 @@ export async function buildPartnerByCampaignMap() {
 /** Resumo agregado das operações (dashboard): contagens/somas por ação e
  *  distribuição por cidade/parque, calculado no SQL — substitui puxar até
  *  4×5.000 reservas completas só para contar. */
-export async function getOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }, o: { includePending?: boolean } = {}) {
+export async function getOperationsSummary(filters: { startDate: string; endDate: string; projectId?: number }, o: { includePending?: boolean; parks?: "ours" | "all" } = {}) {
   // Ao vivo na BD da Multipark (reservas ao vivo, parte B): contagens por dia × parque.
   const { liveOperationsSummary } = await import("./opsStatsLive");
   return liveOperationsSummary(filters, o);

@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { useGlobalFilters } from "@/contexts/GlobalFiltersContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can, type ModuleId } from "@shared/access";
-import { isForbidden } from "@/lib/queryRetry";
+import { isForbidden, retryTransient } from "@/lib/queryRetry";
 import { StatValue } from "@/components/StatValue";
 import { Card } from "@/components/ui/card";
 import {
@@ -32,6 +32,7 @@ function KPI({
   iconColor,
   iconBg,
   label,
+  note,
   value,
   subtitle,
   loading,
@@ -42,6 +43,8 @@ function KPI({
   iconColor: string;
   iconBg: string;
   label: string;
+  /** Plano 64: o dia e os parques que o número conta ("00h–24h · todos os parques"). */
+  note?: string;
   value: string;
   subtitle?: string;
   loading?: boolean;
@@ -57,7 +60,8 @@ function KPI({
       >
         <Icon className="h-5 w-5" style={{ color: iconColor }} aria-hidden />
       </div>
-      <div className="text-[13px] font-medium text-muted-foreground mb-1 truncate" title={label}>{label}</div>
+      <div className="text-[13px] font-medium text-muted-foreground truncate" title={label}>{label}</div>
+      {note ? <div className="text-[11px] text-muted-foreground/80 leading-snug mb-1 break-words">{note}</div> : <div className="mb-1" />}
       {loading ? (
         <div className="h-8 w-20 bg-muted rounded animate-pulse" />
       ) : failed ? (
@@ -72,7 +76,7 @@ function KPI({
           Não carregou · tentar de novo
         </button>
       ) : subtitle && !loading && (
-        <div className="text-xs text-muted-foreground mt-1 truncate tabular-nums" title={subtitle}>{subtitle}</div>
+        <div className="text-xs text-muted-foreground mt-1 tabular-nums break-words" title={subtitle}>{subtitle}</div>
       )}
     </Card>
   );
@@ -126,25 +130,39 @@ const dashboardModules: Array<{ icon: React.ElementType; label: string; path: st
   },
 ];
 
+/** Plano 64: o dia e os parques de cada número, escritos no cartão. */
+const TODAY_ALL_PARKS = "00h–24h · todos os parques";
+const TODAY_OPERATED_PARKS = "00h–24h · parques que operamos";
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   const globalFilters = useGlobalFilters();
-  // expenses.stats é admin-only no servidor — não chamar sem permissão
-  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "");
+  // Plano 64: a cidade/marca do topo vale para TODOS os cartões (as mesmas consultas das páginas).
+  const scope = globalFilters.projectId !== undefined ? { projectId: globalFilters.projectId } : {};
+  // B5: os euros (despesas e entregas) pedem-se a quem tem o módulo Financeiro; o servidor
+  // exige também os totais financeiros (requireFinanceTotals) — um FORBIDDEN dá "Sem acesso".
+  const seesFinance = can(user as any, "financeiro", "view");
   // ── Queries (dados reais da BD) ──
   // 20d: erro ≠ 0 — cada cartão diz "não carregou" e deixa tentar de novo.
-  const expQ = trpc.expenses.stats.useQuery({ projectId: globalFilters.projectId }, { enabled: isAdmin });
-  const bkQ = trpc.multipark.bookingStats.useQuery({ projectId: globalFilters.projectId });
-  const compQ = trpc.complaints.stats.useQuery();
-  const revQ = trpc.reviews.stats.useQuery();
-  const hrQ = trpc.rh.stats.useQuery();
+  const expQ = trpc.expenses.stats.useQuery(scope, { enabled: seesFinance, retry: retryTransient });
+  // B1–B3: as contagens são as das listas de Operações (todos os parques, com as compras por pagar).
+  const bkQ = trpc.multipark.opsBookingCounts.useQuery(scope, { retry: retryTransient });
+  // B4: entregas (saídas feitas) com IVA, nos parques que operamos — a leitura dos entregues da Faturação.
+  const delQ = trpc.invoices.deliveries.useQuery(scope, { enabled: seesFinance, retry: retryTransient });
+  const compQ = trpc.complaints.stats.useQuery(scope, { retry: retryTransient });
+  const revQ = trpc.reviews.stats.useQuery(scope, { retry: retryTransient });
+  // B8: o Geral só mostra as contagens — as horas do mês (a leitura do ponto) ficam para o RH e o Pessoas.
+  const hrQ = trpc.rh.stats.useQuery({ ...scope, skipHours: true }, { retry: retryTransient });
   const { data: expStats, isLoading: expLoading } = expQ;
   const { data: bookingStats, isLoading: bkLoading } = bkQ;
+  const { data: deliveries, isLoading: delLoading } = delQ;
   const { data: complaintStats, isLoading: compLoading } = compQ;
   const { data: reviewStats, isLoading: revLoading } = revQ;
   const { data: hrStats, isLoading: hrLoading } = hrQ;
   const failOf = (q: { error: unknown }) => (q.error ? (isForbidden(q.error) ? "forbidden" as const : "error" as const) : null);
+  /** Sem o módulo Financeiro a consulta nem sai: "Sem acesso" (nunca "0 €"). */
+  const financeFail = (q: { error: unknown }) => (seesFinance ? failOf(q) : "forbidden" as const);
   const bkFailed = failOf(bkQ);
   const retryBk = () => { bkQ.refetch(); };
   // 20d: atalhos só para o que a pessoa pode abrir (pela matriz).
@@ -160,9 +178,10 @@ export default function DashboardPage() {
           icon={CalendarCheck}
           iconColor="#6366F1"
           iconBg="#EEF2FF"
-          label="Reservas Hoje"
+          label="Reservas criadas hoje"
+          note={TODAY_ALL_PARKS}
           value={fmtNum(bookingStats?.reservasHoje ?? 0)}
-          subtitle={`${fmtNum(bookingStats?.reservasMes ?? 0)} este mês`}
+          subtitle={`${fmtNum(bookingStats?.reservasHojeNossos ?? 0)} em parques nossos · ${fmtNum(bookingStats?.reservasHojeMarketplace ?? 0)} em parques do Marketplace · este mês: ${fmtNum(bookingStats?.reservasMes ?? 0)}`}
           loading={bkLoading}
           failed={bkFailed}
           onRetry={retryBk}
@@ -171,9 +190,10 @@ export default function DashboardPage() {
           icon={Car}
           iconColor="#10B981"
           iconBg="#D1FAE5"
-          label="Check-ins Hoje"
+          label="Entradas hoje"
+          note={TODAY_ALL_PARKS}
           value={fmtNum(bookingStats?.checkinHoje ?? 0)}
-          subtitle={`${fmtNum(bookingStats?.checkinMes ?? 0)} este mês`}
+          subtitle={`este mês: ${fmtNum(bookingStats?.checkinMes ?? 0)}`}
           loading={bkLoading}
           failed={bkFailed}
           onRetry={retryBk}
@@ -182,9 +202,10 @@ export default function DashboardPage() {
           icon={CheckCircle2}
           iconColor="#3B82F6"
           iconBg="#DBEAFE"
-          label="Check-outs Hoje"
+          label="Saídas hoje"
+          note={TODAY_ALL_PARKS}
           value={fmtNum(bookingStats?.checkoutHoje ?? 0)}
-          subtitle={`${fmtNum(bookingStats?.checkoutMes ?? 0)} este mês`}
+          subtitle={`este mês: ${fmtNum(bookingStats?.checkoutMes ?? 0)}`}
           loading={bkLoading}
           failed={bkFailed}
           onRetry={retryBk}
@@ -193,9 +214,10 @@ export default function DashboardPage() {
           icon={AlertTriangle}
           iconColor="#EF4444"
           iconBg="#FEE2E2"
-          label="Cancelados Hoje"
+          label="Cancelados hoje"
+          note={TODAY_ALL_PARKS}
           value={fmtNum(bookingStats?.canceladosHoje ?? 0)}
-          subtitle={`${fmtNum(bookingStats?.canceladosMes ?? 0)} este mês`}
+          subtitle={`este mês: ${fmtNum(bookingStats?.canceladosMes ?? 0)}`}
           loading={bkLoading}
           failed={bkFailed}
           onRetry={retryBk}
@@ -204,12 +226,13 @@ export default function DashboardPage() {
           icon={Euro}
           iconColor="#059669"
           iconBg="#D1FAE5"
-          label="Receita Hoje"
-          value={fmtCurrency(bookingStats?.receitaHoje ?? 0)}
-          subtitle={`${fmtCurrency(bookingStats?.receitaMes ?? 0)} este mês`}
-          loading={bkLoading}
-          failed={bkFailed}
-          onRetry={retryBk}
+          label="Entregas hoje (c/ IVA)"
+          note={TODAY_OPERATED_PARKS}
+          value={fmtCurrency(deliveries?.today.gross ?? 0)}
+          subtitle={`${fmtNum(deliveries?.today.count ?? 0)} carros · este mês: ${fmtCurrency(deliveries?.month.gross ?? 0)} c/ IVA (${fmtNum(deliveries?.month.count ?? 0)} carros)`}
+          loading={seesFinance && delLoading}
+          failed={financeFail(delQ)}
+          onRetry={() => { delQ.refetch(); }}
         />
       </div>
 
@@ -221,8 +244,8 @@ export default function DashboardPage() {
           label="Despesas Mês"
           value={fmtCurrency(expStats?.monthly?.total ?? 0)}
           subtitle={`${expStats?.monthly?.count ?? 0} registos`}
-          loading={isAdmin && expLoading}
-          failed={failOf(expQ)}
+          loading={seesFinance && expLoading}
+          failed={financeFail(expQ)}
           onRetry={() => { expQ.refetch(); }}
         />
         <KPI
@@ -232,17 +255,17 @@ export default function DashboardPage() {
           label="Pendente"
           value={fmtCurrency(expStats?.pending?.total ?? 0)}
           subtitle={`${expStats?.pending?.count ?? 0} por pagar`}
-          loading={isAdmin && expLoading}
-          failed={failOf(expQ)}
+          loading={seesFinance && expLoading}
+          failed={financeFail(expQ)}
           onRetry={() => { expQ.refetch(); }}
         />
         <KPI
           icon={MessageSquareWarning}
           iconColor="#EF4444"
           iconBg="#FEE2E2"
-          label="Reclamações"
-          value={fmtNum(complaintStats?.total ?? 0)}
-          subtitle={`${complaintStats?.overdue ?? 0} em atraso`}
+          label="Reclamações abertas"
+          value={fmtNum(complaintStats?.open ?? 0)}
+          subtitle={`${fmtNum(complaintStats?.overdue ?? 0)} em atraso`}
           loading={compLoading}
           failed={failOf(compQ)}
           onRetry={() => { compQ.refetch(); }}
@@ -264,7 +287,7 @@ export default function DashboardPage() {
           iconBg="#EDE9FE"
           label="Colaboradores"
           value={fmtNum(hrStats?.totalActive ?? 0)}
-          subtitle={`${hrStats?.totalPermanent ?? 0} efetivos · ${hrStats?.totalExtras ?? 0} extras`}
+          subtitle={`${fmtNum(hrStats?.staff ?? 0)} funcionários · ${fmtNum(hrStats?.extras ?? 0)} extras${hrStats?.partners ? ` · ${fmtNum(hrStats.partners)} parceiros-empresa` : ""}`}
           loading={hrLoading}
           failed={failOf(hrQ)}
           onRetry={() => { hrQ.refetch(); }}
