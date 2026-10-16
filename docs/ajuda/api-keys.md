@@ -9,7 +9,7 @@ palavras: criador inativo, conta desativada, api key, api keys, chave, chaves, x
 ---
 # API Keys
 
-Página **API Keys** (menu Sistema, **só super admin**): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades), o MCP do Claude (relatórios) e os dispositivos (GPS, rádios). A antiga importação do Gmail foi desligada: as críticas chegam pela sincronização do Gmail.
+Página **API Keys** (menu Sistema, **só super admin**): as chaves que os programas de fora usam para falar com a dashboard — o site (candidaturas e disponibilidades), o MCP do Claude (relatórios) e os dispositivos (GPS, rádios). A antiga importação do Gmail foi desligada: as críticas chegam pela API do Google.
 
 ## Criar e gerir as chaves
 

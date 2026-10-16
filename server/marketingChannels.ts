@@ -4,7 +4,7 @@
  *  1. De onde vêm as reservas. Canais próprios (Marketplace — TODAS as
  *     reservas dos parques de terceiros e as dos nossos vindas pelo
  *     multipark.pt —, site das marcas, telefone): reserva de CLIENTE NOVO (1.ª do email, ou sem email) =
- *     "Anúncios Google" (custo = gasto do Google Ads); de quem JÁ ERA cliente
+ *     "Anúncios (Google + Meta)" (custo = gasto em anúncios: Google Ads + Meta); de quem JÁ ERA cliente
  *     = "Orgânico". Parceiros (custo = comissões, mapa campanha → parceria da
  *     Faturação), campanhas sem parceiro e outros à parte. O gclid é só prova
  *     de clique. Reservas pela data de criação, sem canceladas.

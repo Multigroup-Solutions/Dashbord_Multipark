@@ -1,7 +1,12 @@
 // server/jobs/emailInboundSync.ts
 // Pipelines temáticos do email recebido: cria o registo no módulo certo a
 // partir de UM email que chegou por um alias temático:
-//   criticas@        → Google Reviews   (createGoogleReview + resposta IA)
+//   criticas@        → só a caixa de correio (Jorge, 15 out 2026: as críticas
+//                      vêm pela API da Google). Cria a crítica (createGoogleReview +
+//                      rascunho da IA) só com o interruptor REVIEWS_FROM_EMAIL ligado
+//                      ou quando uma PESSOA a importa (`reviewFromEmail`, manualBy).
+//                      Desligado → "review_off": fica na caixa e a triagem ainda pode
+//                      abrir uma reclamação/perdido (nunca muda de caixa sem caso).
 //   reclamacoes@     → Reclamações      (createComplaint)
 //   perdidos@        → Perdidos&Achados (createLostFoundItem)
 //   recursos-humanos@→ inbound_emails (aba Recrutamento; os Leads de Extras
@@ -56,8 +61,167 @@ import {
 } from "../complaintEmail";
 import { aiMergeConflict, aiMergeSameClient, lostFoundMergeRecent, partnerSafeClientEmail } from "../../shared/complaintIntake";
 import { sqlUtcOrNull } from "../../shared/reviewRules";
+import type { InsertGoogleReview } from "../../drizzle/schema";
 
 export type InboundAttachment = { filename?: string; contentType?: string; size?: number; url?: string; key?: string };
+
+/**
+ * Um email da criticas@ → crítica (Google Reviews). Jorge, 15 out 2026: "as
+ * críticas do Google vêm pela API; os emails ficam só na caixa de correio —
+ * só quando alguém põe que aquilo é uma crítica é que importa".
+ *  - automático (sincronização, push, novas tentativas): o que não é crítica
+ *    sai como sempre ("review_summary", "not_review", "ignored"); o que seria
+ *    crítica só a cria com o interruptor REVIEWS_FROM_EMAIL ligado — desligado
+ *    devolve "review_off" ANTES de tocar na BD (nem crítica, nem rascunho da IA);
+ *  - à mão (`manualBy` = quem disse que é crítica): cria sempre (nem o
+ *    REVIEWS_EMAIL_STRICT nem os filtros dos avisos administrativos — a pessoa
+ *    decidiu), com quem e quando (`emailImportedById` / `emailImportedAt`) e
+ *    uma linha no registo de atividade. Compara SEMPRE com as que já estão nas
+ *    Críticas (a regra do REVIEWS_DEDUP, ligado ou não): a API já trouxe as
+ *    críticas do Google, e importar o aviso de uma delas não a pode repetir —
+ *    a do email fica marcada como repetida (não se apaga; Limpeza desfaz).
+ * Uma crítica criada aqui fica sempre com `emailImportedAt` (está nas Críticas);
+ * as que entraram antes sem a marca ficam fora (server/reviewVisibility.ts).
+ */
+export async function reviewFromEmail(
+  parsed: ReturnType<typeof parseInboundBody>,
+  ctx: { subject: string; bodyText: string; messageId: string; receivedAt?: string | null; fromEmail?: string; clientName: string; desc: string },
+  opts: {
+    manualBy?: number | null;
+    /** Gravar noutra ligação (a transação do "Importar para as Críticas"). Omissão: createGoogleReview. */
+    insert?: (data: InsertGoogleReview) => Promise<number | undefined>;
+    /** O registo de atividade e o rascunho da IA ficam para quem chama (`reviewEmailFollowUps`, depois de gravar). */
+    deferFollowUps?: boolean;
+    /**
+     * À mão, por quem só vê as suas cidades: sem parque reconhecido no email, a crítica fica nesta (a cidade
+     * da conversa) — senão desaparecia-lhe das Críticas, como o "Nova crítica" à mão.
+     */
+    fallbackProjectId?: number | null;
+  } = {},
+): Promise<{ targetModule: string; targetId?: number; createdId?: number; duplicateOf?: number | null; sourceEmailDate?: string | null }> {
+  const manualBy = opts.manualBy ?? null;
+  const manual = manualBy != null;
+  const { clientName, desc } = ctx;
+  // Notificação do Google Business Profile: extrai estrelas + nome real do
+  // avaliador + texto limpo (sem links de tracking/rodapé).
+  const { parseGoogleReviewNotification } = await import("../emailParse");
+  // Plano MPV F6b: interruptores das críticas por email (desligados por omissão).
+  const { reviewFlagOn } = await import("../reviewCleanup");
+  const strict = manual ? false : await reviewFlagOn("REVIEWS_EMAIL_STRICT");
+  // À mão compara sempre (ver acima): importar o aviso de uma crítica que a API já trouxe não a repete.
+  const dedup = manual ? true : await reviewFlagOn("REVIEWS_DEDUP");
+  // R3: com o REVIEWS_DEDUP lê também o ASSUNTO (o nome e o perfil podem vir só lá).
+  const g = parseGoogleReviewNotification(ctx.bodyText, dedup ? ctx.subject : "");
+  // R2/R3: resumos ("recebeu N críticas") nunca viram crítica; com o
+  // REVIEWS_EMAIL_STRICT só o aviso de avaliação (ou um email com estrelas).
+  // O resto segue para a triagem normal das caixas (server/mail/service.ts) —
+  // nunca fica "ignored". À mão, a pessoa já decidiu: é crítica.
+  const { emailReviewVerdict, reviewCommentFromEmail } = await import("../../shared/reviewDedup");
+  // O texto da crítica tira-se pela positiva (entre o nome/estrelas e o "Responder").
+  const comment = reviewCommentFromEmail(ctx.bodyText, g.reviewerName);
+  const verdict = manual ? "review" : emailReviewVerdict({
+    fromEmail: ctx.fromEmail, rating: g.rating, subject: ctx.subject, body: ctx.bodyText, strict, dedup,
+    reviewerWithText: !!g.reviewerName && !!comment,
+  });
+  if (verdict === "summary") return { targetModule: "review_summary" };
+  if (verdict === "not_review") return { targetModule: "not_review" };
+  // O GBP manda também notificações ADMINISTRATIVAS (recursos recusados,
+  // mudanças de proprietário do perfil, verificações…) — não são críticas e
+  // poluíam a lista com rating 0. Sem padrão de crítica + com padrão admin
+  // → fica só em inbound_emails, sem criar avaliação.
+  const haystack = `${ctx.subject}\n${ctx.bodyText}`;
+  const isAdminNotice = g.rating === 0 && !g.reviewerName && (
+    /recurso n[ãa]o foi aprovado/i.test(haystack) ||
+    /(propriet[áa]ri[oa]s?|owner) do Perfil/i.test(haystack) ||
+    /j[áa] pode gerir o Perfil/i.test(haystack) ||
+    /perfil da empresa/i.test(haystack) ||
+    /valide|verifica[çc][ãa]o do perfil/i.test(haystack) ||
+    /adicione fotos/i.test(haystack) ||
+    /relat[óo]rio de desempenho/i.test(haystack) ||
+    /convite para gerir/i.test(haystack) ||
+    /pedido de propriedade/i.test(haystack) ||
+    /ficha de empresa.*publicada/i.test(haystack) ||
+    /est[áa] a receber aten[çc][ãa]o/i.test(haystack)
+  );
+  if (isAdminNotice && !manual) {
+    return { targetModule: "ignored" };
+  }
+  // 15 out 2026: importação automática desligada (a omissão) → o email fica só
+  // na caixa de correio. Nada se escreve nas Críticas e a IA não é chamada.
+  if (!manual && !(await reviewFlagOn("REVIEWS_FROM_EMAIL"))) return { targetModule: "review_off" };
+  const reviewer = g.reviewerName || clientName;
+  const text = g.rating > 0 || g.reviewerName
+    ? `${ctx.subject}\n\n${g.cleanText}`.trim().slice(0, 5000)
+    : desc;
+  // Parque: o "sobre Y" do email é o título do perfil Google (16d). Sem
+  // correspondência exata fica "Sem parque" (nunca adivinha) — à mão, por quem
+  // só vê as suas cidades, fica na cidade da conversa (`fallbackProjectId`).
+  const { projectIdForReviewPark } = await import("../reviewOps");
+  const projectId = (await projectIdForReviewPark(g.parkName)) ?? (manual ? opts.fallbackProjectId ?? null : null);
+  const sourceEmailDate = sqlUtcOrNull(ctx.receivedAt);
+  // R3: a mesma crítica (a Google manda 2 emails; a Windsor pode já a ter
+  // trazido) fica marcada como repetida da primeira — guarda-se, não se
+  // apaga, e sai das listas e dos rascunhos automáticos.
+  let duplicateOf: number | null = null;
+  let entryDuplicateBackup: () => string = () => "";
+  if (dedup) {
+    const { findEmailReviewDuplicate } = await import("../reviewCleanup");
+    ({ entryDuplicateBackup } = await import("../reviewCleanup"));
+    const { reviewDateMs, reviewTextKeyFromEmail, reviewerNameKey } = await import("../../shared/reviewDedup");
+    duplicateOf = await findEmailReviewDuplicate({
+      parkKey: projectId != null ? `p${projectId}` : null,
+      rating: g.rating,
+      textKey: reviewTextKeyFromEmail(ctx.bodyText, reviewer),
+      name: reviewerNameKey(reviewer),
+      atMs: reviewDateMs(sourceEmailDate) ?? Date.now(),
+      apiKey: false,
+    });
+  }
+  const markedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const id = await (opts.insert ?? createGoogleReview)({
+    reviewerName: reviewer,
+    reviewerEmail: parsed.clientEmail,
+    rating: g.rating,
+    reviewText: text,
+    vehiclePlate: parsed.vehiclePlate,
+    projectId,
+    status: "pending_response",
+    sourceEmailId: ctx.messageId,
+    sourceEmailDate,
+    importedAt: markedAt,
+    // 15 out 2026: está nas Críticas porque alguém a importou (à mão: quem; sozinha: NULL = o sistema).
+    emailImportedAt: markedAt,
+    emailImportedById: manualBy,
+    // A cópia diz que a tentativa de rascunho é da marca (desfazer volta a pô-la a NULL).
+    ...(duplicateOf ? { duplicateOf, reviewMarkedAt: markedAt, aiDraftAttemptedAt: markedAt, reviewMarkBackup: entryDuplicateBackup() } : {}),
+  } as any);
+  if (id && !opts.deferFollowUps) await reviewEmailFollowUps({ id: Number(id), manualBy, messageId: ctx.messageId, duplicateOf, sourceEmailDate });
+  // A repetida: a conversa liga-se à ORIGINAL (é essa que se trata).
+  return { targetModule: "review", targetId: duplicateOf ?? id, createdId: id ? Number(id) : undefined, duplicateOf, sourceEmailDate };
+}
+
+/**
+ * Depois de gravar a crítica de um email: o registo de atividade (à mão: quem
+ * importou) e o rascunho de resposta da IA — best-effort e por aprovar, nunca
+ * publica (interruptor AI_REVIEW_AUTO_DRAFTS). MPV R1: só para críticas
+ * recentes (14 dias, pela data do email; sem ela, agora). R3: a repetida nunca
+ * tem rascunho (a original já tem). Nunca lança.
+ */
+export async function reviewEmailFollowUps(f: { id: number; manualBy?: number | null; messageId: string; duplicateOf?: number | null; sourceEmailDate?: string | null }): Promise<void> {
+  if (f.manualBy != null) {
+    try {
+      const { logActivity } = await import("../db");
+      await logActivity({ userId: f.manualBy, action: "review_email_import", entity: "google_review", entityId: f.id,
+        details: `Importada à mão da caixa de correio (email ${String(f.messageId).slice(0, 120)})${f.duplicateOf ? ` — repetida de #${f.duplicateOf}` : ""}` } as any);
+    } catch { /* registo */ }
+  }
+  if (!f.duplicateOf) {
+    try {
+      const { autoDraftEmailReview } = await import("../reviewAutoDraft");
+      await autoDraftEmailReview(f.id, f.sourceEmailDate ?? null, { timeoutMs: 15_000 });
+    } catch { /* IA opcional */ }
+  }
+}
 
 // Cria o registo no módulo de destino e devolve { module, id, taskId }.
 async function routeToModule(
@@ -75,6 +239,8 @@ async function routeToModule(
     receivedAt?: string | null;
     /** Lote 57: email de OUTRA caixa que a IA viu como reclamação (ver InboundEmailInput.aiIntake). */
     aiIntake?: AiComplaintIntake | null;
+    /** 15 out 2026: uma PESSOA disse que este email é uma crítica (ver InboundEmailInput.manualReview). */
+    manualReview?: { userId: number } | null;
   },
 ): Promise<{ targetModule: string; targetId?: number; taskId?: number; isNew?: boolean }> {
   // O remetente do cabeçalho é muitas vezes o BACKOFFICE que reencaminha
@@ -93,103 +259,7 @@ async function routeToModule(
   let desc = `${ctx.subject}\n\n${ctx.bodyText}`.trim().slice(0, 5000);
 
   if (alias === "criticas") {
-    // Notificação do Google Business Profile: extrai estrelas + nome real do
-    // avaliador + texto limpo (sem links de tracking/rodapé).
-    const { parseGoogleReviewNotification } = await import("../emailParse");
-    // Plano MPV F6b: interruptores das críticas por email (desligados por omissão).
-    const { reviewFlagOn } = await import("../reviewCleanup");
-    const strict = await reviewFlagOn("REVIEWS_EMAIL_STRICT");
-    const dedup = await reviewFlagOn("REVIEWS_DEDUP");
-    // R3: com o REVIEWS_DEDUP lê também o ASSUNTO (o nome e o perfil podem vir só lá).
-    const g = parseGoogleReviewNotification(ctx.bodyText, dedup ? ctx.subject : "");
-    // R2/R3: resumos ("recebeu N críticas") nunca viram crítica; com o
-    // REVIEWS_EMAIL_STRICT só o aviso de avaliação (ou um email com estrelas).
-    // O resto segue para a triagem normal das caixas (server/mail/service.ts) —
-    // nunca fica "ignored".
-    const { emailReviewVerdict, reviewCommentFromEmail } = await import("../../shared/reviewDedup");
-    // O texto da crítica tira-se pela positiva (entre o nome/estrelas e o "Responder").
-    const comment = reviewCommentFromEmail(ctx.bodyText, g.reviewerName);
-    const verdict = emailReviewVerdict({
-      fromEmail: ctx.fromEmail, rating: g.rating, subject: ctx.subject, body: ctx.bodyText, strict, dedup,
-      reviewerWithText: !!g.reviewerName && !!comment,
-    });
-    if (verdict === "summary") return { targetModule: "review_summary" };
-    if (verdict === "not_review") return { targetModule: "not_review" };
-    // O GBP manda também notificações ADMINISTRATIVAS (recursos recusados,
-    // mudanças de proprietário do perfil, verificações…) — não são críticas e
-    // poluíam a lista com rating 0. Sem padrão de crítica + com padrão admin
-    // → fica só em inbound_emails, sem criar avaliação.
-    const haystack = `${ctx.subject}\n${ctx.bodyText}`;
-    const isAdminNotice = g.rating === 0 && !g.reviewerName && (
-      /recurso n[ãa]o foi aprovado/i.test(haystack) ||
-      /(propriet[áa]ri[oa]s?|owner) do Perfil/i.test(haystack) ||
-      /j[áa] pode gerir o Perfil/i.test(haystack) ||
-      /perfil da empresa/i.test(haystack) ||
-      /valide|verifica[çc][ãa]o do perfil/i.test(haystack) ||
-      /adicione fotos/i.test(haystack) ||
-      /relat[óo]rio de desempenho/i.test(haystack) ||
-      /convite para gerir/i.test(haystack) ||
-      /pedido de propriedade/i.test(haystack) ||
-      /ficha de empresa.*publicada/i.test(haystack) ||
-      /est[áa] a receber aten[çc][ãa]o/i.test(haystack)
-    );
-    if (isAdminNotice) {
-      return { targetModule: "ignored" };
-    }
-    const reviewer = g.reviewerName || clientName;
-    const text = g.rating > 0 || g.reviewerName
-      ? `${ctx.subject}\n\n${g.cleanText}`.trim().slice(0, 5000)
-      : desc;
-    // Parque: o "sobre Y" do email é o título do perfil Google (16d). Sem
-    // correspondência exata fica "Sem parque" (nunca adivinha).
-    const { projectIdForReviewPark } = await import("../reviewOps");
-    const projectId = await projectIdForReviewPark(g.parkName);
-    const sourceEmailDate = sqlUtcOrNull(ctx.receivedAt);
-    // R3: a mesma crítica (a Google manda 2 emails; a Windsor pode já a ter
-    // trazido) fica marcada como repetida da primeira — guarda-se, não se
-    // apaga, e sai das listas e dos rascunhos automáticos.
-    let duplicateOf: number | null = null;
-    let entryDuplicateBackup: () => string = () => "";
-    if (dedup) {
-      const { findEmailReviewDuplicate } = await import("../reviewCleanup");
-      ({ entryDuplicateBackup } = await import("../reviewCleanup"));
-      const { reviewDateMs, reviewTextKeyFromEmail, reviewerNameKey } = await import("../../shared/reviewDedup");
-      duplicateOf = await findEmailReviewDuplicate({
-        parkKey: projectId != null ? `p${projectId}` : null,
-        rating: g.rating,
-        textKey: reviewTextKeyFromEmail(ctx.bodyText, reviewer),
-        name: reviewerNameKey(reviewer),
-        atMs: reviewDateMs(sourceEmailDate) ?? Date.now(),
-        apiKey: false,
-      });
-    }
-    const markedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
-    const id = await createGoogleReview({
-      reviewerName: reviewer,
-      reviewerEmail: parsed.clientEmail,
-      rating: g.rating,
-      reviewText: text,
-      vehiclePlate: parsed.vehiclePlate,
-      projectId,
-      status: "pending_response",
-      sourceEmailId: ctx.messageId,
-      sourceEmailDate,
-      importedAt: new Date().toISOString().slice(0, 19).replace("T", " "),
-      // A cópia diz que a tentativa de rascunho é da marca (desfazer volta a pô-la a NULL).
-      ...(duplicateOf ? { duplicateOf, reviewMarkedAt: markedAt, aiDraftAttemptedAt: markedAt, reviewMarkBackup: entryDuplicateBackup() } : {}),
-    } as any);
-    // rascunho de resposta por IA (prompt central + sentimento/contexto),
-    // best-effort e por aprovar — nunca publica. Interruptor AI_REVIEW_AUTO_DRAFTS.
-    // MPV R1: só para críticas recentes (14 dias, pela data do email; sem ela, agora).
-    // R3: a repetida nunca tem rascunho (a original já tem).
-    if (id && !duplicateOf) {
-      try {
-        const { autoDraftEmailReview } = await import("../reviewAutoDraft");
-        await autoDraftEmailReview(id, sourceEmailDate, { timeoutMs: 15_000 });
-      } catch { /* IA opcional */ }
-    }
-    // A repetida: a conversa liga-se à ORIGINAL (é essa que se trata).
-    return { targetModule: "review", targetId: duplicateOf ?? id };
+    return reviewFromEmail(parsed, { ...ctx, clientName, desc }, { manualBy: ctx.manualReview?.userId ?? null });
   }
 
   // Faturação automática de parceiros (ex.: "Auto-fatura" mensal do
@@ -627,6 +697,12 @@ export interface InboundEmailInput {
    * 14 out 2026: também perdidos (alias "perdidos") e "Por confirmar".
    */
   aiIntake?: AiComplaintIntake | null;
+  /**
+   * 15 out 2026: uma PESSOA disse que este email é uma crítica ("Por
+   * classificar → Críticas"): no alias "criticas" a crítica é criada mesmo com
+   * o REVIEWS_FROM_EMAIL desligado, com quem e quando (`reviewFromEmail`).
+   */
+  manualReview?: { userId: number } | null;
 }
 
 export interface AiComplaintIntake {
@@ -725,6 +801,7 @@ export async function processInboundEmail(input: InboundEmailInput): Promise<Inb
     const routed = await routeToModule(alias, parsed, {
       subject, bodyText, fromName, fromEmail, messageId, gmThreadId, refs, receivedAt,
       aiIntake: alias === "reclamacoes" || alias === "perdidos" ? input.aiIntake ?? null : null,
+      manualReview: alias === "criticas" ? input.manualReview ?? null : null,
     });
     routedOk = true;
 

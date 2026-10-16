@@ -16,6 +16,7 @@ import {
   actionCategory,
   actionPoints,
   emptyDayMetrics,
+  legacyIncidentCounts,
   round2,
   speedingWithGpsDay,
   type DayMetrics,
@@ -513,10 +514,12 @@ export function computeEmployeeDays(input: EngineInput): EngineOutput {
     }
   }
 
-  // ── Ocorrências (acidentes/danos + informativos)
+  // ── Ocorrências antigas do dashboard (tabela `incidents`, informativas). Plano 64 (F3): só nos dias antes
+  // de LEGACY_INCIDENTS_UNTIL_DAY — a partir daí vêm da app Multipark ao vivo (agentOccurrences, acima) e
+  // dos acidentes confirmados (abaixo); contar as duas era contar a mesma ocorrência duas vezes.
   for (const i of input.incidents) {
     const d = operationalDayOf(i.at);
-    if (!inRange(d, startDay, endDay)) continue;
+    if (!inRange(d, startDay, endDay) || !legacyIncidentCounts(d)) continue;
     const reporter = identity.user(i.reportedBy);
     if (reporter != null) row(reporter, d).metrics.incidentsReported += 1;
     if (i.employeeId && incidentCountsAgainstDriver(i)) {

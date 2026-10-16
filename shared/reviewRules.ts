@@ -118,3 +118,30 @@ export function sqlUtcOrNull(v: unknown): string | null {
   const t = utcMs(v);
   return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 19).replace("T", " ") : null;
 }
+
+// ─── Críticas que vieram por email (Jorge, 15 out 2026) ─────────────────────
+
+/**
+ * "As críticas do Google vêm diretamente pela API da Google; as que entraram
+ * por email estão a repetir — tira-as das Críticas, mas não apagues."
+ *
+ * Uma crítica fica FORA das Críticas (lista, números, médias, rascunhos e
+ * respostas automáticas) quando entrou SOZINHA por email: tem o Message-ID do
+ * email (`sourceEmailId`), não está ligada a uma crítica da API/Windsor
+ * (`googleReviewKey`) e ninguém a importou (`emailImportedAt`). Fica guardada
+ * (nada se apaga) e o super admin vê-a só para consulta.
+ *  - importada à mão da caixa de correio ("Importar para as Críticas" ou
+ *    "Por classificar → Críticas") → `emailImportedAt` + `emailImportedById`;
+ *  - criada com o interruptor REVIEWS_FROM_EMAIL ligado → `emailImportedAt`
+ *    (sem `emailImportedById` = o sistema);
+ *  - ligada depois à da API (a importação concilia) → tem `googleReviewKey`.
+ * As antigas (antes de 15 out 2026) não têm nenhuma das marcas: ficam todas
+ * fora. PURA.
+ */
+export function isEmailOnlyReview(r: { sourceEmailId?: string | null; googleReviewKey?: string | null; emailImportedAt?: unknown }): boolean {
+  return !!String(r.sourceEmailId ?? "").trim() && !String(r.googleReviewKey ?? "").trim() && (r.emailImportedAt == null || String(r.emailImportedAt).trim() === "");
+}
+
+/** O porquê de não se poder mexer numa crítica que ficou só na caixa de correio. */
+export const EMAIL_ONLY_REVIEW_READONLY =
+  "Esta crítica veio por email e está fora das Críticas (só para consulta). Se for mesmo uma crítica, importa-a na caixa de correio (Comunicação → Críticas → \"Importar para as Críticas\").";
