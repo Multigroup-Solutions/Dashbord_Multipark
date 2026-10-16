@@ -18,9 +18,9 @@
  * GPS. As linhas do GPS (`daily_driver_history.date`, `driver_day_shares.day`)
  * guardam o DIA de Lisboa a que pertencem e comparam-se como dia.
  */
-import { and, gte, lte, sql } from "drizzle-orm";
+import { and, asc, gte, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { employees, extrasDiaAssignments } from "../drizzle/schema";
+import { employees, extrasDiaAssignments, timeRecords } from "../drizzle/schema";
 import { bookingHistoryScope, cityNameScope, cityScope, employeeScope, gpsRowOwnScope, gpsRowScope, projectScope } from "./cityScope";
 import {
   LIVE_ACTIONS_SINCE, getActivityActionsLive, getActivityDetailLive,
@@ -31,6 +31,7 @@ import { addDays, daysInRange, lisbonDayOf, lisbonDayRangeUtc, lisbonHoursSince 
 import { lisbonToday } from "../shared/expensePeriods";
 import { aggregateSpeedHistory, buildIdentityResolver, classifyActionShift, leftoverFromShares, type ShiftWindow, type SpeedEntry } from "./activityHelpers";
 import { matchKey } from "../shared/textKey";
+import { pontoMonthTotals } from "./payroll/shifts";
 import { classifyMovement, displayChangeType, MOVEMENT_KIND_CHANGE_TYPES } from "../shared/multiparkMovements";
 
 const rowsOf = (r: any): any[] => ((Array.isArray(r) ? r[0] : r) as any[]) ?? [];
@@ -420,7 +421,29 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
     }
   }
 
-  // ── Ponto (horas pagas do check-out; os rejeitados não contam) + km provisórios
+  // ── Ponto (plano 64, D10): a regra da ficha → Ponto e da folha (#390) —
+  // turnos emparelhados (pairShifts), só os contáveis (sem suspeitos, rejeitados
+  // nem entradas sem saída), no dia de Lisboa em que COMEÇAM. Lê-se de
+  // [início − 1 dia, fim + 1 dia): a saída de um turno da noite cai no dia
+  // seguinte. Antes somava as saídas do período (com as suspeitas, no dia da
+  // saída). Também são as "horas trabalhadas" do Resumo do dia.
+  {
+    const readFrom = lisbonDayRangeUtc(addDays(startDate, -1)).start;
+    const readUntil = lisbonDayRangeUtc(addDays(lastDay, 1)).end;
+    const recs = await db.select({
+      id: timeRecords.id, employeeId: timeRecords.employeeId, type: timeRecords.type, recordedAt: timeRecords.recordedAt,
+      hoursWorked: timeRecords.hoursWorked, notes: timeRecords.notes, reviewStatus: timeRecords.reviewStatus,
+      terminalStatus: timeRecords.terminalStatus, terminalUntil: timeRecords.terminalUntil,
+    }).from(timeRecords)
+      .where(and(gte(timeRecords.recordedAt, readFrom), lt(timeRecords.recordedAt, readUntil), employeeScope(timeRecords.employeeId)))
+      .orderBy(asc(timeRecords.recordedAt), asc(timeRecords.id));
+    // a mesma conta da ficha → Ponto (pontoMonthSummary), ficha a ficha, nos dias do período
+    for (const [empId, summary] of pontoMonthTotals(recs, startDate, lastDay).byEmployee) {
+      if (summary.totalHours > 0) personForEmployee(empId).pontoHours = summary.totalHours;
+    }
+  }
+
+  // ── km provisórios (do resumo do Zello na saída do ponto; os rejeitados não contam)
   const today = lisbonToday();
   const collected = new Set(rowsOf(await db.execute(sql`
     SELECT DISTINCT DATE_FORMAT(date, '%Y-%m-%d') AS d FROM daily_driver_history
@@ -428,13 +451,11 @@ export async function getActivityRange(opts: { startDate: string; endDate?: stri
   out.gpsMissingDays = days.filter((d) => d <= today && !collected.has(d));
   const missing = new Set(out.gpsMissingDays);
   const pontoRows = rowsOf(await db.execute(sql`
-    SELECT employeeId, recordedAt, hoursWorked, zelloKm, zelloMaxSpeed FROM time_records
+    SELECT employeeId, recordedAt, zelloKm, zelloMaxSpeed FROM time_records
      WHERE type = 'check_out' AND recordedAt >= ${range.start} AND recordedAt < ${range.end}
        AND reviewStatus <> 'rejected' AND ${employeeScope(sql`time_records.employeeId`)}`));
   for (const r of pontoRows) {
     const p = personForEmployee(Number(r.employeeId));
-    const h = Number(r.hoursWorked ?? 0);
-    if (h > 0) p.pontoHours = r2((p.pontoHours ?? 0) + h);
     const day = lisbonDayOf(r.recordedAt);
     const km = Number(r.zelloKm ?? 0);
     if (missing.has(day) && km > 0) {

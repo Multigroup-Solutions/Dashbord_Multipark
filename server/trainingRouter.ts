@@ -452,10 +452,12 @@ export const trainingRouter = router({
     if (r.kind !== "quiz") throw new TRPCError({ code: "BAD_REQUEST", message: "Tentativa inválida." });
     return r;
   }),
-  quizRanking: protectedProcedure.query(async ({ ctx }) => {
+  // Plano 64 (D6): só fichas ativas e a cidade/marca do topo (o projectId do
+  // pedido estreita o âmbito no middleware e vai também para a consulta).
+  quizRanking: protectedProcedure.input(z.object({ projectId: z.number().nullish() }).optional()).query(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
     const { quizRanking } = await import("./trainingAttempts");
-    return quizRanking();
+    return quizRanking(50, { projectId: input?.projectId ?? null });
   }),
   /** Nomes a mostrar no ranking — só para ids que jogaram (extra+). */
   rankingNames: protectedProcedure.input(z.object({ employeeIds: z.array(z.number().int().positive()).max(200) })).query(async ({ ctx, input }) => {
@@ -557,9 +559,11 @@ export const trainingRouter = router({
     if (!me) return [];
     return getCareerExamAttempts(me.employee.id);
   }),
-  careerExamAttempts: protectedProcedure.input(z.object({ employeeId: z.number().optional(), examId: z.number().optional() })).query(async ({ ctx, input }) => {
+  // Plano 64 (D7): a taxa do Pessoas — só exames não arquivados, fichas ativas
+  // e a cidade/marca do topo (`forStats`). Os outros chamadores não passam a opção.
+  careerExamAttempts: protectedProcedure.input(z.object({ employeeId: z.number().optional(), examId: z.number().optional(), projectId: z.number().nullish() })).query(async ({ ctx, input }) => {
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
-    return getCareerExamAttempts(input.employeeId, input.examId, trainingResultScope(await rhViewer(ctx.user)));
+    return getCareerExamAttempts(input.employeeId, input.examId, trainingResultScope(await rhViewer(ctx.user)), { forStats: true });
   }),
 
   // ─── A minha formação (percursos + progresso) ───────────────────────────

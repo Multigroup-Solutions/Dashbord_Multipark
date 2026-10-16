@@ -5,7 +5,7 @@ pagina: dashboards
 titulo: Dashboards (Geral, Financeiro, Operações, Pessoas, Suporte)
 separadores: geral=Geral, financeiro=Financeiro, operacoes=Operações, pessoas=Pessoas, suporte=Suporte, marketing=Marketing
 rotas: /dashboards, /dashboard, /financeiro, /operacoes-dashboard, /pessoas-dashboard, /suporte-dashboard
-palavras: dashboards, dashboard geral, dashboard financeiro, dashboard operações, dashboard pessoas, dashboard suporte, entregues s/ iva, custos s/ iva, margem realizada, pagamentos nos próximos 7 dias, contratos a expirar, taxa aprovação exames, rating médio google, briefing do dia, km por condutor, sem acesso no dashboard, dívida atual
+palavras: dashboards, dashboard geral, dashboard financeiro, dashboard operações, dashboard pessoas, dashboard suporte, entregues s/ iva, custos s/ iva, margem realizada, pagamentos nos próximos 7 dias, contratos a expirar, taxa aprovação exames, fichas ativas, documentos em falta, rating médio google, briefing do dia, km por condutor, sem acesso no dashboard, dívida atual
 ---
 # Dashboards
 
@@ -14,12 +14,12 @@ Os **Dashboards** (no topo do menu) juntam num só sítio os números de cada á
 ## Quem vê os Dashboards
 - A página **Dashboards** (permissão **Dashboards**) é de **admin e super admin** (ou de quem tenha essa permissão dada por pessoa, em Permissões).
 - Os separadores aparecem todos a quem abre a página, mas os números de cada um pedem a permissão do módulo, verificada no servidor: o **Financeiro** pede o módulo Financeiro e a permissão de ver **totais financeiros** (`finance.view_totals`); o corte por papel (só admin e acima veem os números principais e os das despesas) é feito só no ecrã. O **Marketing** pede o Marketing (super admin).
-- **"Sem acesso" só aparece em alguns sítios**: nos cartões do **Geral**, no **Operações**, nos cartões do **Suporte**, no **Top 5** do Pessoas ("A tua conta não vê a avaliação de outras pessoas.") e no separador **Marketing**. Nos outros cartões, um pedido recusado aparece como **0**, como **"—"** ou como uma **lista vazia** — antes de concluir que é zero, confirma que a pessoa tem a permissão do módulo.
+- **"Sem acesso" só aparece em alguns sítios**: nos cartões do **Geral**, no **Operações**, nos cartões do **Suporte** e do **Pessoas** (no Top 5: "A tua conta não vê a avaliação de outras pessoas.") e no separador **Marketing**. Nos outros cartões, um pedido recusado aparece como **0**, como **"—"** ou como uma **lista vazia** — antes de concluir que é zero, confirma que a pessoa tem a permissão do módulo.
 - A **cidade** e a **marca** escolhidas no topo da app valem em todos os dashboards (só aparecem as cidades que podes ver); as **datas** são de cada página. Onde um cartão não segue o filtro, está dito abaixo.
 - Ao entrar (sem link de onde vieste): papel abaixo de team leader (utilizador, extra, condutor) → a ficha (RH); team leader ou acima **sem** a permissão Dashboards → Tarefas; **com** ela → /dashboard, que abre os **Dashboards** (separador Geral). Quem não tem os Dashboards e abre /, /dashboard ou /dashboards vai, sem aviso, para o 1.º ecrã do seu menu.
 
 ## Geral (o resumo de hoje)
-Os números de **hoje**, de relance, e atalhos para os outros dashboards. Não tem barra de filtros: os cartões das reservas e das despesas seguem a cidade/marca do topo. Reclamações e críticas não seguem esse filtro, mas o servidor limita-as às **cidades da pessoa**; os colaboradores são sempre de todas as cidades.
+Os números de **hoje**, de relance, e atalhos para os outros dashboards. Não tem barra de filtros: os cartões das reservas e das despesas seguem a cidade/marca do topo. Reclamações e críticas não seguem esse filtro, mas o servidor limita-as às **cidades da pessoa**; os colaboradores também não o seguem: são as fichas que a lista do RH mostra sem cidade escolhida.
 - **Briefing do dia** (quem vê a Passagem de turno): um bloco por cidade, feito todos os dias por volta das 07:30 — **Entradas / saídas**, **Pico**, **Extras escalados / necessários** (a vermelho quando faltam) e **Prazos hoje (em atraso)**. A etiqueta "texto IA" quer dizer que o parágrafo foi escrito pela IA. **Ver detalhe** mostra as entradas/saídas por hora, os prazos, os pendentes da passagem de turno, o que se repete entre turnos, os alertas e o marketing.
   - **Prazos hoje (em atraso)**: só reclamações, pela **mesma regra do cartão Reclamações** — o prazo (SLA) passou ou passa hoje e a reclamação está **Nova** ou **Em análise** (em "Aguarda cliente" o prazo para; a "data limite" sem prazo não conta; arquivadas e convertidas não entram). "Em atraso" = o prazo já tinha passado quando o briefing foi feito. As ocorrências antigas do dashboard deixaram de entrar (as da app Multipark não têm prazo).
   - **"previsão incompleta: …"** (aviso amarelo, também no email): a previsão do Extras-Dia em que o briefing se baseia veio incompleta — a leitura das reservas foi cortada no limite ou a BD da Multipark não respondeu e usou-se a **cópia das reservas**. As entradas, as saídas e os extras necessários desse dia podem estar abaixo do real.
@@ -29,7 +29,7 @@ Os números de **hoje**, de relance, e atalhos para os outros dashboards. Não t
 - **Despesas Mês**: despesas com data neste mês (não canceladas), com o n.º de registos. **Pendente**: as despesas no estado **Pendente**, de sempre (não só do mês) — as **Em atraso** não entram aqui. Só admin e super admin veem estes dois com números; os outros papéis veem 0 €.
 - **Reclamações**: todas as não arquivadas, em qualquer estado; "N em atraso" = passou o prazo e ainda está Nova ou Em análise.
 - **Média Google**: média das estrelas das críticas (as sem estrelas não contam; as sem parque nem marca também não), com uma casa decimal; "N pendentes" = sem resposta enviada (um rascunho da IA não conta) e não fechadas. Sem críticas aparece 0,0 ★.
-- **Colaboradores**: fichas ativas (de todas as cidades), com "N efetivos · N extras".
+- **Colaboradores**: as fichas ativas que a lista do RH mostra **sem cidade escolhida** (este cartão ainda não segue a cidade do topo), com "N efetivos · N extras" — efetivos = funcionários (sem termo e a termo, sem os parceiros-empresa); extras = posto **ou** contrato "extra".
 - **Dashboards · N atalhos**: botões para os dashboards que podes abrir.
 - Cada cartão que não carrega diz **"Não carregou · tentar de novo"**; sem permissão diz **"Sem acesso"**. Exceção: as despesas (Despesas Mês e Pendente) nem são pedidas para quem não é admin e mostram 0 €.
 
@@ -56,15 +56,15 @@ Visão geral operacional. Filtros: **Período** (por omissão os **últimos 30 d
 - Se a leitura das reservas falhar aparece **"Não foi possível ler as reservas da Multipark."** com **Tentar de novo**, e os gráficos dizem "Sem números (ver o aviso acima)" — não é zero.
 
 ## Pessoas (/pessoas-dashboard)
-RH, desempenho e formação. A barra de filtros desta página **não muda nenhum número**. **Funcionários Ativos** e **Documentos em Falta** contam **todas as cidades**; os outros cartões seguem as cidades que podes ver.
-- **Funcionários Ativos**: fichas ativas de todas as cidades, com "N permanentes".
-- **Contratos a Expirar**: contratos que acabam nos **próximos 30 dias** — os que acabam **hoje** não contam (conta também fichas inativas com o contrato a acabar).
-- **Documentos em Falta** (todas as cidades): soma, por ficha, os que faltam dos 7 obrigatórios (foto, cartão de cidadão, carta de condução, comprovativo do NIB, comprovativo de morada, contrato e termo de responsabilidade), com o n.º de colaboradores; só entram fichas que já têm pelo menos um documento.
-- **Avaliados (7 dias)**: pessoas com dias avaliados nos últimos 7 dias operacionais (o dia começa às 03:00); "—" se a tua conta só vê a tua própria avaliação.
-- **Taxa Aprovação Exames**: tentativas aprovadas ÷ todas as tentativas dos exames de carreira; "—" sem tentativas.
-- **Distribuição por Posição** e **por Tipo de Contrato**: contagens das fichas (incluem as inativas).
-- **Top 5 — últimos 7 dias**: os 5 com mais pontos na Avaliação. **Top 5 Quiz Ranking**: os 5 melhores do quiz, com o n.º de jogos e a melhor pontuação.
-- Atenção: se a leitura das fichas ou dos documentos falhar, estes cartões mostram 0 em vez de um erro — confirma no RH antes de concluir.
+RH, desempenho e formação. A barra tem só **Cidade** e **Marca** (já não tem Período: os números são os de agora ou janelas fixas, com o rótulo a dizer qual) e vale para **todos** os cartões — com uma cidade escolhida, só essa cidade; sem cidade, a mesma que a lista do RH te mostra. Cada número é o da página do módulo, com a mesma cidade. Só contam as **fichas ativas**: as inativas, as desativadas e os candidatos ficam de fora.
+- **Fichas ativas**: as fichas ativas da lista do RH (o mesmo número que RH → Ativos), com "N funcionários · N extras" (e "· N parceiros-empresa" quando houver, para a soma bater com o total). **Extra** = posto **ou** contrato "extra"; **funcionário** = o resto (sem termo e a termo), sem os parceiros-empresa. Um extra já não conta duas vezes.
+- **Contratos a Expirar**: fichas ativas com o contrato a acabar entre **hoje e daqui a 30 dias** (dias de Lisboa) — o que acaba **hoje** conta.
+- **Documentos em Falta**: soma, por ficha ativa, os que faltam dos 7 obrigatórios (foto, cartão de cidadão, carta de condução, comprovativo do NIB, comprovativo de morada, contrato e termo de responsabilidade), com o n.º de fichas. Uma ficha **sem nenhum documento** conta com os 7 (antes ficava de fora — por isso o número subiu). É a mesma conta da etiqueta "N em falta" da lista do RH.
+- **Avaliados (7 dias)**: pessoas com dias avaliados nos **últimos 7 dias operacionais até ontem** (o dia começa às 03:00; o de hoje ainda não está calculado). "Sem acesso" se a tua conta só vê a tua própria avaliação.
+- **Taxa Aprovação Exames**: tentativas aprovadas ÷ todas as tentativas dos exames de carreira **não arquivados**, das fichas ativas; "—" sem tentativas.
+- **Distribuição por Posição** e **por Tipo de Contrato**: as fichas ativas da lista (contrato vazio conta como "Permanente", o valor por omissão).
+- **Top 5 — últimos 7 dias operacionais (até ontem)**: os 5 com mais pontos na Avaliação, como a página Avaliação. **Top 5 Quiz Ranking**: os 5 melhores do quiz (só fichas ativas), com o n.º de jogos e a melhor pontuação.
+- Se uma leitura falhar, o cartão mostra **"—"** com "Leitura falhou — não é 0" e, por baixo, o aviso com **Tentar de novo**; sem permissão, **"Sem acesso"**. Nunca 0 por erro.
 
 ## Suporte (/suporte-dashboard)
 Reclamações, críticas Google, ocorrências e perdidos e achados. A barra tem só **Cidade** e **Marca** (já não tem Período: os números são os de agora) e vale para **todos** os cartões — com uma cidade escolhida, o Suporte mostra só essa cidade; sem cidade, as cidades que podes ver. Cada número é o mesmo da página do módulo, com a mesma cidade.

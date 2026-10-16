@@ -9,6 +9,7 @@
  */
 
 import { pontoShiftHours } from "../../shared/pontoHours";
+import { addDays, lisbonDayRangeUtc } from "../../shared/lisbonDay";
 
 export interface TimeRecordLike {
   id: number;
@@ -112,7 +113,11 @@ export function splitShiftHours(inAt: Date, outAt: Date): { normal: number; nigh
  *  - "[SUSPEITO]" nas notas ou reviewStatus=suspicious → status suspicious
  *    (excluído das horas aprovadas até revisão); approved conta; rejected não.
  */
-export function pairShifts(records: TimeRecordLike[]): { shifts: Shift[]; orphans: TimeRecordLike[] } {
+export function pairShifts(records: TimeRecordLike[], opts: { split?: boolean } = {}): { shifts: Shift[]; orphans: TimeRecordLike[] } {
+  // `split: false` (plano 64): sem a divisão noite/fim de semana, que é minuto
+  // a minuto e pesa em muitas fichas — as horas, o estado e o dia ficam iguais
+  // (não dependem dela). Só para quem não usa `split`/`daysTouched`.
+  const withSplit = opts.split !== false;
   const sorted = [...records].sort((a, b) => (a.recordedAt < b.recordedAt ? -1 : a.recordedAt > b.recordedAt ? 1 : a.id - b.id));
   const shifts: Shift[] = [];
   const orphans: TimeRecordLike[] = [];
@@ -144,8 +149,8 @@ export function pairShifts(records: TimeRecordLike[]): { shifts: Shift[]; orphan
     const hours = pontoShiftHours({ inRec: open, outRec: r, realHours });
     // horas abaixo das reais: a divisão noite/fim de semana só conta até lá
     const effectiveOut = hours < realHours - 0.01 ? new Date(inD.getTime() + hours * 3600000) : outD;
-    const sp = splitShiftHours(inD, effectiveOut);
     const { day } = lisbonParts(inD);
+    const sp = withSplit ? splitShiftHours(inD, effectiveOut) : { normal: 0, night: 0, weekend: 0, days: [day] };
     shifts.push({
       inId: open.id, outId: r.id, inAt: open.recordedAt, outAt: r.recordedAt, hours: Math.round(hours * 100) / 100,
       status: statusOf(open, r), day, split: { normal: sp.normal, night: sp.night, weekend: sp.weekend }, daysTouched: sp.days,
@@ -178,7 +183,8 @@ export function countableShifts(shifts: Shift[]): Shift[] {
 export function pontoMonthSummary(records: TimeRecordLike[], firstDay: string, lastDay: string): {
   totalHours: number; shifts: number; suspiciousHours: number; suspiciousShifts: number; openShifts: number;
 } {
-  const month = pairShifts(records).shifts.filter((s) => s.day >= firstDay && s.day <= lastDay);
+  // só horas, estado e dia: sem a divisão noite/fim de semana (os mesmos números, bem mais rápido)
+  const month = pairShifts(records, { split: false }).shifts.filter((s) => s.day >= firstDay && s.day <= lastDay);
   const countable = countableShifts(month);
   const suspicious = month.filter((s) => s.status === "suspicious");
   const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -189,6 +195,52 @@ export function pontoMonthSummary(records: TimeRecordLike[], firstDay: string, l
     suspiciousShifts: suspicious.length,
     openShifts: month.filter((s) => s.status === "open").length,
   };
+}
+
+/**
+ * A janela de UM mês do ponto (plano 64, D2) — a mesma para a ficha → Ponto
+ * (`getMonthlyHours`) e para o RH → "Horas este mês":
+ *  - `firstDay`/`lastDay`: o mês em dias de Lisboa (os turnos contam no dia em
+ *    que COMEÇAM);
+ *  - `readFrom`/`readUntil`: o que se lê da BD, `[dia 1 − 1, último + 1]` em
+ *    UTC (`>= readFrom AND < readUntil`) — o turno da véspera que acaba no
+ *    dia 1 (é do mês anterior) e o do último dia que acaba no seguinte (é
+ *    deste). PURA.
+ */
+export function pontoMonthWindow(year: number, month: number): { firstDay: string; lastDay: string; readFrom: string; readUntil: string } {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const firstDay = `${year}-${pad(month)}-01`;
+  const lastDay = `${year}-${pad(month)}-${pad(new Date(Date.UTC(year, month, 0)).getUTCDate())}`;
+  return {
+    firstDay, lastDay,
+    readFrom: lisbonDayRangeUtc(addDays(firstDay, -1)).start,
+    readUntil: lisbonDayRangeUtc(addDays(lastDay, 1)).end,
+  };
+}
+
+/**
+ * Horas do ponto de VÁRIAS fichas num período (plano 64, D2): soma, ficha a
+ * ficha, o `pontoMonthSummary` (a regra da folha e da ficha → Ponto). Nunca
+ * emparelha picagens de fichas diferentes. PURA.
+ */
+export function pontoMonthTotals(records: ReadonlyArray<TimeRecordLike & { employeeId: number }>, firstDay: string, lastDay: string): {
+  totalHours: number; suspiciousHours: number; openShifts: number; employees: number; byEmployee: Map<number, ReturnType<typeof pontoMonthSummary>>;
+} {
+  const byEmp = new Map<number, TimeRecordLike[]>();
+  for (const r of records) {
+    const list = byEmp.get(r.employeeId);
+    if (list) list.push(r); else byEmp.set(r.employeeId, [r]);
+  }
+  const byEmployee = new Map<number, ReturnType<typeof pontoMonthSummary>>();
+  let total = 0, suspicious = 0, open = 0, employees = 0;
+  for (const [id, list] of byEmp) {
+    const s = pontoMonthSummary(list, firstDay, lastDay);
+    byEmployee.set(id, s);
+    total += s.totalHours; suspicious += s.suspiciousHours; open += s.openShifts;
+    if (s.shifts > 0) employees++;
+  }
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  return { totalHours: r2(total), suspiciousHours: r2(suspicious), openShifts: open, employees, byEmployee };
 }
 
 /**

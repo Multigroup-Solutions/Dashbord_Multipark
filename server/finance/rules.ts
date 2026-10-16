@@ -146,10 +146,8 @@ export function salaryForPeriod(inp: SalaryPeriodInput): SalaryPeriodResult {
   return out;
 }
 
-/** Regra ÚNICA para "é extra" (Faturação usava contractType, Anual usava position). */
-export function isExtraEmployee(e: { contractType?: string | null; position?: string | null }): boolean {
-  return e.contractType === "extra" || e.position === "extra";
-}
+/** Regra ÚNICA para "é extra" (Faturação usava contractType, Anual usava position) — vive em shared/employeeKind.ts (plano 64, D0). */
+export { isExtraEmployee } from "../../shared/employeeKind";
 
 /** Distribuição equitativa pelas folhas da árvore (quem está num nível superior). */
 export function shareTargets(targets: number[], filter?: Set<number>): { matching: number[]; share: number } {

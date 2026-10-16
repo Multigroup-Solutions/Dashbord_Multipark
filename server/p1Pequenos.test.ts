@@ -53,7 +53,8 @@ describe("Pessoas: semana ISO com o ano ISO", () => {
   it("o painel já não pede semanas: lê o motor da Avaliação nos últimos 7 dias operacionais (nunca o ano civil)", () => {
     const src = readFileSync(resolve(root, "client/src/pages/PessoasDashboard.tsx"), "utf8");
     expect(src).toContain("operationalDayOf(Date.now())");
-    expect(src).toContain("trpc.evaluation.ranking.useQuery({ from: evalFrom, to: evalTo }");
+    // plano 64 (D5): com a cidade/marca do topo, como a página Avaliação
+    expect(src).toContain("trpc.evaluation.ranking.useQuery({ from: evalFrom, to: evalTo, ...scope }");
     expect(src).not.toMatch(/currentYear\s*=\s*now\.getFullYear\(\)/);
   });
 });

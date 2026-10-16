@@ -82,6 +82,15 @@ export function lisbonDayOf(at: Date | number | string): string {
 }
 
 /**
+ * Ontem no calendário de Lisboa (ex.: RH → "Processar faltas (ontem)"). Nunca
+ * o dia UTC de agora − 24 h: entre as 00h e a 01h de Lisboa (verão) dava
+ * anteontem (plano 64, D9).
+ */
+export function lisbonYesterday(at: Date | number | string): string {
+  return addDays(lisbonDayOf(at), -1);
+}
+
+/**
  * O Zello só disponibiliza o histórico GPS de um dia depois da meia-noite do
  * dia a seguir ao seguinte (às 04:30 de dia 27 ainda não há o dia 26, só o
  * 25): o último dia recolhível é D-2 no calendário de Lisboa.

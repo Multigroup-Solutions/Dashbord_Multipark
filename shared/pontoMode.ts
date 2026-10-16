@@ -16,6 +16,7 @@
  *    leem o histórico (`pontoModeOn`), nunca a cópia em `employees.pontoMode`.
  */
 import { z } from "zod";
+import { isExtraEmployee as isExtraLike } from "./employeeKind";
 
 export const PONTO_MODOS_FLAG = "PONTO_MODOS";
 
@@ -133,10 +134,8 @@ export interface PontoModeChangeCheck {
   changedDays: string[];
 }
 
-/** Extra = posto ou contrato "extra" (a mesma regra do terminal e das finanças). */
-export function isExtraLike(e: { position?: string | null; contractType?: string | null }): boolean {
-  return e.position === "extra" || e.contractType === "extra";
-}
+/** Extra = posto ou contrato "extra" — a regra única de shared/employeeKind.ts (a mesma do terminal e das finanças). */
+export { isExtraLike };
 
 const MONTHS_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 /** "2026-09" → "setembro de 2026". */
