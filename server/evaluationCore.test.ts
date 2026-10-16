@@ -201,7 +201,9 @@ describe("motor (dia operacional completo)", () => {
     });
     const m = out.rows[0].metrics;
     // Jorge, 3 out: os acidentes antigos não contam — a ocorrência fica só informativa.
-    expect(m).toMatchObject({ speedingEvents: 2, complaints: 1, accidents: 0, incidentsReported: 1, incidentsAgainst: 1, penaltyPoints: 4 });
+    // Plano 64 (F3): e num dia depois de 2 mar 2026 a tabela antiga nem conta como informativa (vem da app ao vivo).
+    expect(m).toMatchObject({ speedingEvents: 2, complaints: 1, accidents: 0, incidentsReported: 0, incidentsAgainst: 0, penaltyPoints: 4 });
+    // os pontos são os mesmos de antes (as ocorrências não pontuam)
     expect(scoreOf(m).totalPoints).toBe(-20 - 20);
   });
 

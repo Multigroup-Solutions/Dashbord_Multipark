@@ -43,6 +43,7 @@ import {
   type AutoPublishCandidate, type AutoPublishState, type SourceRead,
 } from "../shared/reviewAutoPublish";
 import { matchKey } from "../shared/textKey";
+import { reviewInCriticasSql } from "./reviewVisibility";
 
 export const AUTO_PUBLISH_FLAG = "REVIEW_AUTO_PUBLISH_5STAR";
 export const AUTO_PUBLISH_STATE_KEY = "review_auto_publish:state";
@@ -460,6 +461,7 @@ export const realAutoPublishDeps: AutoPublishDeps = {
         LEFT JOIN review_auto_publish q ON q.reviewId = r.id
        WHERE q.id IS NULL AND r.rating = 5 AND r.googleReviewName IS NOT NULL AND r.complaintId IS NULL
          AND r.googleReply IS NULL AND r.respondedAt IS NULL AND r.notAReview = 0 AND r.duplicateOf IS NULL
+         AND ${reviewInCriticasSql("r")}
          AND r.status IN ('pending_response', 'ai_responded')
          AND r.reviewDate >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${REVIEW_AUTO_PUBLISH_MAX_AGE_DAYS} DAY)
          AND (r.googleLocationId IS NULL OR r.googleLocationId NOT IN (

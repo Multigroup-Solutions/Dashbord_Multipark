@@ -10,11 +10,14 @@ export type AttributionQuality = { siteBookings: number; withOriginUrl: number; 
 /** Diagnóstico da atribuição — puro, para testes. */
 export function attributionHealth(q: AttributionQuality, spend: number, googleConversions?: number | null): { level: "ok" | "warning" | "critical" | "none"; message: string } {
   if (q.siteBookings === 0) return { level: "none", message: "Sem reservas feitas no site neste período." };
-  if (q.withOriginUrl / q.siteBookings < 0.5) {
-    return { level: "warning", message: "Mais de metade das reservas do site não tem link de origem: sem link não há como saber se vieram dos anúncios. Pode ser o enriquecimento das reservas em atraso ou a Multipark a não enviar o URL." };
-  }
+  // Plano 64 (F2): o crítico vem antes do aviso dos links — com o multipark.pt
+  // nas "feitas no site", o aviso pode ficar ligado e não pode esconder o crítico
+  // (só o crítico vira alerta no Painel, no email semanal e no briefing).
   if (spend > 0 && q.withClickId === 0) {
     return { level: "critical", message: "Há gasto em anúncios mas nenhuma reserva traz o clique do Google (gclid): o identificador perde-se pelo caminho. Confirma o auto-tagging no Google Ads e se o site passa o gclid até ao checkout. Até lá, o \"via anúncios\" e o ROAS real ficam a zero." };
+  }
+  if (q.withOriginUrl / q.siteBookings < 0.5) {
+    return { level: "warning", message: "Mais de metade das reservas do site não tem link de origem: sem link não há como saber se vieram dos anúncios. Pode ser o enriquecimento das reservas em atraso ou a Multipark a não enviar o URL." };
   }
   // A Google conta as conversões do lado dela (tag no site): se ligamos muito
   // menos reservas do que isso, o gclid perde-se em parte do caminho e os

@@ -103,6 +103,7 @@ import {
   replyToConversation,
 } from "./whatsappInbox";
 import { INBOX_CITY_FILTERS } from "../shared/whatsappInboxView";
+import { EMAIL_ONLY_REVIEW_READONLY, isEmailOnlyReview } from "../shared/reviewRules";
 import { upsertUser, getUserByOpenId, getAllUsers, updateUserRole, createManualUser, getUserByEmail, checkExtraDocsCompliance, processExtraDiaNoShows, updateUser, toggleUserActive, getUserById, getSuperAdmins, getProjects, getProjectById, createProject, updateProject, deleteProject, moveProject, getProjectEmployees, getEmployeeProjects, assignEmployeeToProject, removeEmployeeFromProject, getTaskById, createTask, updateTask, getAllCategories, createCategory, seedDefaultCategories, logActivity, getActivityLogs, getEmployeeById, getEmployeeByUserId, createEmployeeDocumentsBatch, createTimeRecord, getVehicleDriverHistory, getComplaints, getComplaintById, createComplaint, updateComplaint, archiveComplaint, getComplaintMessages, addComplaintMessage, getComplaintPhotos, addComplaintPhoto, removeComplaintPhoto, getComplaintStats, createGoogleReview, getGoogleReviews, getGoogleReviewById, updateGoogleReview, getGoogleReviewStats, createLostFoundItem, getLostFoundItems, getLostFoundItemById, updateLostFoundItem, archiveLostFoundItem, addLostFoundPhoto, getLostFoundPhotos, addLostFoundMessage, getLostFoundMessages, getBookingHistoryByBookingId, getBookingHistoryByPlate, searchBookingHistory, getBookingHistoryDriverStats, getBookingHistoryCrossReference, createIncident, getIncidents, getIncidentById, updateIncident, getIncidentStats, createPerformanceEvaluation, getPerformanceEvaluations, getPartnershipAnalytics, createPartnership, getPartnerships, updatePartnership, setPartnershipMultiparkId, partnershipNameExists, upsertMultiparkBooking, getMultiparkBookingStats, createInviteToken, getInviteByToken, acceptInviteToken, claimInviteToken, releaseInviteToken, countActiveSuperAdmins, getInvitesByUser, getInvitesByEmail, linkInviteToOAuthUser, getPayslipHistoryList, deletePayslipRecord, getTaskAssignees, setTaskAssignees, getProjectHierarchyManagers, createDailyDriverHistory, searchBookingByRef } from "./db";
 import { LEAD_STATUSES } from "../shared/extraLeadsFunnel";
 import { crmQuerySchema } from "../shared/crmFilters";
@@ -402,6 +403,11 @@ function hasRole(userRole: string, minRole: string): boolean {
 
 /** Módulo de cada caixa de email que se pode anexar a um caso (16b). */
 const INBOUND_ALIAS_MODULE = { reclamacoes: "reclamacoes", perdidos: "perdidos", criticas: "criticas", "recursos-humanos": "leads_extras" } as const;
+
+/** 15 out 2026: uma crítica que ficou só na caixa de correio (entrou sozinha por email) é só para consulta. */
+function assertReviewEditable(review: { sourceEmailId?: string | null; googleReviewKey?: string | null; emailImportedAt?: unknown }): void {
+  if (isEmailOnlyReview(review)) throw new TRPCError({ code: "BAD_REQUEST", message: EMAIL_ONLY_REVIEW_READONLY });
+}
 
 /** Cidade por omissão de quem está limitado a cidades (para o registo não ficar invisível). */
 function defaultScopedProjectId(): number | null {
@@ -2462,13 +2468,19 @@ export const appRouter = router({
   }),
 
   // ─── GOOGLE REVIEWS ───────────────────────────────────────────────────────
+  // 15 out 2026: as que entraram sozinhas por email ficam fora das Críticas (lista/números) e, abertas pelo
+  // número (super admin, ligações), só para consulta — nenhuma escrita (assertReviewEditable).
   reviews: router({
     list: protectedProcedure.input(z.object({
       rating: z.number().optional(),
       status: z.string().optional(),
       projectId: z.number().optional(),
+      // 15 out 2026: "Mostrar as que vieram por email" — as que ficaram só na caixa de correio (fora das Críticas).
+      // Só o super admin, só para consulta.
+      fromEmail: z.boolean().optional(),
     }).optional()).query(async ({ ctx, input }) => {
       requireAccess(ctx.user, "criticas", "view");
+      if (input?.fromEmail && ctx.user.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só o super admin vê as críticas que vieram por email." });
       return await getGoogleReviews(input ?? undefined);
     }),
     getById: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
@@ -2485,6 +2497,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id); // âmbito de cidade
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      assertReviewEditable(review);
       const { convertReviewToComplaint } = await import("./reviewOps");
       const r = await convertReviewToComplaint(review.id, { id: ctx.user.id, name: ctx.user.name }, { defaultProjectId: defaultScopedProjectId() });
       if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
@@ -2550,6 +2563,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id); // âmbito de cidade
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      assertReviewEditable(review);
       const { reviewUpdatePatch } = await import("../shared/reviewRules");
       const r = reviewUpdatePatch(review, { aiResponse: input.aiResponse, status: input.status }, ctx.user.id, new Date().toISOString().slice(0, 19).replace("T", " "));
       if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
@@ -2566,6 +2580,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id); // âmbito de cidade
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      assertReviewEditable(review);
       assertProjectAccess(input.projectId);
       const project = await getProjectById(input.projectId);
       if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Parque não encontrado" });
@@ -2609,6 +2624,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id);
       if (!review) throw new TRPCError({ code: "NOT_FOUND" });
+      assertReviewEditable(review);
       const { isMarkedPublished } = await import("../shared/reviewRules");
       if (isMarkedPublished(review)) throw new TRPCError({ code: "BAD_REQUEST", message: "A resposta já foi marcada como publicada. Para a mudar, primeiro \"Desfazer\"." });
       const { draftReviewReply } = await import("./_core/ai/reviewReply");
@@ -2632,6 +2648,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id); // já aplica o âmbito de cidade
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      assertReviewEditable(review);
       const { publishReply } = await import("./integrations/googleBusiness/service");
       const { safeError } = await import("./integrations/googleBusiness/domain");
       try {
@@ -2680,6 +2697,7 @@ export const appRouter = router({
       requireAccess(ctx.user, "criticas", "edit");
       const review = await getGoogleReviewById(input.id); // âmbito de cidade
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Crítica não encontrada" });
+      assertReviewEditable(review);
       if (!String(review.aiResponse ?? "").trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "Não há resposta para aprovar." });
       await updateGoogleReview(input.id, { aiResponseApproved: 1 });
       await logActivity({ userId: ctx.user.id, action: "approve", entity: "google_review", entityId: input.id, details: "Resposta aprovada" });
@@ -2687,7 +2705,8 @@ export const appRouter = router({
     }),
     syncFromGmail: protectedProcedure.mutation(async ({ ctx }) => {
       if (ROLE_HIERARCHY[ctx.user.role] < ROLE_HIERARCHY["admin"]) throw new TRPCError({ code: "FORBIDDEN" });
-      // Sincronização do Gmail (a mesma do agendador/push; o alias criticas@ cria as críticas).
+      // Sincronização do Gmail (a mesma do agendador/push). 15 out 2026: os emails da criticas@ ficam só na caixa
+      // (criam crítica só com REVIEWS_FROM_EMAIL ligado); os números juntam reclamações e perdidos.
       const { runMailSync } = await import("./mail/service");
       const r = await runMailSync({ deadlineAt: Date.now() + 45_000 });
       // O número de registos junta críticas, reclamações e perdidos (o leitor é
