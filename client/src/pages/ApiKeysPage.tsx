@@ -469,11 +469,11 @@ curl -H "X-API-Key: mp_xxxxxxxxxx" ${baseUrl}/api/external/docs`}</pre>
               </CardContent>
             </Card>
 
-            {/* Gmail import: descontinuado (23a, D18) — as críticas chegam pela sincronização do Gmail. */}
+            {/* Gmail import: descontinuado (23a, D18) — as críticas chegam pela API do Google. */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-muted-foreground" /> POST /api/external/gmail-import <span className="text-xs font-normal text-muted-foreground">(descontinuado)</span></CardTitle>
-                <CardDescription>Já não grava nada (responde 410): as críticas chegam pela sincronização do Gmail e as ocorrências vêm da app Multipark.</CardDescription>
+                <CardDescription>Já não grava nada (responde 410): as críticas chegam pela API do Google e as ocorrências vêm da app Multipark.</CardDescription>
               </CardHeader>
             </Card>
 

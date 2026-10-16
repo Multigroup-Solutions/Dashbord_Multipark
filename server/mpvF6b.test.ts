@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
-  flags: { REVIEWS_EMAIL_STRICT: false, REVIEWS_DEDUP: false } as Record<string, boolean>,
+  flags: { REVIEWS_EMAIL_STRICT: false, REVIEWS_DEDUP: false, REVIEWS_FROM_EMAIL: false } as Record<string, boolean>,
   claimed: new Set<string>(),
   created: [] as any[],
   duplicateOf: null as number | null,
@@ -301,24 +301,38 @@ describe("R3 — chave de repetida (perfil + estrelas + texto ≥ 20 + 1.º nome
 
 // ─── Pipeline do email (alias criticas) com os interruptores ────────────────
 
+// 15 out 2026: estes interruptores só contam com a importação por email ligada (REVIEWS_FROM_EMAIL, desligada por
+// omissão — os emails ficam só na caixa; ver server/criticasEmailSoCaixa.test.ts). Aqui ligam-na para provar o resto.
 describe("pipeline criticas@ com REVIEWS_EMAIL_STRICT / REVIEWS_DEDUP", () => {
   const base = (o: any = {}) => ({
     alias: "criticas" as const, messageId: `<m-${Math.random()}@x>`, gmThreadId: null, refs: [], fromName: "Ana", fromEmail: "ana@gmail.com",
     subject: "Candidatura a condutor", receivedAt: "2026-10-14 10:00:00", text: "Bom dia, envio o meu CV em anexo.", html: null, loadAttachments: async () => [], ...o,
   });
   beforeEach(() => {
-    h.flags = { REVIEWS_EMAIL_STRICT: false, REVIEWS_DEDUP: false };
+    h.flags = { REVIEWS_EMAIL_STRICT: false, REVIEWS_DEDUP: false, REVIEWS_FROM_EMAIL: false };
     h.created = [];
     h.duplicateOf = null;
     h.dupQueries = [];
     h.autoDraft.mockClear();
   });
 
-  it("desligados: uma candidatura que entrou pelas Críticas ainda vira crítica (como até aqui)", async () => {
+  it("desligados (omissão, 15 out 2026): uma candidatura que entrou pelas Críticas fica só na caixa — nem crítica, nem IA", async () => {
+    const { processInboundEmail } = await import("./jobs/emailInboundSync");
+    const out = await processInboundEmail(base());
+    expect(out).toMatchObject({ status: "processed", routed: { targetModule: "review_off" } });
+    expect(h.created).toHaveLength(0);
+    expect(h.autoDraft).not.toHaveBeenCalled();
+  });
+
+  it("importação por email ligada, STRICT/DEDUP desligados: a candidatura ainda vira crítica (como até 15 out), marcada como importada pelo sistema", async () => {
+    h.flags.REVIEWS_FROM_EMAIL = true;
     const { processInboundEmail } = await import("./jobs/emailInboundSync");
     const out = await processInboundEmail(base());
     expect(out).toMatchObject({ status: "processed", routed: { targetModule: "review" } });
     expect(h.created).toHaveLength(1);
+    expect(h.created[0].emailImportedAt).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/);
+    expect(h.created[0].emailImportedById).toBeNull();
+    expect(h.autoDraft).toHaveBeenCalledTimes(1);
   });
 
   it("STRICT: a candidatura segue para a triagem ('not_review', nunca 'ignored') e não cria crítica", async () => {
@@ -329,8 +343,9 @@ describe("pipeline criticas@ com REVIEWS_EMAIL_STRICT / REVIEWS_DEDUP", () => {
     expect(h.created).toHaveLength(0);
   });
 
-  it("STRICT: o aviso da Google vira crítica", async () => {
+  it("STRICT: o aviso da Google vira crítica (com a importação por email ligada)", async () => {
     h.flags.REVIEWS_EMAIL_STRICT = true;
+    h.flags.REVIEWS_FROM_EMAIL = true;
     const { processInboundEmail } = await import("./jobs/emailInboundSync");
     const out = await processInboundEmail(base({ fromEmail: "businessprofile-noreply@google.com", subject: SUBJECT_RUI, text: BODY_A }));
     expect(out).toMatchObject({ routed: { targetModule: "review" } });
@@ -339,6 +354,7 @@ describe("pipeline criticas@ com REVIEWS_EMAIL_STRICT / REVIEWS_DEDUP", () => {
 
   it("DEDUP: resumo não vira crítica; repetida fica marcada (guardada) e sem rascunho; lê o assunto", async () => {
     h.flags.REVIEWS_DEDUP = true;
+    h.flags.REVIEWS_FROM_EMAIL = true;
     const { processInboundEmail } = await import("./jobs/emailInboundSync");
     const sum = await processInboundEmail(base({ fromEmail: "businessprofile-noreply@google.com", subject: "Recebeu 3 novas críticas", text: "Veja o que os clientes dizem." }));
     expect(sum).toMatchObject({ routed: { targetModule: "review_summary" } });
@@ -352,15 +368,22 @@ describe("pipeline criticas@ com REVIEWS_EMAIL_STRICT / REVIEWS_DEDUP", () => {
     expect(h.dupQueries[0]).toMatchObject({ parkKey: "p7", rating: 5, name: "rui costa", textKey: reviewTextKeyFromApi(TEXT_RUI) });
   });
 
-  it("a triagem das caixas lê o 'not_review' como uma caixa sem pipeline (também no varrimento)", () => {
+  it("a triagem das caixas lê o 'not_review' (e o 'review_off') como uma caixa sem pipeline (também no varrimento)", async () => {
+    const { releasedStatusOf } = await import("./mail/service");
+    expect(releasedStatusOf("not_review")).toBe("not_review");
+    expect(releasedStatusOf("review_off")).toBe("review_off");
+    for (const t of ["review", "review_summary", "ignored", "complaint", undefined, null]) expect(releasedStatusOf(t)).toBeNull();
     const svc = readFileSync("server/mail/service.ts", "utf8");
-    expect(svc).toContain('routed?.targetModule === "not_review"');
+    expect(svc).toContain("const released = releasedStatusOf(routed?.targetModule);");
+    expect(svc).toContain("if (released) { pipelineUsed = null; releasedFromPipeline = true;");
     // a 2.ª cópia do mesmo Message-ID e a nova tentativa também seguem para a triagem
-    expect(svc).toContain('if (row?.targetModule === "not_review")');
+    expect(svc).toContain("const releasedCopy = releasedStatusOf(row?.targetModule);");
+    expect(svc).toContain("if (releasedStatusOf(routed?.targetModule)) {");
     expect(svc).toContain("triageReleasedMessage(messageId)");
     expect(svc).toContain("ctx.releasedFromPipeline ? null");
     const routing = readFileSync("server/commsRouting.ts", "utf8");
-    expect(routing).toContain('r.pipelineStatus === "not_review" ? null');
+    expect(routing).toContain('const releasedFromPipeline = r.pipelineStatus === "not_review" || r.pipelineStatus === "review_off";');
+    expect(routing).toContain("pipeline: releasedFromPipeline ? null : r.pipeline ?? box?.pipeline ?? null");
   });
 
   it("as marcadas saem das listas, dos números e dos rascunhos automáticos", () => {
@@ -368,7 +391,7 @@ describe("pipeline criticas@ com REVIEWS_EMAIL_STRICT / REVIEWS_DEDUP", () => {
     const list = db.slice(db.indexOf("export async function getGoogleReviews("), db.indexOf("async function withReviewLocationTitles"));
     expect(list).toContain("eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf)");
     const stats = db.slice(db.indexOf("export async function getGoogleReviewStats("));
-    expect(stats.slice(0, 900)).toContain("eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf)");
+    expect(stats.slice(0, 1100)).toContain("eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf)");
     const draft = readFileSync("server/reviewAutoDraft.ts", "utf8");
     expect(draft).toContain("eq(googleReviews.notAReview, 0),");
     expect(draft).toContain("isNull(googleReviews.duplicateOf),");
@@ -432,8 +455,8 @@ describe("W1 — não triar com IA as conversas de colaboradores (salvo urgênci
 // ─── Interruptores e T1 ─────────────────────────────────────────────────────
 
 describe("interruptores do F6b desligados por omissão", () => {
-  it("REVIEWS_EMAIL_STRICT, REVIEWS_DEDUP e WA_TRIAGE_SKIP_STAFF", () => {
-    for (const f of ["REVIEWS_EMAIL_STRICT", "REVIEWS_DEDUP", "WA_TRIAGE_SKIP_STAFF"]) expect(automationFlagDefault(f)).toBe(false);
+  it("REVIEWS_EMAIL_STRICT, REVIEWS_DEDUP, REVIEWS_FROM_EMAIL e WA_TRIAGE_SKIP_STAFF", () => {
+    for (const f of ["REVIEWS_EMAIL_STRICT", "REVIEWS_DEDUP", "REVIEWS_FROM_EMAIL", "WA_TRIAGE_SKIP_STAFF"]) expect(automationFlagDefault(f)).toBe(false);
   });
   it("ai.thinkingLevels continua vazio por omissão (a mudança é só sugerida)", () => {
     expect((SETTINGS as any)["ai.thinkingLevels"].defaultValue).toEqual({});

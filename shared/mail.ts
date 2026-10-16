@@ -808,6 +808,17 @@ export function canSeePersonalMailbox(v: Pick<MailViewer, "id" | "role"> | null 
   return v.id === ownerUserId || v.role === "super_admin";
 }
 
+// ─── Críticas: os emails ficam só na caixa (Jorge, 15 out 2026) ─────────────
+
+/**
+ * A caixa das Críticas (onde aparece "Importar para as Críticas" em cada email
+ * recebido)? A caixa "criticas", ou uma caixa do módulo/pipeline das Críticas. PURA.
+ */
+export function isReviewMailbox(mailbox: Pick<MailboxConfig, "key" | "module" | "pipeline"> | null | undefined): boolean {
+  if (!mailbox) return false;
+  return mailbox.key === "criticas" || mailbox.module === "criticas" || mailbox.pipeline === "criticas";
+}
+
 // ─── RH → Google Drive: só currículos (Jorge, 2 out 2026) ───────────────────
 
 /**

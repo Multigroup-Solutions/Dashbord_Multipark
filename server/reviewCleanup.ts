@@ -16,6 +16,7 @@ import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { googleReviews } from "../drizzle/schema";
 import { getDb } from "./db";
 import { projectScope } from "./cityScope";
+import { reviewInCriticasSql } from "./reviewVisibility";
 import {
   findDuplicateOf, notAReviewDecision, planDuplicateCleanup, reviewDateMs, reviewTextKeyFromApi, reviewTextKeyFromEmail, reviewerNameKey,
   REVIEW_DEDUP_WINDOW_HOURS, type DedupCleanupRow, type ReviewDedupFacts,
@@ -24,7 +25,7 @@ import {
 const nowStr = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 
 /** Interruptor das automações (Definições → Automações), lido fresco (cache de 30 s). Nunca lança. */
-export async function reviewFlagOn(name: "REVIEWS_EMAIL_STRICT" | "REVIEWS_DEDUP"): Promise<boolean> {
+export async function reviewFlagOn(name: "REVIEWS_EMAIL_STRICT" | "REVIEWS_DEDUP" | "REVIEWS_FROM_EMAIL"): Promise<boolean> {
   try {
     const { ensureFeatureFlagOverrides, isFeatureEnabled } = await import("./_core/featureFlags");
     const { automationFlagDefault } = await import("../shared/appSettings");
@@ -146,7 +147,7 @@ export async function findEmailReviewDuplicate(n: Omit<ReviewDedupFacts, "id">):
     const projectId = n.parkKey?.startsWith("p") ? Number(n.parkKey.slice(1)) : null;
     const res = await db.execute(sql`SELECT id, reviewerName, rating, reviewText, reviewDate, sourceEmailDate, createdAt, projectId, googleReviewKey, sourceEmailId
       FROM google_reviews
-      WHERE (rating = ${n.rating} OR rating = 0) AND notAReview = 0 AND duplicateOf IS NULL
+      WHERE (rating = ${n.rating} OR rating = 0) AND notAReview = 0 AND duplicateOf IS NULL AND ${reviewInCriticasSql()}
         ${projectId != null ? sql`AND (projectId = ${projectId} OR projectId IS NULL)` : sql``}
         AND COALESCE(reviewDate, sourceEmailDate, createdAt) BETWEEN DATE_SUB(${at}, INTERVAL ${REVIEW_DEDUP_WINDOW_HOURS} HOUR) AND DATE_ADD(${at}, INTERVAL ${REVIEW_DEDUP_WINDOW_HOURS} HOUR)
       ORDER BY id DESC LIMIT 200`);
@@ -199,9 +200,12 @@ async function loadRows(kind: ReviewCleanupKind): Promise<LoadedRow[]> {
   const db = await getDb();
   if (!db) throw new Error("Base de dados indisponível");
   const where = kind === "not_review" ? sql`sourceEmailId IS NOT NULL` : sql`rating >= 0`;
+  // 15 out 2026: as que ficaram só na caixa de correio já estão fora das Críticas — a limpeza não as propõe
+  // (as que já tinham uma marca continuam em "Marcadas", para desfazer).
   const rows = rowsOf(await db.execute(sql`SELECT id, reviewerName, rating, reviewText, reviewDate, sourceEmailDate, createdAt, projectId, googleReviewKey,
       sourceEmailId, complaintId, googleReply, respondedAt, status, notAReview, duplicateOf, reviewMarkUndoneAt, aiResponse
-    FROM google_reviews WHERE ${where} AND ${projectScope(googleReviews.projectId)} ORDER BY id DESC LIMIT ${SCAN_MAX}`));
+    FROM google_reviews WHERE ${where} AND (${reviewInCriticasSql()} OR notAReview = 1 OR duplicateOf IS NOT NULL)
+      AND ${projectScope(googleReviews.projectId)} ORDER BY id DESC LIMIT ${SCAN_MAX}`));
   // Só os emails de que a regra precisa (seguimento F6b — memória): as repetidas
   // só olham para as de 1 estrela ou mais; o "não é crítica" só para as sem estrelas.
   const parse = await emailParser();

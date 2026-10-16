@@ -4,7 +4,8 @@
  * retomar enquanto done:false; prazo por corrida, retomável):
  *
  *  - GA4 (runReport) por propriedade: totais por dia, canal, página de entrada
- *    (top 50/dia), dispositivo, país, cidade e eventos do funil;
+ *    (top 50/dia), dispositivo, país, cidade, eventos do funil e todos os
+ *    eventos com os eventos-chave (top 40/dia — plano 64, F2);
  *  - Search Console (searchanalytics.query) por propriedade: totais por dia,
  *    pesquisas e páginas (top 250/dia), dispositivo e país;
  *  - PageSpeed: 1×/semana por página × (móvel, computador).
@@ -37,7 +38,7 @@ export const GA_LAG_DAYS = 1;
 export const GA_REFETCH_DAYS = 3;
 export const SC_LAG_DAYS = 2;
 export const SC_REFETCH_DAYS = 4;
-const GA_CHUNK: Record<GaPart, number> = { totals: 31, channel: 31, landing: 14, device: 31, country: 31, city: 31, event: 31 };
+const GA_CHUNK: Record<GaPart, number> = { totals: 31, channel: 31, landing: 14, device: 31, country: 31, city: 31, event: 31, allEvents: 31 };
 
 export type UnitStatus = "ok" | "pending" | "no_access" | "rate_limited" | "error";
 export interface UnitReport { key: string; windows: number; rows: number; status: UnitStatus; error?: string }

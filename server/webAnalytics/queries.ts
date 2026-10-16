@@ -1,8 +1,8 @@
 /**
  * Leituras do Web & SEO para a UI, os alertas e o resumo semanal — tudo a
  * partir dos agregados guardados (web_ga_*, web_sc_*, web_pagespeed_runs) e
- * das reservas/gasto que a app já tem (a mesma regra das Reservas &
- * Operações: pela data de criação em dias de Lisboa, sem canceladas).
+ * das reservas/gasto que a app já tem (as reservas do Painel do Marketing:
+ * pela data de criação em dias de Lisboa, sem canceladas, com o Marketplace).
  * Tabelas grandes: sempre paginadas no SQL (LIMIT/OFFSET), nunca tudo.
  */
 import { sql, type SQL } from "drizzle-orm";
@@ -11,7 +11,10 @@ import { projectScope } from "../cityScope";
 import { inLisbonDaysSql, notCancelledSql } from "../marketingSql";
 import { lisbonDaySql } from "../../shared/lisbonDay";
 import { brandNameForProject } from "../../shared/adCampaignMapping";
-import { brandIdOfName, type GaDimKind, type ScDimKind } from "../../shared/webAnalytics";
+import { webBrandOfTreeBrand, type GaDimKind, type ScDimKind, type WebBrand } from "../../shared/webAnalytics";
+import { isSiteBooking } from "../../shared/bookingOrigin";
+import { MARKETPLACE_BRAND } from "../../shared/projectTree";
+import type { MarketingBooking } from "../marketingLive";
 import { inStrings, rowsOf } from "./store";
 
 const n = (v: unknown) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
@@ -136,8 +139,10 @@ export async function dimCompare(i: DimCompareInput): Promise<{ rows: DimCompare
     const m = (col: string, alias: string) => sql`SUM(CASE WHEN ${inCur} THEN ${c(col)} ELSE 0 END) AS ${c(`c${alias}`)}, SUM(CASE WHEN ${inPrev} THEN ${c(col)} ELSE 0 END) AS ${c(`p${alias}`)}`;
     select = sql`${m("sessions", "Sessions")}, ${m("totalUsers", "Users")}, ${m("engagedSessions", "Engaged")}, ${m("keyEvents", "KeyEvents")}, ${m("revenue", "Revenue")}, ${m("eventCount", "Events")}`;
     from = sql`FROM web_ga_dims WHERE ${inStrings(sql`propertyId`, i.ids)} AND dim = ${i.dim} AND (${inCur} OR ${inPrev})${like}`;
-    having = i.dim === "event" ? sql`HAVING cEvents > 0 OR pEvents > 0` : sql`HAVING cSessions > 0 OR pSessions > 0`;
-    order = i.dim === "event" ? "cEvents DESC" : GA_SORT[(i.sort as GaSort)] ?? GA_SORT.sessions;
+    // Eventos (sem sessões): pelo n.º de eventos; "allEvents" (F2) com os eventos-chave à frente.
+    const events = i.dim === "event" || i.dim === "allEvents";
+    having = events ? sql`HAVING cEvents > 0 OR pEvents > 0` : sql`HAVING cSessions > 0 OR pSessions > 0`;
+    order = i.dim === "allEvents" ? "cKeyEvents DESC, cEvents DESC" : events ? "cEvents DESC" : GA_SORT[(i.sort as GaSort)] ?? GA_SORT.sessions;
   } else {
     const m = (col: string, alias: string) => sql`SUM(CASE WHEN ${inCur} THEN ${c(col)} ELSE 0 END) AS ${c(`c${alias}`)}, SUM(CASE WHEN ${inPrev} THEN ${c(col)} ELSE 0 END) AS ${c(`p${alias}`)}`;
     select = sql`${m("clicks", "Clicks")}, ${m("impressions", "Impressions")}, ${m("position * impressions", "PosW")}`;
@@ -243,39 +248,61 @@ export async function latestAudits(url: string, strategy: string): Promise<Audit
 
 // ─── Negócio: reservas e gasto por dia (por marca) ─────────────────────────
 
-/** Origens em que a reserva é feita num site (shared/bookingOrigin.ts). */
-export const SITE_BOOKING_ORIGINS = ["API", "GENERAL_FORM"];
-
 async function projectsList(): Promise<Array<{ id: number; name: string; level: string | null; parentId: number | null }>> {
   const d = await db();
   return rowsOf(await d.execute(sql`SELECT id, name, level, parentId FROM projects`)).map((r) => ({ id: n(r.id), name: String(r.name ?? ""), level: r.level ?? null, parentId: r.parentId == null ? null : n(r.parentId) }));
 }
 
-/** Marca (id) de cada projeto, pela árvore (nó "brand"). */
-async function brandOfProjectFn(): Promise<(projectId: number | null) => string | null> {
+/** Marca do Web & SEO de cada projeto, pela árvore (nó "brand"; o "Marketplace" é a Multipark). */
+async function brandOfProjectFn(): Promise<(projectId: number | null) => WebBrand | null> {
   const projects = await projectsList();
-  const cache = new Map<number, string | null>();
+  const cache = new Map<number, WebBrand | null>();
   return (projectId) => {
     if (projectId == null) return null;
-    if (!cache.has(projectId)) cache.set(projectId, brandIdOfName(brandNameForProject(projectId, projects as any)));
+    if (!cache.has(projectId)) cache.set(projectId, webBrandOfTreeBrand(brandNameForProject(projectId, projects as any)));
     return cache.get(projectId)!;
   };
 }
 
+/**
+ * Marca (Web & SEO) de uma reserva do Marketing: a do centro dela; sem centro,
+ * as do Marketplace ("Marketplace (sem cidade)") são da Multipark, como na
+ * tabela por marca do Marketing (getSpendAndBookingsByBrand). PURA.
+ */
+export function webBrandOfBooking(b: Pick<MarketingBooking, "projectId" | "marketplace">, brandOfProject: (projectId: number | null) => WebBrand | null): WebBrand | null {
+  if (b.projectId == null) return b.marketplace ? webBrandOfTreeBrand(MARKETPLACE_BRAND) : null;
+  return brandOfProject(b.projectId);
+}
+
 export interface BookingDayAgg { bookings: number; siteBookings: number; revenue: number; siteRevenue: number }
 
+/**
+ * Reservas por dia (todas e as feitas no site) para o Web & SEO — plano 64,
+ * F2: a MESMA leitura do Painel do Marketing (getMarketingStats):
+ * `loadMarketingBookings(from, to, projectIds, { marketplace: true })` com o
+ * âmbito de cidade do utilizador (marketingProjectIds; o Web & SEO não tem
+ * filtro de cidade — as sessões do GA4 não são por cidade) e a mesma regra de
+ * "feita no site" (isSiteBooking). Antes lia só os parques nossos, sem o
+ * Marketplace: na marca Multipark davam 0 reservas no site.
+ * O valor (`revenue`/`siteRevenue`) é o VALOR TOTAL da reserva — o que o
+ * cliente paga, c/ IVA: `total` = COALESCE(SUM(BookingPricing.total),
+ * Booking.price) (server/multiparkDb/marketingBookings.ts) —, em TODAS as
+ * reservas, também nos parques de terceiros (Jorge, 15 out 2026). NÃO é o
+ * `value` do Marketing (terceiros só pela comissão), por isso a receita por
+ * sessão não bate com o valor via net/ROAS do Painel; as CONTAGENS batem.
+ */
 export async function bookingsByDay(from: string, to: string, brand: string | null): Promise<Map<string, BookingDayAgg>> {
   // Reservas AO VIVO da BD da Multipark (server/marketingLive.ts): criadas no dia, sem canceladas.
-  const { loadMarketingBookings } = await import("../marketingLive");
-  const bookings = await loadMarketingBookings(from, to);
+  const [{ loadMarketingBookings }, { marketingProjectIds }] = await Promise.all([import("../marketingLive"), import("../marketingSql")]);
+  const projectIds = await marketingProjectIds(undefined);
+  const bookings = await loadMarketingBookings(from, to, projectIds, { marketplace: true });
   const brandOf = brand ? await brandOfProjectFn() : null;
   const out = new Map<string, BookingDayAgg>();
   for (const b of bookings) {
-    if (brandOf && brandOf(b.projectId) !== brand) continue;
-    const site = !!b.origin && (SITE_BOOKING_ORIGINS as readonly string[]).includes(b.origin);
+    if (brandOf && webBrandOfBooking(b, brandOf) !== brand) continue;
     const e = out.get(b.day) ?? { bookings: 0, siteBookings: 0, revenue: 0, siteRevenue: 0 };
     e.bookings++; e.revenue += b.total;
-    if (site) { e.siteBookings++; e.siteRevenue += b.total; }
+    if (isSiteBooking(b.origin)) { e.siteBookings++; e.siteRevenue += b.total; }
     out.set(b.day, e);
   }
   return out;

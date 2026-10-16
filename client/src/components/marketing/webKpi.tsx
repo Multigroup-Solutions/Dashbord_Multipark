@@ -3,7 +3,7 @@
  * formatação PT-PT, variação com seta (nunca só cor), cartão KPI e chips
  * verde/âmbar/vermelho dos limiares Google.
  */
-import { ArrowDownRight, ArrowUpRight } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Info } from "lucide-react";
 import { StatValue } from "@/components/StatValue";
 import { psLevel, type PsLevel, type PsMetric } from "@shared/webAnalytics";
 
@@ -42,10 +42,11 @@ export function Delta({ cur, prev, invert, abs }: { cur: number | null | undefin
   );
 }
 
-export function Kpi({ icon: Icon, label, value, cur, prev, invert, hint, abs }: { icon: any; label: string; value: string; cur?: number | null; prev?: number | null; invert?: boolean; hint?: string; abs?: (d: number) => string }) {
+/** `tip`: explicação ao passar o rato (o essencial tem de estar também no `hint`, que se vê no telemóvel). */
+export function Kpi({ icon: Icon, label, value, cur, prev, invert, hint, abs, tip }: { icon: any; label: string; value: string; cur?: number | null; prev?: number | null; invert?: boolean; hint?: string; abs?: (d: number) => string; tip?: string }) {
   return (
-    <div className="rounded-xl border bg-card p-3 min-w-0">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{label}</span></div>
+    <div className="rounded-xl border bg-card p-3 min-w-0" title={tip}>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{label}</span>{tip && <Info className="w-3 h-3 shrink-0" aria-hidden />}</div>
       <StatValue value={value} className="mt-1" max={26} />
       <div className="text-[11px] mt-0.5 flex flex-wrap gap-x-2">
         {cur !== undefined && <Delta cur={cur} prev={prev} invert={invert} abs={abs} />}

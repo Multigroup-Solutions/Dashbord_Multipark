@@ -47,7 +47,8 @@ export const SHEET_REPORTS: Record<SheetExportReport, ReportDef> = {
         tabOf("Resumo", ["Indicador", "Valor"], resumo),
         tabOf("Mensal", ["Mês", "Receita s/ IVA", "Custos s/ IVA", "Margem", "Receita prevista s/ IVA", "Custos previstos"],
           (f.monthly ?? []).map((m: any) => [m.month, r2(m.revenueNet), r2(m.costsNet), r2(m.margin), r2(m.revenueForecastNet), r2(m.costForecast)])),
-        tabOf("Despesas por categoria", ["Categoria", "s/ IVA"], Object.entries(f.expensesByCategory ?? {}).map(([k, v]) => [k, r2(v)])),
+        // plano 64 (C3): o ecrã mostra as categorias c/ IVA — a folha leva as duas colunas
+        tabOf("Despesas por categoria", ["Categoria", "s/ IVA", "c/ IVA"], Object.entries(f.expensesByCategory ?? {}).map(([k, v]) => [k, r2(v), r2(f.expensesByCategoryGross?.[k])])),
       ];
     },
   },

@@ -255,17 +255,17 @@ export function createExternalApiRouter(): Router {
         },
         {
           method: "POST", path: "/api/external/gmail-import",
-          description: "DESCONTINUADO (410): as críticas chegam pela sincronização do Gmail e as ocorrências vêm da app Multipark.",
+          description: "DESCONTINUADO (410): as críticas chegam pela API do Google e as ocorrências vêm da app Multipark.",
         },
       ],
     });
   });
 
   // ─── GMAIL IMPORT — DESCONTINUADO (23a, D18: Jorge, 3 out) ─────────────────
-  // As críticas chegam pela sincronização do Gmail (server/jobs/emailInboundSync.ts)
-  // e as ocorrências vêm da app Multipark. Nada se grava aqui: 410.
+  // As críticas chegam pela API do Google (15 out 2026: um email só passa a crítica quando uma pessoa o
+  // importa na caixa Críticas) e as ocorrências vêm da app Multipark. Nada se grava aqui: 410.
   r.post("/gmail-import", (_req: Request, res: Response) => {
-    res.status(410).json({ success: false, error: "Descontinuado: as críticas chegam pela sincronização do Gmail e as ocorrências vêm da app Multipark. Nada foi gravado." });
+    res.status(410).json({ success: false, error: "Descontinuado: as críticas chegam pela API do Google e as ocorrências vêm da app Multipark. Nada foi gravado." });
   });
 
   return r;

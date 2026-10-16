@@ -45,6 +45,8 @@ const eur = (v: number | null | undefined, digits = 0) =>
   v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: digits, minimumFractionDigits: digits });
 const num = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("pt-PT"));
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+/** Jorge (15 out 2026): o que conta como "feita no site" (shared/bookingOrigin.ts — a mesma regra do Web & SEO). */
+const SITE_BOOKINGS_TIP = "Sites das marcas, formulário e multipark.pt (telefone, parceiros como o Booking e balcão não contam)";
 /** 8 out 2026: quantas ficaram fora do via net ("": nenhuma). */
 const viaNetOutText = (x: { pending?: number; pro?: number; plan?: number } | null | undefined) => {
   const parts = [x?.pending ? `${x.pending} pendente(s)` : "", x?.pro ? `${x.pro} Pro` : "", x?.plan ? `${x.plan} de avença` : ""].filter(Boolean);
@@ -64,7 +66,7 @@ function daysBetween(from: string, to: string): string[] {
 }
 
 // Paleta validada (dataviz/validate_palette.js): claro #0055d2/#16a34a, escuro #4f8aec/#16a34a.
-// + laranja para as conversões Google; "ligadas" a tracejado (codificação secundária — verde/laranja ficam perto para deuteranopia).
+// + laranja para as conversões das plataformas (Google + Meta); "ligadas" a tracejado (codificação secundária — verde/laranja ficam perto para deuteranopia).
 const SERIES = "[--mk-1:#0055d2] [--mk-2:#16a34a] [--mk-3:#c2410c] dark:[--mk-1:#4f8aec] dark:[--mk-3:#ea580c]";
 const AXIS = { fontSize: 11, fill: "var(--muted-foreground)" };
 const TOOLTIP_STYLE = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--card-foreground)" };
@@ -96,6 +98,8 @@ export default function MarketingDashboardPanel() {
   const series = useMemo(() => {
     if (!st) return [];
     const spend = new Map<string, number>((st.byDay ?? []).map((d: any) => [d.date, Number(d.cost ?? 0)]));
+    // Plano 64 (F1): `byDay.conversions` são as de TODAS as plataformas (Google + Meta + importações antigas),
+    // a mesma soma do cartão "Conversões (Google + Meta)" — o rótulo do gráfico e da tabela diz o mesmo.
     const conv = new Map<string, number>((st.byDay ?? []).map((d: any) => [d.date, Number(d.conversions ?? 0)]));
     const books = new Map<string, { total: number; attributed: number }>((st.bookingsByDay ?? []).map((d: any) => [d.date, d]));
     return daysBetween(from, to).map((day) => ({
@@ -193,7 +197,7 @@ export default function MarketingDashboardPanel() {
             <div className="flex items-center gap-2 font-medium"><HealthIcon className="w-4 h-4" /> {healthLabel}</div>
             <p className="text-xs">{health.message}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs tabular-nums">
-              <span>Reservas feitas no site: <b>{num(q.siteBookings)}</b></span>
+              <span title={SITE_BOOKINGS_TIP}><span className="underline decoration-dotted underline-offset-2 cursor-help">Reservas feitas no site</span>: <b>{num(q.siteBookings)}</b></span>
               <span>com link de origem: <b>{num(q.withOriginUrl)}</b> ({pct(q.withOriginUrl, q.siteBookings)})</span>
               <span>com clique do Google (gclid): <b>{num(q.withClickId)}</b> ({pct(q.withClickId, q.siteBookings)})</span>
               <span>atribuídas aos anúncios: <b>{num(q.attributed)}</b> ({pct(q.attributed, q.siteBookings)})</span>
@@ -227,7 +231,7 @@ export default function MarketingDashboardPanel() {
                     <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={{ color: "var(--card-foreground)" }} />
                     <Legend wrapperStyle={{ fontSize: 12 }} formatter={(v) => <span className="text-foreground">{v}</span>} />
                     <Line type="monotone" dataKey="bookings" name="Todas" stroke="var(--mk-1)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                    <Line type="monotone" dataKey="conversions" name="Conversões Google" stroke="var(--mk-3)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                    <Line type="monotone" dataKey="conversions" name="Conversões (Google + Meta)" stroke="var(--mk-3)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                     <Line type="monotone" dataKey="viaAds" name="Ligadas por nós (gclid)" stroke="var(--mk-2)" strokeWidth={2} strokeDasharray="5 3" dot={false} activeDot={{ r: 4 }} />
                   </LineChart>
                 </ResponsiveContainer>
@@ -242,7 +246,7 @@ export default function MarketingDashboardPanel() {
                 <CardContent className="p-0 overflow-x-auto">
                   <Table className={`tabular-nums ${STICKY_FIRST_COL}`}>
                     <TableHeader>
-                      <TableRow><TableHead>Dia</TableHead><TableHead className="text-right">Gasto</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead className="text-right">Conversões Google</TableHead><TableHead className="text-right">Ligadas (gclid)</TableHead></TableRow>
+                      <TableRow><TableHead>Dia</TableHead><TableHead className="text-right">Gasto</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead className="text-right">Conversões (Google + Meta)</TableHead><TableHead className="text-right">Ligadas (gclid)</TableHead></TableRow>
                     </TableHeader>
                     <TableBody>
                       {series.map((r) => (

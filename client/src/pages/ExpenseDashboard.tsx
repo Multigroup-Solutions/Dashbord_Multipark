@@ -26,12 +26,10 @@ import {
   Euro,
   Loader2,
 } from "lucide-react";
-import { format } from "date-fns";
-import { pt } from "date-fns/locale";
 import { useAuth } from "@/_core/hooks/useAuth";
 import FitAmount from "@/components/finance/FitAmount";
 import { AXIS_TICK, CHART_TOOLTIP_ITEM, CHART_TOOLTIP_STYLE, eurAxis, eurFull } from "@/lib/financeFormat";
-import { daysUntil, lisbonToday } from "@shared/expensePeriods";
+import { daysUntil, lisbonToday, shortDayLabel } from "@shared/expensePeriods";
 
 // Cores com significado: pendente = âmbar, em atraso = vermelho, pago = verde
 const STATUS_COLOR: Record<string, string> = {
@@ -321,7 +319,7 @@ export default function ExpenseDashboard() {
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm text-foreground truncate">{expense.supplier ?? "Sem fornecedor"}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {project?.name ?? "Sem projeto"} · Vence em {format(new Date(`${dueDay}T00:00:00`), "dd MMM", { locale: pt })}
+                        {project?.name ?? "Sem projeto"} · Vence em {shortDayLabel(dueDay) ?? "—"}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3 shrink-0">

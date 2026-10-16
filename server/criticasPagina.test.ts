@@ -193,7 +193,8 @@ describe("Críticas de email: parque do perfil Google", () => {
   });
   it("o leitor de email grava o parque da crítica", () => {
     const sync = src("server/jobs/emailInboundSync.ts");
-    expect(sync).toContain("const projectId = await projectIdForReviewPark(g.parkName);");
+    // 15 out 2026: à mão, por quem só vê as suas cidades, sem parque reconhecido fica a cidade da conversa.
+    expect(sync).toContain("const projectId = (await projectIdForReviewPark(g.parkName)) ?? (manual ? opts.fallbackProjectId ?? null : null);");
   });
 });
 
