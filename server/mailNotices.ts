@@ -10,7 +10,8 @@
  *    Ocorrências e fica LIDO. Nunca se escreve na BD da Multipark.
  *  - aviso de AVALIAÇÃO (Google Business Profile, Trustpilot, Tripadvisor):
  *    caixa das Críticas, LIDO — a crítica entra nas Críticas pela API do
- *    Google / criticas@, daqui não se cria nada.
+ *    Google, daqui não se cria nada (um email só passa a crítica quando uma
+ *    pessoa o importa — 15 out 2026).
  *
  * As regras puras (reconhecer o aviso) estão em shared/mailTriage.ts; quem
  * aplica é server/commsRouting.ts (applyRuleTriage). Interruptor AI_MAIL_NOTICES.

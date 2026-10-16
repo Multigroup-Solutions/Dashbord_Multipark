@@ -115,7 +115,7 @@ function ConnectionPanel() {
           <p className="font-medium">{p.title} — {p.review.reviewer?.displayName || 'Utilizador Google'}</p>
           <p className="text-sm whitespace-pre-wrap">{p.review.comment || 'Sem texto'}</p>
           <div className="space-y-2">{p.candidateReviews.map(c => <div className="rounded bg-muted p-2 space-y-1" key={c.id}>
-            <p className="text-sm">#{c.id} · {c.reviewerName} · {c.rating} estrelas · {c.reviewDate || 'Sem data'}{c.complaintId ? ` · Reclamação #${c.complaintId}` : ''}</p>
+            <p className="text-sm">#{c.id} · {c.reviewerName} · {c.rating} estrelas · {c.reviewDate || 'Sem data'}{c.complaintId ? ` · Reclamação #${c.complaintId}` : ''}{c.fromEmailOnly ? ' · veio por email (fora das Críticas; ligar mantém a reclamação)' : ''}</p>
             <p className="text-sm whitespace-pre-wrap">{c.reviewText || 'Sem texto'}</p>
             <Button variant="outline" size="sm" disabled={reconcile.isPending} onClick={() => reconcile.mutate({ key: p.key, existingId: c.id })}>Associar à crítica #{c.id}</Button>
           </div>)}
