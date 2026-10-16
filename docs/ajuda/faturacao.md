@@ -9,7 +9,7 @@ palavras: diagnóstico de faturação, diagnose, filtros progressivos, usado na 
 ---
 # Faturação
 
-Receita, custos e margem por período (só super admin; o dashboard Financeiro, com a mesma base, é para admin e acima — ver a ajuda dos Dashboards → Financeiro).
+Receita, custos e margem por período (só super admin; o dashboard Financeiro, com a mesma base, é para quem tem o módulo Financeiro — admin e acima, ou dado por pessoa — e não tem os totais financeiros negados; ver a ajuda dos Dashboards → Financeiro).
 
 As reservas (receita, entregues, recolhidas, receita esperada) são lidas **ao vivo da base de dados da Multipark**, só dos nossos parques (Airpark, Redpark e Skypark em Lisboa, Porto e Faro — a cidade do parque é a reconhecida: Prior Velho e Moscavide contam como Lisboa, Maia como Porto…). As reservas do **Marketplace** dos parques de terceiros não entram na receita; nos nossos parques, uma reserva vinda pelo Marketplace paga 20 % ao Marketplace e, se também tiver parceiro, conta só o Marketplace (nunca duas comissões). Já não dependem de importações nem da cópia antiga. As **Entregas hoje / este mês** do Geral (Dashboards) usam a **mesma leitura dos entregues**, mas **com IVA** e com o **Marketplace operado** — por isso não batem com a Faturação, de propósito. Se a base da Multipark não responder (ou faltar a permissão de ver totais), a página diz o porquê, em vez de números a zero, e tem um botão **Tentar de novo**.
 
