@@ -177,7 +177,7 @@ Raiz: `C:\Users\jorge\Dashbord_Multipark\Dashbord_Multipark`. Caminhos relativos
 | integrations | inline | `.googleAds`, `.meta`, `.googleBusiness`, `.hub` (server/integrations/…/router.ts, hubRouter.ts) |
 | apiKeys | server/apiKeysRouter.ts | API Keys |
 | complaints, notifications, reviews, lostFound, incidents, performance, services, invoices, shiftHandover, partnerships, annual, multipark | inline | |
-| training | server/trainingRouter.ts | + `training.tutor` (trainingTutorRouter.ts) |
+| training | server/trainingRouter.ts | + `training.tutor` (trainingTutorRouter.ts; D7: `mode`, `search` → server/trainingTutorMultis.ts) |
 | extrasDia | inline | + `extrasDiaShiftProcedures` (extrasDiaShiftRouter.ts), `timesProbeProcedures` (sondaTemposRouter.ts) |
 | extrasAvailability | inline | + `availabilityPatternProcedures` (availabilityPatternRouter.ts) |
 | driverApplications, identityLinks, extraLeads, crm, clients | inline | |

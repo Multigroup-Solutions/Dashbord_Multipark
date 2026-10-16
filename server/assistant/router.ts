@@ -23,7 +23,8 @@ import { CHAT_MESSAGES } from "../_core/ai/chat/engine";
 import { deleteConversation, listConversations, loadMessages, resolveConversation } from "../_core/ai/chat/store";
 import type { StaffToolCtx } from "./tools";
 import { AI_FEATURES } from "../../shared/aiFeatures";
-import { ASSISTANT_CHANNEL, economyNote, askAssistant, assistantLimits, assistantModeFor, lisbonDay, ownerKeyFor, staffHelpDocs } from "./service";
+import { ASSISTANT_CHANNEL, economyNote, askAssistant, assistantLimits, assistantModeFor, lisbonDay, ownerKeyFor, staffHelpDocs, tutorOnPage } from "./service";
+import { MULTIS_TUTOR_PROFILE, profileQuestions } from "../../shared/multisProfiles";
 import { mpvSuggestions } from "./mpv";
 import { sanitizeMultisPage } from "../../shared/multisPage";
 
@@ -81,8 +82,11 @@ export const assistantRouter = router({
       const limits = await assistantLimits(feature);
       // MPV (F3): no piloto, as perguntas do perfil da página/separador; sem perfil próprio, as do v1.
       const viewer = withOverrides(ctx.user);
-      const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, await toolCtxFor(ctx as Ctx)) : null;
-      const suggestions = mpvAsks ?? assistantSuggestions(input?.path, viewer);
+      // D7: na página Formação, com o Multis como tutor, as perguntas do perfil de tutor (no v1, só as que não precisam de ferramentas).
+      const tutor = await tutorOnPage(input?.path);
+      const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, await toolCtxFor(ctx as Ctx), { tutor }) : null;
+      const tutorAsks = tutor && !mode.pilot ? profileQuestions(MULTIS_TUTOR_PROFILE, viewer) : null;
+      const suggestions = mpvAsks ?? (tutorAsks?.length ? tutorAsks : null) ?? assistantSuggestions(input?.path, viewer);
       // Multis 2: mostrar a Memória? e o link "Perguntas que falharam" (admins).
       const { assistantMemoryEnabled } = await import("./memory");
       const extra = {

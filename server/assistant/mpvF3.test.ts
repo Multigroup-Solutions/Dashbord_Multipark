@@ -265,7 +265,8 @@ describe("sistema do MPV (bloco estável)", () => {
     expect(names).not.toContain("abrir_ajuda");
     expect(STAFF_TOOLS.map((t) => t.name)).toContain("abrir_ajuda");
     // F4: a avaliacao_minha (alarga a minha_avaliacao) e as ferramentas de dados do piloto no fim.
-    expect(names.slice(2)).toEqual([...STAFF_TOOLS.map((t) => t.name).filter((n) => n !== "abrir_ajuda" && n !== "minha_avaliacao"), "regras_em_vigor", ...MPV_DATA_TOOL_NAMES]);
+    // D7: + a formacao_procurar (o Multis como tutor da Formação) a seguir à regras_em_vigor.
+    expect(names.slice(2)).toEqual([...STAFF_TOOLS.map((t) => t.name).filter((n) => n !== "abrir_ajuda" && n !== "minha_avaliacao"), "regras_em_vigor", "formacao_procurar", ...MPV_DATA_TOOL_NAMES]);
     // Registadas no MESMO sítio que a F2 (tools.ts → MPV_STAFF_TOOLS / staffToolsFor).
     expect(mpvTools()).toBe(MPV_STAFF_TOOLS);
     expect(staffToolsFor({ pilot: true })).toBe(MPV_STAFF_TOOLS);
@@ -615,8 +616,9 @@ describe("perfis por página (shared/multisProfiles.ts)", () => {
 
   it("assistant.status: só no piloto as perguntas vêm do perfil (com o separador validado); o widget mostra-as como sempre", () => {
     const r = src("server/assistant/router.ts");
-    expect(r).toContain("const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, await toolCtxFor(ctx as Ctx)) : null;");
-    expect(r).toContain("const suggestions = mpvAsks ?? assistantSuggestions(input?.path, viewer);");
+    // D7: + o perfil de tutor na página Formação quando o Multis é o tutor (no v1, as perguntas dele sem ferramentas).
+    expect(r).toContain("const mpvAsks = mode.pilot ? mpvSuggestions(input?.path, sanitizeMultisPage(input ?? {}).tab, await toolCtxFor(ctx as Ctx), { tutor }) : null;");
+    expect(r).toContain("const suggestions = mpvAsks ?? (tutorAsks?.length ? tutorAsks : null) ?? assistantSuggestions(input?.path, viewer);");
     expect(src("client/src/components/assistant/AssistantWidget.tsx")).toContain("const suggestions = status.data?.suggestions ?? [];");
   });
 });

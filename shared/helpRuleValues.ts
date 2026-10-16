@@ -13,7 +13,8 @@
  * "por omissão" ao lado do número.
  */
 import { ROLE_LABELS, type Role } from "./access";
-import { DEFAULT_TIGHT_USES_QUEUE, DEFAULT_TIMES_PERCENTILE, SETTINGS, automationFlagDefault } from "./appSettings";
+import { AI_ASSISTANT_DEFAULT_LIMITS, DEFAULT_TIGHT_USES_QUEUE, DEFAULT_TIMES_PERCENTILE, SETTINGS, automationFlagDefault } from "./appSettings";
+import { TUTOR_DEFAULT_LIMITS, TUTOR_DEFAULT_MODE, TUTOR_MODE_LABELS } from "./trainingTutor";
 import {
   COMPLAINT_LIST_DEFAULT_DAYS, COMPLAINT_PHOTO_MAX_BYTES, COMPLAINT_SLA_RUNNING, DEDUPE_WINDOW_MS, DEFAULT_INCIDENT_SLA_HOURS, DEFAULT_LOST_SLA_DAYS,
 } from "./caseRules";
@@ -204,6 +205,12 @@ export const HELP_RULE_VALUES: Readonly<Record<string, HelpRuleValue>> = {
   "reviews.verifyFailDays": v(REVIEW_AUTO_PUBLISH_VERIFY_FAIL_DAYS, "shared/reviewAutoPublish.ts:REVIEW_AUTO_PUBLISH_VERIFY_FAIL_DAYS"),
   "reviews.replyMinChars": v(REPLY_MIN_CHARS, "shared/reviewAutoPublish.ts:REPLY_MIN_CHARS"),
   "reviews.replyMaxChars": v(REPLY_MAX_CHARS, "shared/reviewAutoPublish.ts:REPLY_MAX_CHARS"),
+  // D7 (16 out 2026): quem faz de tutor na Formação e os limites de cada um
+  "training.tutorMode": d(`«${TUTOR_MODE_LABELS[TUTOR_DEFAULT_MODE]}»`, "shared/trainingTutor.ts:TUTOR_DEFAULT_MODE"),
+  "training.tutorPerMinute": d(TUTOR_DEFAULT_LIMITS.perMinute, "shared/trainingTutor.ts:TUTOR_DEFAULT_LIMITS"),
+  "training.tutorPerDay": d(TUTOR_DEFAULT_LIMITS.perDay, "shared/trainingTutor.ts:TUTOR_DEFAULT_LIMITS"),
+  "assistant.perMinute": d(AI_ASSISTANT_DEFAULT_LIMITS.perMinute, "shared/appSettings.ts:AI_ASSISTANT_DEFAULT_LIMITS"),
+  "assistant.perDay": d(AI_ASSISTANT_DEFAULT_LIMITS.perDay, "shared/appSettings.ts:AI_ASSISTANT_DEFAULT_LIMITS"),
 };
 
 export class HelpRuleMarkerError extends Error {

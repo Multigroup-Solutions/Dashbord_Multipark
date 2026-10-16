@@ -59,12 +59,15 @@ export function mpvAllowedToolNames(ctx: StaffToolCtx, tools: ChatTool<StaffTool
   return tools.filter((t) => { try { return t.available(ctx); } catch { return false; } }).map((t) => t.name);
 }
 
-/** A página da ajuda aberta (a mais específica) e o perfil do Multis para ela. */
-export function mpvPageProfile(path: string | null | undefined, tab: string | null | undefined): {
+/**
+ * A página da ajuda aberta (a mais específica) e o perfil do Multis para ela.
+ * `tutor` (D7): o Multis é o tutor da Formação → o perfil de tutor nessa página.
+ */
+export function mpvPageProfile(path: string | null | undefined, tab: string | null | undefined, opts: { tutor?: boolean } = {}): {
   page: HelpTreePage | null; tabSection: HelpTreeSection | null; profile: MultisProfile;
 } {
   const here = knowledgeForPage(path, tab);
-  const profile = multisProfileFor({ page: here?.page.id, tab: here?.tabSection ? tab : null, group: here?.page.group });
+  const profile = multisProfileFor({ page: here?.page.id, tab: here?.tabSection ? tab : null, group: here?.page.group, ...(opts.tutor ? { tutor: true } : {}) });
   return { page: here?.page ?? null, tabSection: here?.tabSection ?? null, profile };
 }
 
@@ -75,8 +78,8 @@ export function mpvPageProfile(path: string | null | undefined, tab: string | nu
  * faz ao correr (ex.: financeiro_totais → financeAllowed). null = a página
  * não tem perfil próprio → ficam as do v1.
  */
-export function mpvSuggestions(path: string | null | undefined, tab: string | null | undefined, ctx: StaffToolCtx): string[] | null {
-  const { profile } = mpvPageProfile(path, tab);
+export function mpvSuggestions(path: string | null | undefined, tab: string | null | undefined, ctx: StaffToolCtx, opts: { tutor?: boolean } = {}): string[] | null {
+  const { profile } = mpvPageProfile(path, tab, opts);
   if (profile === DEFAULT_MULTIS_PROFILE) return null;
   const allowed = new Set(mpvAllowedToolNames(ctx));
   const out = profileQuestions(profile, ctx.user, (t) => allowed.has(t));
@@ -99,7 +102,11 @@ const attr = (s: string) => s.replace(/"/g, "'").replace(/[<>]/g, "");
  * As 2 secções a mais vêm da pesquisa lexical (este) ou da do piloto com
  * vetores (`mpvTurnKnowledgeAsync`, F5).
  */
-type TurnKnowledgeInput = { path?: string | null; tab?: string | null; question: string; ctx: StaffToolCtx; maxChars?: number };
+type TurnKnowledgeInput = {
+  path?: string | null; tab?: string | null; question: string; ctx: StaffToolCtx; maxChars?: number;
+  /** D7: o Multis é o tutor da Formação (training.tutorMode = "multis") → o perfil de tutor. */
+  tutor?: boolean;
+};
 type TurnKnowledge = { block: string; refs: string[]; profile: MultisProfile };
 type Item = { page: HelpTreePage; section: HelpTreeSection; cap?: number };
 
@@ -135,7 +142,7 @@ interface TurnAnchor {
 }
 
 function turnAnchor(p: TurnKnowledgeInput): TurnAnchor {
-  const { page, tabSection, profile } = mpvPageProfile(p.path, p.tab);
+  const { page, tabSection, profile } = mpvPageProfile(p.path, p.tab, { tutor: p.tutor });
   const canSee = (pg: HelpTreePage) => canSeeHelpPage(p.ctx.user, pg);
   const allowed = new Set(mpvAllowedToolNames(p.ctx));
   const preferred = profile.tools.filter((t) => allowed.has(t));

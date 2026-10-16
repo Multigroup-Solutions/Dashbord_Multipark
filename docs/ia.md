@@ -547,6 +547,23 @@ resultado). Não está no menu geral.
   resposta. É um agregado anónimo (`training_tutor_questions`, sem utilizador).
 - Interruptor desligado ou orçamento esgotado: o painel mostra uma mensagem
   simpática a sugerir o formador; nada falha.
+- **D7 (Jorge, 16 out 2026): o Multis é o tutor da página Formação.** Definição
+  `training.tutorMode` (Definições → Parâmetros → Pessoas; `multis` por
+  omissão, `proprio` = tudo como acima). Com `multis` (e o Multis ligado) o
+  cartão do tutor mantém a saudação, o progresso e as dicas (sem IA) e manda as
+  perguntas para o Multis (`assistant`, ou `assistant_smart` no piloto), que
+  recebe o módulo aberto (registo `training_manual|video|path`) e, por pergunta,
+  os trechos dos manuais e vídeos da formação (o módulo primeiro, depois o
+  catálogo; mesmas regras de procura, sem IA; publicados — admin e acima também
+  os não publicados) e da base de conhecimento (com `useInAssistant` ou
+  `useInTutor`; visibilidade de sempre). No piloto há ainda a ferramenta
+  `formacao_procurar` (só leitura, sem IA nem vetores; `training.tutor.search`).
+  Limites e custo: os do Multis (não os do tutor). "Explicar as respostas
+  erradas" e "Procurar formação" ficam no `AI_TRAINING_TUTOR`. As perguntas ao
+  Multis na Formação entram no agregado *Perguntas ao tutor* (`formacao:0` =
+  sem módulo aberto). Código: `server/trainingTutorMultis.ts`,
+  `server/assistant/formacaoTool.ts`, `formacaoKnowledge` em
+  `server/assistant/service.ts`.
 
 ## 9. Variáveis de ambiente
 

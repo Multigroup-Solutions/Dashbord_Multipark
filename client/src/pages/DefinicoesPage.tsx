@@ -53,6 +53,7 @@ import { AiUsageDailyCard } from "@/components/settings/AiUsageDailyCard";
 import { MultisPilotCard } from "@/components/settings/MultisPilotCard";
 import { DEFAULT_REMINDER_RECIPIENTS, ISO_WEEKDAYS, REMINDER_ROLES, REMINDER_ROLE_LABELS, WEEKDAY_SHORT_PT, describeReminderRule, type ReminderRecipients } from "@shared/extrasReminders";
 import { MANUAL_EDIT_AT_CONFIRM_LABELS, MANUAL_EDIT_AT_CONFIRM_MODES } from "@shared/extrasSchedule";
+import { TUTOR_DEFAULT_MODE, TUTOR_MODES } from "@shared/trainingTutor";
 
 const TABS = ["estado", "automacoes", "integracoes", "comunicacao", "parametros", "notificacoes", "seguranca"] as const;
 type Tab = (typeof TABS)[number];
@@ -701,6 +702,8 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
   // Plano MPV F7: dia mexido à mão na confirmação (D4b, três opções) e a quem vão os lembretes (D4c, por cidade).
   const isManualEditMode = item.key === "extras.manualEditAtConfirm";
   const isReminderRecipients = item.key === "extras.reminderRecipients";
+  // D7: quem faz de tutor na Formação (o Multis, por omissão, ou o tutor próprio).
+  const isTutorMode = item.key === "training.tutorMode";
   const isNumber = typeof item.defaultValue === "number";
   const isBool = typeof item.defaultValue === "boolean";
   // Mapa por cidade (ex.: carros/hora por condutor, ponto de encontro).
@@ -784,6 +787,7 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
       })) as ReminderRecipients);
     }
     else if (isManualEditMode) setText(String(current ?? "confirm"));
+    else if (isTutorMode) setText(String(current ?? TUTOR_DEFAULT_MODE));
     else if (isSpeedRule) {
       const c = (current ?? {}) as Record<string, unknown>;
       const txt = (v: unknown) => (v == null ? "" : String(v).replace(".", ","));
@@ -1136,6 +1140,13 @@ function SettingEditor({ item, saving, onSave, codeValue, locked, isSuperAdmin }
             );
           })}
         </div>
+      ) : isTutorMode ? (
+        <Select value={text || TUTOR_DEFAULT_MODE} onValueChange={setText} disabled={locked}>
+          <SelectTrigger className="w-full max-w-md min-w-0 *:data-[slot=select-value]:block *:data-[slot=select-value]:truncate" aria-label={item.label}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {TUTOR_MODES.map((m) => <SelectItem key={m} value={m}>{m === "multis" ? "O Multis (com os manuais e vídeos da formação)" : "O tutor próprio da formação (como antes)"}</SelectItem>)}
+          </SelectContent>
+        </Select>
       ) : isManualEditMode ? (
         <div className="space-y-1">
         <Select value={text || "confirm"} onValueChange={setText} disabled={locked}>

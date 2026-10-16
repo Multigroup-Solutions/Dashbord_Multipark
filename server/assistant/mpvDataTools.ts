@@ -169,8 +169,9 @@ type Impl = (args: Record<string, unknown>, ctx: StaffToolCtx) => Promise<Record
 /**
  * Uma ferramenta de dados: corre, REDIGE os campos `pii` com o contexto do
  * turno e só depois corta textos (`textMax`) e o resultado (teto).
+ * (Exportada para a `formacao_procurar`, D7 — formacaoTool.ts.)
  */
-function dataTool(def: Omit<ChatTool<StaffToolCtx>, "run" | "selfRedacts" | "pii"> & {
+export function dataTool(def: Omit<ChatTool<StaffToolCtx>, "run" | "selfRedacts" | "pii"> & {
   pii: ToolPiiFields; impl: Impl; textMax?: Readonly<Record<string, number>>; shown?: readonly ShownSpec[]; protect?: readonly string[];
   /** Usa leituras lentas (slowCall): a descrição diz ao modelo como ler o «lidoAs». */
   slow?: boolean;

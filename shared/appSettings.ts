@@ -43,6 +43,7 @@ import {
 } from "./leaves";
 import { NO_SHOW_SKIP_SETTING_KEY, noShowSkipSchema } from "./scheduleReview";
 import { operationalDayOf } from "./lisbonDay";
+import { TUTOR_DEFAULT_MODE, TUTOR_MODES, type TutorMode } from "./trainingTutor";
 import { MANUAL_EDIT_AT_CONFIRM_DEFAULT, MANUAL_EDIT_AT_CONFIRM_MODES, type ManualEditAtConfirm } from "./extrasSchedule";
 import { DEFAULT_REMINDER_RECIPIENTS, reminderRecipientsSchema } from "./extrasReminders";
 
@@ -929,6 +930,16 @@ export const SETTINGS = {
     description: "Perguntas ao tutor da formação por pessoa, por minuto e por dia. JSON: {\"perMinute\": 10, \"perDay\": 100}. Vazio = usa AI_TRAINING_TUTOR_PER_MINUTE / AI_TRAINING_TUTOR_PER_DAY (ou 10 e 100).",
     schema: trainingTutorLimitsSchema,
     defaultValue: { perMinute: 10, perDay: 100 },
+    wiring: "live",
+  }),
+  // D7 (Jorge, 16 out 2026): "o Multis passa a ser o tutor da página Formação". Reversível aqui.
+  "training.tutorMode": def({
+    key: "training.tutorMode",
+    group: "pessoas",
+    label: "Formação: quem faz de tutor",
+    description: "Na página Formação (manuais, vídeos, percursos e quiz), o lugar do tutor abre o Multis com o perfil de tutor e os manuais e vídeos da formação (\"multis\", por omissão) ou mostra o tutor próprio da formação, como era antes (\"proprio\"). Com \"multis\" ficam na página a saudação, o progresso, as dicas antes do quiz e \"Explicar as respostas erradas\"; se o Multis estiver desligado, aparece o tutor próprio. Vale para toda a gente (piloto e não piloto).",
+    schema: z.enum(TUTOR_MODES as unknown as [TutorMode, ...TutorMode[]], { error: "Escolhe \"multis\" ou \"proprio\"." }),
+    defaultValue: TUTOR_DEFAULT_MODE,
     wiring: "live",
   }),
   "sla.mailHours": def({

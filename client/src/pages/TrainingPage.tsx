@@ -3,8 +3,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { usePersistedState } from "@/hooks/usePersistedState";
-import { useCallback, useMemo, useState } from "react";
-import { Link } from "wouter";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useSearch } from "wouter";
+import { TUTOR_ENTITY_TYPES, trainingDeepLink, type TutorContext } from "@shared/trainingTutor";
+import { TutorModuleContext } from "./training/TutorPanel";
 import { BarChart3, BookOpen, ClipboardList, Gamepad2, GraduationCap, HelpCircle, ListChecks, Play } from "lucide-react";
 import { can, seesBeyondOwn } from "@shared/access";
 import { FAQsTab, ManualsTab, VideoPlayerDialog, VideosTab, useDoneSet } from "./training/ContentTabs";
@@ -21,8 +23,17 @@ export default function TrainingPage() {
   const isSupervisor = seesBeyondOwn(user, "formacao") && can(user, "formacao", "edit");
   const seesProgress = seesBeyondOwn(user, "formacao");
   const [tab, setTab] = usePersistedState("training.tab", "mine");
-  // Plano MPV §3.1: o Multis sabe o separador aberto.
-  useMultisPage({ tab });
+  // D7: o módulo do tutor aberto (manual, vídeo, percurso) — o Multis, como tutor, sabe qual é.
+  const [tutorModule, setTutorModule] = useState<TutorContext | null>(null);
+  const tutorCtx = useMemo(() => ({
+    register: (c: TutorContext) => {
+      setTutorModule(c);
+      return () => setTutorModule((cur) => (cur && cur.type === c.type && cur.id === c.id ? null : cur));
+    },
+  }), []);
+  const tutorEntityType = tutorModule && tutorModule.type !== "quiz" ? TUTOR_ENTITY_TYPES[tutorModule.type] : null;
+  // Plano MPV §3.1: o Multis sabe o separador aberto (e, D7, o módulo do tutor aberto).
+  useMultisPage({ tab, entity: tutorEntityType ? { type: tutorEntityType, id: tutorModule!.id } : null });
   const [openManualId, setOpenManualId] = useState<number | null>(null);
   const [playVideo, setPlayVideo] = useState<any>(null);
   // Tema do próximo quiz: o da formação (categoria do percurso) ou o procurado em "A minha formação".
@@ -52,7 +63,23 @@ export default function TrainingPage() {
   const quizTopic = useCallback((topic: string) => { setQuizPreset({ topic, label: topic }); setTab("quiz"); }, [setTab]);
   const clearOpenManual = useCallback(() => setOpenManualId(null), []);
 
+  // D7: as "Fontes" do Multis abrem o manual ou o vídeo (/formacao?manual=12, /formacao?video=5).
+  const search = useSearch();
+  const [, navigate] = useLocation();
+  const deepLink = useMemo(() => trainingDeepLink(search), [search]);
+  useEffect(() => {
+    if (!deepLink) return;
+    if (deepLink.type === "manual") {
+      openItem({ itemType: "manual", itemId: deepLink.id });
+      navigate("/formacao", { replace: true });
+    } else if (allVideosQ.data || allVideosQ.error) {
+      openItem({ itemType: "video", itemId: deepLink.id });
+      navigate("/formacao", { replace: true });
+    }
+  }, [deepLink, allVideosQ.data, allVideosQ.error]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
+    <TutorModuleContext.Provider value={tutorCtx}>
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-muted-foreground">Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira</p>
@@ -85,5 +112,6 @@ export default function TrainingPage() {
       </Tabs>
       <VideoPlayerDialog video={playVideo} done={playVideo ? done.has(`video:${playVideo.id}`) : false} onClose={() => setPlayVideo(null)} />
     </div>
+    </TutorModuleContext.Provider>
   );
 }

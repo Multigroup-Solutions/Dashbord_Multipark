@@ -4,7 +4,7 @@ grupo: Sistema
 pagina: multis
 titulo: Multis (o assistente de IA da equipa)
 rotas: /multis/falhas, /perfil
-palavras: multis, multis piloto, cartão multis piloto, eval do multis, avaliação do multis, perguntas de teste, conjunto a, conjunto b, regra inventada, piloto do multis, modo económico, modelo smart, argon, separador aberto, ia, inteligência artificial, assistente, chat, perguntar, perguntar à ia, perguntar ao multis, painel ao lado, conversa, conversas anteriores, nova conversa, apagar conversa, estrela, memória, memória do multis, memória da empresa, lembra-te, lembrar, memorizar, não te esqueças, notas do multis, guardar nota, arquivar nota, avaliar resposta, gosto, polegar, resposta errada, perguntas que falharam, falhas do multis
+palavras: multis, multis piloto, cartão multis piloto, eval do multis, avaliação do multis, perguntas de teste, conjunto a, conjunto b, regra inventada, piloto do multis, modo económico, modelo smart, argon, separador aberto, ia, inteligência artificial, assistente, chat, perguntar, perguntar à ia, perguntar ao multis, painel ao lado, conversa, conversas anteriores, nova conversa, apagar conversa, estrela, memória, memória do multis, memória da empresa, lembra-te, lembrar, memorizar, não te esqueças, notas do multis, guardar nota, arquivar nota, avaliar resposta, gosto, polegar, resposta errada, perguntas que falharam, falhas do multis, tutor, tutor da formação, multis tutor, ouvir
 ---
 # Multis (o assistente de IA da equipa)
 
@@ -50,6 +50,16 @@ O **Multis** é o assistente de IA da Multipark dentro da aplicação. Apresenta
 **O Multis sabe o que tens aberto**
 - Nas páginas com separadores (Extras-Dia, Atividade diária, Avaliação, Despesas, Parcerias, Condutores e agentes, Críticas, Formação) o Multis sabe em que **separador** estás; na **Ficha da reserva** sabe que reserva estás a ver.
 - Não te dá acesso a nada que não tenhas: só o ajuda a perceber a que te referes ("o que é isto?" na Pressão).
+- Na **Formação**, com o Multis como tutor, sabe também o manual, vídeo ou percurso cujo cartão **Tutor da formação** está aberto.
+
+**O Multis como tutor da Formação**
+- Na página **Formação** (manuais, vídeos, percursos e quiz) o Multis faz de **tutor**, no lugar do tutor próprio — para toda a gente, no piloto e fora dele. Escolhe-se em Definições → Parâmetros → Pessoas → **Formação: quem faz de tutor** (por omissão {{regra:training.tutorMode}}); com "proprio" fica tudo como era.
+- O cartão **Tutor da formação** de cada manual, vídeo, percurso e do Quiz tem perguntas rápidas e **Perguntar ao Multis**, que abrem o Multis já com esse módulo.
+- Em cada pergunta feita na página Formação, o Multis recebe os trechos dos **manuais e vídeos da formação** (primeiro do módulo aberto, depois dos outros) e da **base de conhecimento** (se estiver ligada para o Multis ou para o tutor), com as **Fontes** no fim; as de um manual ou vídeo da formação abrem-no na página. Explica passo a passo, verifica se percebeste com uma pergunta curta e não dá as respostas dos quizzes nem dos exames. Se não estiver nos manuais, diz que não encontrou e que perguntes ao formador.
+- Só vê o que tu vês: manuais publicados (os não publicados só admin e acima) e, da base de conhecimento, os documentos do teu papel e das tuas cidades. A pesquisa nos manuais não usa IA.
+- No piloto tem ainda **Procurar nos manuais da formação**: procura outro tema (ou noutro módulo) quando os trechos que recebeu não chegam. As perguntas sugeridas da página passam a ser as do tutor.
+- Na página Formação as respostas têm **Ouvir** (lê em voz alta, com a voz do navegador).
+- As perguntas feitas ao Multis na página Formação contam, anónimas e sem dados pessoais, em **Perguntas ao tutor** (Formação → Acompanhamento, para quem gere a formação).
 
 **Piloto do Multis (modelo smart)**
 - Algumas pessoas experimentam o Multis com um modelo mais forte. Quem está no piloto escolhe-se em **Definições → Parâmetros → IA → Multis: quem está no piloto** e liga-se com **Definições → Automações → Multis por página (MPV)** (só o super admin) e **IA: Multis do piloto (modelo smart)**. Para as outras pessoas nada muda.

@@ -132,13 +132,17 @@ function uniqueSources(hits: Chunk[]) {
  * `failed`: a consulta falhou — 18d: o tutor diz que não conseguiu consultar,
  * em vez de responder como se os manuais não tivessem nada.
  */
-async function tutorKnowledge(question: string, role: string, topK: number): Promise<{ hits: KbHit[]; failed: boolean }> {
+export async function tutorKnowledge(
+  question: string, role: string, topK: number,
+  /** D7: `noEmbed` = só palavras-chave (a ferramenta do Multis nunca chama IA, nem para o vetor da pergunta). */
+  opts: { noEmbed?: boolean } = {},
+): Promise<{ hits: KbHit[]; failed: boolean }> {
   try {
     const { loadKnowledgeConfig } = await import("./knowledge/sync");
     if (!(await loadKnowledgeConfig()).useInTutor) return { hits: [], failed: false };
     const { retrieveKnowledge, kbViewerFrom } = await import("./knowledge/retrieve");
     const { cityScope } = await import("./cityScope");
-    const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, cityScope.getStore()), topK });
+    const r = await retrieveKnowledge({ question, viewer: kbViewerFrom(role, cityScope.getStore()), topK, ...(opts.noEmbed ? { embedQuery: null } : {}) });
     return { hits: r.hits, failed: !!r.failed };
   } catch {
     return { hits: [], failed: true };

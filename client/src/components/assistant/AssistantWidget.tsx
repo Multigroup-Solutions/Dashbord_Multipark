@@ -18,7 +18,9 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Streamdown } from "streamdown";
 import { aiRehypePlugins } from "@/lib/safeMarkdown";
-import { BookMarked, History, Loader2, MessageSquareWarning, Plus, Send, Trash2, User, X } from "lucide-react";
+import { BookMarked, History, Loader2, MessageSquareWarning, Plus, Send, Trash2, User, Volume2, X } from "lucide-react";
+import { speak } from "@/lib/speak";
+import { TUTOR_PAGE_PATH } from "@shared/trainingTutor";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
@@ -53,6 +55,7 @@ const TOOL_LABELS: Record<string, string> = {
   minha_avaliacao: "a tua avaliação",
   minhas_tarefas: "as tuas tarefas",
   financeiro_totais: "totais financeiros",
+  formacao_procurar: "manuais da formação",
 };
 
 /** Evento para abrir o Multis com uma pergunta (ex.: "Perguntar ao Multis" na pesquisa global). */
@@ -100,6 +103,9 @@ export function AssistantWidget() {
     ? { ...(page.tab ? { tab: page.tab } : {}), ...(page.entity ? { entity: page.entity } : {}) }
     : {};
   const status = trpc.assistant.status.useQuery({ path: location, ...pageCtx }, { enabled: open, staleTime: 60_000 });
+  // D7: na página Formação, com o Multis como tutor, as respostas ganham "Ouvir" (como o tutor tinha). Só aí se pergunta.
+  const tutorModeQ = trpc.training.tutor.mode.useQuery(undefined, { enabled: open && pagePath === TUTOR_PAGE_PATH, staleTime: 5 * 60_000, retry: false });
+  const tutorHere = pagePath === TUTOR_PAGE_PATH && tutorModeQ.data?.setting === "multis";
   const history = trpc.assistant.messages.useQuery(conversationId ? { conversationId } : undefined, {
     enabled: open && !fresh,
     staleTime: 30_000,
@@ -299,6 +305,11 @@ export function AssistantWidget() {
                       )}
                       {m.economy && (
                         <div className="mt-1 text-[11px] text-muted-foreground" title={m.economy}>Modo económico</div>
+                      )}
+                      {tutorHere && (
+                        <Button size="sm" variant="ghost" className="mt-1 h-6 px-1.5 text-xs" title="Ouvir" aria-label="Ouvir resposta" onClick={() => speak(m.content)}>
+                          <Volume2 className="mr-1 h-3.5 w-3.5" />Ouvir
+                        </Button>
                       )}
                       {m.id != null && <MultisFeedback messageId={m.id} rating={m.rating} onRated={(r) => setRating(m.key, r)} />}
                     </>

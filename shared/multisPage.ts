@@ -48,7 +48,11 @@ export const MULTIS_PAGE_TABS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** Tipos de registo que o Multis pode saber que estão abertos. */
-export const MULTIS_ENTITY_TYPES = ["booking", "employee", "review", "complaint", "expense", "partner"] as const;
+export const MULTIS_ENTITY_TYPES = [
+  "booking", "employee", "review", "complaint", "expense", "partner",
+  // D7: o módulo da Formação aberto quando se pergunta ao Multis (tutor).
+  "training_manual", "training_video", "training_path",
+] as const;
 export type MultisEntityType = (typeof MULTIS_ENTITY_TYPES)[number];
 export interface MultisEntity { type: MultisEntityType; id: number }
 
@@ -60,6 +64,9 @@ export const MULTIS_ENTITY_LABELS: Record<MultisEntityType, string> = {
   complaint: "reclamação",
   expense: "despesa",
   partner: "parceiro",
+  training_manual: "manual da formação",
+  training_video: "vídeo da formação",
+  training_path: "percurso da formação",
 };
 
 /**

@@ -47,7 +47,10 @@ import { HELP_FILES } from "./helpDocs.generated";
 import { staffToolsFor, type StaffToolCtx } from "./tools";
 import { MPV_VARIANT, mpvAllowedToolNames, mpvSystemPrompt, mpvTurnBudget, mpvTurnKnowledgeAsync } from "./mpv";
 import { makeSectionSearch } from "./helpSearch";
-import { kbViewerFrom, onceQueryEmbed, type QueryEmbedFn } from "../knowledge/retrieve";
+import { kbViewerFrom, onceQueryEmbed, type KbHit, type KbRetrieval, type QueryEmbedFn } from "../knowledge/retrieve";
+import { can } from "../../shared/access";
+import { MULTIS_TUTOR_V1_ROLE } from "../../shared/multisProfiles";
+import { TUTOR_PAGE_PATH, tutorContextFromPage, type TutorContext } from "../../shared/trainingTutor";
 import type { CityAccess } from "../cityAccess";
 import type { AiFeature } from "../_core/ai/features";
 import type { AiTier } from "../_core/ai/models";
@@ -95,6 +98,67 @@ export async function assistantKnowledge(
   }
   if (!r.hits.length && !helpHits.length) return null;
   return { block: r.hits.length ? knowledgeBlock(r.hits) : "", citations: r.citations, helpHits };
+}
+
+/** D7: trechos da formação e da base de conhecimento por pergunta na página Formação. */
+export const FORMACAO_TRAINING_TOP_K = 3;
+export const FORMACAO_KB_TOP_K = 3;
+export const FORMACAO_KNOWLEDGE_MAX_CHARS = 7200;
+
+/**
+ * D7 (Jorge, 16 out 2026): o Multis é o tutor da página Formação. O
+ * <conhecimento> do turno passa a ter, à frente, os trechos dos manuais e
+ * vídeos da formação (o módulo aberto primeiro, depois o catálogo — as regras
+ * do tutor, trainingTutorMultis.ts) e, a seguir, a base de conhecimento com a
+ * visibilidade de sempre (consultada se estiver ligada para o Multis OU para
+ * o tutor, porque o Multis faz agora de tutor). Tudo com as etiquetas [K…] e
+ * as "Fontes:" no fim, como o resto da base. `found` = havia algum trecho.
+ * Nunca lança. Só se chama na página Formação com `training.tutorMode` = "multis".
+ */
+export async function formacaoKnowledge(
+  question: string, user: { role: string; accessOverrides?: unknown }, access: CityAccess | undefined,
+  opts: { module?: TutorContext | null; helpTopK?: number; vectorNeighbors?: boolean; embedQuery?: QueryEmbedFn | null } = {},
+): Promise<{ knowledge: ChatKnowledge | null; found: boolean }> {
+  const { searchTrainingContent } = await import("../trainingTutorMultis");
+  const noTraining = { hits: [], moduleTitle: null, failed: false } as Awaited<ReturnType<typeof searchTrainingContent>>;
+  const trainingP = can(user as Parameters<typeof can>[0], "formacao", "view")
+    ? searchTrainingContent(question, { role: user.role, module: opts.module ?? null, topK: FORMACAO_TRAINING_TOP_K }).catch(() => ({ ...noTraining, failed: true }))
+    : Promise.resolve(noTraining);
+  const kbP = (async (): Promise<KbRetrieval | null> => {
+    const { loadKnowledgeConfig } = await import("../knowledge/sync");
+    const cfg = await loadKnowledgeConfig();
+    if (!cfg.useInAssistant && !cfg.useInTutor) return null;
+    const { retrieveKnowledge } = await import("../knowledge/retrieve");
+    return retrieveKnowledge({
+      question, viewer: kbViewerFrom(user.role, access), topK: FORMACAO_KB_TOP_K, excludeSources: ["help"],
+      // A ajuda pelo significado só quando a base está ligada para o Multis (como no assistantKnowledge).
+      helpTopK: cfg.useInAssistant ? (opts.helpTopK ?? HELP_KB_TOP_K) : 0,
+      ...(opts.vectorNeighbors ? { vectorNeighbors: true, embedQuery: opts.embedQuery ?? null } : {}),
+    });
+  })().catch((): KbRetrieval => ({ hits: [], citations: [], mode: "none", failed: true }));
+  const [training, kb] = await Promise.all([trainingP, kbP]);
+  const helpHits: HelpHit[] = [];
+  for (const h of kb?.helpHits ?? []) {
+    const file = helpFileOfRef(h.ref);
+    if (file) helpHits.push({ file, score: h.score, text: h.text });
+  }
+  const trainingAsKb: KbHit[] = training.hits.map((h, i) => ({
+    chunkId: 0, docId: -(i + 1), title: h.title, section: h.heading, text: h.text, href: h.href, source: "upload", score: 0,
+  }));
+  const all = [...trainingAsKb, ...(kb?.hits ?? [])];
+  if (!all.length) {
+    if (training.failed || kb?.failed) return { knowledge: { block: KB_UNAVAILABLE_BLOCK, citations: [], helpHits }, found: false };
+    return { knowledge: helpHits.length ? { block: "", citations: [], helpHits } : null, found: false };
+  }
+  const { knowledgeBlock, citationsFor } = await import("../knowledge/retrieve");
+  return { knowledge: { block: knowledgeBlock(all, FORMACAO_KNOWLEDGE_MAX_CHARS), citations: citationsFor(all), helpHits }, found: true };
+}
+
+/** D7: esta pergunta é na página Formação com o Multis como tutor? (Só lê a definição nessa página.) Nunca lança. */
+export async function tutorOnPage(path: string | null | undefined): Promise<boolean> {
+  if (pagePathOf(path) !== TUTOR_PAGE_PATH) return false;
+  const { trainingTutorMode } = await import("../trainingTutorMultis");
+  return (await trainingTutorMode()) === "multis";
 }
 
 /** O vetorizador do piloto (null se os vetores estiverem desligados). Nunca lança. */
@@ -224,6 +288,8 @@ export function turnContext(p: {
   tab?: string | null; entity?: MultisEntity | null;
   /** MPV: as ferramentas que esta pessoa pode usar (todas vão declaradas; §3.7). */
   tools?: readonly string[];
+  /** D7 (v1 na página Formação com o Multis como tutor): o papel de tutor. Omisso = como sempre. */
+  pageRole?: string | null;
 }): string {
   const wd = WEEKDAYS[new Date(`${p.today}T12:00:00Z`).getUTCDay()];
   return [
@@ -235,6 +301,7 @@ export function turnContext(p: {
     `Cidades a que tem acesso: ${p.cities === "todas" ? "todas" : p.cities.join(", ") || "nenhuma"}.`,
     p.memoryOff ? "A memória do Multis está desligada: não consegues guardar notas (se pedirem, diz que um administrador a liga em Definições → Automações)." : null,
     p.tools ? `Ferramentas que podes usar: ${p.tools.length ? p.tools.join(", ") : "nenhuma"}.` : null,
+    p.pageRole ? p.pageRole : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -330,10 +397,16 @@ export async function askAssistant(
   // Plano MPV (F3): quem está no piloto recebe o conteúdo do MPV (também no
   // modo económico — é o "MPV-lite"); os outros, o v1 tal e qual.
   const mpv = mode.pilot;
+  // D7 (Jorge, 16 out 2026): na página Formação, com o Multis como tutor (training.tutorMode, por
+  // omissão "multis"): o perfil de tutor (MPV) ou a linha do papel (v1) e os manuais e vídeos da
+  // formação no <conhecimento>. Nas outras páginas nem se lê a definição (o v1 fica igual).
+  const tutor = await tutorOnPage(input.path);
+  const tutorModule = tutor ? tutorContextFromPage(page.entity, page.tab) : null;
   const tools = hooks.evalRun ? hooks.evalRun.wrapTools(staffToolsFor(mode)) : staffToolsFor(mode);
   const context = turnContext({
     today: toolCtx.today, path: input.path, role: user.role, cities, memoryOff: !memoryOn, tab: page.tab, entity: page.entity,
     ...(mpv ? { tools: mpvAllowedToolNames(toolCtx, tools) } : {}),
+    ...(tutor && !mpv ? { pageRole: MULTIS_TUTOR_V1_ROLE } : {}),
   });
   // Plano MPV (F5): no piloto a ajuda e os manuais procuram-se também pelo significado. O vetor
   // da pergunta calcula-se UMA vez no pedido (partilhado pelo bloco da ajuda, pela base de
@@ -347,10 +420,20 @@ export async function askAssistant(
   // de conhecimento, e UMA vez por pedido (a descida smart → lite reaproveita-o).
   let pkOnce: Promise<{ block: string; refs: string[] }> | null = null;
   const pageKnowledge = mpv
-    ? () => (pkOnce ??= mpvTurnKnowledgeAsync({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx }, sectionSearch)
+    ? () => (pkOnce ??= mpvTurnKnowledgeAsync({ path: input.path, tab: page.tab, question: input.question, ctx: toolCtx, ...(tutor ? { tutor: true } : {}) }, sectionSearch)
         .then((r) => ({ block: r.block, refs: r.refs })))
     : null;
-  const knowledgeFor = (q: string) => assistantKnowledge(q, user.role, toolCtx.access, mpv ? { helpTopK: 0, vectorNeighbors: true, embedQuery } : {});
+  // D7: a pergunta achou alguma coisa nos manuais/vídeos/base? (para o agregado dos formadores)
+  let tutorSearched = false;
+  let tutorFound = false;
+  const knowledgeFor = tutor
+    ? async (q: string) => {
+        const r = await formacaoKnowledge(q, user, toolCtx.access, { module: tutorModule, ...(mpv ? { helpTopK: 0, vectorNeighbors: true, embedQuery } : {}) });
+        tutorSearched = true;
+        tutorFound = r.found;
+        return r.knowledge;
+      }
+    : (q: string) => assistantKnowledge(q, user.role, toolCtx.access, mpv ? { helpTopK: 0, vectorNeighbors: true, embedQuery } : {});
   const kbSource = hooks.knowledge === null ? undefined : (hooks.knowledge ?? knowledgeFor);
   // A base de conhecimento consulta-se UMA vez por pedido (a descida smart → lite reaproveita-a).
   let kbOnce: Promise<ChatKnowledge | null> | null = null;
@@ -404,6 +487,13 @@ export async function askAssistant(
     const cid = r.conversationId ?? input.conversationId ?? null;
     // O total (as duas tentativas) cabe nos 60 s da Vercel com margem: prazo contado desde o início.
     r = await turn(feature, cid, cid ? false : input.newConversation, startedAt + ASSISTANT_REQUEST_MAX_MS);
+  }
+  // D7: como o tutor próprio, a pergunta entra no agregado ANÓNIMO dos formadores ("Perguntas ao
+  // tutor"), com "sem resposta" quando nada dos manuais apareceu ou o Multis não respondeu.
+  if (r.ok && tutor && tutorSearched && !hooks.evalRun) {
+    const { recordTutorQuestion } = await import("../trainingTutorMultis");
+    const searchedByTool = r.toolsUsed.includes("formacao_procurar") && !r.toolErrors.some((e) => e.tool === "formacao_procurar");
+    await recordTutorQuestion(input.question, tutorModule, !!detectUnanswered(r.answer, r.toolErrors) || (!tutorFound && !searchedByTool));
   }
   // Respostas que não responderam → "Perguntas que falharam" (marca automática).
   if (r.ok && r.messageId) {

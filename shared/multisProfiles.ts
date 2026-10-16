@@ -234,9 +234,42 @@ export const MULTIS_PROFILE_RULES: readonly ProfileRule[] = [
   },
 ];
 
-/** O perfil da página (id da árvore), do separador e do grupo. PURA. */
-export function multisProfileFor(p: { page?: string | null; tab?: string | null; group?: HelpGroup | string | null }): MultisProfile {
+/**
+ * D7 (Jorge, 16 out 2026): "o Multis passa a ser o tutor da página Formação".
+ * Com `training.tutorMode` = "multis" (por omissão), a página Formação usa
+ * este perfil em vez do "formacao" (que fica para o modo "proprio", tal como
+ * era). Responde com os manuais e vídeos da formação (o <conhecimento> da
+ * página e a `formacao_procurar`), como o tutor próprio fazia.
+ */
+export const MULTIS_TUTOR_PAGE = "formacao";
+export const MULTIS_TUTOR_PROFILE: MultisProfile = {
+  key: "formacao.tutor",
+  role: "Aqui és o tutor da formação: respondes só com os manuais e vídeos da formação e da base de conhecimento (os trechos em <conhecimento>, com a etiqueta [K…] no fim da frase que os usa, ou o que a formacao_procurar devolver, dizendo de que manual vem) e, se não estiver lá, dizes que não encontraste nos manuais e que a pessoa pode perguntar ao formador — nunca inventas procedimentos. Explicas passo a passo, em respostas curtas, com exemplos do dia a dia da operação, e no fim verificas se a pessoa percebeu com uma pergunta curta. Não dás as respostas dos quizzes nem dos exames: ajudas a chegar lá. Para o progresso, usas os dados reais (formacao_progresso).",
+  questions: [
+    q("Explica-me o que tenho aberto, passo a passo."),
+    q("Faz-me uma pergunta para ver se percebi."),
+    q("O que devo rever antes do quiz?"),
+    q("O que me falta para acabar a formação?", { needs: "formacao_progresso" }),
+  ],
+  tools: ["formacao_procurar", "formacao_progresso", "ajuda_procurar", "ajuda_abrir"],
+};
+
+/**
+ * D7, fora do piloto (v1): o v1 não tem perfis nem a `formacao_procurar`, por
+ * isso na página Formação o papel de tutor vai numa linha do <contexto> (só
+ * nesta página; nas outras o v1 fica igual) e os manuais vêm no <conhecimento>.
+ */
+export const MULTIS_TUTOR_V1_ROLE =
+  "Nesta página és o tutor da formação: respondes só com os manuais e vídeos da formação e da base de conhecimento que vêm em <conhecimento> (com a etiqueta [K…] no fim da frase que os usa) e, se não estiver lá, dizes que não encontraste nos manuais e que a pessoa pode perguntar ao formador. Explicas passo a passo, em respostas curtas, e no fim verificas se a pessoa percebeu com uma pergunta curta. Não dás as respostas dos quizzes nem dos exames.";
+
+/**
+ * O perfil da página (id da árvore), do separador e do grupo. `tutor`: o
+ * Multis é o tutor da Formação (D7) → na página "formacao" o perfil de tutor,
+ * em qualquer separador. PURA.
+ */
+export function multisProfileFor(p: { page?: string | null; tab?: string | null; group?: HelpGroup | string | null; tutor?: boolean }): MultisProfile {
   const page = p.page ?? null;
+  if (p.tutor && page === MULTIS_TUTOR_PAGE) return MULTIS_TUTOR_PROFILE;
   if (page) {
     if (p.tab) {
       const r = MULTIS_PROFILE_RULES.find((x) => x.tab === p.tab && x.pages?.includes(page));
@@ -281,5 +314,5 @@ export function profileQuestions(profile: MultisProfile, user: UserLike, canUse?
 
 /** Todos os perfis (para testes e para a ajuda). */
 export function allMultisProfiles(): MultisProfile[] {
-  return [DEFAULT_MULTIS_PROFILE, ...MULTIS_PROFILE_RULES.map((r) => r.profile)];
+  return [DEFAULT_MULTIS_PROFILE, ...MULTIS_PROFILE_RULES.map((r) => r.profile), MULTIS_TUTOR_PROFILE];
 }

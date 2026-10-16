@@ -20,6 +20,7 @@ import { RULES_IN_FORCE_TOOL } from "./rulesTool";
 import { HELP_NAV_TOOLS, type SectionSearchFn } from "./helpTools";
 import { CITY_NAMES, addDays, dayArg, extrasCityArg, num, rangeArgs, resolveCityArg } from "./toolArgs";
 import { MPV_DATA_TOOLS } from "./mpvDataTools";
+import { FORMACAO_SEARCH_TOOL } from "./formacaoTool";
 
 export interface StaffUser {
   id: number;
@@ -307,9 +308,10 @@ export const STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
  */
 // F3: ajuda_abrir/ajuda_procurar (./helpTools.ts) no lugar do abrir_ajuda; a ordem é a mesma para toda a gente (uma cache por modelo).
 // F4: as ferramentas de dados do piloto (./mpvDataTools.ts) no fim; a `avaliacao_minha` alarga (e substitui) a `minha_avaliacao`.
+// D7: a `formacao_procurar` (./formacaoTool.ts, o Multis como tutor da Formação) logo a seguir à `regras_em_vigor`.
 export const MPV_REPLACED_TOOLS: readonly string[] = ["abrir_ajuda", "minha_avaliacao"];
 export const MPV_STAFF_TOOLS: ChatTool<StaffToolCtx>[] = [
-  ...HELP_NAV_TOOLS, ...STAFF_TOOLS.filter((t) => !MPV_REPLACED_TOOLS.includes(t.name)), RULES_IN_FORCE_TOOL, ...MPV_DATA_TOOLS,
+  ...HELP_NAV_TOOLS, ...STAFF_TOOLS.filter((t) => !MPV_REPLACED_TOOLS.includes(t.name)), RULES_IN_FORCE_TOOL, FORMACAO_SEARCH_TOOL, ...MPV_DATA_TOOLS,
 ];
 export function staffToolsFor(mode: { pilot: boolean }): ChatTool<StaffToolCtx>[] {
   return mode.pilot ? MPV_STAFF_TOOLS : STAFF_TOOLS;

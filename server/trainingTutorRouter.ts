@@ -7,7 +7,8 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireAccess } from "./_core/access";
 import { roleRank } from "../shared/access";
-import { TUTOR_CONTEXT_TYPES, TUTOR_MAX_INPUT_CHARS } from "../shared/trainingTutor";
+import { TUTOR_CONTEXT_TYPES, TUTOR_MAX_INPUT_CHARS, TUTOR_SEARCH_MAX_CHARS, type TutorMode } from "../shared/trainingTutor";
+import { safeCitationHref } from "../shared/knowledge";
 import { getEmployeeByUserId } from "./db";
 import { assessmentAnswers } from "./trainingAssessments";
 import { TRPCError } from "@trpc/server";
@@ -26,6 +27,47 @@ export const trainingTutorRouter = router({
     requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
     const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
     return { available: await aiFeatureAvailableFresh("training_tutor") };
+  }),
+
+  /**
+   * D7: quem faz de tutor nesta página. `setting` = Definições
+   * (training.tutorMode); `effective` = o que a página mostra: "multis" só com
+   * o Multis ligado (senão o tutor próprio, para não ficar sem tutor).
+   */
+  mode: protectedProcedure.query(async ({ ctx }) => {
+    requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
+    const { trainingTutorMode } = await import("./trainingTutorMultis");
+    const setting = await trainingTutorMode();
+    if (setting !== "multis") return { setting, effective: "proprio" as TutorMode };
+    const { aiFeatureAvailableFresh } = await import("./_core/ai/status");
+    return { setting, effective: ((await aiFeatureAvailableFresh("assistant")) ? "multis" : "proprio") as TutorMode };
+  }),
+
+  /**
+   * D7: procurar nos manuais e vídeos da formação (sem IA) — a ferramenta
+   * `formacao_procurar` do Multis chama isto COMO quem pergunta. Os mesmos
+   * materiais e a mesma visibilidade do tutor: o módulo aberto e o catálogo
+   * (publicados; admin e acima também os não publicados) + a base de
+   * conhecimento quando "Tutor da formação usa a base" está ligado (só os
+   * documentos que a pessoa pode ver).
+   */
+  search: protectedProcedure.input(z.object({
+    question: z.string().trim().min(2, "Escreve o que procuras.").max(TUTOR_SEARCH_MAX_CHARS, `No máximo ${TUTOR_SEARCH_MAX_CHARS} caracteres.`),
+    context: contextInput.optional(),
+  })).query(async ({ ctx, input }) => {
+    requireAccess(ctx.user, "formacao", "view", { allowOwn: true });
+    const { searchTrainingContent } = await import("./trainingTutorMultis");
+    const { tutorKnowledge } = await import("./trainingTutor");
+    const [training, kb] = await Promise.all([
+      searchTrainingContent(input.question, { role: ctx.user.role, module: input.context ?? null, topK: 4 }),
+      tutorKnowledge(input.question, ctx.user.role, 3, { noEmbed: true }),
+    ]);
+    return {
+      moduleTitle: training.moduleTitle,
+      hits: training.hits,
+      kb: kb.hits.map((h) => ({ title: h.title, section: h.section, text: h.text, href: safeCitationHref(h.href) })),
+      failed: training.failed && kb.failed,
+    };
   }),
 
   /** Saudação com o progresso, próximo passo, sequência de dias e dicas (sem IA). */

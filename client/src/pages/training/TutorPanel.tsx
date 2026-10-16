@@ -2,18 +2,29 @@
  * Tutor da Formação (IA) — painel dentro das páginas da Formação (manual,
  * vídeo, percurso e quiz). Responde só com o conteúdo dos manuais; respostas
  * curtas (boas para ouvir) e "Explicar melhor" para a versão longa.
+ *
+ * D7 (Jorge, 16 out 2026): "o Multis passa a ser o tutor da página Formação".
+ * Com `training.tutorMode` = "multis" (por omissão) e o Multis ligado, o lugar
+ * do tutor mostra a mesma saudação, progresso e dicas (sem IA) e as perguntas
+ * vão para o Multis, que sabe o módulo aberto (TutorModuleContext →
+ * useMultisPage na página) e responde com os manuais e vídeos da formação.
+ * Com "proprio" (ou o Multis desligado) fica o tutor próprio, tal como era.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { fmtPTDate } from "@/lib/lisbonTime";
+import { speak } from "@/lib/speak";
 import { toast } from "sonner";
-import { BookOpen, ChevronDown, ChevronUp, Flame, GraduationCap, Lightbulb, Send, Sparkles, Trash2, Volume2 } from "lucide-react";
-import { TUTOR_MAX_INPUT_CHARS, type TutorContext } from "@shared/trainingTutor";
+import { BookOpen, ChevronDown, ChevronUp, Flame, GraduationCap, Lightbulb, MessageCircle, Send, Sparkles, Trash2, Volume2 } from "lucide-react";
+import { TUTOR_MAX_INPUT_CHARS, tutorQuickQuestions, type TutorContext, type TutorMode } from "@shared/trainingTutor";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
+import { MultisIcon } from "@/components/assistant/MultisIcon";
+import { openAssistantWith } from "@/components/assistant/AssistantWidget";
+import { setMultisOpen } from "@/components/assistant/multisStore";
 
 type Msg = {
   role: "user" | "assistant";
@@ -23,23 +34,103 @@ type Msg = {
   question?: string;
 };
 
-/** Lê em voz alta (pt-PT) com a voz do navegador — sem custo. */
-function speak(text: string) {
-  try {
-    const synth = window.speechSynthesis;
-    if (!synth) { toast.error("O teu navegador não lê texto em voz alta."); return; }
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(text.replace(/[«»*#_`]/g, ""));
-    u.lang = "pt-PT";
-    const v = synth.getVoices().find((x) => x.lang?.toLowerCase().startsWith("pt-pt")) ?? synth.getVoices().find((x) => x.lang?.toLowerCase().startsWith("pt"));
-    if (v) u.voice = v;
-    synth.speak(u);
-  } catch {
-    toast.error("Não foi possível ler em voz alta.");
-  }
+// ─── D7: o Multis como tutor ─────────────────────────────────────────────────
+
+/**
+ * A página Formação diz ao Multis que módulo está aberto: cada painel aberto
+ * regista o seu (o último ganha) e tira-o ao fechar (só se ainda for o dele).
+ * Fora da página (sem provider) não faz nada.
+ */
+export const TutorModuleContext = createContext<{ register: (c: TutorContext) => () => void }>({ register: () => () => undefined });
+
+/** Quem faz de tutor (Definições → training.tutorMode; "multis" só com o Multis ligado). Erro → o tutor próprio. */
+export function useTutorMode(): { mode: TutorMode | null; loading: boolean } {
+  const q = trpc.training.tutor.mode.useQuery(undefined, { staleTime: 5 * 60_000, retry: 1 });
+  if (q.isLoading) return { mode: null, loading: true };
+  return { mode: q.data?.effective ?? "proprio", loading: false };
 }
 
-export function TutorPanel({ context, defaultOpen = true, title }: { context: TutorContext; defaultOpen?: boolean; title?: string }) {
+export function TutorPanel(props: { context: TutorContext; defaultOpen?: boolean; title?: string }) {
+  const { mode, loading } = useTutorMode();
+  if (loading) {
+    return (
+      <Card className="border-primary/30">
+        <CardHeader className="py-3">
+          <CardTitle className="text-base flex items-center gap-2"><GraduationCap className="w-5 h-5 shrink-0 text-primary" /><span className="truncate">{props.title ?? "Tutor da formação"}</span></CardTitle>
+        </CardHeader>
+      </Card>
+    );
+  }
+  return mode === "multis" ? <MultisTutorPanel {...props} /> : <OwnTutorPanel {...props} />;
+}
+
+/** O lugar do tutor com o Multis (D7): saudação, progresso e dicas como antes; as perguntas vão para o Multis. */
+function MultisTutorPanel({ context, defaultOpen = true, title }: { context: TutorContext; defaultOpen?: boolean; title?: string }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const { register } = useContext(TutorModuleContext);
+  const key = `${context.type}:${context.id}`;
+  // Enquanto o painel está aberto, o Multis sabe que módulo é (vai com cada pergunta).
+  useEffect(() => (open ? register(context) : undefined), [open, key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const overview = trpc.training.tutor.overview.useQuery({ context }, { enabled: open, staleTime: 60_000 });
+  const o = overview.data;
+  const quick = tutorQuickQuestions(context.type);
+  const ask = (q: string) => { register(context); openAssistantWith(q); };
+  const openMultis = () => { register(context); setMultisOpen(true); };
+
+  return (
+    <Card className="border-primary/30" data-tutor="multis">
+      <CardHeader className="py-3 cursor-pointer select-none" onClick={() => setOpen((v) => !v)}>
+        <CardTitle className="text-base flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2 min-w-0"><GraduationCap className="w-5 h-5 shrink-0 text-primary" /><span className="truncate">{title ?? "Tutor da formação"}</span></span>
+          <span className="flex items-center gap-2 shrink-0">
+            {o && o.streak >= 2 && <Badge className="bg-orange-100 text-orange-800"><Flame className="w-3 h-3 mr-1" />{o.streak} dias</Badge>}
+            {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      {open && (
+        <CardContent className="space-y-3 pt-0">
+          {overview.isLoading && <p className="text-sm text-muted-foreground">A preparar o tutor…</p>}
+          {overview.error && <QueryErrorNote error={overview.error} onRetry={() => overview.refetch()} retrying={overview.isFetching} what="o tutor" />}
+          {o && (
+            <div className="rounded-lg bg-primary/5 p-3 text-sm space-y-2">
+              <p>{o.greeting}</p>
+              {o.modulesTotal > 0 && (
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 flex-1 rounded bg-muted overflow-hidden"><div className="h-full bg-primary" style={{ width: `${Math.round((o.modulesDone / o.modulesTotal) * 100)}%` }} /></div>
+                  <span className="text-xs text-muted-foreground">{o.modulesDone}/{o.modulesTotal}</span>
+                </div>
+              )}
+              {o.tips.length > 0 && (
+                <ul className="space-y-1">
+                  {o.tips.map((t, i) => <li key={i} className="flex gap-2 text-xs"><Lightbulb className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />{t}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+          <div className="space-y-2">
+            <p className="text-sm flex items-start gap-2">
+              <MultisIcon className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>Tira as tuas dúvidas com o <b>Multis</b>: responde com os manuais e vídeos da formação, diz de onde tirou cada parte e sabe o que tens aberto.</span>
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {quick.map((q) => (
+                <Button key={q} size="sm" variant="outline" className="h-auto whitespace-normal text-left" onClick={() => ask(q)}>
+                  <MessageCircle className="w-3.5 h-3.5 mr-1 shrink-0" />{q}
+                </Button>
+              ))}
+              <Button size="sm" variant="outline" onClick={openMultis}><Send className="w-3.5 h-3.5 mr-1" />Perguntar ao Multis</Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">Não escrevas dados pessoais. Se não estiver nos manuais, pergunta {o?.trainerName ? `ao teu formador, ${o.trainerName}` : "ao teu formador"}.</p>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+/** O tutor próprio da formação (training.tutorMode = "proprio", ou o Multis desligado) — tal como era. */
+function OwnTutorPanel({ context, defaultOpen = true, title }: { context: TutorContext; defaultOpen?: boolean; title?: string }) {
   const [open, setOpen] = useState(defaultOpen);
   const [text, setText] = useState("");
   const [local, setLocal] = useState<Msg[]>([]);
@@ -231,7 +322,7 @@ export function TutorQuestionsCard() {
   const [days, setDays] = useState(90);
   const { data = [], isLoading, error } = trpc.training.tutor.trainerQuestions.useQuery({ days });
   const [expanded, setExpanded] = useState<string | null>(null);
-  const labels: Record<string, string> = { manual: "Manual", video: "Vídeo", path: "Percurso", quiz: "Quiz" };
+  const labels: Record<string, string> = { manual: "Manual", video: "Vídeo", path: "Percurso", quiz: "Quiz", formacao: "Página" };
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
@@ -241,7 +332,7 @@ export function TutorQuestionsCard() {
         </div>
       </CardHeader>
       <CardContent className="space-y-2">
-        <p className="text-xs text-muted-foreground">O que os formandos perguntam mais, por módulo (anónimo, sem dados pessoais). "Sem resposta" = não estava nos manuais — bom sítio para melhorar o conteúdo.</p>
+        <p className="text-xs text-muted-foreground">O que os formandos perguntam mais, por módulo (anónimo, sem dados pessoais) — ao tutor ou ao Multis na página Formação. "Sem resposta" = não estava nos manuais — bom sítio para melhorar o conteúdo.</p>
         {isLoading && <p className="text-sm text-muted-foreground">A carregar…</p>}
         {error && <p className="text-sm text-destructive">{error.message}</p>}
         {!isLoading && !error && data.length === 0 && <p className="text-sm text-muted-foreground">Ainda não há perguntas neste período.</p>}

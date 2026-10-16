@@ -5,7 +5,7 @@ pagina: formacao
 titulo: Formação
 separadores: mine=Fazer a tua formação, videos=Vídeos, manuals=Manuais, faqs=FAQs, quiz=Quiz, career=Carreira, paths=Percursos, dashboard=Acompanhamento
 rotas: /formacao
-palavras: formação, formacao, curso, vídeos, manuais, faqs, quiz, exame, carreira, percurso, percursos, acompanhamento, formação obrigatória, formação em falta, formação por verificar, certificado, nível, n1, n2, n3, n4, promoção, prazo, lembrete, arquivar, procurar formação, faz esta formação, formação por área, área, subsecção, multipark, dashboard, operacional, comunicação, arrumar por área, área proposta, quiz da ia, perguntas novas, perguntas fixas, rever tentativa, faqs da ia, faqs automáticas, gerar agora
+palavras: formação, formacao, curso, vídeos, manuais, faqs, quiz, exame, carreira, percurso, percursos, acompanhamento, formação obrigatória, formação em falta, formação por verificar, certificado, nível, n1, n2, n3, n4, promoção, prazo, lembrete, arquivar, procurar formação, faz esta formação, formação por área, área, subsecção, multipark, dashboard, operacional, comunicação, arrumar por área, área proposta, quiz da ia, perguntas novas, perguntas fixas, rever tentativa, faqs da ia, faqs automáticas, gerar agora, tutor, tutor da formação, perguntar ao multis, quem faz de tutor, tutor próprio
 ---
 # Formação
 
@@ -27,6 +27,14 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
 4. Se a IA falhar ou estiver desligada, o jogo usa as **perguntas fixas** e aparece um aviso a dizer porquê.
 5. **As tuas últimas tentativas** → **Rever**: vês cada pergunta, a tua resposta, a certa e a explicação.
 6. O **ranking** do quiz (aqui e no Dashboard Pessoas) conta só as **fichas ativas** das tuas cidades: quem foi desativado sai do ranking.
+
+**Tutor da formação**
+- Cada manual, vídeo, percurso e o Quiz têm o cartão **Tutor da formação**. Quem faz de tutor escolhe-se em Definições → Parâmetros → Pessoas → **Formação: quem faz de tutor** (por omissão {{regra:training.tutorMode}}, decisão do Jorge de 16 out 2026).
+- **Com o Multis**: o cartão mostra, como antes, a saudação, o progresso, os dias seguidos e as dicas antes do quiz, mais perguntas rápidas (ex.: "Explica-me este manual, passo a passo.") e **Perguntar ao Multis**. O Multis abre a saber o separador e o manual, vídeo ou percurso aberto (enquanto o cartão está aberto) e responde com os trechos dos manuais e vídeos da formação — primeiro os do que tens aberto, depois os dos outros — e da base de conhecimento, com as **Fontes** no fim. Uma fonte que é um manual ou vídeo da formação abre-o aqui. Na página Formação as respostas do Multis têm **Ouvir**.
+  - Vês só o que já vias: manuais publicados (os não publicados só admin e acima) e, da base de conhecimento, só os documentos que o teu papel e as tuas cidades podem ver.
+  - Os limites são os do Multis: {{regra:assistant.perMinute}} perguntas por minuto e {{regra:assistant.perDay}} por dia por pessoa, por omissão (no piloto, os do piloto). Se o Multis estiver desligado, o cartão volta a ser o tutor próprio.
+- **Com o tutor próprio**: o chat no próprio cartão, como era — responde só com os manuais, **Explicar melhor**, **Ouvir** e **Limpar**; {{regra:training.tutorPerMinute}} perguntas por minuto e {{regra:training.tutorPerDay}} por dia por pessoa, por omissão.
+- Nos dois casos: depois do quiz, **Explicar as respostas erradas** (com o trecho do manual) fica no Quiz; os formadores continuam a ver **Perguntas ao tutor** em **Acompanhamento** (anónimo). Com o Multis contam as perguntas feitas na página Formação; "Página" = sem módulo aberto.
 
 **Carreira**
 1. Em **Carreira** fazes os exames para subir de nível (Condutor N1 → N4). Cada exame tem nota mínima, um limite de tentativas por dia e às vezes tempo. Se passares, a promoção fica **por aprovar** pelo supervisor da cidade, pelo backoffice ou pelo admin; ao aprovar recebes o certificado. Os certificados têm validade e, perto do fim, é-te atribuída a recertificação.
@@ -76,5 +84,5 @@ Formação obrigatória, vídeos, manuais, FAQs, quiz e exames de carreira.
   - O cartão diz se o semanal está ligado e o que aconteceu da última vez.
   - **Gerar agora** pode ser usado no máximo 3 vezes por hora e 8 por dia (para toda a gente junta). Corre uma geração de cada vez: se a semanal ou outra pessoa já estiver a gerar, aparece "já há uma geração a correr" — tenta daqui a um minuto.
 - **Arquivar** (antes "Eliminar") vídeos, manuais, FAQs, perguntas e percursos tira-os das listas, mas nada se apaga. Um vídeo ou manual arquivado deixa de contar nos percursos, por isso ninguém fica preso por ele.
-- O **tutor IA** responde a partir dos manuais e pode ser desligado em Definições → Automações. O mesmo interruptor liga as sugestões da IA em **Procurar formação**.
+- O **tutor IA** próprio responde a partir dos manuais e pode ser desligado em Definições → Automações (**IA: tutor da formação**). O mesmo interruptor liga a IA de **Procurar formação** e de **Explicar as respostas erradas** (desligado, ficam a pesquisa por palavras e a explicação do formador). Quem faz de tutor (o Multis ou o tutor próprio): ver **Tutor da formação**.
 - Os lembretes por email respeitam o **Não enviar email** da ficha.

@@ -60,6 +60,7 @@ Antes de lhe perguntar alguma coisa, vê aqui. As já tomadas **não se voltam a
 - Extras Dia: proposta 11:00, confirmar e chamar 15:00 (omissões no código; em produção `extras.autoConfirm` estava gravado como desligado a 15 out 2026 — confirma em `settings.values.list`).
 - Remover leituras de IA a dobrar (críticas, emails).
 - Caixa fica fora do plano do Multis.
+- **D7** (16 out 2026): "o Multis passa a ser o tutor da página Formação" — para todos (piloto e v1), definição `training.tutorMode` (`multis` por omissão; `proprio` volta ao tutor próprio, cujo código fica).
 
 ## Em aberto (perguntar no fim, nunca bloquear)
 | # | Pergunta | Prazo |
@@ -70,7 +71,6 @@ Antes de lhe perguntar alguma coisa, vê aqui. As já tomadas **não se voltam a
 | D4c | A quem vão os lembretes do Extras Dia por cidade e dias (`extras.reminderRecipients`); depois ligar `EXTRAS_REMINDERS` e `EXTRAS_SCHEDULE_ALERTS` | 20 out 2026 |
 | D5 | "Chamar melhor": mudar o texto do aviso de trabalho aos extras? | — |
 | D6 / D6b | Ligar `REVIEW_AUTO_PUBLISH_5STAR` (precisa de `AI_REVIEW_AUTO_DRAFTS`) e `GBP_WINDSOR_REPLY` | antes de ligar |
-| D7 | Formação: o Multis é o tutor, ou fica o tutor próprio? | — |
 | D8 | Pontos "em entrega" 3 / "entrega" 2 (fora do MPV) | — |
 | D9 | Tirar o "apanha tudo" da caixa Críticas e correr a Limpeza (Críticas → Limpeza) | — |
 | D10 | O utilizador "Multipark SA" (info@) precisa de sincronizar o Gmail? | — |

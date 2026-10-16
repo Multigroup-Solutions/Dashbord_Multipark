@@ -12,7 +12,7 @@ import {
   quizAttempts, quizQuestions, trainingAssignments, trainingAttemptSessions, trainingCategories, trainingManuals, trainingPathItems,
   trainingPaths, trainingProgress, trainingTutorMessages, trainingTutorQuestions, trainingVideos, users,
 } from "../drizzle/schema";
-import { TUTOR_HISTORY_DAYS, type TutorContext, type TutorContextType } from "../shared/trainingTutor";
+import { TUTOR_HISTORY_DAYS, TUTOR_PAGE_CONTEXT, type TutorContext, type TutorContextType } from "../shared/trainingTutor";
 import { lisbonDay, parseDbDate, toDbDate } from "./trainingRules";
 import type { ManualDoc } from "./trainingTutorRules";
 
@@ -223,7 +223,8 @@ export async function clearHistory(userId: number, ctx: TutorContext): Promise<v
 
 // ─── Perguntas frequentes (anónimo) ────────────────────────────────────────
 
-export async function recordQuestion(ctx: TutorContext, key: string, sample: string, outOfContent: boolean, now: Date = new Date()): Promise<void> {
+/** `ctx`: o módulo, ou (D7) `{ type: "formacao", id: 0 }` = perguntas ao Multis na página sem módulo aberto. */
+export async function recordQuestion(ctx: { type: TutorContextType | typeof TUTOR_PAGE_CONTEXT; id: number }, key: string, sample: string, outOfContent: boolean, now: Date = new Date()): Promise<void> {
   if (!key) return;
   const d = await db();
   const at = toDbDate(now);
@@ -280,6 +281,7 @@ export async function moduleTitles(refs: Array<{ contextType: string; contextId:
   if (v.length) for (const r of await d.select({ id: trainingVideos.id, t: trainingVideos.title }).from(trainingVideos).where(inArray(trainingVideos.id, v))) out.set(`video:${r.id}`, r.t);
   if (p.length) for (const r of await d.select({ id: trainingPaths.id, t: trainingPaths.name }).from(trainingPaths).where(inArray(trainingPaths.id, p))) out.set(`path:${r.id}`, r.t);
   out.set("quiz:0", "Quiz (geral)");
+  out.set(`${TUTOR_PAGE_CONTEXT}:0`, "Página Formação (Multis, sem módulo aberto)");
   if (q.length) for (const r of await d.select({ id: trainingCategories.id, t: trainingCategories.name }).from(trainingCategories).where(inArray(trainingCategories.id, q))) out.set(`quiz:${r.id}`, `Quiz — ${r.t}`);
   return out;
 }
