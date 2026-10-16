@@ -179,10 +179,16 @@ async function weekOccurrences(r: Range, scope: OccurrenceScopeFilters): Promise
   return s.available ? { ok: true, value: s.data.total } : { ok: false, reason: s.reason };
 }
 
-/** Nota de uma métrica que ficou por contar ("—"), com os motivos sem repetir. PURA. */
-export function unreadNote(what: string, reads: ReadonlyArray<LiveRead<unknown>>): string[] {
-  const reasons = [...new Set(reads.flatMap((x) => (x.ok ? [] : [x.reason])))];
-  return reasons.length ? [`${what} por contar ("—", não é 0): ${reasons.join(" ")}`] : [];
+/**
+ * Nota de uma métrica que ficou por contar ("—"), com os motivos sem repetir.
+ * Diz QUAL semana falhou (a da coluna "Semana", a "Anterior" ou as duas), para
+ * o email não dar a entender que falta um número que lá está. PURA.
+ */
+export function unreadNote(what: string, cur: LiveRead<unknown>, prev: LiveRead<unknown>): string[] {
+  const reasons = [...new Set([cur, prev].flatMap((x) => (x.ok ? [] : [x.reason])))];
+  if (!reasons.length) return [];
+  const which = !cur.ok && !prev.ok ? "" : !cur.ok ? " da semana" : " da semana anterior";
+  return [`${what}${which} por contar ("—", não é 0): ${reasons.join(" ")}`];
 }
 
 /**
@@ -192,6 +198,12 @@ export function unreadNote(what: string, reads: ReadonlyArray<LiveRead<unknown>>
  *  - Fora do prazo no fim da semana: `complaintSlaLateSql` (a regra do cartão Reclamações e do briefing);
  *  - Ocorrências novas: as da página Ocorrências (a tabela antiga `incidents` já não é lida).
  * Se a BD da Multipark falhar, a métrica vai como "—" com uma nota (nunca 0).
+ * Âmbito: NACIONAL — só o cron o chama (sem utilizador; vai a quem tem o
+ * módulo com alcance nacional). As reclamações, as passagens e a escala não
+ * levam cidade: um botão que o peça em nome de uma pessoa tem de lhes pôr o
+ * âmbito dela primeiro (o teste dash64Relatorio falha se outro sítio o chamar).
+ * A semana é de segunda a domingo de Lisboa; "fora do prazo" é à meia-noite
+ * de domingo para segunda (o fim da semana), não à hora do envio.
  */
 async function operacoes(cur: Range, prev: Range): Promise<Pick<WeeklyReportData, "metrics" | "notes">> {
   const db = await getDb();
@@ -231,8 +243,8 @@ async function operacoes(cur: Range, prev: Range): Promise<Pick<WeeklyReportData
       { label: "Passagens de turno preenchidas", value: a.handoverPct, prev: b.handoverPct, unit: "pct", higherIsBetter: true },
     ],
     notes: [
-      ...unreadNote("Entradas e saídas", [a.moves, b.moves]),
-      ...unreadNote("Ocorrências", [a.occurrences, b.occurrences]),
+      ...unreadNote("Entradas e saídas", a.moves, b.moves),
+      ...unreadNote("Ocorrências", a.occurrences, b.occurrences),
     ],
   };
 }
