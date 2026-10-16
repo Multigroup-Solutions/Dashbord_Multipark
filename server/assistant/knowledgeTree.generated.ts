@@ -81,7 +81,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "A página Dashboards (permissão Dashboards) é de admin e super admin (ou de quem tenha essa permissão dada por pessoa, em Permissões).",
        "children": [],
        "container": false,
-       "chars": 1520
+       "chars": 1516
       },
       {
        "id": "dashboards.md#geral-o-resumo-de-hoje",
@@ -92,7 +92,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Os números de hoje, de relance, e atalhos para os outros dashboards.",
        "children": [],
        "container": false,
-       "chars": 2566
+       "chars": 3352
       },
       {
        "id": "dashboards.md#financeiro-financeiro",
@@ -136,7 +136,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Reclamações, críticas Google, ocorrências e perdidos e achados.",
        "children": [],
        "container": false,
-       "chars": 1376
+       "chars": 1904
       },
       {
        "id": "dashboards.md#marketing-dashboards-marketing",
@@ -2869,7 +2869,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "atividade-diaria.md#o-que-se-passava-e-quem-trabalhou"
        ],
        "container": false,
-       "chars": 2405
+       "chars": 2537
       },
       {
        "id": "atividade-diaria.md#entregas-tarde-e-recolhas-manha-os-tempos",
@@ -4616,7 +4616,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "As caixas ficam à esquerda, umas por baixo das outras, como no Gmail: carregas numa e a lista muda logo ao lado, sem sair da página.",
        "children": [],
        "container": false,
-       "chars": 4678
+       "chars": 4909
       },
       {
        "id": "comunicacao.md#o-resto-da-comunicacao-menu-por-esta-ordem",
@@ -4685,10 +4685,10 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "slug": "caixas-super-admin",
        "title": "Caixas (super admin)",
        "level": 4,
-       "summary": "Uma caixa já não se apaga: Desativar tira-a das listas e da sincronização, e as conversas ficam guardadas (o super admin continua a vê-las).",
+       "summary": "Uma caixa já não se apaga: Desativar tira-a das listas e da sincronização, e as conversas ficam guardadas (o super admin continua a vê-las, na secção Antigas…",
        "children": [],
        "container": false,
-       "chars": 179
+       "chars": 234
       },
       {
        "id": "comunicacao.md#o-meu-email-menu-comunicacao-o-meu-email-ou-o-meu-email-na-l",
@@ -4995,7 +4995,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Cada pessoa vê as conversas das suas cidades: um colaborador pela cidade da ficha, um lead pela cidade do lead, um número solto pela cidade da reserva com…",
        "children": [],
        "container": false,
-       "chars": 325
+       "chars": 532
       },
       {
        "id": "whatsapp.md#comecar-uma-conversa",

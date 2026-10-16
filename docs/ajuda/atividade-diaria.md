@@ -33,7 +33,7 @@ Menu **Operações → Actividade Diária**: quem fez o quê nas reservas, o **R
 ## Resumo do dia (supervisão)
 - Estava na **Passagem de turno** e passou para aqui (12 out 2026), com tudo o que tinha. Na Passagem de turno ficou só uma ligação para cá.
 1. Separador **Resumo do dia**. Escolhe o dia e a cidade. O dia é o operacional (03:00 → 03:00).
-2. **Cartões do topo**: recolhas, entregas, **reclamações do dia** (as que chegaram nesse dia), **reclamações dos carros que saíram** (a mesma regra da Atividade do Dia) e ainda:
+2. **Cartões do topo**: recolhas, entregas, **reclamações do dia** (as que chegaram nesse dia operacional, das 03h às 03h, sem as arquivadas nem as convertidas noutro caso — a mesma regra das reclamações dos carros que saíram), **reclamações dos carros que saíram** (a mesma regra da Atividade do Dia) e ainda:
    - **Km da equipa**: os km do GPS da Atividade diária.
    - **Excesso de velocidade**: quantas pessoas tiveram excessos, a velocidade máxima do dia e o total de excessos.
    - **Horas paradas**: o total do "Parado" da tabela e a média por pessoa.

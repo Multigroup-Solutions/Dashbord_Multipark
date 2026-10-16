@@ -7,7 +7,7 @@
  * cidade das conversas é a de whatsappInbox (`visibilitySql` /
  * `conversationVisible`), chamada pelo router antes de cada operação.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
 import { scopedProjectIds } from "./cityScope";
 import {
@@ -17,7 +17,7 @@ import {
   whatsappMessages,
   whatsappQuickReplies,
 } from "../drizzle/schema";
-import { conversationVisibleTo, visibilitySql, type ConversationCityFacts } from "./whatsappInbox";
+import { boxVisibleSql, conversationVisibleTo, hiddenBoxKeys, visibilitySql, type ConversationCityFacts } from "./whatsappInbox";
 import { ROLES, can } from "../shared/access";
 import { last9Digits } from "./whatsappInbound";
 import { messageDisplayBody, firstNameOf } from "../shared/whatsappTemplate";
@@ -235,16 +235,32 @@ export async function claimIfUnassigned(conversationId: number, userId: number):
 
 // ─── Badge da sidebar ───────────────────────────────────────────────────────
 
+/** Quem pede o badge (as caixas que não vê ficam de fora). */
+type BadgeUser = Parameters<typeof hiddenBoxKeys>[0];
+
+/**
+ * As condições das conversas que a pessoa vê — as MESMAS duas da lista
+ * (`listConversations`, server/whatsappInbox.ts): a cidade (`visibilitySql`)
+ * e as caixas por tema que vê (`boxVisibleSql`; sem caixas escondidas não
+ * acrescenta nada, como hoje). Plano 64 (E11). PURA (só monta SQL).
+ */
+export function inboxBadgeConds(scopeIds: number[] | undefined, hidden: readonly string[]): SQL[] {
+  const box = boxVisibleSql(hidden);
+  return box ? [visibilitySql(scopeIds), box] : [visibilitySql(scopeIds)];
+}
+
 /**
  * Conversas visíveis ao utilizador que precisam de atenção — a mesma regra de
  * `conversationAlerts().needsAttention`, em SQL: por ler (não resolvidas) ou
  * abertas e por responder (sem opt-out). `overdue` = por responder há mais
- * do que o SLA.
+ * do que o SLA. Só as conversas que a pessoa vê na lista (`inboxBadgeConds`):
+ * as das caixas que não vê não contam.
  */
-export async function inboxBadge(now: Date = new Date()): Promise<{ attention: number; overdue: number; slaMinutes: number }> {
+export async function inboxBadge(user: BadgeUser, now: Date = new Date()): Promise<{ attention: number; overdue: number; slaMinutes: number }> {
   const sla = slaMinutes();
   const db = await getDb();
   if (!db) return { attention: 0, overdue: 0, slaMinutes: sla };
+  const hidden = await hiddenBoxKeys(user);
   const cutoff = nowStr(new Date(now.getTime() - sla * 60_000));
   const c = whatsappConversations;
   const unanswered = sql`(${c.status} = 'aberto' AND ${c.awaitingSince} IS NOT NULL AND ${c.optedOutAt} IS NULL)`;
@@ -255,7 +271,7 @@ export async function inboxBadge(now: Date = new Date()): Promise<{ attention: n
     })
     .from(c)
     .leftJoin(employees, eq(c.employeeId, employees.id))
-    .where(visibilitySql(scopedProjectIds()));
+    .where(and(...inboxBadgeConds(scopedProjectIds(), hidden)));
   return { attention: Number(row?.attention ?? 0), overdue: Number(row?.overdue ?? 0), slaMinutes: sla };
 }
 

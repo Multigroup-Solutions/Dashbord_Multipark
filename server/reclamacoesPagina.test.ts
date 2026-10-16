@@ -324,8 +324,12 @@ describe("Página", () => {
   });
   it("contadores contados do quadro (com os filtros) e o mesmo 'em atraso' do cron", () => {
     expect(page).not.toContain("trpc.complaints.stats.useQuery");
-    expect(page).toContain("overdue: list.filter((c) => complaintOverdue(c, nowMs)).length");
-    expect(page).toContain("closed: n(\"closed\") + n(\"converted\")");
+    // Plano 64 (E1): a conta passou para a regra única `complaintCounts` (a mesma do Suporte),
+    // sobre a MESMA lista do quadro; as regras ficam iguais.
+    expect(page).toContain("complaintCounts(complaints as any[], Date.now())");
+    const rules = src("shared/caseRules.ts");
+    expect(rules).toContain("overdue: all.filter((c) => complaintOverdue(c, nowMs)).length");
+    expect(rules).toContain("closed: n(\"closed\") + n(\"converted\")");
   });
   it("CSV com datas de Lisboa e células seguras; fotos com fileKey e reduzidas; telemóvel sem colunas espremidas", () => {
     expect(page).toContain("toCsv(headers, rows)");

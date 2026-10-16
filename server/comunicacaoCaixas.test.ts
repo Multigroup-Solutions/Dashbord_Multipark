@@ -109,7 +109,7 @@ describe("Email: a IA separa as caixas gerais; mover à mão; responder pelo ali
     const inbox = src("server/mail/inbox.ts");
     expect(inbox).toContain("const replyAddrs = await replyAddressesOf(acc.mailbox, acc.thread);");
     expect(inbox).toContain("pickFromAddress({ addresses: threadRow ? await replyAddressesOf(mailbox, threadRow) : mailbox.addresses }");
-    expect(inbox).toContain('canCompose: canActOnMailbox(viewer, m) && m.sourceKind !== "tema",');
+    expect(inbox).toContain('canCompose: canActOnMailbox(viewer, m) && m.sourceKind !== "tema"'); // (plano 64 E10: e só das caixas ativas)
   });
 });
 

@@ -373,7 +373,12 @@ export async function getIncidentDashboard(f: CaseScopeFilter) {
   };
 }
 
-export async function getLostDashboard(f: CaseScopeFilter) {
+/**
+ * Painel da página Perdidos. `repeatDrivers: false` (plano 64, E3: o cartão do
+ * Suporte só quer os contadores) salta o cruzamento dos condutores, que lê o
+ * histórico da Multipark ao vivo (90 dias); os contadores são os mesmos.
+ */
+export async function getLostDashboard(f: CaseScopeFilter, opts: { repeatDrivers?: boolean } = {}) {
   const d = await db();
   const scope = sql`${await caseScopeSql(sql`l.projectId`, f)} AND l.archivedAt IS NULL`;
   const now = utcNowStr();
@@ -416,7 +421,7 @@ export async function getLostDashboard(f: CaseScopeFilter) {
     avgResolveHours: agg?.avgResolveMin != null ? Math.round(Number(agg.avgResolveMin) / 6) / 10 : null,
     byType: byType.map((r) => ({ key: String(r.k), label: TYPE[String(r.k)] ?? String(r.k), count: Number(r.n) })),
     byCity: Array.from(byCity.entries()).map(([city, count]) => ({ city, count })).sort((a, b) => b.count - a.count),
-    repeatDrivers: await repeatDriversTop5(f).catch(() => []),
+    repeatDrivers: opts.repeatDrivers === false ? [] : await repeatDriversTop5(f).catch(() => []),
   };
 }
 

@@ -11,7 +11,7 @@
 import { TRPCError } from "@trpc/server";
 import { sql, type SQL } from "drizzle-orm";
 import {
-  MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
+  MAIL_BRAND_LABELS, MAIL_LINK_MODULE, MAIL_TRIAGE_KEY, badgeTotal, brandOfAddress, canActOnMailbox, canSeeMailbox, canSeePersonalMailbox, canSendFromPersonalMailbox, checkSendAs,
   isHrMailThread, isReviewMailbox, mailAttachmentDriveAllowed, extractAddresses, hideAutomaticThreads, isCompanyAddress, isMailBrand, mailboxCityRestricted, mailboxIsMine, normalizeAddress, normalizeLinkEntityId, personalAccountKey,
   pickFromAddress, type MailLinkType, type MailViewer, type MailThreadStatus,
 } from "../../shared/mail";
@@ -171,10 +171,13 @@ export async function visibleMailboxes(viewer: MailViewer) {
     out.push({
       key: m.key, label: m.label, module: m.module, brands: Array.from(new Set(m.addresses.map((a) => a.brand))),
       addresses: m.addresses, signatures: m.signatures, canAct: canActOnMailbox(viewer, m), pipeline: m.pipeline,
-      // Caixa por tema (sem conta): não se escreve uma mensagem nova daqui (17f).
-      canCompose: canActOnMailbox(viewer, m) && m.sourceKind !== "tema",
+      // Caixa por tema (sem conta): não se escreve uma mensagem nova daqui (17f). Nem das
+      // desativadas ("Antigas", plano 64 E10) — o envio recusa-o também (`prepareSend`).
+      canCompose: canActOnMailbox(viewer, m) && m.sourceKind !== "tema" && m.active,
       // Lote 45: a caixa é "dela" quando um endereço tem a pessoa (ou o papel dela) como responsável.
       mine: mailboxIsMine(m.addresses, viewer),
+      // Plano 64 (E10): só o super admin vê as desativadas — vão para "Antigas" e não contam no badge.
+      active: m.active,
       unread: Number(r.unread ?? 0), awaiting: Number(r.awaiting ?? 0), open: Number(r.open ?? 0),
     });
   }
@@ -189,10 +192,10 @@ export async function visibleMailboxes(viewer: MailViewer) {
   return { mailboxes: out, personalUnread: Number(pr.unread ?? 0), triage };
 }
 
-/** Badge do menu: conversas por ler nas caixas visíveis + pessoal. */
+/** Badge do menu: conversas por ler nas caixas visíveis e ATIVAS (`badgeTotal`) + pessoal. */
 export async function mailBadge(viewer: MailViewer): Promise<{ shared: number; personal: number }> {
   const v = await visibleMailboxes(viewer);
-  return { shared: v.mailboxes.reduce((s, m) => s + m.unread, 0), personal: v.personalUnread };
+  return { shared: badgeTotal(v.mailboxes), personal: v.personalUnread };
 }
 
 // ─── Lista de conversas ─────────────────────────────────────────────────────
@@ -878,6 +881,8 @@ async function prepareSend(viewer: MailViewer, input: SendInput, list: { to: str
   } else {
     const m = await getMailbox(input.mailbox);
     if (!m || !canActOnMailbox(viewer, m)) throw forbidden("Sem permissão para enviar por esta caixa.");
+    // Plano 64 (E10): uma caixa desativada ("Antigas") só se consulta — não se escreve por ela.
+    if (!m.active) throw forbidden("Esta caixa está desativada: não se escrevem mensagens novas por ela.");
     const { sourceAccountKey } = await import("../../shared/mail");
     const key = sourceAccountKey(m);
     if (!key) throw bad("A caixa não tem conta Google de origem configurada.");

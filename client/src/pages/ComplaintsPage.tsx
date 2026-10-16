@@ -11,7 +11,7 @@ import CaseMessageList from "@/components/CaseMessageList";
 import { fmtPTDate, fmtPTDateTime } from "@/lib/lisbonTime";
 import { lisbonDayOf } from "@shared/lisbonDay";
 import { toCsv } from "@shared/csv";
-import { COMPLAINT_LIST_DEFAULT_DAYS, complaintOverdue } from "@shared/caseRules";
+import { COMPLAINT_LIST_DEFAULT_DAYS, complaintCounts, complaintOverdue } from "@shared/caseRules";
 import {
   COMPLAINT_AI_UNCONFIRMED_FILTER, COMPLAINT_AI_UNCONFIRMED_LABEL,
   COMPLAINT_ORIGINS, COMPLAINT_ORIGIN_LABELS, COMPLAINT_STATUS_FILTERS, COMPLAINT_STATUS_FILTER_LABELS, activeComplaintFilterCount,
@@ -204,17 +204,9 @@ function KanbanView({ user, filters, setFilters, onSelect, onNew }: {
     return opts;
   }, [allComplaints, filters.assignee]);
   // Contadores contados da MESMA lista do quadro (todos os filtros incluídos) —
-  // antes vinham de outra consulta que ignorava os filtros (16b).
-  const stats = useMemo(() => {
-    const list = complaints as any[];
-    const n = (st: string) => list.filter((c) => c.complaintStatus === st).length;
-    const nowMs = Date.now();
-    return {
-      total: list.length, new: n("new"), analyzing: n("analyzing"), waitingClient: n("waiting_client"),
-      resolved: n("resolved"), closed: n("closed") + n("converted"),
-      overdue: list.filter((c) => complaintOverdue(c, nowMs)).length,
-    };
-  }, [complaints]);
+  // antes vinham de outra consulta que ignorava os filtros (16b). A conta é a
+  // regra única `complaintCounts`, a mesma do cartão do Suporte (plano 64, E1).
+  const stats = useMemo(() => complaintCounts(complaints as any[], Date.now()), [complaints]);
   const updateMut = trpc.complaints.update.useMutation();
   const utils = trpc.useUtils();
 

@@ -2331,9 +2331,11 @@ export async function removeComplaintPhoto(id: number, actorId: number) {
 }
 
 /**
- * Contadores das reclamações (sem as arquivadas). "Fechados" junta fechadas e
- * convertidas, como a coluna Fechado do quadro; "Em atraso" usa a mesma regra
- * do cron (o SLA para em "Aguarda Cliente").
+ * Contadores das reclamações (sem as arquivadas), pela regra única
+ * `complaintCounts` (shared/caseRules.ts): `open` = Novo + Em análise +
+ * Aguarda cliente; "Fechados" junta fechadas e convertidas, como a coluna
+ * Fechado do quadro; "Em atraso" usa a mesma regra do cron (o SLA para em
+ * "Aguarda Cliente"). Com `projectId` (a cidade/marca do topo) só essa.
  */
 export async function getComplaintStats(projectId?: number) {
   const db = await getDb();
@@ -2342,19 +2344,8 @@ export async function getComplaintStats(projectId?: number) {
     .select({ complaintStatus: complaints.complaintStatus, slaDeadline: complaints.slaDeadline })
     .from(complaints)
     .where(and(...await projectFilterConds(complaints.projectId, projectId), sql`${complaints.archivedAt} IS NULL`));
-  const { complaintOverdue } = await import("../shared/caseRules");
-  const nowMs = Date.now();
-  const n = (s: string) => all.filter(c => c.complaintStatus === s).length;
-  return {
-    total: all.length,
-    new: n("new"),
-    analyzing: n("analyzing"),
-    waitingClient: n("waiting_client"),
-    resolved: n("resolved"),
-    closed: n("closed") + n("converted"),
-    converted: n("converted"),
-    overdue: all.filter(c => complaintOverdue(c, nowMs)).length,
-  };
+  const { complaintCounts } = await import("../shared/caseRules");
+  return complaintCounts(all, Date.now());
 }
 
 // ─── GOOGLE REVIEWS ───────────────────────────────────────────────────────────

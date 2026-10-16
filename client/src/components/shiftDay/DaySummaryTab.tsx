@@ -106,9 +106,10 @@ function SupervisorDashboard({ cityState }: { cityState: CityState }) {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <Card className="p-3 gap-0.5"><p className="text-xs text-muted-foreground">Recolhas</p><p className="text-xl font-bold text-emerald-700">{data.totals.checkins}</p></Card>
             <Card className="p-3 gap-0.5"><p className="text-xs text-muted-foreground">Entregas</p><p className="text-xl font-bold text-blue-700">{data.totals.checkouts}</p></Card>
-            <Card className={`p-3 gap-0.5 ${data.complaintsToday > 0 ? "border-amber-300 bg-amber-50/50" : ""}`} title="Reclamações que chegaram (foram criadas) neste dia operacional">
+            <Card className={`p-3 gap-0.5 ${data.complaintsToday > 0 ? "border-amber-300 bg-amber-50/50" : ""}`} title="Reclamações que chegaram (foram criadas) neste dia operacional, das 03h às 03h do dia seguinte — sem as arquivadas nem as convertidas noutro caso (a mesma regra das reclamações dos carros que saíram)">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Reclamações do dia</p>
               <p className="text-xl font-bold">{data.complaintsToday}</p>
+              <p className="text-[11px] text-muted-foreground">dia operacional 03h–03h</p>
             </Card>
             <DepartedComplaintsCard value={data.complaintsDeparted} />
             <Card className="p-3 gap-0.5" title="Os km do GPS da Atividade diária (dia civil, PDAs partilhados partidos por quem os tinha)">

@@ -1104,3 +1104,21 @@ export function pickInitialMailbox(o: {
   if (mine) return mine.key;
   return o.boxes[0]?.key ?? "me";
 }
+
+/**
+ * Plano 64 (E10, P6): as caixas desativadas (só o super admin as vê) saem do
+ * badge do menu — como no WhatsApp, que só mostra as caixas ativas. Soma das
+ * conversas por ler nas caixas ATIVAS. PURA.
+ */
+export function badgeTotal(boxes: ReadonlyArray<{ unread: number; active?: boolean }>): number {
+  return boxes.reduce((s, b) => s + (b.active === false ? 0 : Number(b.unread) || 0), 0);
+}
+
+/**
+ * As caixas da coluna da Comunicação: as ativas em "Caixas" e as desativadas
+ * numa secção "Antigas" (fechada por omissão, sem contadores). A ordem de
+ * cada grupo mantém-se. PURA.
+ */
+export function mailboxSections<T extends { active?: boolean }>(boxes: ReadonlyArray<T>): { active: T[]; old: T[] } {
+  return { active: boxes.filter((b) => b.active !== false), old: boxes.filter((b) => b.active === false) };
+}

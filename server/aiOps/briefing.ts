@@ -37,6 +37,12 @@ export interface BriefingData {
   handover: { last: string | null; pending: string[]; repeated: RepeatedItem[] };
   anomalies: BriefingAnomaly[];
   marketingAlerts: BriefingMarketingAlert[];
+  /**
+   * Plano 64 (E8b): a previsão do Extras-Dia veio incompleta (leitura cortada
+   * ou só a cópia das reservas) — o texto de `forecastIncompleteReason`. null =
+   * completa. Os briefings guardados antes disto não têm o campo (= null).
+   */
+  forecastNotice?: string | null;
 }
 
 /** "03h" … "23h", "00h" (24), "01h" (25), "02h" (26). */
@@ -54,6 +60,8 @@ export function buildBriefingData(input: {
   handover: { last: string | null; pending: OpenItem[]; repeated: RepeatedItem[] };
   anomalies: BriefingAnomaly[];
   marketingAlerts: BriefingMarketingAlert[];
+  /** Aviso da previsão incompleta (`forecastIncompleteReason`); omisso = completa. */
+  forecastNotice?: string | null;
 }): BriefingData {
   const byHour = input.hourly
     .filter((h) => h.hour >= 3 && h.checkins + h.checkouts > 0)
@@ -93,6 +101,7 @@ export function buildBriefingData(input: {
     handover: { last: input.handover.last, pending: input.handover.pending.map((i) => i.text).slice(0, 12), repeated: input.handover.repeated.slice(0, 8) },
     anomalies: input.anomalies.slice(0, 10),
     marketingAlerts: input.marketingAlerts.slice(0, 8),
+    forecastNotice: input.forecastNotice ?? null,
   };
 }
 
@@ -199,6 +208,7 @@ export function renderBriefingEmail(d: BriefingData, summary: string, appUrl: st
     <h2 style="font-size:18px;margin:0 0 6px">Briefing — ${esc(city)}, ${dd}</h2>
     <p style="font-size:14px;line-height:1.45;background:#f4f6fa;border-radius:8px;padding:10px 12px;margin:0 0 8px">${esc(summary)}</p>
     ${section(`Reservas: ${b.checkins} entradas · ${b.checkouts} saídas${b.peak ? ` · pico ${b.peak.label} (${b.peak.total})` : ""}`, hours)}
+    ${d.forecastNotice ? `<p style="font-size:12px;color:#b54708;background:#fffaeb;border-radius:6px;padding:6px 8px;margin:6px 0 0">Atenção — ${esc(d.forecastNotice)}</p>` : ""}
     ${d.extras ? section("Extras", `<p style="font-size:13px;margin:0">${d.extras.scheduled} escalados (${d.extras.scheduledHours} h) · ${d.extras.neededPeak} necessários no pico (${d.extras.neededHours} h previstas) · ${d.extras.teamLeaders} TL${d.extras.gap ? ` · <b style="color:#b42318">faltam ${d.extras.gap}</b>` : ""}</p>`) : ""}
     ${d.sla.items.length || d.sla.complaintsOverdue + d.sla.incidentsOverdue + d.sla.complaintsDueToday + d.sla.incidentsDueToday
       ? section("Prazos (SLA) hoje", `<ul style="font-size:13px;padding-left:18px;margin:0">${d.sla.items.map((i) => li(`${i.overdue ? '<b style="color:#b42318">Em atraso</b> · ' : ""}${i.type === "complaint" ? "Reclamação" : "Ocorrência"} #${i.id} — ${esc(i.title.slice(0, 120))} (prazo ${esc(fmtDue(i.dueAt))})`)).join("")}</ul>`) : ""}
@@ -211,6 +221,7 @@ export function renderBriefingEmail(d: BriefingData, summary: string, appUrl: st
     `Briefing — ${city}, ${dd}`, "", summary, "",
     `Reservas: ${b.checkins} entradas, ${b.checkouts} saídas${b.peak ? `, pico ${b.peak.label} (${b.peak.total})` : ""}`,
     b.byHour.map((h) => `${h.label} ${h.checkins}/${h.checkouts}`).join("  "),
+    d.forecastNotice ? `Atenção — ${d.forecastNotice}` : "",
     d.extras ? `Extras: ${d.extras.scheduled} escalados / ${d.extras.neededPeak} necessários no pico${d.extras.gap ? ` — faltam ${d.extras.gap}` : ""}` : "",
     ...d.sla.items.map((i) => `${i.overdue ? "[ATRASO] " : ""}${i.type === "complaint" ? "Reclamação" : "Ocorrência"} #${i.id} — ${i.title.slice(0, 100)} (prazo ${fmtDue(i.dueAt)})`),
     ...(d.handover.pending.length ? ["", "Pendentes:", ...d.handover.pending.map((t) => `- ${t}`)] : []),
@@ -224,33 +235,39 @@ export function renderBriefingEmail(d: BriefingData, summary: string, appUrl: st
 
 // ─── Recolha (BD) ───────────────────────────────────────────────────────────
 
+/**
+ * Prazos (SLA) de hoje: as reclamações que estão — ou vão estar até ao fim do
+ * dia — fora do prazo, pela MESMA regra do cartão Reclamações e da página
+ * (`complaintOverdue` → `complaintSlaLateSql`: só o `slaDeadline`, só com o
+ * SLA a correr, sem "Aguarda Cliente" nem o `dueDate`) e só as que contam
+ * (`countableComplaintSql`). `buildBriefingData` separa "em atraso" (antes de
+ * agora) de "com prazo hoje". Plano 64 (E8): a tabela antiga `incidents` já
+ * não recebe ocorrências (as da app Multipark não têm prazo) e deixou de ser lida.
+ */
 async function loadSla(day: string, tree: CityTree): Promise<SlaRow[]> {
   const db = await getDb();
   if (!db || !tree.ids.length) return [];
   const end = lisbonDayRangeUtc(day).end;
   const ids = sql.join(tree.ids.map((id) => sql`${id}`), sql`, `);
+  const { countableComplaintSql, complaintSlaLateSql } = await import("../departedComplaints");
   const complaints = rowsOf(await db.execute(sql`
-    SELECT id, title, DATE_FORMAT(COALESCE(slaDeadline, dueDate), '%Y-%m-%d %H:%i:%s') AS dueAt FROM complaints
-     WHERE projectId IN (${ids}) AND complaint_status NOT IN ('resolved', 'closed', 'converted') AND archivedAt IS NULL
-       AND COALESCE(slaDeadline, dueDate) IS NOT NULL AND COALESCE(slaDeadline, dueDate) < ${end}
-     ORDER BY COALESCE(slaDeadline, dueDate) LIMIT 50`));
-  const incidents = rowsOf(await db.execute(sql`
-    SELECT id, incidentType, DATE_FORMAT(dueAt, '%Y-%m-%d %H:%i:%s') AS dueAt FROM incidents
-     WHERE projectId IN (${ids}) AND status IN ('open', 'investigating')
-       AND dueAt IS NOT NULL AND dueAt < ${end}
-     ORDER BY dueAt LIMIT 50`));
-  const INCIDENT_LABEL: Record<string, string> = { vidro_aberto: "Vidro aberto", mal_estacionado: "Mal estacionado", dano: "Dano", chave_errada: "Chave errada", combustivel: "Combustível", limpeza: "Limpeza", documentos: "Documentos", outro: "Ocorrência" };
-  return [
-    ...complaints.map((r) => ({ type: "complaint" as const, id: Number(r.id), title: String(r.title ?? ""), dueAt: String(r.dueAt) })),
-    ...incidents.map((r) => ({ type: "incident" as const, id: Number(r.id), title: INCIDENT_LABEL[String(r.incidentType)] ?? "Ocorrência", dueAt: String(r.dueAt) })),
-  ];
+    SELECT id, title, DATE_FORMAT(slaDeadline, '%Y-%m-%d %H:%i:%s') AS dueAt FROM complaints
+     WHERE projectId IN (${ids}) AND ${countableComplaintSql("complaints")} AND ${complaintSlaLateSql("complaints", end)}
+     ORDER BY slaDeadline LIMIT 50`));
+  return complaints.map((r) => ({ type: "complaint" as const, id: Number(r.id), title: String(r.title ?? ""), dueAt: String(r.dueAt) }));
 }
 
-interface ExtrasInput { hourly: HourCount[]; extras: { neededPeak: number; neededHours: number; assignments: Array<{ isTeamLeader: boolean; startHour: number; endHour: number }> } | null }
+interface ExtrasInput {
+  hourly: HourCount[];
+  extras: { neededPeak: number; neededHours: number; assignments: Array<{ isTeamLeader: boolean; startHour: number; endHour: number }> } | null;
+  /** Plano 64 (E8b): a previsão veio incompleta (`forecastIncompleteReason`); null = completa. */
+  forecastNotice: string | null;
+}
 
 async function loadExtras(day: string, city: OpsCity): Promise<ExtrasInput> {
   // Previsão do Extras-Dia (só leitura): a previsão de D+1 a partir de D.
   const { getExtrasDiaForecast } = await import("../extrasDia");
+  const { forecastIncompleteReason } = await import("../extrasSchedule");
   const f = await getExtrasDiaForecast(addDays(day, -1), city);
   const hourly = f.hourly.map((h) => ({ hour: h.hour, checkins: h.checkins, checkouts: h.checkouts }));
   const db = await getDb();
@@ -263,6 +280,8 @@ async function loadExtras(day: string, city: OpsCity): Promise<ExtrasInput> {
       neededPeak: f.allocation.cheapest.peakDrivers, neededHours: f.allocation.cheapest.totalDriverHours,
       assignments: rows.map((r) => ({ isTeamLeader: Number(r.isTeamLeader) === 1, startHour: Number(r.startHour ?? 0), endHour: Number(r.endHour ?? 0) })),
     },
+    // A regra que já existe (a escala automática não propõe com ela): previsão cortada ou só a cópia.
+    forecastNotice: forecastIncompleteReason(f),
   };
 }
 
@@ -286,6 +305,7 @@ export async function collectBriefing(day: string, tree: CityTree, nowUtc: strin
     handover: { last: ho.latest ? `${ho.latest.date} ${ho.latest.shift === "night" ? "noite" : "manhã"}` : null, pending: ho.pending, repeated: ho.repeated },
     anomalies: anomalies.map((a) => ({ domain: String(a.domain), severity: String(a.severity), detail: String(a.detail), explanation: a.explanation ?? null })),
     marketingAlerts,
+    forecastNotice: ex.forecastNotice,
   });
 }
 

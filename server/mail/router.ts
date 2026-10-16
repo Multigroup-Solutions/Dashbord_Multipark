@@ -66,7 +66,9 @@ export const mailRouter = router({
       if (input.key && input.key !== "me") {
         const { visibleMailboxes } = await import("./inbox");
         const boxes = await visibleMailboxes(v);
-        if (!boxes.mailboxes.some((m) => m.key === input.key)) throw new TRPCError({ code: "BAD_REQUEST", message: "Essa caixa não está no teu acesso." });
+        const box = boxes.mailboxes.find((m) => m.key === input.key);
+        if (!box) throw new TRPCError({ code: "BAD_REQUEST", message: "Essa caixa não está no teu acesso." });
+        if (!box.active) throw new TRPCError({ code: "BAD_REQUEST", message: "Essa caixa está desativada." }); // plano 64 (E10): as "Antigas"
       }
       const { db } = await import("./store");
       const { sql } = await import("drizzle-orm");

@@ -10,7 +10,7 @@ import { can } from "@shared/access";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, Sparkles, Sunrise } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Sparkles, Sunrise } from "lucide-react";
 
 const CITY_LABEL: Record<string, string> = { lisbon: "Lisboa", porto: "Porto", faro: "Faro" };
 const shortDay = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
@@ -37,6 +37,13 @@ function BriefingBlock({ b }: { b: any }) {
         {b.aiUsed && <Badge variant="outline" className="text-[11px] gap-1"><Sparkles className="h-3 w-3" />texto IA</Badge>}
       </div>
       {b.summary && <p className="text-sm leading-relaxed bg-muted/40 rounded-lg p-3">{b.summary}</p>}
+      {/* Plano 64 (E8b): a previsão do Extras-Dia veio incompleta (leitura cortada ou só a cópia das reservas). Briefings antigos não têm o campo. */}
+      {d.forecastNotice && (
+        <p role="note" className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">{d.forecastNotice}</span>
+        </p>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <Stat label="Entradas / saídas" value={`${d.bookings.checkins} / ${d.bookings.checkouts}`} />
         <Stat label="Pico" value={d.bookings.peak ? `${d.bookings.peak.label} (${d.bookings.peak.total})` : "—"} />

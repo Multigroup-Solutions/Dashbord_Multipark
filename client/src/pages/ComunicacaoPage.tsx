@@ -20,10 +20,10 @@ import { Switch } from "@/components/ui/switch";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useSidebar } from "@/components/ui/sidebar";
 import { toast } from "sonner";
-import { AlarmClock, Archive, Bot, Inbox, Loader2, Mail, MailOpen, PenSquare, RefreshCw, Search, SlidersHorizontal, Star, UserRound, X } from "lucide-react";
+import { AlarmClock, Archive, Bot, ChevronDown, ChevronRight, Inbox, Loader2, Mail, MailOpen, PenSquare, RefreshCw, Search, SlidersHorizontal, Star, UserRound, X } from "lucide-react";
 import {
   MAIL_BRAND_LABELS, MAIL_LIST_VIEW_LABELS, MAIL_THREAD_STATUSES, MAIL_THREAD_STATUS_FILTER_LABELS, MAIL_THREAD_STATUS_LABELS, MAIL_TRIAGE_KEY, MAIL_TRIAGE_LABEL,
-  isMailBrand, isMailOverdue, mailActiveFilterCount, mailInitialView, pickInitialMailbox, type MailListView, type MailThreadStatus,
+  isMailBrand, isMailOverdue, mailActiveFilterCount, mailInitialView, mailboxSections, pickInitialMailbox, type MailListView, type MailThreadStatus,
 } from "@shared/mail";
 import { GoogleAccountCard, useGoogleOAuthReturnToast } from "@/components/GoogleAccountCard";
 import { MailThreadView } from "@/components/mail/MailThreadView";
@@ -60,7 +60,10 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   useGoogleOAuthReturnToast(() => { utils.mail.overview.invalidate(); utils.googleAccount.status.invalidate(); });
 
   const overview = trpc.mail.overview.useQuery(undefined, { refetchInterval: POLL_MS });
-  const boxes = overview.data?.mailboxes ?? [];
+  // Plano 64 (E10): as caixas desativadas (só o super admin as vê) vão para "Antigas", no fim e
+  // sem contadores; não são a caixa inicial nem a de onde se escreve. Abrem-se pelo ?caixa=.
+  const { active: boxes, old: oldBoxes } = mailboxSections(overview.data?.mailboxes ?? []);
+  const [showOld, setShowOld] = useState(false);
   const triage = overview.data?.triage ?? null;
   // A caixa vem da rota (O meu email) ou do ?caixa=; sem nada, a inicial da pessoa (pickInitialMailbox).
   const routeBox = personal ? ME : params.get("caixa");
@@ -148,7 +151,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
     onError: (e) => toast.error(e.message),
   });
 
-  const current = boxes.find((b) => b.key === mailbox);
+  const current = boxes.find((b) => b.key === mailbox) ?? oldBoxes.find((b) => b.key === mailbox);
   const slaHours = overview.data?.slaHours ?? 24;
   const now = Date.now();
   const refresh = () => { list.refetch(); overview.refetch(); utils.mail.badge.invalidate(); };
@@ -167,6 +170,8 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
   };
 
   const canCompose = isMe ? (personalReady && ownerUserId == null) : !!current?.canCompose;
+  // "Antigas" abre-se à mão; abre sozinha quando a caixa aberta (pelo link) é uma delas.
+  const oldOpen = showOld || oldBoxes.some((b) => b.key === mailbox);
   const homeBox = overview.data?.homeBox ?? null;
   const boxTitle = isMe ? "O meu email" : mailbox === MAIL_TRIAGE_KEY ? MAIL_TRIAGE_LABEL : current?.label ?? "Email";
 
@@ -221,6 +226,16 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
       {boxButton(ME, "O meu email", overview.data?.personalUnread ?? 0, { icon: <Mail className="h-4 w-4 shrink-0 opacity-70" />, canStar: true })}
       {isMe && (overview.data?.others?.length ?? 0) > 0 && (
         <div className="px-2 pt-1"><OthersPicker others={overview.data!.others} value={ownerUserId} onChange={(v) => { setOwnerUserId(v); close(); }} /></div>
+      )}
+      {oldBoxes.length > 0 && (
+        <>
+          <button type="button" onClick={() => setShowOld((x) => !x)} aria-expanded={oldOpen}
+            className="flex items-center gap-1 px-3 pb-1 pt-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            title="Caixas desativadas: as conversas ficam guardadas e não contam no número do menu">
+            {oldOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}Antigas ({oldBoxes.length})
+          </button>
+          {oldOpen && oldBoxes.map((b) => boxButton(b.key, b.label, 0, { icon: <Archive className="h-4 w-4 shrink-0 opacity-50" /> }))}
+        </>
       )}
       <p className="mt-auto px-3 pt-3 text-[10.5px] leading-snug text-muted-foreground">A ★ escolhe a caixa por onde entras. O que envias daqui fica ligado à ficha do cliente.</p>
     </nav>
@@ -315,6 +330,7 @@ export default function ComunicacaoPage({ personal = false }: { personal?: boole
               {boxes.map((b) => <SelectItem key={b.key} value={b.key}>{b.label}{b.unread ? ` (${b.unread})` : ""}</SelectItem>)}
               {triage && <SelectItem value={MAIL_TRIAGE_KEY}>{MAIL_TRIAGE_LABEL}{triage.open ? ` (${triage.open})` : ""}</SelectItem>}
               <SelectItem value={ME}>O meu email{overview.data?.personalUnread ? ` (${overview.data.personalUnread})` : ""}</SelectItem>
+              {oldBoxes.map((b) => <SelectItem key={b.key} value={b.key}>{b.label} (antiga)</SelectItem>)}
             </SelectContent>
           </Select>
         )}
