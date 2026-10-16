@@ -183,7 +183,10 @@ function BrandSummary({ data }: { data: any }) {
   }
   // 28c (Jorge, 6 out): as DUAS medidas lado a lado — conversões das plataformas (Google, Meta) e reservas
   // reais "via net" (tudo o que não é parceiro); "ligadas" = com prova de clique no link de origem.
-  const sum = (k: string) => rows.reduce((t, r) => t + Number(r[k] ?? 0), 0);
+  // Plano 64 (F6): as reservas sem parque/marca entram numa linha "Sem marca" (sem gasto) e no total — o total
+  // da tabela passa a bater com o Painel. Antes ficavam só numa nota por baixo, fora do total.
+  const noBrand: any = data.withoutBrand && Number(data.withoutBrand.bookings ?? 0) > 0 ? data.withoutBrand : null;
+  const sum = (k: string) => rows.reduce((t, r) => t + Number(r[k] ?? 0), 0) + Number(noBrand?.[k] ?? 0);
   const totals = {
     spend: sum("spend"), spendGoogle: sum("spendGoogle"), spendMeta: sum("spendMeta"),
     conversionsGoogle: sum("conversionsGoogle"), conversionsMeta: sum("conversionsMeta"), conversions: sum("conversions"), conversionValue: sum("conversionValue"),
@@ -197,22 +200,23 @@ function BrandSummary({ data }: { data: any }) {
   const vatPct = `${Math.round(vat * 100)} %`;
   const conv1 = (n: number) => (Math.round(n * 10) / 10).toFixed(1).replace(".", ",");
   const linkPct = (r: { bookingsWeb: number; webWithLink: number }) => (r.bookingsWeb > 0 ? `${Math.round((r.webWithLink / r.bookingsWeb) * 100)} %` : "—");
-  const Cells = ({ r, total }: { r: any; total?: boolean }) => (
+  /** `noSpend`: linha sem gasto nem conversões (a "Sem marca") — as colunas do gasto ficam "—", não 0 €. */
+  const Cells = ({ r, total, noSpend }: { r: any; total?: boolean; noSpend?: boolean }) => (
     <>
-      <td className="px-3 py-2 text-right text-muted-foreground">{eur(r.spendGoogle ?? 0)}</td>
-      <td className="px-3 py-2 text-right text-muted-foreground">{eur(r.spendMeta ?? 0)}</td>
-      <td className="px-3 py-2 text-right">{eur(r.spend)}</td>
-      <td className="px-3 py-2 text-right">{conv1(r.conversionsGoogle ?? 0)}</td>
-      <td className="px-3 py-2 text-right">{conv1(r.conversionsMeta ?? 0)}</td>
-      <td className="px-3 py-2 text-right text-muted-foreground">{(r.conversions ?? 0) > 0 ? eur(r.spend / r.conversions) : "—"}</td>
-      <td className="px-3 py-2 text-right text-muted-foreground">{eur(r.conversionValue ?? 0)}</td>
+      <td className="px-3 py-2 text-right text-muted-foreground">{noSpend ? "—" : eur(r.spendGoogle ?? 0)}</td>
+      <td className="px-3 py-2 text-right text-muted-foreground">{noSpend ? "—" : eur(r.spendMeta ?? 0)}</td>
+      <td className="px-3 py-2 text-right">{noSpend ? "—" : eur(r.spend)}</td>
+      <td className="px-3 py-2 text-right">{noSpend ? "—" : conv1(r.conversionsGoogle ?? 0)}</td>
+      <td className="px-3 py-2 text-right">{noSpend ? "—" : conv1(r.conversionsMeta ?? 0)}</td>
+      <td className="px-3 py-2 text-right text-muted-foreground">{!noSpend && (r.conversions ?? 0) > 0 ? eur(r.spend / r.conversions) : "—"}</td>
+      <td className="px-3 py-2 text-right text-muted-foreground">{noSpend ? "—" : eur(r.conversionValue ?? 0)}</td>
       <td className={`px-3 py-2 text-right ${total ? "" : "font-semibold"}`}>{bk(num(r.bookingsWeb ?? 0))}</td>
       <td className="px-3 py-2 text-right">{bk(eur(r.revenueWeb ?? 0))}</td>
-      <td className="px-3 py-2 text-right">{!noBk && (r.bookingsWeb ?? 0) > 0 ? eur(r.spend / r.bookingsWeb) : "—"}</td>
+      <td className="px-3 py-2 text-right">{!noSpend && !noBk && (r.bookingsWeb ?? 0) > 0 ? eur(r.spend / r.bookingsWeb) : "—"}</td>
       <td className="px-3 py-2 text-right" title="Reservas via net que trazem o link de origem (sem ele não há como ligar ao anúncio)">{bk(linkPct({ bookingsWeb: r.bookingsWeb ?? 0, webWithLink: r.webWithLink ?? 0 }))}</td>
       <td className="px-3 py-2 text-right">{bk(num(r.attributed))}</td>
       <td className="px-3 py-2 text-right">{bk(eur(r.revenueAttributed ?? 0))}</td>
-      <td className="px-3 py-2 text-right">{roasX(roasNet(r.revenueWeb ?? 0, r.spend))}</td>
+      <td className="px-3 py-2 text-right">{noSpend ? "—" : roasX(roasNet(r.revenueWeb ?? 0, r.spend))}</td>
     </>
   );
   return (
@@ -259,6 +263,12 @@ function BrandSummary({ data }: { data: any }) {
                     <Cells r={r} />
                   </tr>
                 ))}
+                {noBrand && (
+                  <tr className="border-b text-muted-foreground">
+                    <td className="px-3 py-2 font-semibold min-w-[9rem]" title={`Reservas do período sem parque/marca atribuída · Reservas (todas, com parceiros): ${num(noBrand.bookings)}`}>Sem marca</td>
+                    <Cells r={noBrand} noSpend />
+                  </tr>
+                )}
                 <tr className="bg-muted/40 font-semibold">
                   <td className="px-3 py-2" title={`Reservas (todas, com parceiros): ${noBk ? "—" : num(totals.bookings)}`}>Total</td>
                   <Cells r={totals} total />
@@ -288,7 +298,7 @@ function BrandSummary({ data }: { data: any }) {
         </div>
       )}
       {!noBk && data.bookingsWithoutBrand > 0 && (
-        <p className="text-xs text-muted-foreground">{num(data.bookingsWithoutBrand)} reserva(s) do período sem parque/marca atribuída — não entram em nenhuma linha.</p>
+        <p className="text-xs text-muted-foreground">{num(data.bookingsWithoutBrand)} reserva(s) do período sem parque/marca atribuída (todas, com parceiros) — estão na linha «Sem marca» e no total, em nenhuma marca.</p>
       )}
       {data.unassignedSpend > 0 && (
         <p className="text-xs text-muted-foreground">{eur(data.unassignedSpend)} de gasto sem cidade (campanhas por associar ou nacional de marca sem cidades) — conta no total da marca, em nenhuma cidade.</p>
