@@ -31,6 +31,7 @@ import { brandNameForProject } from "../../../shared/adCampaignMapping";
 import { MARKETPLACE_BRAND } from "../../../shared/projectTree";
 import { isAdPlatformInvoice, roasNetOfVat } from "../../../shared/marketingRules";
 import { lisbonDaySql } from "../../../shared/lisbonDay";
+import { isSiteBooking } from "../../../shared/bookingOrigin";
 import { vatRateForPeriod } from "../../finance/rates";
 import { inLisbonDaysSql, marketingProjectIds, notCancelledSql } from "../../marketingSql";
 import { brandNodeResolver, splitViaNet, viaNetParticipants, viaNetPools, type CampaignViaNet, type ViaNetExclusion } from "../../../shared/viaNet";
@@ -41,8 +42,6 @@ import { getConnection } from "./oauth";
 const valueOf = (b: { value?: number; total: number }) => b.value ?? b.total;
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
-/** Origens em que a reserva é feita num site (onde o gclid/utm pode chegar) — ver shared/bookingOrigin.ts. */
-export const SITE_ORIGINS = ["API", "GENERAL_FORM"];
 const PAID = ["google_paid", "meta_paid"];
 const rowsOf = <T = any>(r: any): T[] => (Array.isArray(r) && Array.isArray(r[0]) ? r[0] : r) as T[];
 
@@ -119,7 +118,8 @@ export async function getMarketingStats(f: MarketingStatsFilters, preloadedAds?:
     byDay.set(b.day, d);
     // Qualidade da atribuição (Google): das reservas feitas no SITE, quantas têm
     // link de origem, quantas trazem o clique do Google e quantas ficaram atribuídas.
-    if (b.origin && SITE_ORIGINS.includes(b.origin)) {
+    // Plano 64 (F2): "feita no site" é a regra única (shared/bookingOrigin.ts), a mesma do Web & SEO.
+    if (isSiteBooking(b.origin)) {
       attributionQuality.siteBookings++;
       if (b.hasOriginUrl) attributionQuality.withOriginUrl++;
       if (b.hasClickId) attributionQuality.withClickId++;

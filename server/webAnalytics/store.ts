@@ -40,9 +40,14 @@ export interface WebStore {
   saveCrux?(target: { type: "origin" | "url"; target: string }, formFactor: string, rows: readonly CruxPeriodRow[]): Promise<void>;
 }
 
-/** Linhas a gravar de uma dimensão GA4: top N por dia, valor cortado. PURA. */
+/**
+ * Linhas a gravar de uma dimensão GA4: top N por dia, valor cortado. Em
+ * "allEvents" (plano 64, F2) os eventos-chave ficam sempre (à frente), mesmo
+ * que raros; os outros pelos mais frequentes. PURA.
+ */
 export function gaDimRowsToStore(dim: GaDimKind, rows: readonly GaRow[]) {
-  const score = (r: GaRow) => (dim === "event" ? r.m.eventCount ?? 0 : r.m.sessions ?? 0);
+  const score = (r: GaRow) => (dim === "allEvents" ? ((r.m.keyEvents ?? 0) > 0 ? 1e12 : 0) + (r.m.eventCount ?? 0)
+    : dim === "event" ? r.m.eventCount ?? 0 : r.m.sessions ?? 0);
   return topNPerDay(rows, GA_DIMS[dim].topN, score).map((r) => {
     const value = clip(r.dim ?? "", 500);
     return {

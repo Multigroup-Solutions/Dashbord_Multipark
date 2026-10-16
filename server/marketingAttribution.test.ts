@@ -10,6 +10,8 @@ describe("diagnóstico da atribuição aos anúncios", () => {
   });
   it("gasto em anúncios mas nenhum gclid nas reservas → partida", () => {
     expect(attributionHealth({ siteBookings: 100, withOriginUrl: 90, withClickId: 0, attributed: 0 }, 500).level).toBe("critical");
+    // Plano 64 (F2): sem link na maioria E sem nenhum gclid → o crítico não fica escondido pelo aviso.
+    expect(attributionHealth({ siteBookings: 100, withOriginUrl: 40, withClickId: 0, attributed: 0 }, 500).level).toBe("critical");
   });
   it("sem gasto, zero gclid é normal", () => {
     expect(attributionHealth({ siteBookings: 100, withOriginUrl: 90, withClickId: 0, attributed: 0 }, 0).level).toBe("ok");

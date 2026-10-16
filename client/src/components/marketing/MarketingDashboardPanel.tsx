@@ -45,6 +45,8 @@ const eur = (v: number | null | undefined, digits = 0) =>
   v == null ? "—" : v.toLocaleString("pt-PT", { style: "currency", currency: "EUR", maximumFractionDigits: digits, minimumFractionDigits: digits });
 const num = (v: number | null | undefined) => (v == null ? "—" : Number(v).toLocaleString("pt-PT"));
 const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
+/** Jorge (15 out 2026): o que conta como "feita no site" (shared/bookingOrigin.ts — a mesma regra do Web & SEO). */
+const SITE_BOOKINGS_TIP = "Sites das marcas, formulário e multipark.pt (telefone, parceiros como o Booking e balcão não contam)";
 /** 8 out 2026: quantas ficaram fora do via net ("": nenhuma). */
 const viaNetOutText = (x: { pending?: number; pro?: number; plan?: number } | null | undefined) => {
   const parts = [x?.pending ? `${x.pending} pendente(s)` : "", x?.pro ? `${x.pro} Pro` : "", x?.plan ? `${x.plan} de avença` : ""].filter(Boolean);
@@ -195,7 +197,7 @@ export default function MarketingDashboardPanel() {
             <div className="flex items-center gap-2 font-medium"><HealthIcon className="w-4 h-4" /> {healthLabel}</div>
             <p className="text-xs">{health.message}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs tabular-nums">
-              <span>Reservas feitas no site: <b>{num(q.siteBookings)}</b></span>
+              <span title={SITE_BOOKINGS_TIP}><span className="underline decoration-dotted underline-offset-2 cursor-help">Reservas feitas no site</span>: <b>{num(q.siteBookings)}</b></span>
               <span>com link de origem: <b>{num(q.withOriginUrl)}</b> ({pct(q.withOriginUrl, q.siteBookings)})</span>
               <span>com clique do Google (gclid): <b>{num(q.withClickId)}</b> ({pct(q.withClickId, q.siteBookings)})</span>
               <span>atribuídas aos anúncios: <b>{num(q.attributed)}</b> ({pct(q.attributed, q.siteBookings)})</span>

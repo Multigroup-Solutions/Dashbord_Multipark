@@ -202,7 +202,10 @@ export async function loadMarketingBookings(from: string, to: string, projectIds
   if (!parkIds.length && !mk.third.length && !mk.marketplaceOnly.length) return [];
   // A mesma página pede isto várias vezes (estatísticas, marcas, ROAS, canais, alertas):
   // uma consulta por período × parques a cada minuto (a promessa é partilhada).
-  const key = JSON.stringify([from, to, [...parkIds].sort(), opts.marketplace ? [[...mk.third].sort(), [...mk.marketplaceOnly].sort(), projectIds ?? null] : null]);
+  // Plano 64 (F2, auditoria): o âmbito de cidade do utilizador entra na chave — com o Marketplace o
+  // resultado é filtrado no fim pelo âmbito (allowed), e dois utilizadores com os mesmos parques mas
+  // âmbitos diferentes (ex.: um vê o nó Marketplace da cidade, o outro não) não podem partilhar a lista.
+  const key = JSON.stringify([from, to, [...parkIds].sort(), opts.marketplace ? [[...mk.third].sort(), [...mk.marketplaceOnly].sort(), projectIds ?? null] : null, scoped ? [...scoped].sort((a, b) => a - b) : null]);
   const hit = bookingsCache.get(key);
   if (hit && Date.now() - hit.at < BOOKINGS_TTL_MS) return hit.value;
   const value = (async () => {
