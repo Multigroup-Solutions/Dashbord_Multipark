@@ -103,11 +103,23 @@ export const dbAutoLinkDeps: AutoLinkDeps = {
 
 // ─── Pós-processamento de cada email guardado ───────────────────────────────
 
+/**
+ * O pipeline da caixa largou o email para a triagem normal? "not_review" (R2:
+ * não era crítica) ou "review_off" (15 out 2026: seria crítica, mas a
+ * importação das críticas por email está desligada — fica na caixa Críticas e
+ * só muda de caixa se a triagem abrir uma reclamação ou um perdido). PURA.
+ */
+export function releasedStatusOf(targetModule: unknown): "not_review" | "review_off" | null {
+  return targetModule === "not_review" || targetModule === "review_off" ? targetModule : null;
+}
+
 async function runPipeline(
   e: Pick<StoredEvent, "parsed" | "result">,
   api: Pick<GmailApi, "getAttachment">,
   pipeline: MailPipeline,
   aiIntake: import("../jobs/emailInboundSync").AiComplaintIntake | null = null,
+  /** 15 out 2026: uma pessoa disse que é crítica ("Por classificar → Críticas"). */
+  manualReview: { userId: number } | null = null,
 ): Promise<{ targetModule: string; targetId?: number; existing?: true } | null> {
   const p = e.parsed;
   if (!p.rfcMessageId) return null;
@@ -133,9 +145,13 @@ async function runPipeline(
       return list;
     },
     aiIntake,
+    manualReview,
   });
   // R2 (F6b): não era crítica → "not_review" — a triagem (também a do varrimento) lê-o como de uma caixa sem pipeline.
-  const pipelineStatus = out.status === "processed" && out.routed.targetModule === "not_review" ? "not_review" : out.status;
+  // 15 out 2026: seria crítica mas a importação por email está desligada → "review_off" — idem, mas fica na caixa
+  // (só sai com um caso: reclamação ou perdido).
+  const released = out.status === "processed" ? releasedStatusOf(out.routed.targetModule) : null;
+  const pipelineStatus = released ?? out.status;
   if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, pipelineStatus).catch(() => {});
   if (out.status === "processed") return out.routed;
   if (out.status === "duplicate") {
@@ -143,10 +159,11 @@ async function runPipeline(
     // liga ao registo que existe, sem o contar como novo.
     const { getInboundEmailByMessageId } = await import("../db");
     const row: any = await getInboundEmailByMessageId(p.rfcMessageId).catch(() => null);
-    // R2 (F6b): a 1.ª cópia não era crítica → esta cópia também segue para a triagem normal.
-    if (row?.targetModule === "not_review") {
-      if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, "not_review").catch(() => {});
-      return { targetModule: "not_review", existing: true };
+    // R2 (F6b): a 1.ª cópia não era crítica (ou a importação por email estava desligada) → esta cópia também segue para a triagem normal.
+    const releasedCopy = releasedStatusOf(row?.targetModule);
+    if (releasedCopy) {
+      if (e.result.messageId) await setMessagePipeline(e.result.messageId, pipeline, releasedCopy).catch(() => {});
+      return { targetModule: releasedCopy, existing: true };
     }
     if (row?.targetModule && row?.targetId) return { targetModule: String(row.targetModule), targetId: Number(row.targetId), existing: true };
   }
@@ -228,6 +245,8 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     let routed: { targetModule: string; targetId?: number; existing?: true } | null = null;
     let pipelineUsed: string | null = null;
     let releasedFromPipeline = false;
+    // 15 out 2026: "review_off" — o email fica na caixa onde entrou (só um caso o muda).
+    let keepBox = false;
     const external = !!p.fromEmail && !isCompanyAddress(p.fromEmail, brandDomains)
       && !isAutomatedSender(p.fromEmail, { autoSubmitted: p.autoSubmitted, precedence: p.precedence, listUnsubscribe: p.listUnsubscribe, listId: p.listId }, { ownListDomains: Object.values(brandDomains).flat() });
     // 1) Pipeline temático — só emails RECEBIDOS (de pessoas), recentes, de caixas partilhadas.
@@ -269,7 +288,8 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
           // Plano MPV F6b (R2, REVIEWS_EMAIL_STRICT): entrou pelas Críticas mas não é
           // um aviso de avaliação → segue para a triagem normal (como se não houvesse
           // pipeline): a IA lê-o e põe-no na caixa do tema. Nunca fica ignorado.
-          if (routed?.targetModule === "not_review") { pipelineUsed = null; releasedFromPipeline = true; }
+          const released = releasedStatusOf(routed?.targetModule);
+          if (released) { pipelineUsed = null; releasedFromPipeline = true; keepBox = released === "review_off"; }
         } catch (err: any) {
           // O caso NÃO foi criado: fica marcado para nova tentativa e o cron
           // não fica verde (antes perdia-se em silêncio). O resto (ligações,
@@ -321,7 +341,7 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     let aiLostFound = false;
     if (mailbox && e.result.messageId) {
       const target = await triageNewMessage(e, mailbox, {
-        automated: automatedValue, pipeline: pipelineUsed, releasedFromPipeline, createdCase, routingRun, loadBudget, api, company,
+        automated: automatedValue, pipeline: pipelineUsed, releasedFromPipeline, keepBox, createdCase, routingRun, loadBudget, api, company,
         onCase: (r) => {
           // Só a RECLAMAÇÃO tem o seu aviso ("Nova reclamação" / "por confirmar (IA)"). Ronda 2: um perdido
           // aberto pela IA não avisa ninguém por si — o aviso de email novo vai a quem vê a caixa Perdidos.
@@ -348,7 +368,10 @@ export function makeOnStored(api: GmailApi, report: MailSyncReport, brandDomains
     if (fresh && mailbox && alias?.owner && e.result.newThread && noticeBox === mailbox) {
       ownerNotified = await notifyAliasOwner(e, mailbox, alias, projectId).catch(() => false);
     }
-    if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified) {
+    // 15 out 2026: um email da criticas@ que fica só na caixa (importação desligada) não avisa "email novo" —
+    // como quando criava a crítica (o responsável do alias continua a ser avisado).
+    const stayedAsReviewMail = keepBox && noticeBox === mailbox;
+    if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified && !stayedAsReviewMail) {
       await notifyNewMail(e, noticeBox, projectId).catch(() => {});
     }
   };
@@ -387,6 +410,8 @@ async function triageNewMessage(
     automated: number; pipeline: string | null; createdCase: boolean;
     /** O pipeline da caixa não ficou com o email (R2: não era crítica) — tria como uma caixa sem pipeline. */
     releasedFromPipeline?: boolean;
+    /** 15 out 2026 ("review_off"): a conversa fica nesta caixa — só um caso (reclamação/perdido) a muda. */
+    keepBox?: boolean;
     routingRun: { left: number; deadlineAt?: number }; loadBudget: () => Promise<void>;
     api: Pick<GmailApi, "getAttachment" | "getMessage"> | null; company: (a: string) => boolean;
     onCase?: (r: import("../complaintMailIntake").IntakeResult) => void; onAi?: () => void;
@@ -429,6 +454,7 @@ async function triageNewMessage(
     forwardedExternal: senderKind === "company" && !!forwardedExternalSender(text, ctx.company),
     // Só o que a sincronização deu como envio em massa (uma lista NOSSA — Grupo Google que distribui a caixa — é o cliente).
     listMail: bulkListMail({ automated: ctx.automated, listUnsubscribe: p.listUnsubscribe, listId: p.listId }),
+    keepBox: !!ctx.keepBox,
   };
   let res: Awaited<ReturnType<typeof routeEmailMessage>>;
   if (pre.action === "rule") res = await applyRuleTriage(msg, pre, deps);
@@ -508,7 +534,11 @@ export async function moveThreadToBox(threadId: number, boxKey: string, by: "ai"
  * (alias escolhido ou caixa) tiver pipeline, corre-o nas mensagens recebidas
  * ainda não processadas (vão buscar-se ao Gmail — anexos incluídos).
  */
-export async function reprocessThreadPipeline(threadId: number, mailbox: MailboxConfig, alias: MailboxAddress | null): Promise<{ processed: number; created: number }> {
+export async function reprocessThreadPipeline(
+  threadId: number, mailbox: MailboxConfig, alias: MailboxAddress | null,
+  /** 15 out 2026: quem atribuiu a conversa à mão — no pipeline das Críticas conta como "é uma crítica" (importa). */
+  opts: { manualBy?: number | null } = {},
+): Promise<{ processed: number; created: number }> {
   const out = { processed: 0, created: 0 };
   const pipeline = aliasPipeline(mailbox, alias, null);
   if (!pipeline) return out;
@@ -525,8 +555,20 @@ export async function reprocessThreadPipeline(threadId: number, mailbox: Mailbox
     const raw = await api.getMessage(String(m.gmailMessageId)).catch(() => null);
     if (!raw) continue;
     const parsed = parseGmailMessage(raw);
-    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId: Number(m.id), newThread: false, reopened: false } }, api, pipeline);
+    const manualReview = pipeline === "criticas" && opts.manualBy != null ? { userId: opts.manualBy } : null;
+    const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId: Number(m.id), newThread: false, reopened: false } }, api, pipeline, null, manualReview);
     out.processed++;
+    // À mão e o Message-ID já tinha passado (outra conta: ficou só na caixa, ou é uma crítica antiga fora das
+    // Críticas) → o mesmo "Importar para as Críticas" (cria uma vez ou repõe a que está guardada).
+    if (manualReview && (routed?.targetModule !== "review" || routed.existing)) {
+      const { importMailMessageAsReview } = await import("../reviewEmailImport");
+      const r = await importMailMessageAsReview(Number(m.id), manualReview.userId).catch((err: any) => {
+        console.warn("[mail] importar para as Críticas falhou:", m.id, String(err?.message ?? err).slice(0, 160));
+        return null;
+      });
+      if (r?.status === "created" || r?.status === "restored") out.created++;
+      continue;
+    }
     if (routed && ["complaint", "lostfound", "review", "incident"].includes(routed.targetModule)) out.created++;
   }
   return out;
@@ -565,8 +607,8 @@ export async function retryPipelineMessage(messageId: number, opts: { manual?: b
       if (seen) aiIntake = pipeline === "perdidos" ? { forceLostFoundId: seen.lostFoundId, replyOnly: true } : { forceComplaintId: seen.complaintId, replyOnly: true };
     }
     const routed = await runPipeline({ parsed, result: { stored: true, threadId, messageId, newThread: false, reopened: false } }, api, pipeline, aiIntake);
-    // R2 (F6b): não era crítica → segue para a triagem normal (como na sincronização).
-    if (routed?.targetModule === "not_review") {
+    // R2 (F6b): não era crítica (ou a importação por email está desligada) → segue para a triagem normal (como na sincronização).
+    if (releasedStatusOf(routed?.targetModule)) {
       const { triageReleasedMessage } = await import("../commsRouting");
       await triageReleasedMessage(messageId).catch((err: any) => console.warn("[mail] triagem depois do pipeline falhou:", messageId, String(err?.message ?? err).slice(0, 160)));
     }

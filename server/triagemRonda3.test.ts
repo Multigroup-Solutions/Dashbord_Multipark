@@ -267,6 +267,7 @@ describe("o aviso do perdido aberto pela IA vai a quem vê a caixa Perdidos na c
     expect(svc).toContain('if ((r.status === "created" || r.status === "linked") && "lostFoundId" in r) aiLostFound = true;');
     expect(svc).toContain("if (aiLostFound && projectId == null)");
     expect(svc.indexOf("if (aiLostFound && projectId == null)")).toBeLessThan(svc.indexOf("await notifyNewMail(e, noticeBox, projectId)"));
-    expect(svc).toContain("if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified)");
+    // 15 out 2026: + o email da criticas@ que ficou só na caixa (importação desligada) — como quando criava a crítica.
+    expect(svc).toContain("if (fresh && noticeBox?.notify && !createdCase && !aiComplaint && !ownerNotified && !stayedAsReviewMail)");
   });
 });

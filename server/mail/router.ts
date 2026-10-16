@@ -156,6 +156,11 @@ export const mailRouter = router({
         const { assignTriagedThread } = await import("./inbox");
         return assignTriagedThread(viewerOf(ctx.user as CtxUser), input.id, input);
       }),
+    /** 15 out 2026: "Importar para as Críticas" — um email recebido na caixa das Críticas passa a crítica (uma pessoa decide). */
+    importReview: protectedProcedure.input(z.object({ messageId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const { importMessageAsReview } = await import("./inbox");
+      return importMessageAsReview(viewerOf(ctx.user as CtxUser), input.messageId);
+    }),
     aiDraft: protectedProcedure.input(threadId).mutation(async ({ ctx, input }) => {
       const { aiDraft } = await import("./inbox");
       const r = await aiDraft(viewerOf(ctx.user as CtxUser), input.id);

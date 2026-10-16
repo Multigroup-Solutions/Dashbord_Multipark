@@ -10,8 +10,12 @@
  *  - reclamação / perdido → abre o caso (ou junta-se ao aberto) e a conversa
  *    vai para a caixa Reclamações / Perdidos, POR LER; com certeza média o caso
  *    fica "Por confirmar (IA)" (server/complaintMailIntake.ts);
- *  - crítica → caixa das Críticas, LIDA (o caso nas Críticas vem pela API do
- *    Google / criticas@ — daqui não se cria nada);
+ *  - crítica → caixa das Críticas, LIDA (a crítica nas Críticas vem pela API do
+ *    Google — daqui não se cria nada; um email só passa a crítica quando uma
+ *    pessoa o importa, 15 out 2026);
+ *  - email da criticas@ que seria crítica com a importação por email desligada
+ *    ("review_off"): fica na caixa Críticas — só sai com uma reclamação ou um
+ *    perdido (`keepBox`);
  *  - ocorrência → caixa das Ocorrências (o aviso automático da app liga-se à
  *    ocorrência da Multipark e fica LIDO — server/mailNotices.ts);
  *  - o resto: conversa nova → caixa do tema, por ler; não percebeu → info;
@@ -92,6 +96,12 @@ export interface EmailRoutingMessage {
   mode?: "sync" | "sweep";
   /** Quando chegou (UTC "AAAA-MM-DD HH:MM:SS") — para encontrar a ocorrência da app. */
   sentAt?: string | null;
+  /**
+   * 15 out 2026: email da criticas@ que ficou só na caixa (importação das
+   * críticas por email desligada — "review_off"): não vai para a caixa do
+   * tema; só um caso (reclamação/perdido) a muda de caixa.
+   */
+  keepBox?: boolean;
 }
 
 export interface ClassifiedEmail { output: MailRoutingOutput; restore: (s: string) => string; /** Modelo que respondeu (para o "Testar a triagem"). */ model?: string }
@@ -241,7 +251,8 @@ export async function classifyAndApply(msg: EmailRoutingMessage, deps: EmailRout
   //    separada pela IA; nunca uma movida à mão). Sem caso → a do tema (só
   //    conversa nova). Sem a caixa do caso ativa → a do tema.
   const caseBox = opened ? CASE_BOX[d.caseKind!] : null;
-  const target = caseBox && active.has(caseBox) ? caseBox : d.routeBox;
+  // 15 out 2026: um email que ficou só na caixa das Críticas ("review_off") não vai para a caixa do tema.
+  const target = caseBox && active.has(caseBox) ? caseBox : msg.keepBox ? null : d.routeBox;
   let moved = false;
   if (target && target !== msg.fromBoxKey) moved = await deps.move(msg.threadId, target, opened ? { reroute: true } : undefined);
   const finalBox = moved ? target! : msg.fromBoxKey;
@@ -319,7 +330,7 @@ export async function applyRuleTriage(
     return done(false, msg.fromBoxKey, { reason: "envio automático (cabeçalhos de lista ou resposta automática)", onlyTriage: sweep });
   }
   if (rule.notice === "review") {
-    // A crítica entra nas Críticas pela API do Google / criticas@ — daqui só a caixa e o lido.
+    // A crítica entra nas Críticas pela API do Google (ou importada à mão) — daqui só a caixa e o lido.
     const moved = await moveTo("criticas");
     const markedRead = await read();
     return done(moved, "criticas", { reason: "aviso de avaliação — fica lido (a crítica entra sozinha nas Críticas)", markedRead });
@@ -641,10 +652,12 @@ export async function loadStoredTriageMessage(messageId: number, mode: "sync" | 
   // "Por classificar" não conta: os casos nascem na mesma (a conversa é que não muda de caixa sozinha).
   const humanTouched = r.routedBy === "manual" || Number(r.corrected) === 1 || intake === "dismissed" || r.archivedAt != null
     || (mode === "sweep" && r.threadStatus === "resolvido");
+  const releasedFromPipeline = r.pipelineStatus === "not_review" || r.pipelineStatus === "review_off";
   const pre: PreTriageFacts = {
     outbound: r.direction === "out", personal: r.mailboxKey == null && r.ownerUserId != null, systemMail: automated === 3, automated,
     // R2 (plano MPV F6b): entrou pelas Críticas mas não era crítica → tria-se como numa caixa sem pipeline.
-    mailboxKey: r.mailboxKey ?? null, pipeline: r.pipelineStatus === "not_review" ? null : r.pipeline ?? box?.pipeline ?? null, fromEmail: r.fromEmail ?? null, text,
+    // 15 out 2026: o mesmo para "review_off" (seria crítica, importação por email desligada) — mas fica na caixa.
+    mailboxKey: r.mailboxKey ?? null, pipeline: releasedFromPipeline ? null : r.pipeline ?? box?.pipeline ?? null, fromEmail: r.fromEmail ?? null, text,
     senderIsCompany: senderKind === "company", createdCase: false,
     threadHasCase: Number(r.hasCase) === 1 || intake === "created" || intake === "linked" || intake === "creating" || intake === "suggested",
     humanTouched,
@@ -657,6 +670,7 @@ export async function loadStoredTriageMessage(messageId: number, mode: "sync" | 
       projectId: r.projectId != null ? Number(r.projectId) : null,
       newThread: r.firstInId != null && Number(r.firstInId) === Number(r.id),
       senderKind, forwardedExternal: senderKind === "company" && !!forwardedExternalSender(text, company), mode, sentAt: r.sentAt ?? null,
+      keepBox: r.pipelineStatus === "review_off",
     },
   };
 }

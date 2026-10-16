@@ -96,6 +96,7 @@ import { recordBillingFromMp } from "../shared/partnerBilling";
 import { isoWeekYearLisbon, incidentSlaHours, addHoursUtc, utcNowStr as caseUtcNowStr, incidentCountsAgainstDriver } from "../shared/caseRules";
 // Migrações aplicadas sozinhas no arranque (a lista vive em server/migrations/index.ts).
 import { ensureRecentSchema } from "./migrations/index";
+import { reviewInCriticas } from "./reviewVisibility";
 import { approvedLeaveSql } from "./leavesSql";
 import { CITY_LABELS, cityKeyFromPlace } from "../shared/city";
 
@@ -2355,10 +2356,13 @@ export async function createGoogleReview(data: InsertGoogleReview) {
   return result[0].insertId;
 }
 
-export async function getGoogleReviews(filters?: { rating?: number; status?: string; projectId?: number }) {
+export async function getGoogleReviews(filters?: { rating?: number; status?: string; projectId?: number; fromEmail?: boolean }) {
   const db = await getDb(); if (!db) return [];
   // Plano MPV F6b: as que não são críticas e as repetidas saem da lista (nada se apaga — Críticas → Limpeza desfaz).
   const conditions: any[] = [projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf)];
+  // 15 out 2026: as que entraram sozinhas por email ficam fora (só na caixa de correio; nada se apaga).
+  // `fromEmail` (só o super admin, para consulta — o router decide) mostra SÓ essas.
+  conditions.push(filters?.fromEmail ? sql`NOT ${reviewInCriticas()}` : reviewInCriticas());
   if (filters?.rating) conditions.push(eq(googleReviews.rating, filters.rating));
   if (filters?.status) conditions.push(eq(googleReviews.status, filters.status as any));
   if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
@@ -2397,7 +2401,8 @@ export async function updateGoogleReview(id: number, data: Partial<InsertGoogleR
 export async function getGoogleReviewStats(filters?: { projectId?: number }) {
   const db = await getDb(); if (!db) return { total: 0, avg: 0, star1: 0, star2: 0, star3: 0, star4: 0, star5: 0, unrated: 0, pending: 0, responded: 0, complaints: 0 };
   // Plano MPV F6b: as que não são críticas e as repetidas não contam nos números.
-  const conditions = [projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf)];
+  // 15 out 2026: nem as que entraram sozinhas por email (Média Google, Suporte, pendentes…).
+  const conditions = [projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf), reviewInCriticas()];
   if (filters?.projectId) conditions.push(inArray(googleReviews.projectId, await resolveProjectIds(filters.projectId)));
   // 44c: o lixo (sem parque nem marca) não conta nos números.
   const { isTrashReview } = await import("../shared/reviewParks");
@@ -6540,7 +6545,7 @@ export async function getClientHistory(q: ClientHistoryQuery) {
       ? db.select({
           id: googleReviews.id, rating: googleReviews.rating, reviewText: googleReviews.reviewText,
           status: googleReviews.status, vehiclePlate: googleReviews.vehiclePlate, createdAt: googleReviews.createdAt,
-        }).from(googleReviews).where(and(or(...reviewConds), projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf))).orderBy(desc(googleReviews.createdAt)).limit(30)
+        }).from(googleReviews).where(and(or(...reviewConds), projectScope(googleReviews.projectId), eq(googleReviews.notAReview, 0), isNull(googleReviews.duplicateOf), reviewInCriticas())).orderBy(desc(googleReviews.createdAt)).limit(30)
       : Promise.resolve([]),
   ]);
 

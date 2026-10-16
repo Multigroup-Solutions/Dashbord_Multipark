@@ -40,20 +40,20 @@ Todos @multipark.pt (e, pelos domínios alternativos, também @skypark.pt, @redp
 1. **+ Alias** e escreve o endereço completo (qualquer domínio: reservas@skypark.pt, info@multibacks.app…).
 2. **Caixa**: onde a conversa aparece (quem a vê é a regra da caixa).
 3. **Marca** e **Cidade** (a conversa fica dessa cidade: quem só vê a sua cidade só a vê se for a dela; os avisos vão para essa cidade).
-4. **Destino**: *Como a caixa*, *Geral*/*Reservas* (só conversa) ou um pipeline (Reclamações, Perdidos, Críticas, RH, Campanhas, Ocorrências) — cria o registo no módulo.
+4. **Destino**: *Como a caixa*, *Geral*/*Reservas* (só conversa) ou um pipeline (Reclamações, Perdidos, Críticas, RH, Campanhas, Ocorrências) — cria o registo no módulo. Exceção (15 out 2026): o pipeline **Críticas** não cria críticas sozinho — os emails ficam na caixa Críticas e uma pessoa carrega em **Importar para as Críticas** (interruptor **"Críticas: criar críticas sozinho a partir dos emails da criticas@"**, desligado por omissão).
 5. **Responsável**: uma pessoa (a conversa fica-lhe atribuída e recebe aviso) ou uma equipa (papel: quem o tem e vê a caixa é avisado).
 6. **Etiqueta** (aparece na conversa) e **Ativo**. **Guardar**.
 Um endereço só pode estar numa caixa. Um alias inativo deixa de encaminhar.
 
 ## Depois do alias: a triagem da IA (14 out 2026)
-- O alias decide a caixa onde o email **entra**. Depois disso, nos emails recebidos de pessoas nas caixas partilhadas, a IA lê e decide pelo sentido (ver Ajuda → Comunicação): reclamações e perdidos vão para os módulos e para a caixa do caso; críticas e avisos de ocorrência para a caixa deles, lidos; o resto para a caixa do tema.
+- O alias decide a caixa onde o email **entra**. Depois disso, nos emails recebidos de pessoas nas caixas partilhadas, a IA lê e decide pelo sentido (ver Ajuda → Comunicação): reclamações e perdidos vão para os módulos e para a caixa do caso; críticas e avisos de ocorrência para a caixa deles, lidos; o resto para a caixa do tema. O que entra pela **criticas@** fica na caixa Críticas (só uma reclamação ou um perdido o tira de lá).
 - **reclamacoes@** e **perdidos@** criam sempre o caso (o destino deles). A IA só impede o caso quando tem a certeza de que é lixo e o interruptor **"IA: não abrir caso para o lixo que chega à reclamacoes@ e perdidos@"** está ligado (desligado por omissão).
 - Envios em massa reconhecem-se pelos **cabeçalhos** (List-Unsubscribe, List-Id, Precedence, Auto-Submitted) — nunca pelas palavras. Um **Grupo Google da empresa** que distribui um alias (List-Id de um domínio nosso) não conta como envio em massa: é o cliente a escrever.
 - O assunto já **não** manda emails para o pipeline das Ocorrências (antes, "ocorrência" no assunto bastava). Os avisos da app Multipark reconhecem-se pelo formulário.
 
 ## Por classificar (Comunicação → caixa **Por classificar**, só admin e super admin)
 - Emails que chegaram por um endereço fora da tabela (ex.: em **Bcc**, ou um alias novo por configurar). Automáticos (notificações de reserva, emails do próprio dashboard) nunca vão para aqui.
-- Abre a conversa → **Atribuir à caixa** (opcional: um alias da tabela, e **Acrescentar este endereço à tabela** para os próximos já chegarem classificados). Se o destino criar registos, são criados nesse momento.
+- Abre a conversa → **Atribuir à caixa** (opcional: um alias da tabela, e **Acrescentar este endereço à tabela** para os próximos já chegarem classificados). Se o destino criar registos, são criados nesse momento. Atribuir à caixa **Críticas** é dizer "é uma crítica": importa para as Críticas, com o teu nome no registo.
 
 **Envio**
 - Emails de sistema (notificações, briefing, escala, tarefas, formação, relatórios) saem da conta em **Envio de email (Gmail)** (Definições → Comunicação; **Testar** envia-te um email). Ficam marcados como automáticos — nunca aparecem como conversas de clientes.

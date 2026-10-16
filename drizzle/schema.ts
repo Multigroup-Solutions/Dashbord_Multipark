@@ -1627,10 +1627,18 @@ export const googleReviews = mysqlTable("google_reviews", {
 	reviewMarkedById: int(),
 	reviewMarkUndoneAt: datetime({ mode: 'string' }),
 	reviewMarkBackup: text(),
+	// 0835 (Jorge, 15 out 2026) — críticas que vieram por email: só contam se
+	// alguém as importou (à mão: quem e quando; com REVIEWS_FROM_EMAIL ligado:
+	// só quando, sem pessoa). Sem marca e sem googleReviewKey = ficou só na
+	// caixa de correio (fora das Críticas; nada se apaga).
+	emailImportedAt: datetime({ mode: 'string' }),
+	emailImportedById: int(),
 },
 (table) => [
 	// 0700 — "repetidas desta" sem ler a tabela toda.
 	index("idx_google_reviews_duplicate_of").on(table.duplicateOf),
+	// 0835 — a crítica de um email (importar à mão sem a criar duas vezes).
+	index("idx_google_reviews_source_email").on(table.sourceEmailId),
 ]);
 
 /**
