@@ -2,15 +2,24 @@
 // de Extras (P3 lote 17g-4).
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Check, CheckCircle2, ChevronDown, ChevronRight, RotateCcw, Users, XCircle } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, ChevronRight, MessageCircle, RotateCcw, Users, XCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { can } from "@shared/access";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cityKeyFromText, matchCityKey } from "@shared/city";
+import { availabilityRangeError, availabilityRangeLabel, currentWeekRangeLisbon } from "@shared/availabilityWeek";
+import { driverCityFrom, driverCityLabel, hasDriverTemplate } from "@shared/driverTemplates";
+import { DEFAULT_WHATSAPP_TEMPLATE_ID, firstNameOf } from "@shared/whatsappTemplate";
+import { normalizePhoneE164 } from "@shared/phone";
+import DateRangeNav, { type DateGran } from "@/components/DateRangeNav";
+import { renderPreview, type PreviewCity } from "@/components/whatsapp/DriverCityPanel";
 import { QueryErrorNote } from "@/components/QueryErrorNote";
 import { ContactAvatar } from "@/components/whatsapp/ContactAvatar";
 import { ViewToggle } from "@/components/ViewToggle";
@@ -28,6 +37,11 @@ const APP_STATUS: Record<string, { label: string; className: string }> = {
   approved: { label: "Aprovada", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
   rejected: { label: "Rejeitada", className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
 };
+
+/** Candidatura no diálogo de aprovação. */
+type ApproveTarget = { id: number; fullName: string; email: string; city: string | null; phone: string | null };
+/** Intervalo do pedido de disponibilidade (dias ISO, dentro de uma semana segunda–domingo). */
+type AvailabilityRange = { from: string; to: string };
 
 // Rende nos Leads de Extras, junto dos leads e do recrutamento (Jorge, 2 out
 // 2026: "fica tudo junto nas leads"). Antes vivia na Disponibilidade.
@@ -57,23 +71,48 @@ export function CandidaturasSection() {
         .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pt")),
     [projects.data],
   );
-  const [approveFor, setApproveFor] = useState<null | { id: number; fullName: string; email: string; city: string | null }>(null);
+  const [approveFor, setApproveFor] = useState<null | ApproveTarget>(null);
   const [approveProjectId, setApproveProjectId] = useState<string>("");
   // 18b: a pessoa já teve ficha desativada → mostra o motivo e só reativa com confirmação.
-  const [reactivateAsk, setReactivateAsk] = useState<null | { appId: number; projectId: number; employeeId: number; fullName: string; reason: string }>(null);
+  // O pedido de disponibilidade escolhido no 1.º diálogo segue para a confirmação.
+  const [reactivateAsk, setReactivateAsk] = useState<null | { appId: number; projectId: number; employeeId: number; fullName: string; reason: string; availabilityRequest?: AvailabilityRange }>(null);
+
+  // ── Pedido de disponibilidade ao aprovar (WhatsApp) ───────────────────────
+  // O mesmo envio da página Disponibilidades (template "Pedido de
+  // disponibilidade" da cidade escolhida acima). Desligado por defeito: manda
+  // uma mensagem a uma pessoa real, tem de ser pedido. Intervalo por defeito =
+  // a semana de HOJE em Lisboa (segunda a domingo); o pedido é sempre de UMA
+  // semana de disponibilidade (regra em shared/availabilityWeek.ts, igual no servidor).
+  const { user } = useAuth();
+  const canSendWhatsapp = !!user && can(user as any, "whatsapp", "edit");
+  const [sendAvailability, setSendAvailability] = useState(false);
+  const [availRange, setAvailRange] = useState<AvailabilityRange & { gran: DateGran }>(() => ({ ...currentWeekRangeLisbon(), gran: "week" }));
+  const availRangeProblem = sendAvailability ? availabilityRangeError(availRange.from, availRange.to) : null;
+  const availWeekLabel = availabilityRangeLabel(availRange.from, availRange.to);
+  const approveProject = cityProjects.find((p: any) => String(p.id) === approveProjectId);
+  const availCity = approveProject ? driverCityFrom(String(approveProject.name)) : null;
+  const availCityHasTemplate = !!availCity && hasDriverTemplate(availCity, "AVAILABILITY");
+  const availPreviewQuery = trpc.whatsapp.templatePreview.useQuery(
+    { templateId: DEFAULT_WHATSAPP_TEMPLATE_ID },
+    { enabled: approveFor != null && sendAvailability && canSendWhatsapp, staleTime: 5 * 60_000, retry: false },
+  );
+  const availPreview = ((availPreviewQuery.data?.cities ?? []) as PreviewCity[]).find((p) => p.city === availCity);
+  const approveHasPhone = !!approveFor && !!normalizePhoneE164((approveFor.phone ?? "").trim());
 
   /** Abre o diálogo com a cidade da candidatura pré-selecionada (quando se reconhece). */
-  function openApprove(a: { id: number; fullName: string; email: string; city: string | null }) {
+  function openApprove(a: ApproveTarget) {
     const key = cityKeyFromText(a.city);
     const match = key ? cityProjects.find((p: any) => matchCityKey(p.name) === key) : undefined;
     setApproveProjectId(match ? String(match.id) : cityProjects.length === 1 ? String(cityProjects[0].id) : "");
+    setSendAvailability(false);
+    setAvailRange({ ...currentWeekRangeLisbon(), gran: "week" });
     setApproveFor(a);
   }
 
   const approve = trpc.driverApplications.approve.useMutation({
     onSuccess: (r, vars) => {
       if (!r.ok) {
-        setReactivateAsk({ appId: vars.id, projectId: vars.projectId, ...r.needsConfirm });
+        setReactivateAsk({ appId: vars.id, projectId: vars.projectId, ...r.needsConfirm, availabilityRequest: vars.availabilityRequest });
         setApproveFor(null);
         return;
       }
@@ -86,6 +125,14 @@ export function CandidaturasSection() {
         );
       } else {
         toast.success(`Candidatura aprovada — ${who}, alocado a ${cc.projectName}.`);
+      }
+      // Pedido de disponibilidade: a aprovação já está feita; uma falha no
+      // WhatsApp diz-se com o motivo (nunca em silêncio) e não a desfaz.
+      const ar = r.availabilityRequest;
+      if (ar?.sent) {
+        toast.success(`Pedido de disponibilidade enviado por WhatsApp (${ar.weekLabel}${ar.city ? `, template de ${driverCityLabel(ar.city)}` : ""}).`);
+      } else if (ar) {
+        toast.error(`Candidatura aprovada, mas o pedido de disponibilidade não foi enviado: ${ar.reason}`, { duration: 15_000 });
       }
       setApproveFor(null);
       list.refetch();
@@ -134,7 +181,7 @@ export function CandidaturasSection() {
           variant="outline"
           className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950 mr-1"
           disabled={approve.isPending}
-          onClick={() => openApprove({ id: a.id, fullName: a.fullName, email: a.email, city: a.city ?? null })}
+          onClick={() => openApprove({ id: a.id, fullName: a.fullName, email: a.email, city: a.city ?? null, phone: a.phone ?? null })}
         >
           <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Aprovar
         </Button>
@@ -325,7 +372,7 @@ export function CandidaturasSection() {
 
       {/* ── Dialog: aprovar candidatura + cidade (centro de custos) ─────────── */}
       <Dialog open={approveFor != null} onOpenChange={(open) => { if (!open && !approve.isPending) setApproveFor(null); }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-emerald-600" />
@@ -371,17 +418,98 @@ export function CandidaturasSection() {
             </p>
           </div>
 
+          {canSendWhatsapp && (
+            <div className="space-y-3 rounded-md border p-3">
+              <label className="flex items-start gap-2 min-h-[44px] text-sm cursor-pointer">
+                <Checkbox
+                  checked={sendAvailability}
+                  disabled={approve.isPending}
+                  onCheckedChange={(v) => setSendAvailability(v === true)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="inline-flex items-center gap-1.5 font-medium">
+                    <MessageCircle className="h-4 w-4 text-green-600" /> Enviar pedido de disponibilidade
+                  </span>
+                  <span className="block text-[11.5px] text-muted-foreground">
+                    Logo a seguir a aprovar, o extra recebe por WhatsApp o mesmo pedido da página Disponibilidades.
+                  </span>
+                </span>
+              </label>
+
+              {sendAvailability && (
+                <div className="space-y-2">
+                  <Label className="text-xs">Semana do pedido</Label>
+                  <DateRangeNav
+                    start={availRange.from}
+                    end={availRange.to}
+                    gran={availRange.gran}
+                    showAll={false}
+                    granularities={["day", "week"]}
+                    onChange={(from, to, gran) => setAvailRange({ from, to, gran })}
+                  />
+                  {availRangeProblem ? (
+                    <p className="text-xs text-red-700" role="alert">{availRangeProblem}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      A mensagem diz <span className="font-medium">“{availWeekLabel}”</span>. Uma semana de segunda a
+                      domingo, inteira ou só parte dela.
+                    </p>
+                  )}
+                  {!approveProject ? (
+                    <p className="text-xs text-muted-foreground">Escolhe a cidade acima: o template é o dessa cidade.</p>
+                  ) : !availCityHasTemplate ? (
+                    <p className="text-xs text-amber-700">
+                      {String(approveProject.name)} não tem template de pedido de disponibilidade: a candidatura é aprovada, o pedido não sai.
+                    </p>
+                  ) : availPreviewQuery.isLoading ? (
+                    <p className="text-xs text-muted-foreground">A ler o template na Meta…</p>
+                  ) : availPreview && !availPreview.ok ? (
+                    <p className="text-xs text-amber-700">
+                      {driverCityLabel(availCity!)} ({availPreview.templateName}): {availPreview.reason}
+                      {availPreview.inspected ? " — a candidatura é aprovada, o pedido não sai." : ". O envio tenta na mesma."}
+                    </p>
+                  ) : availPreview?.ok && !availRangeProblem ? (
+                    <div className="space-y-1">
+                      <p className="text-[11px] text-muted-foreground">
+                        {driverCityLabel(availCity!)} · {availPreview.templateName} · {availPreview.languageCode}
+                      </p>
+                      <div className="rounded-md bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-900 p-3 text-sm whitespace-pre-wrap max-h-48 overflow-y-auto">
+                        {renderPreview(availPreview, firstNameOf(approveFor?.fullName ?? null) ?? "Nome", availWeekLabel)}
+                      </div>
+                    </div>
+                  ) : null}
+                  {!approveHasPhone && (
+                    <p className="text-xs text-amber-700">
+                      A candidatura não tem um telemóvel válido{approveFor?.phone ? ` (“${approveFor.phone}”)` : ""}: o pedido só
+                      sai se a ficha tiver um.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setApproveFor(null)} disabled={approve.isPending}>
               Cancelar
             </Button>
             <Button
               className="bg-emerald-700 hover:bg-emerald-800 text-white"
-              disabled={!approveProjectId || approve.isPending || !approveFor}
-              onClick={() => approveFor && approve.mutate({ id: approveFor.id, projectId: Number(approveProjectId) })}
+              disabled={!approveProjectId || approve.isPending || !approveFor || !!availRangeProblem}
+              onClick={() =>
+                approveFor &&
+                approve.mutate({
+                  id: approveFor.id,
+                  projectId: Number(approveProjectId),
+                  availabilityRequest: sendAvailability && canSendWhatsapp ? { from: availRange.from, to: availRange.to } : undefined,
+                })
+              }
             >
               <CheckCircle2 className="h-4 w-4 mr-2" />
-              {approve.isPending ? "A aprovar…" : "Aprovar e alocar"}
+              {approve.isPending
+                ? sendAvailability ? "A aprovar e a enviar…" : "A aprovar…"
+                : sendAvailability ? "Aprovar e pedir disponibilidade" : "Aprovar e alocar"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -402,7 +530,7 @@ export function CandidaturasSection() {
             <Button
               className="bg-emerald-700 hover:bg-emerald-800 text-white"
               disabled={approve.isPending || !reactivateAsk}
-              onClick={() => reactivateAsk && approve.mutate({ id: reactivateAsk.appId, projectId: reactivateAsk.projectId, confirmReactivate: true })}
+              onClick={() => reactivateAsk && approve.mutate({ id: reactivateAsk.appId, projectId: reactivateAsk.projectId, confirmReactivate: true, availabilityRequest: reactivateAsk.availabilityRequest })}
             >
               <CheckCircle2 className="h-4 w-4 mr-2" /> {approve.isPending ? "A reativar…" : "Reativar e aprovar"}
             </Button>
