@@ -14,6 +14,15 @@
  *    semântica de calendário), podem nessa hora.
  * O aviso distingue "faltam escalar (há quem possa)" de "falta gente
  * (ninguém disponível)".
+ *
+ * Jorge, 21 out 2026 (o mesmo pedido outra vez: "há extras disponíveis à 01h
+ * e o aviso continua lá"): com gente SUFICIENTE por escalar NÃO há falta de
+ * condutores — é só "por escalar" (nota neutra, sem alarme). O aviso "Faltam
+ * condutores" fica para as horas em que, mesmo escalando todos os disponíveis,
+ * continua a faltar gente (`isFillableGap` / `splitStaffingGaps` /
+ * `shortHours`). A hora de fim de uma linha é a hora de SAÍDA (15h–01h são
+ * 10 horas pagas; quem acaba à 01h não conta à 01h) — é a mesma leitura da
+ * proposta automática, do calendário e das horas pagas.
  */
 import { inWindows, type HourWindow } from "./availabilityWindow";
 
@@ -145,14 +154,45 @@ export function describeStaffingGap(g: StaffingGap): string {
   return `${verb} escalar ${g.missing} ${when} (${avail})`;
 }
 
+/** Há disponíveis que cheguem para a falta? (escalando-os, fica coberta). PURA. */
+export function isFillableGap(g: Pick<StaffingGap, "missing" | "available">): boolean {
+  return g.available.length >= g.missing;
+}
+
+/**
+ * Separa as faltas: `short` = falta condutores mesmo escalando todos os
+ * disponíveis (o aviso); `fillable` = há quem escalar (nota "por escalar"). PURA.
+ */
+export function splitStaffingGaps(gaps: readonly StaffingGap[]): { short: StaffingGap[]; fillable: StaffingGap[] } {
+  const short: StaffingGap[] = [];
+  const fillable: StaffingGap[] = [];
+  for (const g of gaps) (isFillableGap(g) ? fillable : short).push(g);
+  return { short, fillable };
+}
+
+/** Horas em que falta gente mesmo escalando todos os disponíveis. PURA. */
+export function shortHours<T extends Pick<StaffingHour, "needed" | "scheduled" | "availableIds">>(hours: readonly T[]): T[] {
+  return hours.filter((h) => h.needed - h.scheduled > h.availableIds.length);
+}
+
+/** A nota de uma falta com gente que chegue: "1 por escalar às 01h (há 5 disponíveis: Ana, Rui, …)". PURA. */
+export function describeFillableGap(g: StaffingGap): string {
+  const k = g.available.length;
+  return `${g.missing} por escalar ${gapWhen(g)} (há ${k} ${k === 1 ? "disponível" : "disponíveis"}: ${namesList(g.available)})`;
+}
+
 /** "precisas 2 (além do TL) · escalados 1 · disponíveis por escalar 2" PURA. */
 export function describeStaffingHour(h: Pick<StaffingHour, "needed" | "scheduled" | "availableIds">): string {
   return `precisas ${h.needed} (além do TL) · escalados ${h.scheduled} · disponíveis por escalar ${h.availableIds.length}`;
 }
 
-/** Estado de uma hora para a cor do indicador. PURA. */
+/**
+ * Estado de uma hora para a cor do indicador: `fillable` = há disponíveis que
+ * cheguem (por escalar, sem alarme); `short` = falta gente mesmo escalando
+ * todos os disponíveis. PURA.
+ */
 export function staffingHourState(h: Pick<StaffingHour, "needed" | "scheduled" | "availableIds">): "ok" | "fillable" | "short" | "idle" {
   if (h.needed <= 0) return "idle";
   if (h.scheduled >= h.needed) return "ok";
-  return h.availableIds.length > 0 ? "fillable" : "short";
+  return h.availableIds.length >= h.needed - h.scheduled ? "fillable" : "short";
 }

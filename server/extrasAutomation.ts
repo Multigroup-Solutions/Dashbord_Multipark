@@ -1538,19 +1538,28 @@ export async function runExtrasAutomation(now: Date = new Date(), opts: { deadli
     // ainda não foi avisado com sucesso) — assim, de hora a hora até à meia-noite,
     // apanha quem for escalado depois das 18h e repete as falhas.
     steps.push({ key: "tomorrow-notify", fn: plain(`notify:${date}`, () => notifyAssignments(date, { respectHold: true })) });
+    // 21 out 2026 (Jorge): "faltam condutores" só quando falta gente mesmo
+    // escalando todos os extras disponíveis (a mesma regra do indicador do
+    // ecrã); horas com gente que chegue são só "por escalar" e vão no corpo.
     steps.push({ key: "tomorrow-coverage", fn: () => run(`coverage:${date}`, async () => {
       const out: Record<string, number> = {};
+      const { getStaffingReport } = await import("./extrasDiaShift");
+      const { describeFillableGap, describeStaffingGap, splitStaffingGaps } = await import("../shared/extrasStaffing");
       for (const city of ["lisbon", "porto", "faro"] as CityId[]) {
-        const { gaps, incomplete } = await coverageReport(date, city);
-        out[city] = gaps.length;
+        const { gaps, incomplete } = await getStaffingReport(date, city);
+        const { short, fillable } = splitStaffingGaps(gaps);
+        out[city] = short.length;
+        out[`${city}_por_escalar`] = fillable.length;
         // Previsão incompleta: as "faltas" seriam falsas — não se avisa ninguém.
         if (incomplete) { out[`${city}_incompleta`] = 1; continue; }
-        if (gaps.length) {
+        if (short.length) {
           const label = city === "lisbon" ? "Lisboa" : city === "porto" ? "Porto" : "Faro";
           const { notify } = await import("./notify");
+          const body = `${date}: ${short.map(describeStaffingGap).join("; ")}`
+            + (fillable.length ? `. Por escalar (há quem possa): ${fillable.map(describeFillableGap).join("; ")}` : "");
           await notify({
             kind: "extras_gap", city,
-            title: `Faltam condutores amanhã em ${label}`, body: `${date}: ${describeGaps(gaps)}`, link: "/extras-dia",
+            title: `Faltam condutores amanhã em ${label}`, body, link: "/extras-dia",
             entity: { type: "extras_gap", id: `${date}:${city}` },
           });
         }

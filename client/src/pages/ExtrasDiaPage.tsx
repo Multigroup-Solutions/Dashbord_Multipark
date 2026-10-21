@@ -77,6 +77,7 @@ import { StaffingBanner, StaffingGapList } from "./extrasDia/StaffingIndicator";
 import { NotifyShiftDialog } from "./extrasDia/NotifyShiftDialog";
 import { extraCityGroupKey, tightHoursForDay, type PressureSlot, type TightReason } from "@shared/extrasPressure";
 import { assignmentWhoLine, describeGap, describePickupPairing, manualTouchLabel, removedOutText } from "@shared/extrasSchedule";
+import { splitStaffingGaps } from "@shared/extrasStaffing";
 import { AvailabilityDayFields, isDayMarked, type AvailabilityDayState } from "@/components/AvailabilityDayFields";
 import {
   CITY_KEYS,
@@ -643,6 +644,8 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
   const q = trpc.extrasDia.schedule.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
   // Pedido 7: as faltas dizem se há quem escalar ("faltam escalar 2 às 02h (há 2 disponíveis: …)") ou não.
   const staffingQ = trpc.extrasDia.staffing.useQuery({ date: targetDate, city }, { enabled: !!targetDate });
+  // 21 out 2026: "Falta de gente" só quando falta mesmo escalando os disponíveis (o resto é "por escalar", no StaffingBanner).
+  const shortGaps = staffingQ.data ? splitStaffingGaps(staffingQ.data.gaps).short : null;
   const refresh = () => {
     utils.extrasDia.schedule.invalidate();
     utils.extrasDia.assignments.invalidate();
@@ -740,13 +743,13 @@ function SchedulePanel({ targetDate }: { targetDate: string }) {
       <CardContent className="space-y-3">
         {q.isLoading && <div className="text-sm text-muted-foreground">A carregar…</div>}
         {q.error && <QueryErrorNote error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} what="o estado da escala" />}
-        {d && d.gaps.length > 0 && (
+        {d && d.gaps.length > 0 && (!shortGaps || shortGaps.length > 0) && (
           <div className="rounded-md border-2 border-red-400 bg-red-50 p-3 text-sm text-red-900 dark:bg-red-950/40 dark:text-red-200">
             <div className="flex items-center gap-2 font-semibold">
               <AlertTriangle className="h-4 w-4 shrink-0" /> Falta de gente
             </div>
-            {staffingQ.data ? (
-              <StaffingGapList gaps={staffingQ.data.gaps} className="mt-1" />
+            {shortGaps ? (
+              <StaffingGapList gaps={shortGaps} className="mt-1" />
             ) : (
               <ul className="mt-1 space-y-0.5">
                 {d.gaps.map((g, i) => <li key={i}>• {describeGap(g).replace(/^./, (c) => c.toUpperCase())}</li>)}

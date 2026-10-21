@@ -19,8 +19,12 @@ import {
 } from "../shared/availabilityWindow";
 import { planSchedule, remainingNeed, type ScheduleCandidate } from "../shared/extrasSchedule";
 import {
+  describeFillableGap,
   describeStaffingGap,
   describeStaffingHour,
+  isFillableGap,
+  shortHours,
+  splitStaffingGaps,
   staffingByHour,
   staffingGaps,
   staffingHourState,
@@ -217,6 +221,53 @@ describe("indicador por hora", () => {
     expect(staffingHourState({ needed: 2, scheduled: 2, availableIds: [] })).toBe("ok");
     expect(staffingHourState({ needed: 2, scheduled: 1, availableIds: [4] })).toBe("fillable");
     expect(staffingHourState({ needed: 2, scheduled: 1, availableIds: [] })).toBe("short");
+    // Só há 1 disponível para 2 em falta: continua a faltar 1 mesmo escalando-o.
+    expect(staffingHourState({ needed: 3, scheduled: 1, availableIds: [4] })).toBe("short");
+  });
+});
+
+// ─── Pedido 7 outra vez (Jorge, 21 out 2026): "há extras disponíveis à 01h e o
+// aviso continua lá". Com gente suficiente por escalar NÃO é falta de
+// condutores — é "por escalar". O aviso é só para as horas em que, mesmo
+// escalando todos os disponíveis, continua a faltar gente.
+describe("há quem escalar → não é falta de condutores", () => {
+  const candidates = [
+    { id: 1, name: "Baltazar Silva", windows: [{ from: 15, to: 27 }] },
+    { id: 2, name: "Carlos Pinto", windows: [{ from: 15, to: 27 }] },
+    { id: 3, name: "Hugo Reis", windows: [{ from: 23, to: 27 }] },
+  ];
+  // O exemplo da imagem: extras até à 01h (fim 25), TL até às 02h, precisa 1 à 01h.
+  const rows = [
+    { employeeId: 9, isTeamLeader: true, startHour: 17, endHour: 26 },
+    { employeeId: 11, startHour: 15, endHour: 25 },
+    { employeeId: 12, startHour: 15, endHour: 25 },
+    { employeeId: 13, startHour: 18, endHour: 25 },
+  ];
+  it("1 em falta à 01h com 3 disponíveis → por escalar, zero horas em falta", () => {
+    const hours = staffingByHour({ needed: need({ 18: 3, 25: 1 }), rows, candidates });
+    const gaps = staffingGaps(hours, candidates);
+    expect(gaps).toHaveLength(1);
+    expect(isFillableGap(gaps[0])).toBe(true);
+    expect(splitStaffingGaps(gaps)).toEqual({ short: [], fillable: gaps });
+    expect(shortHours(hours)).toEqual([]);
+    expect(describeFillableGap(gaps[0])).toBe("1 por escalar às 01h (há 3 disponíveis: Baltazar, Carlos, Hugo)");
+  });
+  it("2 em falta e só 1 disponível → continua a ser falta (falta 1 mesmo escalando)", () => {
+    const hours = staffingByHour({ needed: need({ 25: 3 }), rows, candidates: [candidates[2]] });
+    const gaps = staffingGaps(hours, [candidates[2]]);
+    expect(isFillableGap(gaps[0])).toBe(false);
+    expect(splitStaffingGaps(gaps)).toEqual({ short: gaps, fillable: [] });
+    expect(shortHours(hours).map((h) => h.hour)).toEqual([25]);
+    expect(describeStaffingGap(gaps[0])).toBe("Faltam escalar 3 às 01h (só há 1 disponível: Hugo)");
+  });
+  it("ninguém disponível → falta; e uma falta coberta e outra não separam-se", () => {
+    const hours = staffingByHour({ needed: need({ 20: 4, 25: 1 }), rows, candidates: [candidates[2]] });
+    const gaps = staffingGaps(hours, [candidates[2]]);
+    const { short, fillable } = splitStaffingGaps(gaps);
+    expect(short.map((g) => g.fromHour)).toEqual([20]);
+    expect(fillable.map((g) => g.fromHour)).toEqual([25]);
+    expect(shortHours(hours).map((h) => h.hour)).toEqual([20]);
+    expect(describeStaffingGap(short[0])).toBe("Falta gente às 20h (falta 1; ninguém disponível)");
   });
 });
 
