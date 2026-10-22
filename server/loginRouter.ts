@@ -243,6 +243,72 @@ export const loginProcedures = {
       }),
   }),
 
+  /**
+   * Plano 05 (F3, SHARED_AUTH_LOGIN): entrar com a conta Multipark (be-shared).
+   * O be-shared confere email + palavra-passe; a conta do dashboard vem da
+   * ligação (`users.sharedUserId`) — sem ligação, fica um pedido de acesso.
+   * Depois, as MESMAS portas do Google (`completeLogin`, método "shared").
+   */
+  shared: router({
+    options: publicProcedure.query(async () => {
+      const { ensureFeatureFlagOverrides } = await import("./_core/featureFlags");
+      await ensureFeatureFlagOverrides();
+      const { sharedLoginEnabled } = await import("./sharedIdentity");
+      const { sharedAuth } = await import("./_core/sharedAuth");
+      return { enabled: sharedLoginEnabled() && sharedAuth().configured };
+    }),
+
+    login: publicProcedure
+      .input(z.object({ email: EMAIL, password: z.string().min(1, "Escreve a palavra-passe.").max(256), next: NEXT, pdaToken: PDA_TOKEN }))
+      .mutation(async ({ ctx, input }) => {
+        assertSameOriginJson(ctx.req);
+        const { ensureFeatureFlagOverrides } = await import("./_core/featureFlags");
+        await ensureFeatureFlagOverrides();
+        const { sharedLoginEnabled, resolveSharedLogin, realSharedIdentityDeps } = await import("./sharedIdentity");
+        const { SharedAuthError } = await import("./_core/sharedAuth");
+        const { SHARED_LOGIN_MSG } = await import("@shared/sharedIdentity");
+        if (!sharedLoginEnabled()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: SHARED_LOGIN_MSG.off });
+        const deps = await realSharedIdentityDeps();
+        if (!deps.client.configured) throw new TRPCError({ code: "PRECONDITION_FAILED", message: SHARED_LOGIN_MSG.off });
+
+        let session: import("./_core/sharedAuth").SharedSession;
+        try {
+          session = await deps.client.passwordLogin(input.email, input.password, { ip: clientIp(ctx.req), userAgent: userAgentOf(ctx.req) });
+        } catch (err) {
+          const code = err instanceof SharedAuthError ? err.code : "unavailable";
+          if (code === "invalid_credentials") throw new TRPCError({ code: "UNAUTHORIZED", message: SHARED_LOGIN_MSG.invalid });
+          if (code === "account_deactivated") throw new TRPCError({ code: "FORBIDDEN", message: ACCESS_DENIED_MSG });
+          if (code === "rate_limited") throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: SHARED_LOGIN_MSG.rateLimited });
+          throw new TRPCError({ code: "SERVICE_UNAVAILABLE" as any, message: SHARED_LOGIN_MSG.unavailable });
+        }
+
+        const resolved = await resolveSharedLogin(deps, session);
+        if (resolved.kind === "access_requested") {
+          await deps.client.endSession(session.sessionId);
+          clearSession(ctx.req, ctx.res);
+          throw new TRPCError({ code: "FORBIDDEN", message: SHARED_LOGIN_MSG.accessRequested });
+        }
+
+        const pda = await registeredPda(input.pdaToken);
+        const { completeLogin } = await import("./_core/oauth");
+        const { loginStore } = await import("./loginStore");
+        const store = loginStore();
+        const account = await store.userById(resolved.account.id);
+        const done = await completeLogin({
+          req: ctx.req as any, res: ctx.res as any, account, method: "shared", email: session.user.email,
+          sessionName: account?.name || session.user.firstName || "Utilizador",
+          pda, sharedSessionId: pda ? null : session.sessionId,
+          reload: () => store.userById(resolved.account.id),
+        });
+        if (!done.ok || done.pdaSession) await deps.client.endSession(session.sessionId);
+        if (!done.ok) {
+          clearSession(ctx.req, ctx.res);
+          throw new TRPCError({ code: "FORBIDDEN", message: refusal(done.reason) });
+        }
+        return { ok: true as const, next: safeReturnPath(input.next), pdaSession: !!done.pdaSession, linkedNow: resolved.linkedNow };
+      }),
+  }),
+
   codes: router({
     /** Cartão "Códigos de entrada" (Atividade diária → Ao vivo): os pedidos cujo código veio para mim. */
     pendingForMe: protectedProcedure.query(async ({ ctx }) => {

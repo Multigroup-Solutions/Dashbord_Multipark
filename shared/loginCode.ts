@@ -78,7 +78,8 @@ export const EMAIL_INVALID_MSG = "Escreve o teu email (por exemplo nome@gmail.co
 
 // ─── Papéis × forma de entrar ───────────────────────────────────────────────
 
-export type LoginMethod = "google" | "code" | "password";
+/** `shared` = conta Multipark (be-shared, plano 05) — como o Google, vale para todos os papéis. */
+export type LoginMethod = "google" | "code" | "password" | "shared";
 export const PASSWORD_ROLES = ["user", "extra", "condutor"] as const;
 
 /**
@@ -116,7 +117,7 @@ export function canUsePassword(role: string | null | undefined): boolean {
 
 /** Este papel pode entrar desta forma? PURA. */
 export function methodAllowedForRole(method: LoginMethod, role: string | null | undefined, opts: { registeredPda?: boolean } = {}): boolean {
-  if (method === "google") return true;
+  if (method === "google" || method === "shared") return true;
   if (canUsePassword(role)) return true;
   if (method === "code" && STAFF_CODE_ON_REGISTERED_PDA && opts.registeredPda && roleRank(role) >= roleRank("team_leader")) return true;
   return false;

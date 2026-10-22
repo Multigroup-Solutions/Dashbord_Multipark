@@ -7,6 +7,7 @@ import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Search } from "lucide-react";
 import { getFilteredHubGroups, openMenuItem } from "@/components/DashboardLayout";
+import { useMenuFlags } from "@/lib/menuFlags";
 
 const foldText = (v: string) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
@@ -17,9 +18,10 @@ export default function ModulesPage() {
   const activeGroup = new URLSearchParams(search).get("g");
   const [q, setQ] = useState("");
   const role = user?.role ?? "user";
+  const menuFlags = useMenuFlags(user);
 
   const groups = useMemo(() => {
-    let all = getFilteredHubGroups(user ?? role);
+    let all = getFilteredHubGroups(user ?? role, menuFlags);
     if (activeGroup) all = all.filter((g) => g.id === activeGroup);
     // 20d: sem acentos nem maiúsculas ("formacao" encontra "Formação").
     const needle = foldText(q.trim());
@@ -29,7 +31,7 @@ export default function ModulesPage() {
         .filter((g) => g.items.length > 0);
     }
     return all;
-  }, [user, role, activeGroup, q]);
+  }, [user, role, activeGroup, q, menuFlags]);
 
   return (
     <div className="space-y-6 max-w-[1240px]">
