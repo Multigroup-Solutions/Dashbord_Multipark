@@ -8,6 +8,8 @@
 // A2: num PDA registado (token do aparelho validado no servidor) o Google sai
 // com GOOGLE_NOS_PDAS desligado, o Chrome não guarda nada (autocomplete off /
 // new-password / one-time-code) e a entrada leva o token (sessão de PDA).
+// Plano 05 (SHARED_AUTH_LOGIN): "Entrar com a conta Multipark" (?passo=conta-multipark).
+// Desligado: nada muda.
 import { useAuth } from "@/_core/hooks/useAuth";
 import { can, roleRank } from "@shared/access";
 import { Button } from "@/components/ui/button";
@@ -24,9 +26,10 @@ import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { getPdaToken } from "@/lib/pdaDevice";
 import { useCodeLoginOption } from "@/lib/loginOptions";
+import { MultiparkMark, SharedLoginForm, useSharedLoginOption } from "@/components/login/SharedLoginForm";
 
-type Step = "entrar" | "codigo" | "nova-palavra-passe";
-const STEPS: Step[] = ["entrar", "codigo", "nova-palavra-passe"];
+type Step = "entrar" | "codigo" | "nova-palavra-passe" | "conta-multipark";
+const STEPS: Step[] = ["entrar", "codigo", "nova-palavra-passe", "conta-multipark"];
 const EMAIL_KEY = "mp.login.email";
 const CODE_MSG_KEY = "mp.login.codeMsg";
 
@@ -102,6 +105,8 @@ export default function Home() {
   const pdaDevice = usePdaDevice(pdaToken, codeLogin);
   const onPda = !!pdaToken;
   const showGoogle = !pdaDevice || googleShownOnDevice({ registeredPda: pdaDevice.registered, codeLogin: !!codeLogin, googleOnPdas: pdaDevice.google });
+  // Plano 05: a conta Multipark (be-shared). `undefined` enquanto pergunta; desligada → nada novo.
+  const sharedLogin = useSharedLoginOption();
 
   // Acesso recusado — MESMA mensagem em todos os casos (conta desativada,
   // desconhecida, ou registada sem acesso). Duas origens possíveis:
@@ -132,7 +137,7 @@ export default function Home() {
     }
   }, [user, loading, step, goHome]);
 
-  if (loading || (!user && (codeLogin === undefined || (codeLogin && onPda && pdaDevice === undefined)))) {
+  if (loading || (!user && (codeLogin === undefined || (codeLogin && onPda && pdaDevice === undefined) || (step === "conta-multipark" && sharedLogin === undefined)))) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -177,10 +182,33 @@ export default function Home() {
     </Button>
   );
 
+  // Plano 05: só com SHARED_AUTH_LOGIN ligado (e o be-shared configurado).
+  const sharedButton = (
+    <Button
+      type="button"
+      size="lg"
+      variant="outline"
+      className="w-full h-11 text-[15px] font-semibold shadow-sm"
+      onClick={() => setStep("conta-multipark")}
+    >
+      <MultiparkMark className="w-5 h-5 mr-2" />
+      Entrar com a conta Multipark
+    </Button>
+  );
+  const sharedStep = !choosingPassword && step === "conta-multipark" && sharedLogin === true;
+
   let form: ReactNode;
   if (choosingPassword) {
     form = <ChoosePassword name={(user as any)?.name ?? null} email={(user as any)?.email ?? null}
       onDone={() => goHome((user as any).role, can(user as any, "dashboards", "view"))} />;
+  } else if (sharedStep) {
+    form = (
+      <>
+        {alerts}
+        <SharedLoginForm next={nextFromUrl()} onPda={onPda} onBack={() => setStep("entrar")}
+          onDone={(to) => { if (onPda) forgetLoginSteps(); window.location.replace(to); }} />
+      </>
+    );
   } else if (!codeLogin) {
     // ENTRAR_COM_CODIGO desligado: como sempre (só Google).
     form = (
@@ -190,6 +218,7 @@ export default function Home() {
         </p>
         {alerts}
         {googleButton("default")}
+        {sharedLogin && <div className="mt-3">{sharedButton}</div>}
         <div className="flex items-center text-center text-slate-400 text-xs my-6 before:content-[''] before:flex-1 before:h-px before:bg-slate-200 after:content-[''] after:flex-1 after:h-px after:bg-slate-200">
           <span className="px-3.5">acesso reservado à equipa</span>
         </div>
@@ -211,12 +240,21 @@ export default function Home() {
         <p className="text-[15px] text-slate-500 leading-snug mb-6">Entra com o teu email.</p>
         {alerts}
         <EmailPassword onPda={onPda} onCodeRequested={() => setStep("codigo")} />
+        {!showGoogle && sharedLogin && (
+          <>
+            <div className="flex items-center text-center text-slate-400 text-xs my-6 before:content-[''] before:flex-1 before:h-px before:bg-slate-200 after:content-[''] after:flex-1 after:h-px after:bg-slate-200">
+              <span className="px-3.5">ou</span>
+            </div>
+            {sharedButton}
+          </>
+        )}
         {showGoogle ? (
           <>
             <div className="flex items-center text-center text-slate-400 text-xs my-6 before:content-[''] before:flex-1 before:h-px before:bg-slate-200 after:content-[''] after:flex-1 after:h-px after:bg-slate-200">
               <span className="px-3.5">ou</span>
             </div>
             {googleButton("outline")}
+            {sharedLogin && <div className="mt-3">{sharedButton}</div>}
             <p className="text-[12.5px] text-slate-400 leading-relaxed mt-4">
               {pdaDevice?.registered
                 ? "Neste PDA, team leaders e supervisores também entram com código (sem palavra-passe)."
@@ -240,7 +278,7 @@ export default function Home() {
           <img src="/multipark-logo.png" alt="Multipark" className="h-8 mb-9" />
 
           <h1 className="font-display font-bold text-3xl text-[#0c1f3f] mb-2">
-            {choosingPassword ? "Cria a tua palavra-passe" : step === "codigo" && codeLogin ? "Código de entrada" : "Bem-vindo de volta"}
+            {choosingPassword ? "Cria a tua palavra-passe" : sharedStep ? "Conta Multipark" : step === "codigo" && codeLogin ? "Código de entrada" : "Bem-vindo de volta"}
           </h1>
           {form}
         </div>

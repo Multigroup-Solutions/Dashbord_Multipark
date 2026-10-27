@@ -121,6 +121,7 @@ import { extrasDiaShiftProcedures } from "./extrasDiaShiftRouter";
 import { timesProbeProcedures } from "./sondaTemposRouter";
 import { availabilityPatternProcedures } from "./availabilityPatternRouter";
 import { loginProcedures } from "./loginRouter";
+import { sharedIdentityRouter } from "./sharedIdentityRouter";
 
 /** Estados dos leads de extras (inclui `replied` — "Respondeu"). */
 const LEAD_STATUS_ENUM = LEAD_STATUSES;
@@ -577,6 +578,9 @@ export const appRouter = router({
   }),
 
   // ── AUTH ────────────────────────────────────────────────────────────────────
+  // Plano 05: identidade partilhada (conta Multipark / be-shared).
+  sharedIdentity: sharedIdentityRouter,
+
   auth: router({
     me: publicProcedure.query(async (opts) => {
       const u = opts.ctx.user;
@@ -642,6 +646,16 @@ export const appRouter = router({
         const { pdaLogout } = await import("./pdaSession");
         const r = await pdaLogout(ctx.req, ctx.user?.id ?? null, input?.expect ?? null).catch(() => "ok" as const);
         if (r === "stale") return { success: true, stale: true } as { success: true; stale?: boolean };
+        // Plano 05: sessão aberta com a conta Multipark → termina-a também no be-shared (nunca parte o logout).
+        try {
+          const { sdk } = await import("./_core/sdk");
+          const session = await sdk.sessionOf(ctx.req as any);
+          if (session?.ss) {
+            const [{ sharedAuth }, { forgetSharedSession }] = await Promise.all([import("./_core/sharedAuth"), import("./sharedSessionCheck")]);
+            await sharedAuth().endSession(session.ss);
+            forgetSharedSession(session.ss);
+          }
+        } catch { /* o logout do dashboard acontece sempre */ }
         const cookieOptions = getSessionCookieOptions(ctx.req);
         ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
         return { success: true } as { success: true; stale?: boolean };

@@ -209,6 +209,7 @@ export const SCHEMA_MIGRATIONS: ReadonlyArray<readonly [string, () => Promise<Sc
   ["0830", () => import("./migration_0830").then((m) => step(m.MIGRATION_0830_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0830))],
   // Críticas por email ficam só na caixa de correio: marca de quem importou (google_reviews.emailImportedAt/ById) + índice do Message-ID.
   ["0835", () => import("./migration_0835").then((m) => step(m.MIGRATION_0835_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0835))],
+  ["0950", () => import("./migration_0950").then((m) => step(m.MIGRATION_0950_STATEMENTS, m.IDEMPOTENT_ERROR_CODES_0950))],
 ];
 
 export const SCHEMA_MIGRATION_IDS: readonly string[] = SCHEMA_MIGRATIONS.map(([id]) => id);

@@ -3,8 +3,8 @@ modulo: permissoes
 grupo: Sistema
 pagina: permissoes
 titulo: Permissões
-rotas: /permissoes, /utilizadores
-palavras: pôr inativo, inativo, desativado, pode voltar, fica bloqueado, suspender, suspensão, sem atividade, 6 meses, desativar conta e ficha, coluna agente, ligações, separar conta, ligar conta, cartões, lista, ver em cartões, ver em lista, foto, permissões, permissao, acesso, acessos, papel, função, override, dar acesso, retirar acesso, quem tem acesso, cidades extra, totais financeiros, módulo, sem acesso, acesso não autorizado
+rotas: /permissoes, /utilizadores, /utilizadores/identidade-partilhada
+palavras: pôr inativo, inativo, desativado, pode voltar, fica bloqueado, suspender, suspensão, sem atividade, 6 meses, desativar conta e ficha, coluna agente, ligações, separar conta, ligar conta, cartões, lista, ver em cartões, ver em lista, foto, permissões, permissao, acesso, acessos, papel, função, override, dar acesso, retirar acesso, quem tem acesso, cidades extra, totais financeiros, módulo, sem acesso, acesso não autorizado, conta multipark, identidade partilhada, ligar conta multipark, pedido de acesso
 ---
 # Permissões
 
@@ -20,6 +20,12 @@ palavras: pôr inativo, inativo, desativado, pode voltar, fica bloqueado, suspen
 - A lista já não sai pela direita do ecrã: as colunas quebram linha e **Departamento** e **Criado em** só aparecem em ecrãs largos.
 
 O que cada pessoa pode ver e fazer depende do **papel** (Extra, Condutor, Team Leader, Supervisor, Frontoffice, Backoffice, Admin, Super Admin) e da **cidade** do centro de custos da ficha. Papéis de cidade veem só a sua cidade; Frontoffice e acima veem todas.
+
+## Identidade partilhada (só Super Admin)
+Menu **Sistema → Identidade partilhada**. Só aparece com um dos interruptores da conta Multipark ligado (Definições → Automações).
+- **Contas**: cada utilizador do dashboard e a conta Multipark ligada (ou "Por ligar"). Podes **Propor ligação** (a pessoa confirma no email da conta Multipark), **Criar conta Multipark** ou **Desligar** (pede o motivo e termina as sessões). **Ligar pelas fichas** mostra primeiro o que ia ligar e só liga quando aplicas.
+- **Pedidos de acesso**: quem entrou com uma conta Multipark sem ligação. Ligas a uma conta existente, crias uma conta nova "Utilizador" ou recusas.
+- No **Perfil**, o cartão **Conta Multipark** mostra se a tua conta está ligada e deixa-te ligá-la com o email e a palavra-passe da Multipark.
 
 ## Página Permissões (Supervisor, Backoffice, Admin e acima)
 1. Menu **Sistema → Permissões**.

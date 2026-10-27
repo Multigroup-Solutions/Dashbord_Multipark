@@ -8,8 +8,8 @@
  * caminho de volta (`/api/oauth/login?next=…`).
  */
 
-/** Páginas que se abrem sem sessão (o filtro global não pede dados nelas). */
-export const PUBLIC_PATH_PREFIXES = ["/convite/", "/pda/registar"] as const;
+/** Páginas que se abrem sem sessão (o filtro global não pede dados nelas). Plano 05: + a confirmação da ligação à conta Multipark. */
+export const PUBLIC_PATH_PREFIXES = ["/convite/", "/pda/registar", "/ligar-conta-multipark/"] as const;
 
 export function isPublicPath(path: string | null | undefined): boolean {
   const p = String(path ?? "");

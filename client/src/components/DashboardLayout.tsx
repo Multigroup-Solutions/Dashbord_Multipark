@@ -102,6 +102,7 @@ import {
   PhoneCall,
   Plane,
   UserRound,
+  Fingerprint,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -119,6 +120,7 @@ import { MULTIS_PANEL_WIDTH_PX } from "@shared/assistant";
 import { GlobalSearch, GlobalSearchButton } from "@/components/GlobalSearch";
 import { WhatsAppCallManager } from "@/components/whatsapp/WhatsAppCallManager";
 import { CentralRingManager } from "@/components/CentralRingManager";
+import { useMenuFlags, type MenuFlag } from "@/lib/menuFlags";
 import { GoogleOnlineSync } from "@/components/google/GoogleOnlineSync";
 import { can, roleRank, seesBeyondOwn, type AccessOverrides, type ModuleId } from "@shared/access";
 import { allowedWithoutCostCenter, decideRoute } from "@shared/routeAccess";
@@ -157,6 +159,8 @@ export type MenuItem = {
   ownLabel?: string;
   /** 14 out 2026: só estes papéis (além do módulo), ex.: Condutores e agentes só a supervisor e acima. */
   roles?: readonly string[];
+  /** Plano 05: só aparece com este interruptor ligado (lib/menuFlags.ts); sem a resposta, escondido. */
+  flag?: MenuFlag;
 };
 
 /** Abre um item do menu: navega, ou abre o endereço externo num separador novo. */
@@ -177,7 +181,8 @@ export type MenuGroup = {
 };
 
 /** O item é visível para a pessoa (papel + overrides)? (sem módulo = visível a qualquer sessão) */
-export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf" | "beyondOwn"> & { roles?: readonly string[] }): boolean {
+export function canSeeItem(userRole: AccessSubject, item: Pick<MenuItem, "module" | "anyOf" | "beyondOwn"> & { roles?: readonly string[]; flag?: MenuFlag }, flagsOn?: ReadonlySet<MenuFlag>): boolean {
+  if (item.flag && !flagsOn?.has(item.flag)) return false;
   if (item.roles && !item.roles.includes(typeof userRole === "string" ? userRole : String(userRole?.role ?? ""))) return false;
   const mods = item.anyOf ?? (item.module ? [item.module] : []);
   if (item.beyondOwn) return mods.some(m => seesBeyondOwn(userRole, m));
@@ -191,13 +196,13 @@ export function menuLabelFor(userRole: AccessSubject, item: Pick<MenuItem, "labe
   return mods.some(m => seesBeyondOwn(userRole, m)) ? item.label : item.ownLabel;
 }
 
-function visibleItems(userRole: AccessSubject, items: MenuItem[]): MenuItem[] {
-  return items.filter(i => canSeeItem(userRole, i)).map(i => (i.ownLabel ? { ...i, label: menuLabelFor(userRole, i) } : i));
+function visibleItems(userRole: AccessSubject, items: MenuItem[], flagsOn?: ReadonlySet<MenuFlag>): MenuItem[] {
+  return items.filter(i => canSeeItem(userRole, i, flagsOn)).map(i => (i.ownLabel ? { ...i, label: menuLabelFor(userRole, i) } : i));
 }
 
-export function getFilteredMenuGroups(userRole: AccessSubject): MenuGroup[] {
+export function getFilteredMenuGroups(userRole: AccessSubject, flagsOn?: ReadonlySet<MenuFlag>): MenuGroup[] {
   return menuGroups
-    .map(g => ({ ...g, items: visibleItems(userRole, g.items) }))
+    .map(g => ({ ...g, items: visibleItems(userRole, g.items, flagsOn) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -297,6 +302,8 @@ export const menuGroups: MenuGroup[] = [
     icon: SlidersHorizontal,
     items: [
       { icon: Users, label: "Utilizadores", path: "/utilizadores", module: "utilizadores" },
+      // Plano 05: contas do dashboard ↔ conta Multipark (be-shared). Só super admin e só com SHARED_AUTH_LINK/LOGIN ligado.
+      { icon: Fingerprint, label: "Identidade partilhada", path: "/utilizadores/identidade-partilhada", module: "utilizadores", roles: ["super_admin"], flag: "sharedIdentity" },
       { icon: ShieldCheck, label: "Permissões", path: "/permissoes", module: "permissoes" },
       { icon: Key, label: "API Keys", path: "/api-keys", module: "api_keys" },
       { icon: Plug, label: "Integrações", path: "/integracoes", module: "integracoes" },
@@ -332,9 +339,9 @@ export const hubGroups: HubGroup[] = [
     id: g.label.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(),
   })),
 ];
-export function getFilteredHubGroups(userRole: AccessSubject): HubGroup[] {
+export function getFilteredHubGroups(userRole: AccessSubject, flagsOn?: ReadonlySet<MenuFlag>): HubGroup[] {
   return hubGroups
-    .map(g => ({ ...g, items: visibleItems(userRole, g.items) }))
+    .map(g => ({ ...g, items: visibleItems(userRole, g.items, flagsOn) }))
     .filter(g => g.items.length > 0);
 }
 
@@ -488,6 +495,8 @@ function DashboardLayoutContent({
   // Ponto rápido a partir do avatar: estado atual + entrada/saída com selfie+GPS
   // (mesmas regras do ponto na ficha de RH).
   const utils = trpc.useUtils();
+  // Plano 05: itens do menu atrás de um interruptor (só o super admin pergunta).
+  const menuFlags = useMenuFlags(user);
   // Interruptor WHATSAPP_CALLS (desligado por omissão): sem ele não há polling de chamadas.
   const callsFlag = trpc.whatsapp.calls.enabled.useQuery(undefined, {
     enabled: !!user && can(user as any, "whatsapp", "edit"),
@@ -573,7 +582,7 @@ function DashboardLayoutContent({
     );
   };
   const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
-  const filteredGroups = getFilteredHubGroups(user ?? userRole);
+  const filteredGroups = getFilteredHubGroups(user ?? userRole, menuFlags);
   const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
   // Badge do WhatsApp: conversas por ler/por responder (só para quem tem o item no menu).
