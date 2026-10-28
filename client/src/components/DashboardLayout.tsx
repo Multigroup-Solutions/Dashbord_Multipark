@@ -4,6 +4,7 @@ import { PdaDeviceBinder } from "@/components/PdaDeviceBinder";
 import { PersonalDeviceBinder } from "@/components/PersonalDeviceBinder";
 import { beginPdaSessionEnd } from "@/lib/pdaSessionEnd";
 import { checkoutSummaryLines } from "@shared/pdaSession";
+import { pontoMenuState, pontoRefetchIntervalMs } from "@shared/pontoMenu";
 import { PushAlertsPrompt } from "@/components/login/PushAlertsPrompt";
 import { codeLoginCached, useCodeLoginOption } from "@/lib/loginOptions";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -503,9 +504,10 @@ function DashboardLayoutContent({
     staleTime: 5 * 60_000,
     retry: false,
   });
+  // Com erro pergunta de novo aos 15 s (antes só aos 2 min, e o ponto ficava escondido) — shared/pontoMenu.ts.
   const pontoQ = trpc.rh.timeRecords.myStatus.useQuery(undefined, {
     enabled: !!employee,
-    refetchInterval: 120_000,
+    refetchInterval: (q) => pontoRefetchIntervalMs(q.state.status === "error"),
   });
   const [pontoMode, setPontoMode] = useState<"check_in" | "check_out" | null>(null);
   // Terminal pelo perfil (plano 56 B1; interruptor PONTO_TERMINAL): "Estou no terminal"
@@ -581,7 +583,9 @@ function DashboardLayoutContent({
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
   };
-  const pontoStatus = pontoQ.data?.employeeId ? pontoQ.data.status : null;
+  // Com ficha, o menu tem SEMPRE uma linha de ponto: estado, "a verificar" ou o motivo (shared/pontoMenu.ts).
+  const ponto = pontoMenuState({ hasEmployee: !!employee, data: pontoQ.data, error: pontoQ.error as any });
+  const pontoStatus = ponto.kind === "in" || ponto.kind === "out" ? ponto.kind : null;
   const filteredGroups = getFilteredHubGroups(user ?? userRole, menuFlags);
   const filteredItems = filteredGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
@@ -952,7 +956,8 @@ function DashboardLayoutContent({
             {/* Notifications */}
 
             {/* User Avatar with dropdown */}
-            <DropdownMenu>
+            {/* Ao abrir o menu pergunta o ponto outra vez: o estado mostrado é o de agora. */}
+            <DropdownMenu onOpenChange={(open) => { if (open && employee) void pontoQ.refetch(); }}>
               <DropdownMenuTrigger asChild>
                 <button className="focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full" aria-label="Menu da conta">
                   <Avatar className="h-9 w-9 border cursor-pointer">
@@ -970,12 +975,24 @@ function DashboardLayoutContent({
                   {pontoStatus && (
                     <p className="text-xs mt-1 flex items-center gap-1.5">
                       <span className={`inline-block h-2 w-2 rounded-full ${pontoStatus === "in" ? "bg-green-500" : "bg-gray-400"}`} />
-                      {pontoStatus === "in"
-                        ? `Em serviço desde ${fmtPTTime(pontoQ.data?.since)}`
+                      {ponto.kind === "in"
+                        ? `Em serviço desde ${fmtPTTime(ponto.since)}`
                         : "Fora de serviço"}
-                      {pontoStatus === "in" && pontoQ.data?.terminal && (
+                      {ponto.kind === "in" && ponto.terminal && (
                         <span className="ml-1 inline-flex items-center rounded-full border border-sky-300 bg-sky-100 px-1.5 py-0 text-[10px] font-medium text-sky-800 dark:bg-sky-950 dark:text-sky-200">Terminal</span>
                       )}
+                    </p>
+                  )}
+                  {ponto.kind === "loading" && (
+                    <p className="text-xs mt-1 flex items-center gap-1.5 text-muted-foreground">
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                      A verificar o ponto…
+                    </p>
+                  )}
+                  {ponto.kind === "error" && (
+                    <p className="text-xs mt-1 flex items-start gap-1.5 text-amber-700 dark:text-amber-300">
+                      <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                      <span>{ponto.message}</span>
                     </p>
                   )}
                 </div>
@@ -1004,6 +1021,17 @@ function DashboardLayoutContent({
                   >
                     <ArrowUpFromLine className="mr-2 h-4 w-4" />
                     <span>Dar saída (check-out)</span>
+                  </DropdownMenuItem>
+                )}
+                {ponto.kind === "error" && ponto.retry && (
+                  <DropdownMenuItem
+                    // fica aberto: a pessoa vê o estado voltar e pica logo a seguir
+                    onSelect={(e) => { e.preventDefault(); void pontoQ.refetch(); }}
+                    disabled={pontoQ.isFetching}
+                    className="cursor-pointer"
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${pontoQ.isFetching ? "animate-spin" : ""}`} />
+                    <span>Ponto: tentar de novo</span>
                   </DropdownMenuItem>
                 )}
                 {terminalOn && !terminal.status?.session && (
