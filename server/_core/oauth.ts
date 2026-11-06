@@ -96,6 +96,24 @@ function sendErrorPage(res: Response, status: number, title: string, message: st
     .send(renderErrorPage(title, message, details, retryHref));
 }
 
+/**
+ * 6 nov: que falha foi no callback (PURA). `code_used` = a Google recusou o
+ * código (invalid_grant: já usado ou expirado); `db_busy` = a BD sem ligações
+ * livres; o resto é `other`. Procura na mensagem e nas causas encadeadas.
+ */
+export function classifyCallbackError(err: unknown): "code_used" | "db_busy" | "other" {
+  const parts: string[] = [];
+  let cur: any = err;
+  for (let i = 0; cur && i < 5; i++) {
+    parts.push(String(cur?.message ?? cur), String(cur?.code ?? ""));
+    cur = cur?.cause;
+  }
+  const text = parts.join(" ");
+  if (/Google token exchange failed: 400[\s\S]*invalid_grant/.test(text)) return "code_used";
+  if (/ER_CON_COUNT_ERROR|Too many connections/i.test(text)) return "db_busy";
+  return "other";
+}
+
 /** Entradas e recusas no registo de atividade (20d). Nunca parte o login. */
 async function logLogin(entry: { userId: number; action: "login" | "login_denied"; entityId: number | null; details: string }): Promise<void> {
   try {
@@ -660,11 +678,27 @@ export function registerOAuthRoutes(app: Express) {
     } catch (error: any) {
       // 20d: o detalhe (mensagens internas, SQL) fica só no log, com uma referência.
       const ref = crypto.randomBytes(4).toString("hex");
+      const retry = retryLoginUrl(returnedState);
+      const kind = classifyCallbackError(error);
+      // 6 nov: o código da Google só serve uma vez (recarregar esta página, voltar
+      // atrás) — não é erro nosso: pede para começar outra vez.
+      if (kind === "code_used") {
+        console.warn(`[OAuth] Código da Google já usado ou expirado ref=${ref}`);
+        sendErrorPage(res, 400,
+          "O pedido de entrada expirou",
+          "Este link de entrada já foi usado ou expirou (acontece ao recarregar a página ou voltar atrás).",
+          "Carrega em Tentar de novo.",
+          retry);
+        return;
+      }
       console.error(`[OAuth] Callback failed ref=${ref}`, error);
-      sendErrorPage(res, 500,
+      sendErrorPage(res, kind === "db_busy" ? 503 : 500,
         "Não foi possível concluir a entrada",
-        "Ocorreu um erro do nosso lado ao concluir o login. Tenta de novo daqui a pouco.",
-        `Se voltar a acontecer, avisa o administrador com esta referência: ${ref}`);
+        kind === "db_busy"
+          ? "O sistema está com muita carga neste momento. Espera um minuto e tenta de novo."
+          : "Ocorreu um erro do nosso lado ao concluir o login. Tenta de novo daqui a pouco.",
+        `Se voltar a acontecer, avisa o administrador com esta referência: ${ref}`,
+        retry);
     }
   });
 }

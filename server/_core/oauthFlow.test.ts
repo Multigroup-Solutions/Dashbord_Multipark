@@ -153,3 +153,37 @@ describe("login pelo QR do PDA (rotas reais)", () => {
     expect(html).toContain('href="/api/oauth/login?next=%2Frh"');
   });
 });
+
+describe("6 nov 2026: falhas no fim do login com saída clara", () => {
+  it("código da Google já usado (recarregar a página) → 400 \"expirou\" com Tentar de novo, não erro nosso", async () => {
+    const { google } = await startLogin();
+    vi.mocked(sdk.exchangeCodeForToken).mockRejectedValueOnce(new Error('Google token exchange failed: 400 {\n  "error": "invalid_grant",\n  "error_description": "Bad Request"\n}'));
+    const res = await callback(google.searchParams.get("state")!);
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain("O pedido de entrada expirou");
+    expect(html).toContain("Tentar de novo");
+    expect(html).not.toContain("referência");
+  });
+
+  it("BD sem ligações → 503 \"muita carga\" com Tentar de novo e a referência", async () => {
+    const { google } = await startLogin();
+    const { upsertUser } = await import("../db");
+    vi.mocked(upsertUser).mockRejectedValueOnce(Object.assign(new Error("Failed query: select …"), { cause: Object.assign(new Error("Too many connections"), { code: "ER_CON_COUNT_ERROR" }) }));
+    const res = await callback(google.searchParams.get("state")!);
+    expect(res.status).toBe(503);
+    const html = await res.text();
+    expect(html).toContain("muita carga");
+    expect(html).toContain("Tentar de novo");
+    expect(html).toMatch(/referência: [0-9a-f]{8}/);
+  });
+
+  it("classifyCallbackError: código usado, BD ocupada, o resto", async () => {
+    const { classifyCallbackError } = await import("./oauth");
+    expect(classifyCallbackError(new Error('Google token exchange failed: 400 {"error": "invalid_grant"}'))).toBe("code_used");
+    expect(classifyCallbackError(new Error('Google token exchange failed: 401 {"error": "invalid_client"}'))).toBe("other");
+    expect(classifyCallbackError(Object.assign(new Error("Failed query"), { cause: { code: "ER_CON_COUNT_ERROR", message: "x" } }))).toBe("db_busy");
+    expect(classifyCallbackError(new Error("algo"))).toBe("other");
+    expect(classifyCallbackError(undefined)).toBe("other");
+  });
+});

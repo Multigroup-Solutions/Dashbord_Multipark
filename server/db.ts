@@ -5,6 +5,7 @@ import { decideHandoverWrite, diffHandoverFields, HANDOVER_CONFLICT_MESSAGE, HAN
 import { handoverAiSummaryStale, mergeStoredOpenItems, parseMaterialExceptions, parseOpenItems, stampOpenItems, type OpenItem } from '../shared/shiftHandoverAuto';
 import { and, asc, desc, eq, gte, lte, lt, ne, like, or, sql, aliasedTable, isNotNull, isNull, inArray, notInArray, getTableColumns, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { sharedDrizzle } from "./_core/dbPool";
 import { normalizeEmail } from "../shared/email";
 import { ACCESS_VALUES, actionsToLetters, isModuleId, lettersToActions, moduleOverrideKey, normalizeGrant, overrideActive, type Access, type AccessOverrides, type ModuleId, type ModuleOverride } from "../shared/access";
 import { cachedPermissionRows, type PermissionRow } from "./_core/accessContext";
@@ -113,7 +114,7 @@ export function toMysqlDateTime(d: Date | string | null | undefined): string {
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _db = sharedDrizzle();
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;

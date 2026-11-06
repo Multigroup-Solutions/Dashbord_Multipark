@@ -15,7 +15,7 @@ import {
   redactForLog, searchNote, sugarSearchPhone, sugarSearchQuery,
 } from "../shared/centralSugar";
 
-const h = vi.hoisted(() => ({ enabled: true, enableOnRefresh: false, forced: 0, stored: undefined as boolean | undefined, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
+const h = vi.hoisted(() => ({ fail: false, enabled: true, enableOnRefresh: false, forced: 0, stored: undefined as boolean | undefined, queries: [] as Array<{ sql: string; params: unknown[] }>, calls: [] as unknown[][] }));
 const dialect = new MySqlDialect();
 vi.mock("./_core/env", () => ({ ENV: { cookieSecret: "segredo-so-para-testes" } }));
 // 39c: o valor gravado nas Automações (lido direto quando a cache diz "desligado")
@@ -33,6 +33,7 @@ vi.mock("./db", () => ({
     execute: async (q: any) => {
       const { sql, params } = dialect.sqlToQuery(q);
       h.queries.push({ sql, params });
+      if (h.fail) throw new Error("Too many connections");
       if (/FROM central_accounts a/.test(sql) && /a\.username = \?/.test(sql)) return [params[0] === "ana.silva" ? [{ id: 7, userId: 12, username: "ana.silva", secretHash: STORED, name: "Ana Silva" }] : []];
       if (/FROM central_accounts a/.test(sql) && /a\.id = \?/.test(sql)) return [params[0] === 7 ? [{ id: 7, userId: 12, username: "ana.silva", name: "Ana Silva" }] : []];
       if (/INSERT INTO central_calls/.test(sql)) { h.calls.push(params); return [{ affectedRows: 1 }]; }
@@ -58,7 +59,7 @@ vi.mock("./db", () => ({
   }),
 }));
 
-import { createCentralSugarRouter, hashCentralSecret, signCentralToken, verifyCentralToken } from "./centralSugar";
+import { CENTRAL_RATE_MAX, createCentralSugarRouter, hashCentralSecret, resetCentralCaches, signCentralToken, verifyCentralToken } from "./centralSugar";
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
@@ -160,7 +161,8 @@ describe("39a — a porta Sugar (HTTP)", () => {
   let server: Server;
   let url: string;
   beforeEach(async () => {
-    h.enabled = true; h.enableOnRefresh = false; h.forced = 0; h.stored = undefined; h.queries.length = 0; h.calls.length = 0;
+    h.fail = false; h.enabled = true; h.enableOnRefresh = false; h.forced = 0; h.stored = undefined; h.queries.length = 0; h.calls.length = 0;
+    resetCentralCaches();
     server = createServer(express().use("/api/central/sugar", createCentralSugarRouter()));
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/central/sugar`;
@@ -186,10 +188,11 @@ describe("39a — a porta Sugar (HTTP)", () => {
     h.enabled = false;
     expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(503);
     expect(logged().at(-1)!.params).toContain("interruptor desligado — nada gravado nas Automações (por omissão desligado)");
-    h.stored = false;
+    // 6 nov: o interruptor fica 15 s em memória — aqui "passam" os 15 s entre cada mudança
+    h.stored = false; resetCentralCaches();
     expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(503);
     expect(logged().at(-1)!.params).toContain("interruptor desligado — gravado como desligado nas Automações");
-    h.stored = true;
+    h.stored = true; resetCentralCaches();
     expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(401); // passou o interruptor; falta o login
   });
 
@@ -335,6 +338,45 @@ describe("39a — a porta Sugar (HTTP)", () => {
     const html = await r.text();
     expect(html).toContain('to="/clientes/"+m[3]');
     expect(html).toContain("location.replace(to)");
+  });
+
+  // ── 6 nov 2026: a consola fez dezenas de pedidos por segundo e esgotou as ligações do MySQL ──
+  const tokenFor = async () => (await (await post("/rest/v10/oauth2/token", { grant_type: "password", username: "ana.silva", password: SECRET })).json()).access_token as string;
+
+  it("6 nov: a mesma pesquisa repetida não volta à BD nem fica registada outra vez", async () => {
+    const auth = { "OAuth-Token": await tokenFor() };
+    const ask = () => post("/rest/v10/Contacts/filter", { max_num: 1, q: "*+351913225918*" }, auth).then((r) => r.json());
+    const first = await ask();
+    expect(first.records[0]).toMatchObject({ id: "crm-55", name: "Maria Cliente" });
+    const before = h.queries.length;
+    for (let i = 0; i < 20; i++) expect(await ask()).toEqual(first);
+    expect(h.queries.length).toBe(before); // nem a conta, nem o interruptor, nem a pesquisa, nem o registo
+  });
+
+  it("6 nov: desligada, os pedidos seguidos não vão à BD (o interruptor fica 15 s em memória)", async () => {
+    h.enabled = false;
+    expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(503);
+    const before = h.queries.length;
+    for (let i = 0; i < 10; i++) expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(503);
+    expect(h.queries.length).toBe(before);
+  });
+
+  it(`6 nov: mais de ${CENTRAL_RATE_MAX} pedidos em 10 s do mesmo IP → 429 sem tocar na BD`, async () => {
+    for (let i = 0; i < CENTRAL_RATE_MAX; i++) expect((await fetch(`${url}/rest/v10/ping`)).status).toBe(401);
+    const before = h.queries.length;
+    const r = await fetch(`${url}/rest/v10/ping`);
+    expect(r.status).toBe(429);
+    expect(r.headers.get("retry-after")).toBe("10");
+    expect(h.queries.length).toBe(before);
+  });
+
+  it("6 nov: BD sem ligações → 503 logo (antes o pedido ficava pendurado)", async () => {
+    const auth = { "OAuth-Token": await tokenFor() };
+    resetCentralCaches();
+    h.fail = true;
+    const r = await post("/rest/v10/Contacts/filter", { max_num: 1, q: "*+351913225918*" }, auth);
+    expect(r.status).toBe(503);
+    expect((await r.json()).error).toBe("service_unavailable");
   });
 
   it("v4_1: login com md5, set_entry de uma chamada; sessão inválida não grava", async () => {
