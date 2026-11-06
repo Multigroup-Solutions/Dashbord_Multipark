@@ -134,7 +134,8 @@ describe("46: conta Google sem ficha", () => {
     });
     await expect(c.extrasAvailability.setMyWeek({ weekStart: WEEK, days })).rejects.toMatchObject({ message: expect.stringContaining("maria.extra@gmail.com") });
     expect(s.setMy).not.toHaveBeenCalled();
-    expect(await c.rh.me()).toBeUndefined();
+    // null, não undefined: o React Query v5 transforma undefined em erro.
+    expect(await c.rh.me()).toBeNull();
   });
   it("a mensagem funciona sem email e é a mesma no ecrã", () => {
     expect(noLinkedRecordMessage(null)).toMatch(/não está ligada a nenhuma ficha. Pede ao RH/);

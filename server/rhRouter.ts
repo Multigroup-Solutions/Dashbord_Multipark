@@ -232,7 +232,10 @@ export const rhRouter = router({
     }),
   // ── MY PROFILE (for extra/low-role users) ──────────────────────────────────────────────────
   me: protectedProcedure.query(async ({ ctx }) => {
-    return getEmployeeByUserId(ctx.user.id);
+    // Conta sem ficha → null (nunca undefined): o React Query v5 trata
+    // `undefined` como erro ("… data is undefined") e o ecrã mostrava esse erro
+    // em vez do aviso "a tua conta não está ligada a nenhuma ficha" (nov 2026).
+    return (await getEmployeeByUserId(ctx.user.id)) ?? null;
   }),
   /**
    * 49c: "Voltei, quero trabalhar" — quem está INATIVO (motivo que não
