@@ -890,6 +890,30 @@ export interface PendingRequest {
   shift: string | null;
   fromHour: number | null;
   toHour: number | null;
+  /** Quando o pedido saiu, tal como a BD o escreve ("YYYY-MM-DD HH:MM:SS"). */
+  sentAt: string | null;
+}
+
+/**
+ * Travão da resposta ESCRITA a um aviso de escala (PURA; o botão do aviso não
+ * passa por aqui, liga-se ao turno pelo `context.id`). A resposta escrita vai
+ * para o último pedido da pessoa, por isso:
+ *  - aviso de um dia que já passou → não se aplica, mesmo com "Confirmo";
+ *  - pedido de disponibilidade enviado depois do aviso → o "sim"/"não" pode
+ *    estar a responder a esse pedido: só um "Confirmo" explícito conta.
+ * Pedidos da semana e de um dia nunca são travados.
+ */
+export function shiftTextReplyBlock(input: {
+  pending: Pick<PendingRequest, "kind" | "targetDate">;
+  today: string;
+  availabilityAfterNotice: boolean;
+  explicitConfirm: boolean;
+}): "past_day" | "availability_after_notice" | null {
+  const { pending, today } = input;
+  if (pending.kind !== "assignment" || !pending.targetDate) return null;
+  if (pending.targetDate < today) return "past_day";
+  if (input.availabilityAfterNotice && !input.explicitConfirm) return "availability_after_notice";
+  return null;
 }
 
 /**
@@ -915,29 +939,106 @@ export function decideAutoReply(input: {
   return "none";
 }
 
+function pendingRequestFromRow(r: any): PendingRequest {
+  return {
+    id: Number(r.id),
+    kind: String(r.kind),
+    targetDate: r.targetDate ? String(r.targetDate) : null,
+    weekStart: r.weekStart ? String(r.weekStart) : null,
+    shift: r.shift ? String(r.shift) : null,
+    fromHour: r.fromHour != null ? Number(r.fromHour) : null,
+    toHour: r.toHour != null ? Number(r.toHour) : null,
+    sentAt: r.sentAtText ? String(r.sentAtText) : null,
+  };
+}
+
 /** Último pedido (email ou WhatsApp) feito a este colaborador nos últimos 10 dias. */
 async function latestRequestFor(employeeId: number): Promise<PendingRequest | null> {
   const db = await getDb();
   if (!db) return null;
   try {
+    // sentAt em texto: volta à BD tal e qual na comparação com as mensagens, sem passar por um Date do JS.
     const [rows] = (await db.execute(sql`
-      SELECT id, kind, targetDate, weekStart, shift, fromHour, toHour
+      SELECT id, kind, targetDate, weekStart, shift, fromHour, toHour, CAST(sentAt AS CHAR) AS sentAtText
         FROM \`availability_request_log\`
        WHERE employeeId = ${employeeId} AND sentAt >= DATE_SUB(NOW(), INTERVAL 10 DAY)
        ORDER BY sentAt DESC, id DESC LIMIT 1`)) as any;
     const r = (rows as any[])?.[0];
-    if (!r) return null;
-    return {
-      id: Number(r.id),
-      kind: String(r.kind),
-      targetDate: r.targetDate ? String(r.targetDate) : null,
-      weekStart: r.weekStart ? String(r.weekStart) : null,
-      shift: r.shift ? String(r.shift) : null,
-      fromHour: r.fromHour != null ? Number(r.fromHour) : null,
-      toHour: r.toHour != null ? Number(r.toHour) : null,
-    };
+    return r ? pendingRequestFromRow(r) : null;
   } catch {
     return null; // tabela ainda não existe
+  }
+}
+
+/** Aviso de escala de hoje ou de um dia futuro. PURA. */
+function isCurrentShiftNotice(pending: Pick<PendingRequest, "kind" | "targetDate">, today: string): boolean {
+  return pending.kind === "assignment" && !!pending.targetDate && pending.targetDate >= today;
+}
+
+/** Aviso de escala mais recente de hoje em diante, enviado nos últimos 10 dias e ainda sem resposta. */
+async function openShiftNoticeFor(employeeId: number, today: string): Promise<PendingRequest | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await ensureTables();
+  const [rows] = (await db.execute(sql`
+    SELECT l.id, l.kind, l.targetDate, l.weekStart, l.shift, l.fromHour, l.toHour, CAST(l.sentAt AS CHAR) AS sentAtText
+      FROM \`availability_request_log\` l
+     WHERE l.employeeId = ${employeeId} AND l.kind = 'assignment' AND l.targetDate >= ${today}
+       AND l.sentAt >= DATE_SUB(NOW(), INTERVAL 10 DAY)
+       AND NOT EXISTS (SELECT 1 FROM \`whatsapp_request_answers\` a WHERE a.requestId = l.id)
+     ORDER BY l.sentAt DESC, l.id DESC LIMIT 1`)) as any;
+  const r = (rows as any[])?.[0];
+  return r ? pendingRequestFromRow(r) : null;
+}
+
+/**
+ * Saiu um pedido de disponibilidade nosso a esta pessoa depois do aviso? É o
+ * caso da difusão manual, que não fica em `availability_request_log`. Procura
+ * nas conversas da ficha e na desta mensagem (há pessoas com duas conversas).
+ * O mesmo segundo do aviso conta como depois (lado seguro).
+ */
+async function availabilitySentAfterNotice(input: { employeeId: number; conversationId: number; sentAt: string | null }): Promise<boolean> {
+  if (!input.sentAt) return true;
+  const db = await getDb();
+  if (!db) return true;
+  const [convRows] = (await db.execute(sql`SELECT id FROM \`whatsapp_conversations\` WHERE employeeId = ${input.employeeId}`)) as any;
+  const ids = Array.from(new Set([input.conversationId, ...((convRows as any[]) ?? []).map((c) => Number(c.id))]));
+  const [rows] = (await db.execute(sql`
+    SELECT DISTINCT templateName FROM \`whatsapp_messages\`
+     WHERE conversationId IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+       AND direction = 'out' AND status <> 'failed' AND templateName IS NOT NULL
+       AND createdAt >= ${input.sentAt}`)) as any;
+  const { isDriverMessageTemplate } = await import("../shared/whatsappTemplate");
+  return ((rows as any[]) ?? []).some((m) => isDriverMessageTemplate(m.templateName, "AVAILABILITY"));
+}
+
+/**
+ * A que pedido responde esta mensagem escrita; null = travada (`shiftTextReplyBlock`):
+ * não gasta IA, não marca, não responde, não avisa e fica na caixa do WhatsApp.
+ * Um "Confirmo" nunca responde a um pedido de disponibilidade: se o último
+ * pedido não serve, vai para o aviso ainda aberto (sem nenhum, segue o último).
+ * Erro da BD → travada (lado seguro).
+ */
+async function requestForTextReply(
+  input: { employeeId: number; conversationId: number },
+  latest: PendingRequest,
+  explicitConfirm: boolean,
+): Promise<PendingRequest | null> {
+  try {
+    const today = lisbonClock().date;
+    const pending = explicitConfirm && !isCurrentShiftNotice(latest, today)
+      ? (await openShiftNoticeFor(input.employeeId, today)) ?? latest
+      : latest;
+    const availabilityAfterNotice = !explicitConfirm && isCurrentShiftNotice(pending, today)
+      ? await availabilitySentAfterNotice({ ...input, sentAt: pending.sentAt })
+      : false;
+    const block = shiftTextReplyBlock({ pending, today, availabilityAfterNotice, explicitConfirm });
+    if (!block) return pending;
+    console.info(`[extras-auto] resposta escrita travada (${block}): colaborador ${input.employeeId}, pedido ${pending.id}`);
+    return null;
+  } catch (err) {
+    console.warn("[extras-auto] travão da resposta escrita:", String((err as any)?.message ?? err).slice(0, 160));
+    return null;
   }
 }
 
@@ -1006,9 +1107,12 @@ async function handleWhatsappReplyInner(input: { employeeId: number; conversatio
     // por isso lê-se o interruptor fresco aqui.
     await ensureFeatureFlagOverridesFresh();
     if (!availabilityAutoReplyOn()) return { action: "none" };
-    const pending = await latestRequestFor(input.employeeId);
+    const latest = await latestRequestFor(input.employeeId);
+    if (!latest) return { action: "none" };
+    const { classifyAvailabilityReply, isExplicitShiftConfirm } = await import("./availabilityReply");
+    // Travão ANTES da IA e da revisão: uma resposta travada fica só na caixa.
+    const pending = await requestForTextReply(input, latest, isExplicitShiftConfirm(input.body));
     if (!pending) return { action: "none" };
-    const { classifyAvailabilityReply } = await import("./availabilityReply");
     let verdict = classifyAvailabilityReply(input.body).verdict;
     // Pouco clara → IA (lite). Confiança alta aplica-se sozinha; o resto fica
     // para revisão humana (server/aiOps/availabilityAi.ts).
@@ -1020,8 +1124,16 @@ async function handleWhatsappReplyInner(input: { employeeId: number; conversatio
       const d = await classifyUnclearAvailability(input.body, pending, { employeeId: input.employeeId });
       seen.aiRead = d.action !== "review" || !!d.ai;
       if (d.action === "apply_no") verdict = "no";
-      else if (d.action === "apply_yes") { verdict = "yes"; aiYes = { days: d.days, fromHour: d.fromHour, toHour: d.toHour }; }
-      else {
+      else if (d.action === "apply_yes") {
+        // Aviso de escala: "disponível" com horas é uma condição (a resposta não as aplicaria) → uma pessoa decide.
+        if (pending.kind === "assignment" && (d.fromHour != null || d.toHour != null)) {
+          const note = reviewNote({ action: "review", reason: "disponível só nestas horas, por rever", ai: { intent: "available", days: d.days, fromHour: d.fromHour, toHour: d.toHour, confidence: d.confidence } });
+          await flagAvailabilityForReview(input.employeeId, pending, `${note} WhatsApp: "${input.body.slice(0, 300)}"`);
+          return { action: "none" };
+        }
+        verdict = "yes";
+        aiYes = { days: d.days, fromHour: d.fromHour, toHour: d.toHour };
+      } else {
         // Sem leitura da IA (desligada/indisponível) → como antes: fica no inbox.
         // Com leitura mas sem confiança → revisão humana (tarefa/backoffice).
         if (d.ai) await flagAvailabilityForReview(input.employeeId, pending, `${reviewNote(d)} WhatsApp: "${input.body.slice(0, 300)}"`);
