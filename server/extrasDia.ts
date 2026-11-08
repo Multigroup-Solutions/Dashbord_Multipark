@@ -1145,6 +1145,8 @@ export async function teamLeaderRefusalFor(employeeId: number, personName?: stri
 export async function listDriverCandidates(date?: string, opts?: { forTeamLeader?: boolean }): Promise<DriverCandidate[]> {
   const db = await getDb();
   if (!db) return [];
+  // Conta desativada não entra na escala, mesmo com a ficha ativa (Jorge, 8 nov 2026).
+  const { accountNotDeactivated } = await import("./extrasAvailability");
   let rows = await db
     .select({
       id: employees.id,
@@ -1156,7 +1158,7 @@ export async function listDriverCandidates(date?: string, opts?: { forTeamLeader
       userId: employees.userId,
     })
     .from(employees)
-    .where(and(eq(employees.isActive, 1), projectScope(employees.projectId)))
+    .where(and(eq(employees.isActive, 1), accountNotDeactivated(), projectScope(employees.projectId)))
     .orderBy(asc(employees.fullName));
 
   // TL (Jorge, 14 out 2026): só quem tem CONTA com permissões de Team Leader —
