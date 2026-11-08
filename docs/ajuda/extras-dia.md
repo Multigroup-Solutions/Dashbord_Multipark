@@ -186,6 +186,12 @@ Planeamento do dia seguinte: chegadas, saídas, lavagens e quantos condutores s�
    - A janela diz **quem fica de fora e porquê** (já avisado destas horas, sem email, sem telemóvel válido, funcionário…). Carrega em **Enviar**; no fim aparece o resultado por pessoa e canal.
    - **Carregar duas vezes não reenvia**: cada linha recebe um aviso por versão e canal. Se mudares as horas ou a pessoa, a linha volta a receber.
    - Ao lado de cada pessoa aparece o estado: avisado, ✓ confirmou, ✗ não pode e, à parte, o do **email** (email, email falhou, sem email).
+   - **Quando a pessoa responde por escrito no WhatsApp** (só com **Extras: resposta automática no WhatsApp** ligado; os botões do aviso funcionam sempre da mesma forma):
+     - **Dia que já passou**: a resposta não muda nada, mesmo que diga "Confirmo".
+     - **Pedido de disponibilidade enviado depois do aviso** (também o enviado à mão): só "Confirmo" confirma o turno. Um "Sim" ou um "Não consigo" não muda o estado, porque podem estar a responder ao pedido.
+     - Nestes casos ninguém é avisado e a pessoa não recebe resposta: a mensagem fica na caixa do WhatsApp para uma pessoa ler.
+     - **"Confirmo" depois de um pedido de disponibilidade**, se esse for o último pedido da pessoa: vale para o aviso mais recente de hoje ou de um dia futuro ainda por responder. Se não houver nenhum, conta como resposta ao pedido.
+     - **Respostas com hora ou condição** ("posso às 17h", "só às 17h", "vou tentar", "no máximo às 18h") não contam como "sim": vão à leitura por IA, se estiver ligada, e o que não ficar claro passa para uma pessoa. Se a IA ler que a pessoa pode em certas horas, o turno não fica confirmado: chega um aviso no sino para uma pessoa decidir.
    - **Aviso desatualizado** quer dizer que as horas mudaram depois do aviso; avisa outra vez.
    - Para um dia que já passou, não se avisa nem se confirma. Fica tudo no registo de atividade.
 5. Se não houver trabalho, usa "Mandado p/ casa" na linha da pessoa.

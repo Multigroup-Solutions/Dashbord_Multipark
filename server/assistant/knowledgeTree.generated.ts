@@ -2743,7 +2743,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
         "extras-dia.md#proposta-automatica"
        ],
        "container": false,
-       "chars": 5959
+       "chars": 7125
       },
       {
        "id": "extras-dia.md#proposta-automatica",
@@ -5108,7 +5108,7 @@ export const KNOWLEDGE_OUTLINE: HelpTreeOutline = {
        "summary": "Confirmação do STOP / INICIAR (sempre).",
        "children": [],
        "container": false,
-       "chars": 718
+       "chars": 1015
       },
       {
        "id": "whatsapp.md#caixas-por-tema",

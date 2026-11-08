@@ -4,7 +4,7 @@ import { maskPhone, maskPhonesInText } from "../shared/maskPhone";
 import { laterTimestamp, nextStatus, previewFields } from "./whatsappStore";
 import { cacheIsFresh, countsAsReply, last9Digits, parseWebhookPayload, planInbound, storedMessageType } from "./whatsappInbound";
 import { conversationDisplayName, conversationVisibleTo } from "./whatsappInbox";
-import { decideAutoReply, userSeesProject } from "./extrasAutomation";
+import { decideAutoReply, shiftTextReplyBlock, userSeesProject } from "./extrasAutomation";
 import { duplicatePhoneIndexes, summarize, type BroadcastRecipient } from "./whatsappBroadcast";
 import { isValidWebhookVerification } from "./whatsappWebhook";
 import { MIGRATION_0094_STATEMENTS } from "./migrations/migration_0094";
@@ -214,6 +214,42 @@ describe("decideAutoReply", () => {
   it("sem pedido ou resposta ambígua → nada", () => {
     expect(decideAutoReply({ pending: null, verdict: "yes", alreadyAnswered: false, dayAlreadyMarked: false })).toBe("none");
     expect(decideAutoReply({ pending: week, verdict: "unclear", alreadyAnswered: false, dayAlreadyMarked: false })).toBe("none");
+  });
+});
+
+describe("shiftTextReplyBlock", () => {
+  const today = "2026-11-08";
+  const notice = (targetDate: string) => ({ kind: "assignment", targetDate });
+  const block = (pending: { kind: string; targetDate: string | null }, availabilityAfterNotice: boolean, explicitConfirm: boolean) =>
+    shiftTextReplyBlock({ pending, today, availabilityAfterNotice, explicitConfirm });
+
+  it("dia passado: travado, mesmo com 'Confirmo' e sem pedido depois", () => {
+    expect(block(notice("2026-11-07"), false, false)).toBe("past_day");
+    expect(block(notice("2026-11-07"), false, true)).toBe("past_day");
+    expect(block(notice("2026-11-07"), true, true)).toBe("past_day");
+  });
+
+  it("hoje e dias futuros sem pedido depois: passa", () => {
+    for (const d of [today, "2026-11-09"]) {
+      expect(block(notice(d), false, false)).toBeNull();
+      expect(block(notice(d), false, true)).toBeNull();
+    }
+  });
+
+  it("com pedido depois: 'Sim' e 'Não consigo esta semana' travados, 'Confirmo' passa", () => {
+    expect(block(notice("2026-11-09"), true, false)).toBe("availability_after_notice");
+    expect(block(notice(today), true, false)).toBe("availability_after_notice");
+    expect(block(notice("2026-11-09"), true, true)).toBeNull();
+  });
+
+  it("pedidos da semana e de um dia nunca são travados, nem de dias passados", () => {
+    for (const availabilityAfterNotice of [false, true]) {
+      for (const explicitConfirm of [false, true]) {
+        expect(block({ kind: "week", targetDate: null }, availabilityAfterNotice, explicitConfirm)).toBeNull();
+        expect(block({ kind: "day", targetDate: "2026-11-01" }, availabilityAfterNotice, explicitConfirm)).toBeNull();
+      }
+    }
+    expect(block({ kind: "assignment", targetDate: null }, true, false)).toBeNull();
   });
 });
 
