@@ -91,10 +91,26 @@ export interface ActiveExtra {
   noAutoEmail?: number;
 }
 
+/**
+ * A ficha ativa não chega: a conta da pessoa pode estar desativada nos
+ * Utilizadores (Jorge, 8 nov 2026 — a ficha só acompanha a conta desde o #309 e
+ * só na cidade de quem desativa). Mesma regra do `employeesFollowingAccount`:
+ * outra conta ativa da ficha mantém a pessoa. Quem não tem conta continua a
+ * receber, e uma conta junta a outra (`merged_into_`) não é pessoa desativada.
+ * Usada nos pedidos de disponibilidade e na escala (`listDriverCandidates`).
+ */
+export function accountNotDeactivated() {
+  return sql`NOT EXISTS (SELECT 1 FROM users u
+    WHERE u.id = ${employees.userId} AND u.isActive = 0
+      AND (u.loginMethod IS NULL OR u.loginMethod NOT LIKE 'merged_into_%')
+      AND NOT EXISTS (SELECT 1 FROM employee_accounts a JOIN users x ON x.id = a.userId
+        WHERE a.employeeId = ${employees.id} AND x.isActive = 1))`;
+}
+
 export async function listActiveExtras(projectId?: number | null): Promise<ActiveExtra[]> {
   const db = await getDb();
   if (!db) return [];
-  const conds = [eq(employees.isActive, 1), eq(employees.position, "extra"), projectScope(employees.projectId)];
+  const conds = [eq(employees.isActive, 1), eq(employees.position, "extra"), accountNotDeactivated(), projectScope(employees.projectId)];
   if (projectId != null) conds.push(eq(employees.projectId, projectId));
   const rows = await db
     .select({
@@ -131,7 +147,7 @@ export async function listActiveEmployeesByIds(ids: number[]): Promise<ActiveExt
       projectId: employees.projectId,
     })
     .from(employees)
-    .where(and(eq(employees.isActive, 1), eq(employees.position, "extra"), inArray(employees.id, ids), projectScope(employees.projectId)))
+    .where(and(eq(employees.isActive, 1), eq(employees.position, "extra"), inArray(employees.id, ids), accountNotDeactivated(), projectScope(employees.projectId)))
     .orderBy(asc(employees.fullName));
 }
 

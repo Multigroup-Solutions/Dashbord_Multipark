@@ -4,6 +4,7 @@
 Integração da WhatsApp Cloud API (Meta Graph API) na dashboard "Barnie" (dashboard-jorge) para: (1) seleção múltipla de extras com contactos, (2) envio em massa de templates WhatsApp, (3) inbox de respostas via webhook Meta, (4) API segura para uma app externa de formulário de disponibilidades. Plano aprovado pelo Jorge em 2026-07-09. Implementação faseada — cada fase é revista antes da seguinte. Este ficheiro tem o plano completo, os 5 ajustes do Jorge, e o changelog por fase.
 
 ## Related
+- `extras-whatsapp-text-reply-brake.md` — **2026-11-08**: travão das respostas escritas ao aviso de escala (dia passado, pedido de disponibilidade depois do aviso).
 - `employee-city-derivation.md` — **2026-10-07**: a cidade derivada passa a escolher o TEMPLATE (registo `shared/driverTemplates.ts`).
 - `sync-runners-topology.md` — topologia de execução (Railway `setInterval` vs Vercel/GitHub Actions cron). Relevante porque o webhook e o broadcast correm no processo Railway; o `runConcurrent` reutilizado vem do `multiparkBookingSync.ts`.
 - `profile-photo-upload.md` — **2026-10-01**: a foto da ficha (`employees.photoUrl`) é a fonte do avatar do inbox (lista + cabeçalho da conversa).
@@ -605,7 +606,7 @@ enviar a partir da mesma tabela de extras.
 **Scope**: `server/whatsappTemplateMeta.ts` (novo), `server/whatsappTemplateMeta.test.ts` (novo),
 `server/whatsappBroadcast.ts`, `server/whatsapp.ts`, `server/whatsapp.test.ts`,
 `server/_core/api-entry.ts`, `.env.example`, `client/src/pages/ExtrasDiaPage.tsx`
-**Trigger**: 2º teste real — `+351963687459` (employeeId 374) falhou com
+**Trigger**: 2º teste real — `+351965041858` (employeeId 374) falhou com
 `(#100) Invalid parameter — Parameter name is missing or empty`. Causa: o
 `disponibilidade_extras` (aprovado em **pt_BR**, ver commit `aadf91f`) foi criado no WhatsApp Manager
 com parâmetros **NOMEADOS** (`{{nome}}`, `{{semana}}`) e a Cloud API exige `parameter_name` em cada

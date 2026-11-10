@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyAvailabilityReply, replyOnly } from "./availabilityReply";
+import { classifyAvailabilityReply, isExplicitShiftConfirm, replyOnly } from "./availabilityReply";
 import { canDeleteDocument, canEditContract, canEditPersonal, canViewDocuments, canViewEmployee, canViewSensitive, canViewTimeAndSchedule, employeeAccess, isProtectedTarget, sanitizeEmployee, sanitizeEmployeeRows, type RhViewer } from "./rhAccess";
 import { csvCell, toCsv } from "../shared/csv";
 
@@ -26,6 +26,59 @@ describe("classifyAvailabilityReply", () => {
     const body = "Não posso.\n\nOn Tue, RH wrote:\n> Podes confirmar? Responde SIM\n> disponível?";
     expect(replyOnly(body)).toBe("Não posso.");
     expect(classifyAvailabilityReply(body).verdict).toBe("no");
+  });
+  it("'o máximo', 'no máximo' e 'tentar' são condição, nunca um 'sim'", () => {
+    for (const t of ["O máximo posso tentar entre as 16h e as 17h", "no máximo às 17h", "vou tentar", "Vou tentar ir", "Posso tentar"]) {
+      expect(classifyAvailabilityReply(t).verdict, t).toBe("unclear");
+    }
+  });
+  it("'só às' é condição", () => {
+    for (const t of ["Sim, só às 17h", "Ok, só às 18", "Só às 17h", "Não, só às 17h"]) {
+      expect(classifyAvailabilityReply(t).verdict, t).toBe("unclear");
+    }
+  });
+  it("'posso' com uma hora é condição", () => {
+    for (const t of ["Posso às 17h", "posso as 17", "posso das 16 às 18", "posso 17:30", "posso 17h30", "Sim, posso às 17h", "posso até às 18", "às 17h posso", "posso 17", "posso ao meio-dia"]) {
+      expect(classifyAvailabilityReply(t).verdict, t).toBe("unclear");
+    }
+  });
+  it("sem hora nem condição fica como estava", () => {
+    for (const t of ["Sim, posso segunda", "Sim", "Confirmo", "Sim, confirmo", "Posso", "Sim, posso dia 17", "posso até dia 17"]) {
+      expect(classifyAvailabilityReply(t).verdict, t).toBe("yes");
+    }
+    // Negado com hora continua a ser um "não"; com um "posso" a seguir já é condição.
+    expect(classifyAvailabilityReply("Não posso").verdict).toBe("no");
+    expect(classifyAvailabilityReply("Não posso às 17h").verdict).toBe("no");
+    expect(classifyAvailabilityReply("Não posso às 17h, posso às 18h").verdict).toBe("unclear");
+  });
+  it("'Confirmado' ainda não é um 'sim' (fica para a fase 3)", () => {
+    expect(classifyAvailabilityReply("Confirmado").verdict).toBe("unclear");
+  });
+});
+
+describe("isExplicitShiftConfirm", () => {
+  it("só quem diz mesmo 'confirmo'", () => {
+    for (const t of ["Confirmo", "Sim, confirmo", "confirmo obrigado", "CONFIRMO!", "Confirmo o turno"]) {
+      expect(isExplicitShiftConfirm(t), t).toBe(true);
+    }
+  });
+  it("sem a palavra não conta", () => {
+    for (const t of ["Sim", "ok", "Sim, posso segunda", "Confirmado", "", "reconfirmo"]) {
+      expect(isExplicitShiftConfirm(t), t).toBe(false);
+    }
+  });
+  it("com negação, condição, hora, pergunta ou adiamento não conta", () => {
+    for (const t of ["não confirmo", "confirmo mas só às 17h", "confirmo só às 17h", "confirmo às 17h", "Confirmo?", "talvez confirmo", "confirmo se for de manhã", "depois confirmo", "amanhã confirmo"]) {
+      expect(isExplicitShiftConfirm(t), t).toBe(false);
+    }
+  });
+  it("confirmar a disponibilidade não é confirmar o turno", () => {
+    expect(isExplicitShiftConfirm("Confirmo a minha disponibilidade")).toBe(false);
+    expect(isExplicitShiftConfirm("Confirmo, estou disponível")).toBe(false);
+  });
+  it("só conta a resposta, não a citação", () => {
+    expect(isExplicitShiftConfirm("Não posso\n> Confirmo")).toBe(false);
+    expect(isExplicitShiftConfirm("Confirmo\n> pedido das 17h?")).toBe(true);
   });
 });
 

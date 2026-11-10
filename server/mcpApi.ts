@@ -14,6 +14,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { sharedDrizzle } from "./_core/dbPool";
 import {
   apiKeyMiddleware, requireCapability, requireAnyV1Capability, logApiKeyAction, apiKeyActorId, getApiKeyInfo,
   getCapabilities, apiInternalError,
@@ -41,7 +42,7 @@ import {
 
 let _db: ReturnType<typeof drizzle> | null = null;
 async function db() {
-  if (!_db && process.env.DATABASE_URL) _db = drizzle(process.env.DATABASE_URL);
+  if (!_db && process.env.DATABASE_URL) _db = sharedDrizzle();
   return _db;
 }
 

@@ -89,7 +89,15 @@ async function accountByUsername(username: string): Promise<(Account & { secretH
       LEFT JOIN users u ON u.id = a.userId WHERE a.username = ${username} AND a.revokedAt IS NULL LIMIT 1`))[0];
   return r ? { id: Number(r.id), userId: Number(r.userId), username: String(r.username), secretHash: String(r.secretHash), name: r.name ? String(r.name) : null } : null;
 }
+/** A conta do token, guardada 1 min por instância (revogar demora no máximo isso a pegar). */
 async function accountById(id: number): Promise<Account | null> {
+  const hit = accountCache.get(id);
+  if (hit && Date.now() - hit.at < ACCOUNT_CACHE_MS) return hit.acc;
+  const acc = await readAccountById(id);
+  remember(accountCache, id, { at: Date.now(), acc });
+  return acc;
+}
+async function readAccountById(id: number): Promise<Account | null> {
   const db = await getDb();
   if (!db) return null;
   const r = rowsOf(await db.execute(sql`SELECT a.id, a.userId, a.username, u.name FROM central_accounts a
@@ -102,6 +110,11 @@ async function touch(accountId: number) {
 }
 
 async function logRequest(req: Request, status: number, accountId: number | null, note: string | null) {
+  // 6 nov: o mesmo pedido com a mesma resposta só fica registado 1 vez por minuto (por instância)
+  const key = `${req.method}|${String(req.originalUrl || req.url).split("?")[0]}|${status}|${accountId ?? ""}|${note ?? ""}`;
+  const last = lastLogged.get(key);
+  if (last !== undefined && Date.now() - last < LOG_DEDUPE_MS) return;
+  remember(lastLogged, key, Date.now());
   try {
     const db = await getDb();
     if (!db) return;
@@ -290,8 +303,61 @@ function fail(req: Request) {
   failures.set(k, f && f.until > now ? { n: f.n + 1, until: f.until } : { n: 1, until: now + FAIL_WINDOW_MS });
 }
 
-/** Ligada? E, se não, porquê (fica na nota do pedido, para se perceber logo). */
+// ─── 6 nov 2026: a consola não pode esgotar a BD ────────────────────────────
+// A consola chegou a fazer dezenas de pedidos por segundo e cada um ia à BD 3
+// a 5 vezes: o MySQL ficou sem ligações ("Too many connections") e o login da
+// dashboard falhava. Agora o interruptor, a conta e as pesquisas ficam uns
+// segundos em memória, o mesmo pedido não volta a ser gravado logo a seguir e
+// cada IP tem um teto de pedidos (acima dele: 429 sem tocar na BD).
+
+const ENABLED_CACHE_MS = 15_000;
+const ACCOUNT_CACHE_MS = 60_000;
+const SEARCH_CACHE_MS = 30_000;
+const LOG_DEDUPE_MS = 60_000;
+export const CENTRAL_RATE_WINDOW_MS = 10_000;
+export const CENTRAL_RATE_MAX = 60;
+const CACHE_MAX_KEYS = 5_000;
+
+let enabledCache: { at: number; value: Promise<{ on: boolean; why: string | null }> } | null = null;
+const accountCache = new Map<number, { at: number; acc: Account | null }>();
+const searchCache = new Map<string, { at: number; found: FoundContact[]; note: string }>();
+const lastLogged = new Map<string, number>();
+const rate = new Map<string, { since: number; n: number }>();
+
+/** Guarda numa cache em memória sem a deixar crescer sem fim. */
+function remember<K, V>(map: Map<K, V>, key: K, value: V) {
+  if (map.size >= CACHE_MAX_KEYS && !map.has(key)) map.clear();
+  map.set(key, value);
+}
+
+/** Este IP passou o teto de pedidos da janela? (conta este pedido) */
+function overRate(req: Request, now = Date.now()): boolean {
+  const k = ipOf(req);
+  const cur = rate.get(k);
+  if (!cur || now - cur.since >= CENTRAL_RATE_WINDOW_MS) { remember(rate, k, { since: now, n: 1 }); return false; }
+  cur.n += 1;
+  if (cur.n === CENTRAL_RATE_MAX + 1) console.warn(`[central] ${k} passou ${CENTRAL_RATE_MAX} pedidos em ${CENTRAL_RATE_WINDOW_MS / 1000} s — a responder 429`);
+  return cur.n > CENTRAL_RATE_MAX;
+}
+
+/** Testes: esquece o que está em memória (interruptor, contas, pesquisas, registos, tetos). */
+export function resetCentralCaches() {
+  enabledCache = null;
+  accountCache.clear(); searchCache.clear(); lastLogged.clear(); rate.clear();
+}
+
+/** Ligada? Guardado 15 s por instância (ligar/desligar demora no máximo isso a pegar). */
 async function centralEnabled(): Promise<{ on: boolean; why: string | null }> {
+  const now = Date.now();
+  if (enabledCache && now - enabledCache.at < ENABLED_CACHE_MS) return enabledCache.value;
+  const value = readCentralEnabled();
+  enabledCache = { at: now, value };
+  value.catch(() => { enabledCache = null; });
+  return value;
+}
+
+/** Ligada? E, se não, porquê (fica na nota do pedido, para se perceber logo). */
+async function readCentralEnabled(): Promise<{ on: boolean; why: string | null }> {
   const [{ ensureFeatureFlagOverrides, isFeatureEnabled }, { automationFlagDefault }] = await Promise.all([import("./_core/featureFlags"), import("../shared/appSettings")]);
   const read = () => isFeatureEnabled(CENTRAL_SUGAR_FLAG, { defaultEnabled: automationFlagDefault(CENTRAL_SUGAR_FLAG) });
   await ensureFeatureFlagOverrides();
@@ -341,6 +407,23 @@ const contactRedirectScript = `function(){
 
 export function createCentralSugarRouter(): Router {
   const r = Router();
+  // 6 nov: no Express 4 um erro numa função async (ex.: BD sem ligações) deixava
+  // o pedido pendurado até ao limite da Vercel — a instância ficava presa e a
+  // consola voltava a tentar. Todas as funções daqui passam o erro ao fim do
+  // router, que responde logo 503.
+  const wrap = (fn: unknown) => {
+    if (typeof fn !== "function" || fn.length >= 4) return fn;
+    return (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const out = (fn as (a: Request, b: Response, c: NextFunction) => unknown)(req, res, next);
+        if (out && typeof (out as Promise<unknown>).catch === "function") (out as Promise<unknown>).catch(next);
+      } catch (e) { next(e); }
+    };
+  };
+  for (const m of ["use", "get", "post", "put", "delete", "all"] as const) {
+    const orig = (r as any)[m].bind(r);
+    (r as any)[m] = (...args: unknown[]) => orig(...args.map(wrap));
+  }
   r.use(express.json({ limit: "512kb" }));
   r.use(express.urlencoded({ limit: "512kb", extended: true }));
 
@@ -363,6 +446,13 @@ export function createCentralSugarRouter(): Router {
     res.setHeader("Cache-Control", "no-store");
     res.send(`<!doctype html><html lang="pt"><head><meta charset="utf-8"><title>Dashboard Multipark</title></head><body>
 <p>A abrir na dashboard…</p><script>(${contactRedirectScript})();</script></body></html>`);
+  });
+
+  // 6 nov: teto por IP — acima dele responde 429 sem ir à BD (nem para registar)
+  r.use((req: Request, res: Response, next: NextFunction) => {
+    if (!overRate(req)) return next();
+    res.setHeader("Retry-After", String(Math.ceil(CENTRAL_RATE_WINDOW_MS / 1000)));
+    res.status(429).json({ error: "too_many_requests", error_message: "Demasiados pedidos. Espera uns segundos." });
   });
 
   r.use(async (req: Request, res: Response, next: NextFunction) => {
@@ -464,9 +554,14 @@ export function createCentralSugarRouter(): Router {
   const search = async (req: Authed, res: Response, module: string) => {
     const input = { ...(req.query as object), ...((req.body ?? {}) as object) } as Record<string, unknown>;
     const q = sugarSearchQuery(input);
+    // 6 nov: a mesma pesquisa nos últimos 30 s → a mesma resposta, sem voltar à BD
+    const cacheKey = `${module.toLowerCase()}|${JSON.stringify(q)}|${String(input.max_num ?? "")}`;
+    const cached = searchCache.get(cacheKey);
     let found: FoundContact[] = [];
     let note = "pesquisa sem número (resposta vazia)";
-    if (q?.kind === "phone") {
+    if (cached && Date.now() - cached.at < SEARCH_CACHE_MS) {
+      found = cached.found; note = cached.note;
+    } else if (q?.kind === "phone") {
       const f = await lookupCaller(q.phone);
       if (f) { found = [f]; note = searchNote(q.phone, f.id, f.name); }
     } else if (q?.kind === "ext") {
@@ -477,6 +572,7 @@ export function createCentralSugarRouter(): Router {
       found = await searchByName(q.text, Number(input.max_num ?? 10)).catch(() => []);
       note = `pesquisa por nome "${q.text}" → ${found.length} resultado${found.length === 1 ? "" : "s"}`;
     }
+    if (!cached || cached.found !== found) remember(searchCache, cacheKey, { at: Date.now(), found, note });
     await logRequest(req, 200, req.centralAccount!.id, note);
     const mod = module.toLowerCase() === "accounts" ? "Accounts" : module.toLowerCase() === "leads" ? "Leads" : "Contacts";
     res.json({ next_offset: -1, records: found.map((f) => sugarContact(f, mod)) });
@@ -548,5 +644,12 @@ export function createCentralSugarRouter(): Router {
   });
 
   r.all("*", async (req, res) => { await logRequest(req, 404, null, "caminho desconhecido"); res.status(404).json({ error: "not_found", error_message: "Caminho desconhecido." }); });
+
+  // 6 nov: qualquer erro (ex.: BD sem ligações) responde já 503, sem ir à BD registar
+  r.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    console.warn("[central] pedido falhou:", req.method, String(req.originalUrl || req.url).split("?")[0], String((err as Error)?.message ?? err).slice(0, 160));
+    if (res.headersSent) return;
+    res.status(503).json({ error: "service_unavailable", error_message: "A dashboard não conseguiu responder agora. Tenta daqui a pouco." });
+  });
   return r;
 }

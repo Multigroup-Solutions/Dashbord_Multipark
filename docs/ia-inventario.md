@@ -132,7 +132,7 @@ Legenda: **Auto** = corre sozinha · **Pedido** = só quando alguém carrega no 
 ### Extras Dia e Disponibilidade
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
 |---|---|---|---|---|
-| Respostas de disponibilidade pouco claras — `AI_AVAILABILITY_CLASSIFY` | Auto quando as regras não percebem: WhatsApp de um colaborador com pedido nos últimos 10 dias (também precisa de `EXTRAS_AVAILABILITY_AUTO_REPLY`) e emails para recursos-humanos@ | Chefias (tarefas e avisos) | Resposta (até 600 car.) e o pedido, com `redactPii` | Com ≥ 85 %: **marca a disponibilidade, responde por WhatsApp e confirma ou recusa o turno**. Abaixo disso, tarefa para uma pessoa |
+| Respostas de disponibilidade pouco claras — `AI_AVAILABILITY_CLASSIFY` | Auto quando as regras não percebem: WhatsApp de um colaborador com pedido nos últimos 10 dias (também precisa de `EXTRAS_AVAILABILITY_AUTO_REPLY`; a resposta escrita a um aviso de um dia passado, ou a um aviso seguido de um pedido de disponibilidade, não chega à IA) e emails para recursos-humanos@ | Chefias (tarefas e avisos) | Resposta (até 600 car.) e o pedido, com `redactPii` | Com ≥ 85 %: **marca a disponibilidade, responde por WhatsApp e confirma ou recusa o turno** (num aviso de turno, "disponível" com horas não confirma: vai para o sino). Abaixo disso, tarefa para uma pessoa |
 
 ### Avaliação
 | O quê | Quando | Quem vê | Dados | Guardado / sozinha? |
