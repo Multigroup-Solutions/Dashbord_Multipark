@@ -606,7 +606,7 @@ enviar a partir da mesma tabela de extras.
 **Scope**: `server/whatsappTemplateMeta.ts` (novo), `server/whatsappTemplateMeta.test.ts` (novo),
 `server/whatsappBroadcast.ts`, `server/whatsapp.ts`, `server/whatsapp.test.ts`,
 `server/_core/api-entry.ts`, `.env.example`, `client/src/pages/ExtrasDiaPage.tsx`
-**Trigger**: 2º teste real — `+351963687459` (employeeId 374) falhou com
+**Trigger**: 2º teste real — `+351965041858` (employeeId 374) falhou com
 `(#100) Invalid parameter — Parameter name is missing or empty`. Causa: o
 `disponibilidade_extras` (aprovado em **pt_BR**, ver commit `aadf91f`) foi criado no WhatsApp Manager
 com parâmetros **NOMEADOS** (`{{nome}}`, `{{semana}}`) e a Cloud API exige `parameter_name` em cada
