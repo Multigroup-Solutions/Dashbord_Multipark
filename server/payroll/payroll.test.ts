@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { pairShifts, splitShiftHours, countableShifts, checkoutHours } from "./shifts";
+import { readFileSync } from "node:fs";
+import { pairShifts, splitShiftHours, countableShifts, checkoutHours, forgottenCheckoutAt } from "./shifts";
 import { computeEmployeeMonth, contractDaysInMonth, expectedHoursFromSchedule } from "./compute";
 
 // Instantes em UTC; em setembro (verão) Lisboa = UTC+1.
@@ -158,5 +159,30 @@ describe("checkoutHours — horas da saída do ponto (a entrada vem da BD em UTC
   it("exatamente 16 h ainda conta as horas reais; também aceita o formato ISO", () => {
     expect(checkoutHours("2026-10-11 18:00:00", now)).toMatchObject({ hoursWorked: "16.00", forgotten: false });
     expect(checkoutHours("2026-10-12T02:00:00Z", now)).toMatchObject({ hoursWorked: "8.00", forgotten: false });
+  });
+});
+
+describe("fecho automático do ponto esquecido — a saída fica 12 h depois da entrada, em UTC", () => {
+  const savedTz = process.env.TZ;
+  afterEach(() => { if (savedTz === undefined) delete process.env.TZ; else process.env.TZ = savedTz; });
+
+  for (const tz of ["Europe/Lisbon", "America/New_York", "UTC"]) {
+    it(`entrada às 16:00 UTC → saída gravada às 04:00 UTC do dia seguinte (TZ=${tz})`, () => {
+      process.env.TZ = tz;
+      const outAt = forgottenCheckoutAt("2026-10-11 16:00:00");
+      expect(outAt.toISOString()).toBe("2026-10-12T04:00:00.000Z");
+      // o mesmo texto que vai para a BD
+      expect(outAt.toISOString().slice(0, 19).replace("T", " ")).toBe("2026-10-12 04:00:00");
+      // e é a mesma hora que a saída dada à mão por uma entrada esquecida
+      expect(checkoutHours("2026-10-11 16:00:00", Date.parse("2026-10-12T10:00:00Z")).outAt.getTime()).toBe(outAt.getTime());
+    });
+  }
+
+  it("autoCloseStaleCheckIns lê a entrada em UTC e compara as 16 h com a hora UTC da BD", () => {
+    const d = readFileSync("server/db.ts", "utf8");
+    const fn = d.slice(d.indexOf("export async function autoCloseStaleCheckIns"), d.indexOf("// ─── PASSAGEM DE TURNO"));
+    expect(fn).toContain("const outAt = forgottenCheckoutAt(String(r.recordedAt));");
+    expect(fn).toContain("DATE_SUB(UTC_TIMESTAMP(), INTERVAL 16 HOUR)");
+    expect(fn).not.toMatch(/new Date\(r\.recordedAt\)|NOW\(\)/);
   });
 });
