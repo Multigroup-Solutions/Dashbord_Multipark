@@ -9,6 +9,7 @@
  *   verify        POST /{NOVO_PHONE_ID}/verify_code   code=<SMS>
  *   register      POST /{NOVO_PHONE_ID}/register      messaging_product=whatsapp, pin=<WA_BOT_2FA_PIN>
  *   postcheck     números da WABA (os dois CONNECTED) + templates booking_* APPROVED
+ *   set-pin       POST /{NOVO_PHONE_ID}                pin=<novo PIN>  (troca o PIN da verificação em dois passos)
  *   all           tudo em sequência, interativo (pede o código SMS e, se faltar, o PIN)
  *
  * Uso:
@@ -18,7 +19,11 @@
  *   npx tsx scripts/wa-migrate-number.ts verify --phone-id <NOVO_PHONE_ID> [--code 123456]
  *   npx tsx scripts/wa-migrate-number.ts register --phone-id <NOVO_PHONE_ID>
  *   npx tsx scripts/wa-migrate-number.ts postcheck
+ *   npx tsx scripts/wa-migrate-number.ts set-pin --phone-id <NOVO_PHONE_ID>
  *   npx tsx scripts/wa-migrate-number.ts all
+ *
+ * PINs: escritos no terminal SEM eco (nada aparece enquanto escreves); o
+ * set-pin pede o novo PIN duas vezes e nunca o lê do .env nem o guarda.
  *
  * Regras: o token e o PIN NUNCA são impressos; antes de cada POST corre um GET
  * de verificação; qualquer erro da Meta pára o script e mostra code / subcode /
@@ -192,6 +197,49 @@ async function ask(question: string): Promise<string> {
   }
 }
 
+/**
+ * Lê um segredo do terminal SEM eco (raw mode): nada é escrito no ecrã nem no
+ * histórico. Enter termina, Backspace apaga, Ctrl+C aborta.
+ */
+async function askHidden(question: string): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    console.error(`✖ Sem terminal interativo para: ${question.trim()} — o PIN só é aceite escrito no terminal.`);
+    throw new Stop();
+  }
+  process.stdout.write(question);
+  return new Promise<string>((resolve, reject) => {
+    let value = "";
+    const done = (fn: () => void) => {
+      stdin.off("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      process.stdout.write("\n");
+      fn();
+    };
+    const onData = (chunk: Buffer) => {
+      for (const ch of chunk.toString("utf8")) {
+        if (ch === "\u0003") return done(() => reject(new Stop()));
+        if (ch === "\r" || ch === "\n") return done(() => resolve(value.trim()));
+        if (ch === "\u007f" || ch === "\b") value = value.slice(0, -1);
+        else if (ch >= " ") value += ch;
+      }
+    };
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onData);
+  });
+}
+
+async function askPin(question: string): Promise<string> {
+  const pin = (await askHidden(question)).replace(/\D/g, "");
+  if (pin.length !== 6) {
+    console.error("✖ O PIN tem de ter 6 dígitos. Script parado.");
+    throw new Stop();
+  }
+  return pin;
+}
+
 async function verify(phoneId: string, code?: string): Promise<void> {
   console.log("\n▶ 5. Verificar código");
   await showNumber("estado", phoneId);
@@ -207,14 +255,33 @@ async function verify(phoneId: string, code?: string): Promise<void> {
 async function register(phoneId: string): Promise<void> {
   console.log("\n▶ 6. Registar na Cloud API");
   await showNumber("estado", phoneId);
-  let pin = (env.WA_BOT_2FA_PIN ?? "").replace(/\D/g, "");
-  if (!pin) pin = (await ask("  WA_BOT_2FA_PIN não está no .env — PIN de 6 dígitos (não é guardado nem mostrado): ")).replace(/\D/g, "");
+  const fromEnv = (env.WA_BOT_2FA_PIN ?? "").replace(/\D/g, "");
+  const pin = fromEnv || (await askPin("  PIN de 6 dígitos (não aparece enquanto escreves, não é guardado): "));
   if (pin.length !== 6) {
     console.error("✖ O PIN tem de ter 6 dígitos. Script parado.");
     throw new Stop();
   }
   const r = await graph("POST register", "POST", `${phoneId}/register`, { messaging_product: "whatsapp", pin });
-  console.log(`  ✔ registado (${JSON.stringify(r)}) — verificação em dois passos ligada com o PIN do .env`);
+  console.log(`  ✔ registado (${JSON.stringify(r)}) — verificação em dois passos ligada com o PIN ${fromEnv ? "de WA_BOT_2FA_PIN" : "escrito agora"}`);
+}
+
+/** Troca o PIN da verificação em dois passos (POST /{phone-id} {pin}). Pede-o 2× sem eco. */
+async function setPin(phoneId: string): Promise<void> {
+  console.log("\n▶ Trocar o PIN da verificação em dois passos");
+  const n = await showNumber("estado", phoneId);
+  if (n.status !== "CONNECTED") {
+    console.error(`✖ O número não está CONNECTED (status=${n.status}). Script parado.`);
+    throw new Stop();
+  }
+  const pin = await askPin("  Novo PIN de 6 dígitos (não aparece enquanto escreves, não é guardado): ");
+  const again = await askPin("  Repete o novo PIN: ");
+  if (pin !== again) {
+    console.error("✖ Os dois PINs não coincidem. Nada foi enviado. Script parado.");
+    throw new Stop();
+  }
+  const r = await graph("POST pin", "POST", `${phoneId}`, { pin });
+  console.log(`  ✔ PIN trocado (${JSON.stringify(r)})`);
+  await showNumber("estado", phoneId);
 }
 
 async function postcheck(newPhoneId?: string): Promise<void> {
@@ -274,6 +341,8 @@ async function main(): Promise<void> {
       return register(needPhoneId());
     case "postcheck":
       return postcheck(arg("phone-id"));
+    case "set-pin":
+      return setPin(needPhoneId());
     case "all": {
       const existing = await precheck();
       const id = existing ?? (await start());
@@ -291,7 +360,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.error("Uso: precheck | start | request-code --phone-id X | verify --phone-id X [--code N] | register --phone-id X | postcheck [--phone-id X] | all");
+      console.error("Uso: precheck | start | request-code --phone-id X | verify --phone-id X [--code N] | register --phone-id X | postcheck [--phone-id X] | set-pin --phone-id X | all");
       throw new Stop();
   }
 }
